@@ -5,8 +5,22 @@ def generate_fastapi_code(functions):
     lines = []
 
     lines.append("from fastapi import FastAPI")
+    lines.append("import generated.runtime.notebook_module as notebook_module")
     lines.append("")
     lines.append("app = FastAPI()")
+    lines.append("")
+    lines.append("def _parse_val(val):")
+    lines.append("    if val is None:")
+    lines.append("        return val")
+    lines.append("    try:")
+    lines.append("        return int(val)")
+    lines.append("    except ValueError:")
+    lines.append("        pass")
+    lines.append("    try:")
+    lines.append("        return float(val)")
+    lines.append("    except ValueError:")
+    lines.append("        pass")
+    lines.append("    return val")
     lines.append("")
 
     for func in functions:
@@ -14,12 +28,15 @@ def generate_fastapi_code(functions):
         args = func["args"]
 
         params = ", ".join(args)
+        call_params = ", ".join(f"_parse_val({arg})" for arg in args)
 
         endpoint = f"""
 @app.get("/{func_name}")
 def {func_name}({params}):
+    result = notebook_module.{func_name}({call_params})
+
     return {{
-        "message": "Function {func_name} called successfully"
+        "result": result
     }}
 """
 
