@@ -27,8 +27,20 @@ def generate_fastapi_code(functions):
         func_name = func["name"]
         args = func["args"]
 
-        params = ", ".join(args)
-        call_params = ", ".join(f"_parse_val({arg})" for arg in args)
+        formatted_args = []
+        call_args = []
+        for arg in args:
+            arg_name = arg["name"]
+            arg_type = arg["type"]
+            if arg_type:
+                formatted_args.append(f"{arg_name}: {arg_type}")
+                call_args.append(arg_name)
+            else:
+                formatted_args.append(arg_name)
+                call_args.append(f"_parse_val({arg_name})")
+
+        params = ", ".join(formatted_args)
+        call_params = ", ".join(call_args)
 
         endpoint = f"""
 @app.get("/{func_name}")
@@ -60,7 +72,11 @@ if __name__ == "__main__":
     sample_functions = [
         {
             "name": "add",
-            "args": ["a", "b"]
+            "args": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "int"}
+            ],
+            "return_type": "int"
         }
     ]
 
