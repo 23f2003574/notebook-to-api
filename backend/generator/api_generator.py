@@ -5,53 +5,41 @@ def generate_fastapi_code(functions):
     lines = []
 
     lines.append("from fastapi import FastAPI")
+    lines.append("from pydantic import BaseModel")
     lines.append("import generated.runtime.notebook_module as notebook_module")
     lines.append("")
     lines.append("app = FastAPI()")
     lines.append("")
-    lines.append("def _parse_val(val):")
-    lines.append("    if val is None:")
-    lines.append("        return val")
-    lines.append("    try:")
-    lines.append("        return int(val)")
-    lines.append("    except ValueError:")
-    lines.append("        pass")
-    lines.append("    try:")
-    lines.append("        return float(val)")
-    lines.append("    except ValueError:")
-    lines.append("        pass")
-    lines.append("    return val")
-    lines.append("")
 
+    # Generate Pydantic models first
+    for func in functions:
+        func_name = func["name"]
+        model_name = f"{func_name[0].upper()}{func_name[1:]}Request"
+
+        lines.append(f"class {model_name}(BaseModel):")
+        for arg in func["args"]:
+            arg_name = arg["name"]
+            arg_type = arg["type"] or "str"
+            lines.append(f"    {arg_name}: {arg_type}")
+        lines.append("")
+
+    # Generate POST endpoints
     for func in functions:
         func_name = func["name"]
         args = func["args"]
+        model_name = f"{func_name[0].upper()}{func_name[1:]}Request"
 
-        formatted_args = []
-        call_args = []
-        for arg in args:
-            arg_name = arg["name"]
-            arg_type = arg["type"]
-            if arg_type:
-                formatted_args.append(f"{arg_name}: {arg_type}")
-                call_args.append(arg_name)
-            else:
-                formatted_args.append(arg_name)
-                call_args.append(f"_parse_val({arg_name})")
-
-        params = ", ".join(formatted_args)
-        call_params = ", ".join(call_args)
+        call_args = ", ".join(f"req.{arg['name']}" for arg in args)
 
         endpoint = f"""
-@app.get("/{func_name}")
-def {func_name}({params}):
-    result = notebook_module.{func_name}({call_params})
+@app.post("/{func_name}")
+def {func_name}(req: {model_name}):
+    result = notebook_module.{func_name}({call_args})
 
     return {{
         "result": result
     }}
 """
-
         lines.append(endpoint)
 
     return "\n".join(lines)
