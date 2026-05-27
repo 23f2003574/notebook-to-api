@@ -36,8 +36,40 @@ def extract_functions_from_code(code):
     return functions
 
 
+def extract_imports_from_code(code):
+    tree = ast.parse(code)
+
+    imports = set()
+
+    # Map common Python import modules to their PyPI package names
+    pypi_mapping = {
+        "sklearn": "scikit-learn",
+        "cv2": "opencv-python",
+        "PIL": "Pillow",
+        "yaml": "PyYAML",
+    }
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                base_module = alias.name.split(".")[0]
+                imports.add(pypi_mapping.get(base_module, base_module))
+
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                base_module = node.module.split(".")[0]
+                imports.add(pypi_mapping.get(base_module, base_module))
+
+    return imports
+
+
 if __name__ == "__main__":
     sample_code = """
+import sys
+import os
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+
 def add(a: int, b: int) -> int:
     return a + b
 
@@ -46,6 +78,8 @@ def greet(name: str) -> str:
 """
 
     extracted = extract_functions_from_code(sample_code)
-
     for func in extracted:
-        print(func)
+        print("Function:", func)
+
+    imports = extract_imports_from_code(sample_code)
+    print("Imports:", imports)
