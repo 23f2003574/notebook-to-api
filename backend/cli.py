@@ -8,6 +8,7 @@ from backend.compiler import compile_notebook
 # Import inspector for analysis
 from backend.inspector import inspect_notebook
 from backend.exporters.openapi_exporter import export_openapi_schema
+from backend.serve import serve_notebook
 
 
 def main():
@@ -33,6 +34,8 @@ def main():
         "--output",
         default="generated",
         help="Output directory where compilation artifacts would be placed (used to list generated files)."
+    )
+
     # openapi export command
     openapi_parser = subparsers.add_parser(
         "export-openapi", help="Export OpenAPI schema from generated FastAPI app."
@@ -42,6 +45,14 @@ def main():
         default="generated/openapi.json",
         help="Path to write the OpenAPI JSON file."
     )
+
+    # serve command (live notebook server)
+    serve_parser = subparsers.add_parser("serve", help="Serve notebook as live API with hot recompilation.")
+    serve_parser.add_argument("notebook", help="Path to the notebook file.")
+    serve_parser.add_argument(
+        "--output",
+        default="generated",
+        help="Output directory where the FastAPI app will be written."
     )
 
     args = parser.parse_args()
@@ -57,6 +68,8 @@ def main():
         inspect_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
     elif args.command == "export-openapi":
         export_openapi_schema(args.output)
+    elif args.command == "serve":
+        serve_notebook(args.notebook, args.output)
     elif args.command == "deploy":
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)

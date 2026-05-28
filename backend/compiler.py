@@ -35,7 +35,8 @@ def write_requirements(imports):
     core_dependencies = [
         "fastapi",
         "uvicorn",
-        "pydantic"
+        "pydantic",
+        "watchdog"
     ]
 
     final_deps = sorted(set(list(imports) + core_dependencies))
@@ -69,7 +70,8 @@ def compile_notebook_to_api(notebook_path, output_path):
     
     api_code = generate_fastapi_code(functions)
     write_generated_api(api_code, output_path)
-    generate_dockerfile("generated/")
+    dockerfile_path = os.path.join(os.path.dirname(output_path), "Dockerfile")
+    generate_dockerfile(dockerfile_path)
     
     print(f"Successfully generated FastAPI app at: {output_path}")
 
