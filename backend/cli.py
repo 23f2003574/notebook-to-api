@@ -7,6 +7,7 @@ from pathlib import Path
 from backend.compiler import compile_notebook
 # Import inspector for analysis
 from backend.inspector import inspect_notebook
+from backend.exporters.openapi_exporter import export_openapi_schema
 
 
 def main():
@@ -32,6 +33,15 @@ def main():
         "--output",
         default="generated",
         help="Output directory where compilation artifacts would be placed (used to list generated files)."
+    # openapi export command
+    openapi_parser = subparsers.add_parser(
+        "export-openapi", help="Export OpenAPI schema from generated FastAPI app."
+    )
+    openapi_parser.add_argument(
+        "--output",
+        default="generated/openapi.json",
+        help="Path to write the OpenAPI JSON file."
+    )
     )
 
     args = parser.parse_args()
@@ -45,6 +55,8 @@ def main():
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
         inspect_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
+    elif args.command == "export-openapi":
+        export_openapi_schema(args.output)
     elif args.command == "deploy":
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
