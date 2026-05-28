@@ -10,8 +10,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 
 from pathlib import Path
-from backend.parser.notebook_parser import load_notebook, extract_code_cells, extract_functions_from_notebook
-from backend.parser.ast_parser import extract_imports_from_code
+from backend.parser.notebook_parser import load_notebook, extract_code_cells
+from backend.parser.ast_parser import extract_functions_from_code, extract_imports_from_code
 from backend.generator.api_generator import generate_fastapi_code, write_generated_api
 from backend.generator.docker_generator import generate_dockerfile
 
@@ -55,7 +55,11 @@ def compile_notebook_to_api(notebook_path, output_path):
     
     notebook = load_notebook(notebook_path)
     code_cells = extract_code_cells(notebook)
-    functions = extract_functions_from_notebook(code_cells)
+    # Extract functions from all code cells
+    functions = []
+    for cell in code_cells:
+        funcs = extract_functions_from_code(cell)
+        functions.extend(funcs)
     
     write_runtime_module(code_cells)
     
@@ -70,21 +74,10 @@ def compile_notebook_to_api(notebook_path, output_path):
     print(f"Successfully generated FastAPI app at: {output_path}")
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Compile Jupyter notebook to FastAPI app")
-    parser.add_argument(
-        "--notebook", 
-        type=str, 
-        default="notebooks/sample.ipynb", 
-        help="Path to the input Jupyter notebook"
-    )
-    parser.add_argument(
-        "--output", 
-        type=str, 
-        default="generated/app.py", 
-        help="Path to write the generated FastAPI app"
-    )
-    
-    args = parser.parse_args()
-    
-    compile_notebook_to_api(args.notebook, args.output)
+
+def compile_notebook(notebook_path, output_dir):
+    """Convenient wrapper for CLI.
+    Generates the FastAPI app at <output_dir>/app.py.
+    """
+    output_path = os.path.join(output_dir, "app.py")
+    compile_notebook_to_api(notebook_path, output_path)

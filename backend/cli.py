@@ -5,6 +5,8 @@ from pathlib import Path
 
 # Import the compiler function
 from backend.compiler import compile_notebook
+# Import inspector for analysis
+from backend.inspector import inspect_notebook
 
 
 def main():
@@ -23,18 +25,13 @@ def main():
         help="Output directory where the FastAPI app and assets will be written."
     )
 
-    # deploy command (compile + docker build)
-    deploy_parser = subparsers.add_parser("deploy", help="Compile notebook and build Docker image.")
-    deploy_parser.add_argument("notebook", help="Path to the notebook file.")
-    deploy_parser.add_argument(
+    # inspect command (show analysis report)
+    inspect_parser = subparsers.add_parser("inspect", help="Inspect a notebook and display analysis report.")
+    inspect_parser.add_argument("notebook", help="Path to the notebook file.")
+    inspect_parser.add_argument(
         "--output",
         default="generated",
-        help="Output directory for the generated code."
-    )
-    deploy_parser.add_argument(
-        "--tag",
-        default="notebook-api",
-        help="Docker image tag to use when building."
+        help="Output directory where compilation artifacts would be placed (used to list generated files)."
     )
 
     args = parser.parse_args()
@@ -44,6 +41,10 @@ def main():
         output_dir.mkdir(parents=True, exist_ok=True)
         compile_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
         print("\nCompilation finished. FastAPI app is ready in", output_dir)
+    elif args.command == "inspect":
+        output_dir = Path(args.output)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        inspect_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
     elif args.command == "deploy":
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
