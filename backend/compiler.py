@@ -1,14 +1,19 @@
 import argparse
 import os
 import sys
+import pathlib
 
 # Ensure project root is in sys.path for proper imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+
 
 from pathlib import Path
 from backend.parser.notebook_parser import load_notebook, extract_code_cells, extract_functions_from_notebook
 from backend.parser.ast_parser import extract_imports_from_code
 from backend.generator.api_generator import generate_fastapi_code, write_generated_api
+from backend.generator.docker_generator import generate_dockerfile
 
 
 def write_runtime_module(code_cells):
@@ -62,7 +67,9 @@ def compile_notebook_to_api(notebook_path, output_path="generated/app.py"):
         all_imports.update(cell_imports)
 
     filtered_imports = [imp for imp in all_imports if imp not in STANDARD_LIBS]
+    output_dir = Path(output_path).parent
     write_requirements(filtered_imports)
+    generate_dockerfile(output_dir / "Dockerfile")
 
     # 3. Extract functions via AST from the notebook cells
     functions = extract_functions_from_notebook(notebook_path)
