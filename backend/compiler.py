@@ -47,40 +47,27 @@ def write_requirements(imports):
     print(f"requirements.txt generated with dependencies: {final_deps}")
 
 
-def compile_notebook_to_api(notebook_path, output_path="generated/app.py"):
+def compile_notebook_to_api(notebook_path, output_path):
     print(f"Starting compilation for: {notebook_path}")
     
-    # 1. Load notebook and write runtime module
+    # Ensure output directory exists
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
     notebook = load_notebook(notebook_path)
     code_cells = extract_code_cells(notebook)
+    functions = extract_functions_from_notebook(code_cells)
+    
     write_runtime_module(code_cells)
-
-    # 2. Extract and filter imports for dependencies
-    STANDARD_LIBS = {
-        "os", "sys", "json", "math", "pathlib", "typing", 
-        "datetime", "collections", "itertools", "functools", "re", "time"
-    }
-
-    all_imports = set()
-    for cell in code_cells:
-        cell_imports = extract_imports_from_code(cell)
-        all_imports.update(cell_imports)
-
-    filtered_imports = [imp for imp in all_imports if imp not in STANDARD_LIBS]
-    output_dir = Path(output_path).parent
-    write_requirements(filtered_imports)
-    generate_dockerfile(output_dir / "Dockerfile")
-
-    # 3. Extract functions via AST from the notebook cells
-    functions = extract_functions_from_notebook(notebook_path)
-    print(f"Extracted {len(functions)} functions: {functions}")
     
-    # 4. Generate FastAPI code
-    generated_code = generate_fastapi_code(functions)
+    all_code = "\n\n".join(code_cells)
+    imports = extract_imports_from_code(all_code)
+    write_requirements(imports)
     
-    # 5. Write to the output path
-    write_generated_api(generated_code, output_path)
-    print("Compilation completed successfully!")
+    api_code = generate_fastapi_code(functions)
+    write_generated_api(api_code, output_path)
+    generate_dockerfile("generated/")
+    
+    print(f"Successfully generated FastAPI app at: {output_path}")
 
 
 if __name__ == "__main__":
