@@ -281,9 +281,17 @@ export default function Dashboard() {
 
               <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
 
-                <h2 className="text-xl font-semibold text-white mb-4">
-                  📋 Extracted Functions ({functions.length})
-                </h2>
+                <div className="flex items-center justify-between mb-4">
+
+                  <h2 className="text-xl font-semibold text-white">
+                    🚀 Generated Endpoints
+                  </h2>
+
+                  <span className="bg-emerald-600 text-white text-sm font-bold px-3 py-1 rounded-full">
+                    {endpoints.length}
+                  </span>
+
+                </div>
 
                 <FunctionList
                   functions={functions}
