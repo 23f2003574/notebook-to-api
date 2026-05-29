@@ -37,20 +37,17 @@ export default function Dashboard() {
     const inspectData =
       await inspectResponse.json()
 
-    if (inspectResponse.ok) {
+    if (response.ok) {
+    setFunctions(data.functions || [])
+    setEndpoints(data.endpoints || [])
 
-      setFunctions(
-        inspectData.functions || []
-      )
-
-      setLogs([
-        '✅ Notebook uploaded successfully',
-        `🔍 Found ${
-          inspectData.functions?.length || 0
-        } functions`
-      ])
-
-    } else {
+    setLogs([
+      '✅ Compilation successful',
+      `📦 Generated ${data.functions?.length || 0} functions`,
+      `🚀 Generated ${data.endpoints?.length || 0} endpoints`,
+      `📚 Dependencies: ${data.dependencies?.join(', ') || 'none'}`
+    ])
+  } else {
 
       setLogs([
         '⚠️ Upload succeeded',
