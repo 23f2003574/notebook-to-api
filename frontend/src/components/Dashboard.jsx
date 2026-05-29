@@ -279,25 +279,61 @@ export default function Dashboard() {
 
             {functions.length > 0 && (
 
-              <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
+              <>
 
-                <div className="flex items-center justify-between mb-4">
+                <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
 
-                  <h2 className="text-xl font-semibold text-white">
-                    🚀 Generated Endpoints
-                  </h2>
+                  <div className="flex items-center justify-between mb-4">
 
-                  <span className="bg-emerald-600 text-white text-sm font-bold px-3 py-1 rounded-full">
-                    {endpoints.length}
-                  </span>
+                    <h2 className="text-xl font-semibold text-white">
+                      🚀 Generated Endpoints
+                    </h2>
+
+                    <span className="bg-emerald-600 text-white text-sm font-bold px-3 py-1 rounded-full">
+                      {endpoints.length}
+                    </span>   
 
                 </div>
 
                 <FunctionList
                   functions={functions}
-                />
+                  />
 
-              </div>
+                </div>
+
+              <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mt-6">
+
+                <h2 className="text-xl font-semibold text-white mb-4">
+                    📦 Generated Files
+                </h2>
+
+              <div className="space-y-2">
+
+                    <div className="bg-slate-900 rounded px-4 py-2 text-slate-300">
+                      app.py
+                    </div>
+
+                    <div className="bg-slate-900 rounded px-4 py-2 text-slate-300">
+                      requirements.txt
+                    </div>
+
+                    <div className="bg-slate-900 rounded px-4 py-2 text-slate-300">
+                      Dockerfile
+                    </div>
+
+                    <div className="bg-slate-900 rounded px-4 py-2 text-slate-300">
+                      openapi.json
+                    </div>
+
+                    <div className="bg-slate-900 rounded px-4 py-2 text-slate-300">
+                      python_client.py
+                    </div>
+              
+                  </div>
+
+                </div>
+
+              </>
 
             )}
 
