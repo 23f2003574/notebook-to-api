@@ -97,7 +97,10 @@ export default function Dashboard() {
             </div>
             <div className="text-right">
               <p className="text-sm text-slate-400 mb-2">
-                Backend: <span className="text-emerald-400">Running</span>
+                Backend:
+                <span className="text-emerald-400 font-semibold">
+                  {' '}🟢 Running
+                </span>
               </p>
               <a href="http://localhost:8001/docs" target="_blank" rel="noopener noreferrer" className="inline-block bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-3 py-2 rounded transition">
                 📖 Open API Docs
