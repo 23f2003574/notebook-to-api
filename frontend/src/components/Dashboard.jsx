@@ -154,7 +154,25 @@ export default function Dashboard() {
                 {isCompiling ? '🔄 Compiling...' : '🚀 Compile Now'}
               </button>
             </div>
+            {/* Generated Endpoints Section */}
+            {endpoints.length > 0 && (
+              <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
+                <h2 className="text-xl font-semibold text-white mb-4">
+                  🚀 Generated Endpoints ({endpoints.length})
+                </h2>
 
+                <div className="space-y-2">
+                  {endpoints.map((endpoint) => (
+                    <div
+                      key={endpoint}
+                      className="bg-slate-900 border border-slate-700 rounded px-4 py-3 text-emerald-400 font-mono"
+                    >
+                      POST {endpoint}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             {/* Functions Section */}
             {functions.length > 0 && (
               <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
