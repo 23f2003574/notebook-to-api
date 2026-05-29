@@ -187,10 +187,25 @@ async def compile_notebook_endpoint(
             "generated"
         )
 
+        endpoints = []
+
+        for func in functions:
+
+            if isinstance(func, dict):
+
+                name = func.get("name")
+
+                if name:
+
+                    endpoints.append(
+                        f"/{name}"
+                    )
+
         return {
             "status": "success",
             "notebook": notebook_path,
             "functions": functions,
+            "endpoints": endpoints,
             "message": "Notebook compiled successfully"
         }
 
@@ -200,7 +215,6 @@ async def compile_notebook_endpoint(
             status_code=500,
             detail=f"Compilation error: {str(e)}"
         )
-
 
 @router.get("/health")
 async def health_check():

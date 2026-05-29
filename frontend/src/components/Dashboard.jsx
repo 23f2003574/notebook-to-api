@@ -9,10 +9,65 @@ export default function Dashboard() {
   const [logs, setLogs] = useState([])
   const [isCompiling, setIsCompiling] = useState(false)
 
-  const handleUploadSuccess = (response) => {
-    setUploadedNotebook(response.filename)
-    setLogs(['✅ Notebook uploaded successfully'])
+ const handleUploadSuccess = async (response) => {
+
+  setUploadedNotebook(response.filename)
+
+  setLogs([
+    '✅ Notebook uploaded successfully',
+    '🔍 Inspecting notebook...'
+  ])
+
+  try {
+
+    const inspectResponse = await fetch(
+      'http://localhost:8001/api/inspect',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          notebook_path: response.filename
+        })
+      }
+    )
+
+    const inspectData =
+      await inspectResponse.json()
+
+    if (inspectResponse.ok) {
+
+      setFunctions(
+        inspectData.functions || []
+      )
+
+      setLogs([
+        '✅ Notebook uploaded successfully',
+        `🔍 Found ${
+          inspectData.functions?.length || 0
+        } functions`
+      ])
+
+    } else {
+
+      setLogs([
+        '⚠️ Upload succeeded',
+        '❌ Inspection failed'
+      ])
+
+    }
+
+  } catch (error) {
+
+    setLogs([
+      '⚠️ Upload succeeded',
+      '❌ Inspection error: ' +
+      error.message
+    ])
+
   }
+}
 
   const handleCompile = async () => {
     if (!uploadedNotebook) {
