@@ -242,13 +242,30 @@ export default function Dashboard() {
                       className="flex items-center justify-between bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 hover:border-emerald-500 transition"
                     >
 
-                      <span className="bg-emerald-600 text-white text-xs font-bold px-2 py-1 rounded">
-                        POST
-                      </span>
+                      <div className="flex items-center gap-4">
 
-                      <span className="text-emerald-400 font-mono">
-                        {endpoint}
-                      </span>
+                        <span className="bg-emerald-600 text-white text-xs font-bold px-2 py-1 rounded">
+                          POST
+                        </span>
+
+                        <span className="text-emerald-400 font-mono">
+                          {endpoint}
+                        </span>
+
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(endpoint)
+
+                          setLogs([
+                            `📋 Copied ${endpoint}`
+                          ])
+                        }}
+                        className="bg-slate-700 hover:bg-slate-600 text-white text-sm px-3 py-1 rounded"
+                      >
+                        Copy
+                      </button>
 
                     </div>
 
