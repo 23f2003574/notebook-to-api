@@ -8,6 +8,7 @@ export default function Dashboard() {
   const [functions, setFunctions] = useState([])
   const [logs, setLogs] = useState([])
   const [isCompiling, setIsCompiling] = useState(false)
+  const [endpoints, setEndpoints] = useState([])
 
  const handleUploadSuccess = async (response) => {
 
