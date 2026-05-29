@@ -219,10 +219,22 @@ export default function Dashboard() {
 
             <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 hover:border-slate-600 transition">
 
-              <h2 className="text-xl font-semibold text-white mb-4">
-                ⚡ Compile to API
-              </h2>
+              <div className="flex items-center justify-between mb-4">
 
+                <h2 className="text-xl font-semibold text-white">
+                  📦 Generated Files
+                </h2>
+
+                <a
+                  href="http://localhost:8000/docs"
+                  target="_blank"
+                    rel="noreferrer"
+                    className="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-2 rounded transition"
+                >
+                  🌐 Open API
+                </a>
+
+              </div>
               <button
                 onClick={handleCompile}
                 disabled={!uploadedNotebook || isCompiling}
