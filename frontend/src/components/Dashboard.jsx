@@ -165,14 +165,26 @@ export default function Dashboard() {
               </p>
             </div>
 
-            <div className="text-right text-sm text-slate-400">
-              <p>
+            <div className="text-right">
+
+              <p className="text-sm text-slate-400 mb-2">
                 Backend:
                 <span className="text-emerald-400">
                   {' '}Running
                 </span>
               </p>
+
+              <a
+                href="http://localhost:8001/docs"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-block bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-3 py-2 rounded transition"
+              >
+                📖 Open API Docs
+              </a>
+
             </div>
+
 
           </div>
         </div>
