@@ -14,6 +14,7 @@ export default function EndpointTester({ endpoints = [] }) {
 
   const [responseData, setResponseData] = useState(null)
   const [responseStatus, setResponseStatus] = useState(null)
+  const [requestHistory, setRequestHistory] = useState([])
   const [isSending, setIsSending] = useState(false)
   const [jsonError, setJsonError] = useState('')
 
@@ -32,6 +33,7 @@ export default function EndpointTester({ endpoints = [] }) {
     setResponseData(null)
     setResponseStatus(null)
     setJsonError('')
+    setRequestHistory([])
   }
 
   const formatJson = () => {
@@ -75,6 +77,14 @@ export default function EndpointTester({ endpoints = [] }) {
       const data = await response.json()
 
       setResponseData(data)
+
+      setRequestHistory(prev => [
+        {
+          endpoint: selectedEndpoint,
+          timestamp: new Date().toLocaleTimeString()
+        },
+        ...prev
+      ])
     } catch (error) {
       setResponseData({
         error: error.message
@@ -187,6 +197,31 @@ export default function EndpointTester({ endpoints = [] }) {
                   <pre className="bg-slate-900 border border-slate-700 rounded-lg p-4 text-slate-300 text-sm overflow-auto">
                     {JSON.stringify(responseData, null, 2)}
                   </pre>
+                </div>
+              )}
+
+              {requestHistory.length > 0 && (
+                <div className="mt-6">
+                  <h3 className="text-slate-300 font-semibold mb-3">
+                    📜 Request History
+                  </h3>
+
+                  <div className="space-y-2">
+                    {requestHistory.map((item, index) => (
+                      <div
+                        key={index}
+                        className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 flex justify-between items-center"
+                      >
+                        <span className="text-emerald-400 font-mono">
+                          POST {item.endpoint}
+                        </span>
+
+                        <span className="text-xs text-slate-500">
+                          {item.timestamp}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
