@@ -13,6 +13,7 @@ export default function EndpointTester({ endpoints = [] }) {
   )
 
   const [responseData, setResponseData] = useState(null)
+  const [responseStatus, setResponseStatus] = useState(null)
   const [isSending, setIsSending] = useState(false)
   const [jsonError, setJsonError] = useState('')
 
@@ -51,6 +52,8 @@ export default function EndpointTester({ endpoints = [] }) {
           body: requestBody
         }
       )
+
+      setResponseStatus(response.status)
 
       const data = await response.json()
 
@@ -136,6 +139,23 @@ export default function EndpointTester({ endpoints = [] }) {
 
               {responseData && (
                 <div className="mt-4">
+
+                  {responseStatus && (
+                    <div className="mb-3">
+                      <span
+                        className={`px-3 py-1 rounded-full text-sm font-semibold ${
+                          responseStatus >= 200 && responseStatus < 300
+                            ? 'bg-emerald-600 text-white'
+                            : responseStatus >= 400
+                            ? 'bg-red-600 text-white'
+                            : 'bg-yellow-600 text-white'
+                        }`}
+                      >
+                        HTTP {responseStatus}
+                      </span>
+                    </div>
+                  )}
+
                   <label className="block text-slate-300 text-sm mb-2">
                     Response
                   </label>
