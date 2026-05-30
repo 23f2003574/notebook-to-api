@@ -11,7 +11,6 @@ export default function EndpointTester({ endpoints = [] }) {
       2
     )
   )
-
   return (
     <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
       <h2 className="text-xl font-semibold text-white mb-4">
@@ -21,7 +20,6 @@ export default function EndpointTester({ endpoints = [] }) {
       <p className="text-slate-400 mb-4">
         Test generated API endpoints directly from the dashboard.
       </p>
-
       <div className="space-y-4">
         <div>
           <label className="block text-slate-300 text-sm mb-2">
@@ -44,7 +42,6 @@ export default function EndpointTester({ endpoints = [] }) {
             ))}
           </select>
         </div>
-
         {selectedEndpoint && (
           <>
             <div className="bg-slate-900 border border-slate-700 rounded-lg p-4">
@@ -57,7 +54,6 @@ export default function EndpointTester({ endpoints = [] }) {
               <label className="block text-slate-300 text-sm mb-2">
                 Request Body
               </label>
-
               <textarea
                 value={requestBody}
                 onChange={(e) => setRequestBody(e.target.value)}
