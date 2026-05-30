@@ -2,6 +2,15 @@ import { useState } from 'react'
 
 export default function EndpointTester({ endpoints = [] }) {
   const [selectedEndpoint, setSelectedEndpoint] = useState('')
+  const [requestBody, setRequestBody] = useState(
+    JSON.stringify(
+      {
+        example: "value"
+      },
+      null,
+      2
+    )
+  )
 
   return (
     <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
@@ -37,11 +46,26 @@ export default function EndpointTester({ endpoints = [] }) {
         </div>
 
         {selectedEndpoint && (
-          <div className="bg-slate-900 border border-slate-700 rounded-lg p-4">
-            <p className="text-emerald-400 font-mono">
-              Selected: {selectedEndpoint}
-            </p>
-          </div>
+          <>
+            <div className="bg-slate-900 border border-slate-700 rounded-lg p-4">
+              <p className="text-emerald-400 font-mono">
+                Selected: {selectedEndpoint}
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-slate-300 text-sm mb-2">
+                Request Body
+              </label>
+
+              <textarea
+                value={requestBody}
+                onChange={(e) => setRequestBody(e.target.value)}
+                rows={10}
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white font-mono text-sm"
+              />
+            </div>
+          </>
         )}
       </div>
     </div>
