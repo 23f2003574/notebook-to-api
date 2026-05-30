@@ -195,7 +195,7 @@ export default function Dashboard() {
               </div>
             )}
             {endpoints.length > 0 && (
-              <EndpointTester />
+              <EndpointTester endpoints={endpoints} />
             )}
           </div>
 
