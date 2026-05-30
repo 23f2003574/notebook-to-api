@@ -36,6 +36,14 @@ export default function EndpointTester({ endpoints = [] }) {
     setRequestHistory([])
   }
 
+  const copyResponse = async () => {
+    if (!responseData) return
+
+    await navigator.clipboard.writeText(
+      JSON.stringify(responseData, null, 2)
+    )
+  }
+
   const formatJson = () => {
     try {
       const parsed = JSON.parse(requestBody)
@@ -190,9 +198,18 @@ export default function EndpointTester({ endpoints = [] }) {
                     </div>
                   )}
 
-                  <label className="block text-slate-300 text-sm mb-2">
-                    Response
-                  </label>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-slate-300 text-sm">
+                      Response
+                    </label>
+
+                    <button
+                      onClick={copyResponse}
+                      className="bg-slate-700 hover:bg-slate-600 text-white text-xs px-3 py-1 rounded"
+                    >
+                      📋 Copy Response
+                    </button>
+                  </div>
 
                   <pre className="bg-slate-900 border border-slate-700 rounded-lg p-4 text-slate-300 text-sm overflow-auto">
                     {JSON.stringify(responseData, null, 2)}
