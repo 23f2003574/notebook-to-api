@@ -17,6 +17,23 @@ export default function EndpointTester({ endpoints = [] }) {
   const [isSending, setIsSending] = useState(false)
   const [jsonError, setJsonError] = useState('')
 
+  const clearPlayground = () => {
+    setSelectedEndpoint('')
+    setRequestBody(
+      JSON.stringify(
+        {
+          example: "value"
+        },
+        null,
+        2
+      )
+    )
+
+    setResponseData(null)
+    setResponseStatus(null)
+    setJsonError('')
+  }
+
   const formatJson = () => {
     try {
       const parsed = JSON.parse(requestBody)
@@ -122,6 +139,13 @@ export default function EndpointTester({ endpoints = [] }) {
                   className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-sm"
                 >
                   ✨ Format JSON
+                </button>
+
+                <button
+                  onClick={clearPlayground}
+                  className="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg text-sm"
+                >
+                  🗑 Clear
                 </button>
               </div>
               {jsonError && (
