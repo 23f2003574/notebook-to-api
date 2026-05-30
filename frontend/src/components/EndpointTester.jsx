@@ -38,6 +38,27 @@ export default function EndpointTester({ endpoints = [] }) {
     setRequestHistory([])
   }
 
+  const downloadResponse = () => {
+    if (!responseData) return
+
+    const blob = new Blob(
+      [JSON.stringify(responseData, null, 2)],
+      { type: 'application/json' }
+    )
+
+    const url = URL.createObjectURL(blob)
+
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'response.json'
+
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+
+    URL.revokeObjectURL(url)
+  }
+
   const copyResponse = async () => {
     if (!responseData) return
 
@@ -210,12 +231,21 @@ export default function EndpointTester({ endpoints = [] }) {
                       Response
                     </label>
 
+                  <div className="flex gap-2">
                     <button
                       onClick={copyResponse}
                       className="bg-slate-700 hover:bg-slate-600 text-white text-xs px-3 py-1 rounded"
                     >
                       📋 Copy Response
                     </button>
+
+                    <button
+                      onClick={downloadResponse}
+                      className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 py-1 rounded"
+                    >
+                      ⬇ Download JSON
+                    </button>
+                  </div>
                   </div>
 
                   {responseMeta && (
