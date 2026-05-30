@@ -14,6 +14,7 @@ export default function EndpointTester({ endpoints = [] }) {
 
   const [responseData, setResponseData] = useState(null)
   const [responseStatus, setResponseStatus] = useState(null)
+  const [responseMeta, setResponseMeta] = useState(null)
   const [requestHistory, setRequestHistory] = useState([])
   const [isSending, setIsSending] = useState(false)
   const [jsonError, setJsonError] = useState('')
@@ -32,6 +33,7 @@ export default function EndpointTester({ endpoints = [] }) {
 
     setResponseData(null)
     setResponseStatus(null)
+    setResponseMeta(null)
     setJsonError('')
     setRequestHistory([])
   }
@@ -85,6 +87,11 @@ export default function EndpointTester({ endpoints = [] }) {
       const data = await response.json()
 
       setResponseData(data)
+
+      setResponseMeta({
+        timestamp: new Date().toLocaleTimeString(),
+        size: JSON.stringify(data).length
+      })
 
       setRequestHistory(prev => [
         {
@@ -210,6 +217,18 @@ export default function EndpointTester({ endpoints = [] }) {
                       📋 Copy Response
                     </button>
                   </div>
+
+                  {responseMeta && (
+                    <div className="bg-slate-900 border border-slate-700 rounded-lg p-3 mb-3">
+                      <div className="text-sm text-slate-300">
+                        📏 Response Size: {responseMeta.size} bytes
+                      </div>
+
+                      <div className="text-sm text-slate-300 mt-1">
+                        🕒 Received: {responseMeta.timestamp}
+                      </div>
+                    </div>
+                  )}
 
                   <pre className="bg-slate-900 border border-slate-700 rounded-lg p-4 text-slate-300 text-sm overflow-auto">
                     {JSON.stringify(responseData, null, 2)}
