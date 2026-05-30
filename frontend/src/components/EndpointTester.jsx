@@ -11,6 +11,37 @@ export default function EndpointTester({ endpoints = [] }) {
       2
     )
   )
+
+  const [responseData, setResponseData] = useState(null)
+  const [isSending, setIsSending] = useState(false)
+
+  const sendRequest = async () => {
+    try {
+      setIsSending(true)
+
+      const response = await fetch(
+        `http://localhost:8000${selectedEndpoint}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: requestBody
+        }
+      )
+
+      const data = await response.json()
+
+      setResponseData(data)
+    } catch (error) {
+      setResponseData({
+        error: error.message
+      })
+    } finally {
+      setIsSending(false)
+    }
+  }
+
   return (
     <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
       <h2 className="text-xl font-semibold text-white mb-4">
@@ -60,6 +91,25 @@ export default function EndpointTester({ endpoints = [] }) {
                 rows={10}
                 className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white font-mono text-sm"
               />
+              <button
+                onClick={sendRequest}
+                disabled={isSending}
+                className="mt-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-600 text-white px-4 py-2 rounded-lg"
+              >
+                {isSending ? 'Sending...' : 'Send Request'}
+              </button>
+
+              {responseData && (
+                <div className="mt-4">
+                  <label className="block text-slate-300 text-sm mb-2">
+                    Response
+                  </label>
+
+                  <pre className="bg-slate-900 border border-slate-700 rounded-lg p-4 text-slate-300 text-sm overflow-auto">
+                    {JSON.stringify(responseData, null, 2)}
+                  </pre>
+                </div>
+              )}
             </div>
           </>
         )}
