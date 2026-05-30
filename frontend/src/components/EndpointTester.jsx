@@ -14,8 +14,16 @@ export default function EndpointTester({ endpoints = [] }) {
 
   const [responseData, setResponseData] = useState(null)
   const [isSending, setIsSending] = useState(false)
+  const [jsonError, setJsonError] = useState('')
 
   const sendRequest = async () => {
+    try {
+      JSON.parse(requestBody)
+      setJsonError('')
+    } catch {
+      setJsonError('Invalid JSON format')
+      return
+    }
     try {
       setIsSending(true)
 
@@ -91,6 +99,11 @@ export default function EndpointTester({ endpoints = [] }) {
                 rows={10}
                 className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white font-mono text-sm"
               />
+              {jsonError && (
+                <p className="text-red-400 text-sm mt-2">
+                  ❌ {jsonError}
+                </p>
+              )}
               <button
                 onClick={sendRequest}
                 disabled={isSending}
