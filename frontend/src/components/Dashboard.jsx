@@ -2,6 +2,7 @@ import { useState } from 'react'
 import NotebookUpload from './NotebookUpload'
 import FunctionList from './FunctionList'
 import CompilationLogs from './CompilationLogs'
+import EndpointTester from "./EndpointTester"
 
 export default function Dashboard() {
   const [uploadedNotebook, setUploadedNotebook] = useState(null)
@@ -193,7 +194,9 @@ export default function Dashboard() {
                 </div>
               </div>
             )}
-
+            {endpoints.length > 0 && (
+              <EndpointTester />
+            )}
           </div>
 
           <div className="lg:col-span-1">
