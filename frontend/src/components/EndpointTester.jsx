@@ -16,6 +16,20 @@ export default function EndpointTester({ endpoints = [] }) {
   const [isSending, setIsSending] = useState(false)
   const [jsonError, setJsonError] = useState('')
 
+  const formatJson = () => {
+    try {
+      const parsed = JSON.parse(requestBody)
+
+      setRequestBody(
+        JSON.stringify(parsed, null, 2)
+      )
+
+      setJsonError('')
+    } catch {
+      setJsonError('Cannot format invalid JSON')
+    }
+  }
+
   const sendRequest = async () => {
     try {
       JSON.parse(requestBody)
@@ -99,6 +113,14 @@ export default function EndpointTester({ endpoints = [] }) {
                 rows={10}
                 className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white font-mono text-sm"
               />
+              <div className="flex gap-2 mt-3">
+                <button
+                  onClick={formatJson}
+                  className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-sm"
+                >
+                  ✨ Format JSON
+                </button>
+              </div>
               {jsonError && (
                 <p className="text-red-400 text-sm mt-2">
                   ❌ {jsonError}
