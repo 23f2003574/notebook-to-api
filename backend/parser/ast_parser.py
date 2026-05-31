@@ -98,6 +98,27 @@ def generate_example_payload(args):
                 .strip()
             )
 
+        if arg_type and arg_type.startswith("Literal["):
+            literal_values = (
+                arg_type
+                .replace("Literal[", "")
+                .rstrip("]")
+                .split(",")
+            )
+            first_value = literal_values[0].strip()
+            if (
+                first_value.startswith('"')
+                and first_value.endswith('"')
+            ):
+                first_value = first_value[1:-1]
+            elif (
+                first_value.startswith("'")
+                and first_value.endswith("'")
+            ):
+                first_value = first_value[1:-1]
+            payload[arg_name] = first_value
+            continue
+
         if arg_type in (
             "pd.DataFrame",
             "DataFrame"
@@ -183,20 +204,16 @@ def extract_imports_from_code(code):
 
 if __name__ == "__main__":
     sample_code = """
-import pandas as pd
-import numpy as np
+from typing import Literal
 
-def predict(data: pd.DataFrame) -> list:
-    return []
+def train(model: Literal["xgboost", "rf", "svm"]) -> str:
+    return model
 
-def classify(image: np.ndarray) -> str:
-    return ""
+def set_mode(mode: Literal["fast", "balanced", "accurate"]) -> str:
+    return mode
 
-def summarize(values: pd.Series) -> float:
-    return 0.0
-
-def process(df: DataFrame, arr: ndarray) -> list:
-    return []
+def set_level(level: Literal[1, 2, 3]) -> int:
+    return level
 """
 
     extracted = extract_functions_from_code(sample_code)
