@@ -57,6 +57,65 @@ def extract_functions_from_code(code):
     return functions
 
 
+def normalize_type_annotation(arg_type):
+    if not arg_type:
+        return arg_type
+
+    if arg_type.startswith("Annotated["):
+        return (
+            arg_type
+            .replace("Annotated[", "")
+            .rstrip("]")
+            .split(",")[0]
+            .strip()
+        )
+
+    if arg_type.startswith("Optional["):
+        return (
+            arg_type
+            .replace("Optional[", "")
+            .replace("]", "")
+        )
+
+    if arg_type.startswith("Union["):
+        return (
+            arg_type
+            .replace("Union[", "")
+            .replace("]", "")
+            .split(",")[0]
+            .strip()
+        )
+
+    if "|" in arg_type:
+        return arg_type.split("|")[0].strip()
+
+    if (
+        arg_type.startswith("List[")
+        or arg_type.startswith("list[")
+    ):
+        return "list"
+
+    if (
+        arg_type.startswith("Dict[")
+        or arg_type.startswith("dict[")
+    ):
+        return "dict"
+
+    if (
+        arg_type.startswith("Tuple[")
+        or arg_type.startswith("tuple[")
+    ):
+        return "tuple"
+
+    if (
+        arg_type.startswith("Set[")
+        or arg_type.startswith("set[")
+    ):
+        return "set"
+
+    return arg_type
+
+
 def generate_example_payload(args):
     payload = {}
 
@@ -73,40 +132,9 @@ def generate_example_payload(args):
 
     for arg in args:
         arg_name = arg.get("name")
-        arg_type = arg.get("type")
-
-        if arg_type and arg_type.startswith("Annotated["):
-            inner_type = (
-                arg_type
-                .replace("Annotated[", "")
-                .rstrip("]")
-                .split(",")[0]
-                .strip()
-            )
-            arg_type = inner_type
-
-        if arg_type and arg_type.startswith("Optional["):
-            arg_type = (
-                arg_type
-                .replace("Optional[", "")
-                .replace("]", "")
-            )
-
-        if arg_type and arg_type.startswith("Union["):
-            arg_type = (
-                arg_type
-                .replace("Union[", "")
-                .replace("]", "")
-                .split(",")[0]
-                .strip()
-            )
-
-        if arg_type and "|" in arg_type:
-            arg_type = (
-                arg_type
-                .split("|")[0]
-                .strip()
-            )
+        arg_type = normalize_type_annotation(
+            arg.get("type")
+        )
 
         if arg_type and arg_type.startswith("Literal["):
             literal_values = (
@@ -150,30 +178,6 @@ def generate_example_payload(args):
             payload[arg_name] = []
             continue
 
-        if arg_type and (
-            arg_type.startswith("List[")
-            or arg_type.startswith("list[")
-        ):
-            arg_type = "list"
-
-        if arg_type and (
-            arg_type.startswith("Dict[")
-            or arg_type.startswith("dict[")
-        ):
-            arg_type = "dict"
-
-        if arg_type and (
-            arg_type.startswith("Tuple[")
-            or arg_type.startswith("tuple[")
-        ):
-            arg_type = "tuple"
-
-        if arg_type and (
-            arg_type.startswith("Set[")
-            or arg_type.startswith("set[")
-        ):
-            arg_type = "set"
-
         if arg.get("default") is not None:
             payload[arg_name] = arg["default"]
         else:
@@ -214,16 +218,39 @@ def extract_imports_from_code(code):
 
 if __name__ == "__main__":
     sample_code = """
-from typing import Annotated
+from typing import Optional, Union, Literal, Annotated, List, Dict
+import pandas as pd
+import numpy as np
+
+def add(a: int, b: int) -> int:
+    return a + b
+
+def greet(name: Optional[str]) -> str:
+    return f"Hello {name}"
+
+def parse(value: Union[int, str]) -> str:
+    return str(value)
+
+def identify(user_id: int | str) -> str:
+    return str(user_id)
+
+def train(model: Literal["xgboost", "rf"]) -> str:
+    return model
 
 def search(query: Annotated[str, "search query"]) -> list:
     return []
 
-def predict(age: Annotated[int, "user age"]) -> float:
-    return 0.0
+def classify(labels: List[str]) -> str:
+    return labels[0]
 
-def process(ratio: Annotated[float, "blend ratio"]) -> str:
-    return ""
+def predict(data: pd.DataFrame) -> list:
+    return []
+
+def embed(arr: np.ndarray) -> list:
+    return []
+
+def fit(epochs=100, lr=0.001) -> str:
+    return "done"
 """
 
     extracted = extract_functions_from_code(sample_code)
