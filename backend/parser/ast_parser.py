@@ -98,6 +98,27 @@ def generate_example_payload(args):
                 .strip()
             )
 
+        if arg_type in (
+            "pd.DataFrame",
+            "DataFrame"
+        ):
+            payload[arg_name] = []
+            continue
+
+        if arg_type in (
+            "np.ndarray",
+            "ndarray"
+        ):
+            payload[arg_name] = []
+            continue
+
+        if arg_type in (
+            "pd.Series",
+            "Series"
+        ):
+            payload[arg_name] = []
+            continue
+
         if arg_type and (
             arg_type.startswith("List[")
             or arg_type.startswith("list[")
@@ -162,16 +183,20 @@ def extract_imports_from_code(code):
 
 if __name__ == "__main__":
     sample_code = """
-from typing import Union
+import pandas as pd
+import numpy as np
 
-def parse(value: Union[int, str]) -> str:
-    return str(value)
+def predict(data: pd.DataFrame) -> list:
+    return []
 
-def identify(user_id: int | str) -> str:
-    return str(user_id)
+def classify(image: np.ndarray) -> str:
+    return ""
 
-def mix(x: Union[float, int, str]) -> str:
-    return str(x)
+def summarize(values: pd.Series) -> float:
+    return 0.0
+
+def process(df: DataFrame, arr: ndarray) -> list:
+    return []
 """
 
     extracted = extract_functions_from_code(sample_code)
