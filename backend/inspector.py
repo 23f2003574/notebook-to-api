@@ -67,6 +67,10 @@ def inspect_notebook(notebook_path, output_dir="generated"):
             f"   Route: POST /{func['name']}"
         )
 
+        print(
+            f"   Example Payload: {func.get('example_payload', {})}"
+        )
+
     print("\nDependencies:")
     print("-" * 20)
 
