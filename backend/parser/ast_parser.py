@@ -66,12 +66,21 @@ def generate_example_payload(args):
         "str": "",
         "bool": False,
         "list": [],
-        "dict": {}
+        "dict": {},
+        "List": [],
+        "Dict": {}
     }
 
     for arg in args:
         arg_name = arg.get("name")
         arg_type = arg.get("type")
+
+        if arg_type and arg_type.startswith("Optional["):
+            arg_type = (
+                arg_type
+                .replace("Optional[", "")
+                .replace("]", "")
+            )
 
         if arg.get("default") is not None:
             payload[arg_name] = arg["default"]
@@ -113,22 +122,20 @@ def extract_imports_from_code(code):
 
 if __name__ == "__main__":
     sample_code = """
-import sys
-import os
+from typing import Optional
 import pandas as pd
-from sklearn.linear_model import LinearRegression
 
 def add(a: int, b: int) -> int:
     return a + b
 
-def greet(name: str) -> str:
+def greet(name: Optional[str]) -> str:
     return f"Hello {name}"
+
+def train(epochs: Optional[int]) -> str:
+    return "done"
 
 def predict(model="xgboost") -> str:
     return model
-
-def train(epochs=100, lr=0.001) -> str:
-    return "done"
 """
 
     extracted = extract_functions_from_code(sample_code)
