@@ -10,14 +10,34 @@ def extract_functions_from_code(code):
         if isinstance(node, ast.FunctionDef):
             args = []
 
-            for arg in node.args.args:
+            defaults = node.args.defaults
+
+            default_offset = (
+                len(node.args.args)
+                - len(defaults)
+            )
+
+            for idx, arg in enumerate(node.args.args):
                 arg_info = {
                     "name": arg.arg,
-                    "type": None
+                    "type": None,
+                    "default": None
                 }
 
                 if arg.annotation:
                     arg_info["type"] = ast.unparse(arg.annotation)
+
+                default_index = idx - default_offset
+
+                if default_index >= 0:
+                    try:
+                        arg_info["default"] = ast.literal_eval(
+                            defaults[default_index]
+                        )
+                    except Exception:
+                        arg_info["default"] = ast.unparse(
+                            defaults[default_index]
+                        )
 
                 args.append(arg_info)
 
@@ -51,13 +71,15 @@ def generate_example_payload(args):
 
     for arg in args:
         arg_name = arg.get("name")
-
         arg_type = arg.get("type")
 
-        payload[arg_name] = type_defaults.get(
-            arg_type,
-            None
-        )
+        if arg.get("default") is not None:
+            payload[arg_name] = arg["default"]
+        else:
+            payload[arg_name] = type_defaults.get(
+                arg_type,
+                None
+            )
 
     return payload
 
@@ -101,6 +123,12 @@ def add(a: int, b: int) -> int:
 
 def greet(name: str) -> str:
     return f"Hello {name}"
+
+def predict(model="xgboost") -> str:
+    return model
+
+def train(epochs=100, lr=0.001) -> str:
+    return "done"
 """
 
     extracted = extract_functions_from_code(sample_code)
