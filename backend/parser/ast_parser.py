@@ -28,12 +28,38 @@ def extract_functions_from_code(code):
             function_info = {
                 "name": node.name,
                 "args": args,
-                "return_type": return_type
+                "return_type": return_type,
+                "example_payload": generate_example_payload(args)
             }
 
             functions.append(function_info)
 
     return functions
+
+
+def generate_example_payload(args):
+    payload = {}
+
+    type_defaults = {
+        "int": 0,
+        "float": 0.0,
+        "str": "",
+        "bool": False,
+        "list": [],
+        "dict": {}
+    }
+
+    for arg in args:
+        arg_name = arg.get("name")
+
+        arg_type = arg.get("type")
+
+        payload[arg_name] = type_defaults.get(
+            arg_type,
+            None
+        )
+
+    return payload
 
 
 def extract_imports_from_code(code):

@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 export default function EndpointTester({ endpoints = [] }) {
   const [selectedEndpoint, setSelectedEndpoint] = useState('')
+  const [searchTerm, setSearchTerm] = useState('')
   const [requestBody, setRequestBody] = useState(
     JSON.stringify(
       {
@@ -16,6 +17,10 @@ export default function EndpointTester({ endpoints = [] }) {
   const [responseStatus, setResponseStatus] = useState(null)
   const [responseMeta, setResponseMeta] = useState(null)
   const [requestHistory, setRequestHistory] = useState([])
+
+  const filteredEndpoints = endpoints.filter(endpoint =>
+    endpoint.toLowerCase().includes(searchTerm.toLowerCase())
+  )
   const [isSending, setIsSending] = useState(false)
   const [jsonError, setJsonError] = useState('')
 
@@ -140,6 +145,20 @@ export default function EndpointTester({ endpoints = [] }) {
         Test generated API endpoints directly from the dashboard.
       </p>
       <div className="space-y-4">
+        <div className="mb-4">
+          <label className="block text-slate-300 text-sm mb-2">
+            🔍 Search Endpoint
+          </label>
+
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Search endpoints..."
+            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white"
+          />
+        </div>
+
         <div>
           <label className="block text-slate-300 text-sm mb-2">
             Select Endpoint
@@ -154,12 +173,18 @@ export default function EndpointTester({ endpoints = [] }) {
               Choose an endpoint...
             </option>
 
-            {endpoints.map((endpoint) => (
+            {filteredEndpoints.map((endpoint) => (
               <option key={endpoint} value={endpoint}>
                 {endpoint}
               </option>
             ))}
           </select>
+
+          {filteredEndpoints.length === 0 && (
+            <p className="text-yellow-400 text-sm mt-2">
+              No matching endpoints found.
+            </p>
+          )}
         </div>
         {selectedEndpoint && (
           <>
