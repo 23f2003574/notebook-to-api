@@ -66,9 +66,7 @@ def generate_example_payload(args):
         "str": "",
         "bool": False,
         "list": [],
-        "dict": {},
-        "List": [],
-        "Dict": {}
+        "dict": {}
     }
 
     for arg in args:
@@ -81,6 +79,12 @@ def generate_example_payload(args):
                 .replace("Optional[", "")
                 .replace("]", "")
             )
+
+        if arg_type and arg_type.startswith("List["):
+            arg_type = "list"
+
+        if arg_type and arg_type.startswith("Dict["):
+            arg_type = "dict"
 
         if arg.get("default") is not None:
             payload[arg_name] = arg["default"]
@@ -122,8 +126,7 @@ def extract_imports_from_code(code):
 
 if __name__ == "__main__":
     sample_code = """
-from typing import Optional
-import pandas as pd
+from typing import Optional, List, Dict
 
 def add(a: int, b: int) -> int:
     return a + b
@@ -131,11 +134,11 @@ def add(a: int, b: int) -> int:
 def greet(name: Optional[str]) -> str:
     return f"Hello {name}"
 
-def train(epochs: Optional[int]) -> str:
-    return "done"
+def classify(labels: List[str]) -> str:
+    return labels[0]
 
-def predict(model="xgboost") -> str:
-    return model
+def configure(params: Dict[str, float]) -> str:
+    return str(params)
 """
 
     extracted = extract_functions_from_code(sample_code)
