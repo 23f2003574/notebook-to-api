@@ -82,6 +82,22 @@ def generate_example_payload(args):
                 .replace("]", "")
             )
 
+        if arg_type and arg_type.startswith("Union["):
+            arg_type = (
+                arg_type
+                .replace("Union[", "")
+                .replace("]", "")
+                .split(",")[0]
+                .strip()
+            )
+
+        if arg_type and "|" in arg_type:
+            arg_type = (
+                arg_type
+                .split("|")[0]
+                .strip()
+            )
+
         if arg_type and (
             arg_type.startswith("List[")
             or arg_type.startswith("list[")
@@ -146,19 +162,16 @@ def extract_imports_from_code(code):
 
 if __name__ == "__main__":
     sample_code = """
-from typing import Tuple, Set
+from typing import Union
 
-def coords(point: tuple[int, int]) -> float:
-    return 0.0
+def parse(value: Union[int, str]) -> str:
+    return str(value)
 
-def coords_old(point: Tuple[int, int]) -> float:
-    return 0.0
+def identify(user_id: int | str) -> str:
+    return str(user_id)
 
-def tags(labels: set[str]) -> int:
-    return len(labels)
-
-def tags_old(labels: Set[str]) -> int:
-    return len(labels)
+def mix(x: Union[float, int, str]) -> str:
+    return str(x)
 """
 
     extracted = extract_functions_from_code(sample_code)
