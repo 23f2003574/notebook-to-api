@@ -66,7 +66,9 @@ def generate_example_payload(args):
         "str": "",
         "bool": False,
         "list": [],
-        "dict": {}
+        "dict": {},
+        "tuple": [],
+        "set": []
     }
 
     for arg in args:
@@ -91,6 +93,18 @@ def generate_example_payload(args):
             or arg_type.startswith("dict[")
         ):
             arg_type = "dict"
+
+        if arg_type and (
+            arg_type.startswith("Tuple[")
+            or arg_type.startswith("tuple[")
+        ):
+            arg_type = "tuple"
+
+        if arg_type and (
+            arg_type.startswith("Set[")
+            or arg_type.startswith("set[")
+        ):
+            arg_type = "set"
 
         if arg.get("default") is not None:
             payload[arg_name] = arg["default"]
@@ -132,22 +146,19 @@ def extract_imports_from_code(code):
 
 if __name__ == "__main__":
     sample_code = """
-from typing import Optional, List, Dict
+from typing import Tuple, Set
 
-def add(a: int, b: int) -> int:
-    return a + b
+def coords(point: tuple[int, int]) -> float:
+    return 0.0
 
-def classify_old(labels: List[str]) -> str:
-    return labels[0]
+def coords_old(point: Tuple[int, int]) -> float:
+    return 0.0
 
-def classify_new(labels: list[str]) -> str:
-    return labels[0]
+def tags(labels: set[str]) -> int:
+    return len(labels)
 
-def configure_old(params: Dict[str, float]) -> str:
-    return str(params)
-
-def configure_new(params: dict[str, float]) -> str:
-    return str(params)
+def tags_old(labels: Set[str]) -> int:
+    return len(labels)
 """
 
     extracted = extract_functions_from_code(sample_code)
