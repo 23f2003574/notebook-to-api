@@ -75,6 +75,16 @@ def generate_example_payload(args):
         arg_name = arg.get("name")
         arg_type = arg.get("type")
 
+        if arg_type and arg_type.startswith("Annotated["):
+            inner_type = (
+                arg_type
+                .replace("Annotated[", "")
+                .rstrip("]")
+                .split(",")[0]
+                .strip()
+            )
+            arg_type = inner_type
+
         if arg_type and arg_type.startswith("Optional["):
             arg_type = (
                 arg_type
@@ -204,16 +214,16 @@ def extract_imports_from_code(code):
 
 if __name__ == "__main__":
     sample_code = """
-from typing import Literal
+from typing import Annotated
 
-def train(model: Literal["xgboost", "rf", "svm"]) -> str:
-    return model
+def search(query: Annotated[str, "search query"]) -> list:
+    return []
 
-def set_mode(mode: Literal["fast", "balanced", "accurate"]) -> str:
-    return mode
+def predict(age: Annotated[int, "user age"]) -> float:
+    return 0.0
 
-def set_level(level: Literal[1, 2, 3]) -> int:
-    return level
+def process(ratio: Annotated[float, "blend ratio"]) -> str:
+    return ""
 """
 
     extracted = extract_functions_from_code(sample_code)
