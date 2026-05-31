@@ -80,10 +80,16 @@ def generate_example_payload(args):
                 .replace("]", "")
             )
 
-        if arg_type and arg_type.startswith("List["):
+        if arg_type and (
+            arg_type.startswith("List[")
+            or arg_type.startswith("list[")
+        ):
             arg_type = "list"
 
-        if arg_type and arg_type.startswith("Dict["):
+        if arg_type and (
+            arg_type.startswith("Dict[")
+            or arg_type.startswith("dict[")
+        ):
             arg_type = "dict"
 
         if arg.get("default") is not None:
@@ -131,13 +137,16 @@ from typing import Optional, List, Dict
 def add(a: int, b: int) -> int:
     return a + b
 
-def greet(name: Optional[str]) -> str:
-    return f"Hello {name}"
-
-def classify(labels: List[str]) -> str:
+def classify_old(labels: List[str]) -> str:
     return labels[0]
 
-def configure(params: Dict[str, float]) -> str:
+def classify_new(labels: list[str]) -> str:
+    return labels[0]
+
+def configure_old(params: Dict[str, float]) -> str:
+    return str(params)
+
+def configure_new(params: dict[str, float]) -> str:
     return str(params)
 """
 
