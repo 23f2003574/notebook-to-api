@@ -1,6 +1,9 @@
 import { useState } from 'react'
 
-export default function EndpointTester({ endpoints = [] }) {
+export default function EndpointTester({
+  endpoints = [],
+  functions = []
+}) {
   const [selectedEndpoint, setSelectedEndpoint] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [requestBody, setRequestBody] = useState(
@@ -166,7 +169,27 @@ export default function EndpointTester({ endpoints = [] }) {
 
           <select
             value={selectedEndpoint}
-            onChange={(e) => setSelectedEndpoint(e.target.value)}
+            onChange={(e) => {
+                  const endpoint = e.target.value
+
+                  setSelectedEndpoint(endpoint)
+
+                  const functionName = endpoint.replace('/', '')
+
+                  const matchedFunction = functions.find(
+                    f => f.name === functionName
+                  )
+
+                  if (matchedFunction?.example_payload) {
+                    setRequestBody(
+                      JSON.stringify(
+                        matchedFunction.example_payload,
+                        null,
+                        2
+                      )
+                    )
+                  }
+                }}
             className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white"
           >
             <option value="">
