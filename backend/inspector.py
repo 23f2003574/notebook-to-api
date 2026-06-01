@@ -71,6 +71,10 @@ def inspect_notebook(notebook_path, output_dir="generated"):
             f"   Example Payload: {func.get('example_payload', {})}"
         )
 
+        print(
+            f"   Example Response: {func.get('example_response', {})}"
+        )
+
     print("\nDependencies:")
     print("-" * 20)
 
