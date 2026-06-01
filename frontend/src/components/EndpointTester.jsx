@@ -246,9 +246,24 @@ export default function EndpointTester({
                         className="flex justify-between text-sm"
                       >
                         <div className="flex flex-col">
-                          <span className="text-slate-300">
-                            {arg.name}
-                          </span>
+                          <div className="flex items-center gap-2">
+
+                            <span className="text-slate-300">
+                              {arg.name}
+                            </span>
+
+                            {arg.default !== null &&
+                            arg.default !== undefined ? (
+                              <span className="text-xs bg-blue-600/30 text-blue-300 px-2 py-1 rounded">
+                                optional
+                              </span>
+                            ) : (
+                              <span className="text-xs bg-red-600/30 text-red-300 px-2 py-1 rounded">
+                                required
+                              </span>
+                            )}
+
+                          </div>
 
                           {arg.default !== null &&
                             arg.default !== undefined && (
