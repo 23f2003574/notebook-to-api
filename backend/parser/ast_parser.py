@@ -49,7 +49,10 @@ def extract_functions_from_code(code):
                 "name": node.name,
                 "args": args,
                 "return_type": return_type,
-                "example_payload": generate_example_payload(args)
+                "example_payload": generate_example_payload(args),
+                "example_response": generate_example_response(
+                    return_type
+                )
             }
 
             functions.append(function_info)
@@ -114,6 +117,47 @@ def normalize_type_annotation(arg_type):
         return "set"
 
     return arg_type
+
+
+def generate_example_response(return_type):
+    if not return_type:
+        return {
+            "result": None
+        }
+
+    return_type = normalize_type_annotation(
+        return_type
+    )
+
+    type_defaults = {
+        "int": 0,
+        "float": 0.0,
+        "str": "",
+        "bool": False,
+        "list": [],
+        "dict": {},
+        "tuple": [],
+        "set": []
+    }
+
+    if return_type in (
+        "pd.DataFrame",
+        "DataFrame",
+        "pd.Series",
+        "Series",
+        "np.ndarray",
+        "ndarray"
+    ):
+        return {
+            "result": []
+        }
+
+    return {
+        "result": type_defaults.get(
+            return_type,
+            None
+        )
+    }
 
 
 def generate_example_payload(args):
