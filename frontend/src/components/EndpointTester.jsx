@@ -234,7 +234,7 @@ export default function EndpointTester({
                     📊 Endpoint Summary
                   </h3>
 
-                  <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
 
                     <div className="bg-slate-900 rounded p-3">
                       <div className="text-slate-400">
@@ -285,6 +285,43 @@ export default function EndpointTester({
                               arg.default !== undefined
                           ).length || 0
                         }
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-900 rounded p-3">
+                      <div className="text-slate-400">
+                        Type Coverage
+                      </div>
+
+                      <div className="text-emerald-400 font-semibold">
+                        {
+                          selectedFunction.args?.filter(
+                            arg => arg.type
+                          ).length || 0
+                        }
+                        /
+                        {selectedFunction.args?.length || 0}
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-900 rounded p-3">
+                      <div className="text-slate-400">
+                        Coverage %
+                      </div>
+
+                      <div className="text-yellow-400 font-semibold">
+                        {
+                          selectedFunction.args?.length
+                            ? Math.round(
+                                (
+                                  selectedFunction.args.filter(
+                                    arg => arg.type
+                                  ).length /
+                                  selectedFunction.args.length
+                                ) * 100
+                              )
+                            : 100
+                        }%
                       </div>
                     </div>
 
