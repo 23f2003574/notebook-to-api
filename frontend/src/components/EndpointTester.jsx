@@ -245,9 +245,18 @@ export default function EndpointTester({
                         key={arg.name}
                         className="flex justify-between text-sm"
                       >
-                        <span className="text-slate-300">
-                          {arg.name}
-                        </span>
+                        <div className="flex flex-col">
+                          <span className="text-slate-300">
+                            {arg.name}
+                          </span>
+
+                          {arg.default !== null &&
+                            arg.default !== undefined && (
+                              <span className="text-xs text-yellow-400">
+                                default = {String(arg.default)}
+                              </span>
+                          )}
+                        </div>
 
                         <span className="text-blue-400 font-mono">
                           {arg.type || "unknown"}
