@@ -21,6 +21,7 @@ export default function EndpointTester({
   const [responseMeta, setResponseMeta] = useState(null)
   const [requestHistory, setRequestHistory] = useState([])
   const [exampleResponse, setExampleResponse] = useState(null)
+  const [selectedFunction, setSelectedFunction] = useState(null)
 
   const filteredEndpoints = endpoints.filter(endpoint =>
     endpoint.toLowerCase().includes(searchTerm.toLowerCase())
@@ -181,6 +182,10 @@ export default function EndpointTester({
                     f => f.name === functionName
                   )
 
+                  setSelectedFunction(
+                    matchedFunction || null
+                  )
+
                   if (matchedFunction?.example_payload) {
                     setRequestBody(
                       JSON.stringify(
@@ -221,6 +226,49 @@ export default function EndpointTester({
                 Selected: {selectedEndpoint}
               </p>
             </div>
+
+            {selectedFunction && (
+              <div className="mt-4 bg-slate-900 border border-slate-700 rounded-lg p-4">
+                <h3 className="text-slate-300 font-semibold mb-3">
+                  📋 Type Information
+                </h3>
+
+                <div className="space-y-2">
+
+                  <div>
+                    <p className="text-slate-400 text-sm mb-2">
+                      Parameters
+                    </p>
+
+                    {selectedFunction.args?.map((arg) => (
+                      <div
+                        key={arg.name}
+                        className="flex justify-between text-sm"
+                      >
+                        <span className="text-slate-300">
+                          {arg.name}
+                        </span>
+
+                        <span className="text-blue-400 font-mono">
+                          {arg.type || "unknown"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-700">
+                    <p className="text-slate-400 text-sm mb-1">
+                      Return Type
+                    </p>
+
+                    <span className="text-emerald-400 font-mono">
+                      {selectedFunction.return_type || "None"}
+                    </span>
+                  </div>
+
+                </div>
+              </div>
+            )}
 
             {exampleResponse && (
               <div className="mt-4">
