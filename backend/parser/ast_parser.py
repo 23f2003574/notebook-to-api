@@ -129,6 +129,32 @@ def generate_example_response(return_type):
         return_type
     )
 
+    if return_type and return_type.startswith("Literal["):
+        literal_values = (
+            return_type
+            .replace("Literal[", "")
+            .rstrip("]")
+            .split(",")
+        )
+
+        first_value = literal_values[0].strip()
+
+        if (
+            first_value.startswith('"')
+            and first_value.endswith('"')
+        ):
+            first_value = first_value[1:-1]
+
+        elif (
+            first_value.startswith("'")
+            and first_value.endswith("'")
+        ):
+            first_value = first_value[1:-1]
+
+        return {
+            "result": first_value
+        }
+
     type_defaults = {
         "int": 0,
         "float": 0.0,
@@ -262,39 +288,19 @@ def extract_imports_from_code(code):
 
 if __name__ == "__main__":
     sample_code = """
-from typing import Optional, Union, Literal, Annotated, List, Dict
-import pandas as pd
-import numpy as np
+from typing import Optional, Union, Literal, Annotated
 
-def add(a: int, b: int) -> int:
-    return a + b
+def get_name() -> Optional[str]:
+    return "alice"
 
-def greet(name: Optional[str]) -> str:
-    return f"Hello {name}"
+def get_model() -> Literal["xgboost", "rf"]:
+    return "xgboost"
 
-def parse(value: Union[int, str]) -> str:
-    return str(value)
+def get_user_id() -> int | str:
+    return 1
 
-def identify(user_id: int | str) -> str:
-    return str(user_id)
-
-def train(model: Literal["xgboost", "rf"]) -> str:
-    return model
-
-def search(query: Annotated[str, "search query"]) -> list:
-    return []
-
-def classify(labels: List[str]) -> str:
-    return labels[0]
-
-def predict(data: pd.DataFrame) -> list:
-    return []
-
-def embed(arr: np.ndarray) -> list:
-    return []
-
-def fit(epochs=100, lr=0.001) -> str:
-    return "done"
+def get_score() -> Union[int, float]:
+    return 0
 """
 
     extracted = extract_functions_from_code(sample_code)
