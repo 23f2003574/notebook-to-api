@@ -152,6 +152,16 @@ export default function EndpointTester({
     return schema
   }
 
+  const copyParameterSchema = async () => {
+    await navigator.clipboard.writeText(
+      JSON.stringify(
+        generateParameterSchema(),
+        null,
+        2
+      )
+    )
+  }
+
   return (
     <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
       <h2 className="text-xl font-semibold text-white mb-4">
@@ -341,9 +351,18 @@ export default function EndpointTester({
                 </div>
 
                 <div className="mb-4 bg-slate-800 border border-slate-700 rounded-lg p-4">
-                  <h3 className="text-slate-300 font-semibold mb-3">
-                    📄 Parameter Schema
-                  </h3>
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-slate-300 font-semibold">
+                      📄 Parameter Schema
+                    </h3>
+
+                    <button
+                      onClick={copyParameterSchema}
+                      className="bg-slate-700 hover:bg-slate-600 text-white text-xs px-3 py-1 rounded"
+                    >
+                      📋 Copy Schema
+                    </button>
+                  </div>
 
                   <pre className="bg-slate-900 border border-slate-700 rounded-lg p-4 text-slate-300 text-sm overflow-auto">
                     {JSON.stringify(
