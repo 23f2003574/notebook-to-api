@@ -9,9 +9,17 @@ export default function FunctionList({ functions }) {
         <div key={idx} className="bg-slate-700 p-4 rounded border border-slate-600">
           <div className="flex items-start justify-between mb-2">
             <code className="text-emerald-400 font-mono text-sm">{func.name}</code>
-            <span className="text-xs bg-blue-600/30 text-blue-300 px-2 py-1 rounded">
-              {func.type || 'function'}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs bg-blue-600/30 text-blue-300 px-2 py-1 rounded">
+                {func.type || 'function'}
+              </span>
+
+              {func.return_type && (
+                <span className="text-xs bg-emerald-600/30 text-emerald-300 px-2 py-1 rounded">
+                  {func.return_type}
+                </span>
+              )}
+            </div>
           </div>
           {func.params && (
             <p className="text-xs text-slate-400">
@@ -19,9 +27,15 @@ export default function FunctionList({ functions }) {
             </p>
           )}
           {func.return_type && (
-            <p className="text-xs text-slate-400">
-              📤 Returns: <code className="text-slate-300">{func.return_type}</code>
-            </p>
+            <div className="mt-2 flex items-center gap-2">
+              <span className="text-xs text-slate-400">
+                📤 Returns:
+              </span>
+
+              <span className="text-xs bg-emerald-600/30 text-emerald-300 px-2 py-1 rounded">
+                {func.return_type}
+              </span>
+            </div>
           )}
         </div>
       ))}
