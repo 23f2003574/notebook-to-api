@@ -152,6 +152,16 @@ export default function EndpointTester({
     return schema
   }
 
+  const generateResponseSchema = () => {
+    if (!selectedFunction) return {}
+
+    return {
+      result:
+        selectedFunction.return_type ||
+        "unknown"
+    }
+  }
+
   const copyParameterSchema = async () => {
     await navigator.clipboard.writeText(
       JSON.stringify(
@@ -367,6 +377,20 @@ export default function EndpointTester({
                   <pre className="bg-slate-900 border border-slate-700 rounded-lg p-4 text-slate-300 text-sm overflow-auto">
                     {JSON.stringify(
                       generateParameterSchema(),
+                      null,
+                      2
+                    )}
+                  </pre>
+                </div>
+
+                <div className="mb-4 bg-slate-800 border border-slate-700 rounded-lg p-4">
+                  <h3 className="text-slate-300 font-semibold mb-3">
+                    📄 Response Schema
+                  </h3>
+
+                  <pre className="bg-slate-900 border border-slate-700 rounded-lg p-4 text-slate-300 text-sm overflow-auto">
+                    {JSON.stringify(
+                      generateResponseSchema(),
                       null,
                       2
                     )}
