@@ -140,6 +140,18 @@ export default function EndpointTester({
     }
   }
 
+  const generateParameterSchema = () => {
+    if (!selectedFunction) return {}
+
+    const schema = {}
+
+    selectedFunction.args?.forEach(arg => {
+      schema[arg.name] = arg.type || "unknown"
+    })
+
+    return schema
+  }
+
   return (
     <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
       <h2 className="text-xl font-semibold text-white mb-4">
@@ -326,6 +338,20 @@ export default function EndpointTester({
                     </div>
 
                   </div>
+                </div>
+
+                <div className="mb-4 bg-slate-800 border border-slate-700 rounded-lg p-4">
+                  <h3 className="text-slate-300 font-semibold mb-3">
+                    📄 Parameter Schema
+                  </h3>
+
+                  <pre className="bg-slate-900 border border-slate-700 rounded-lg p-4 text-slate-300 text-sm overflow-auto">
+                    {JSON.stringify(
+                      generateParameterSchema(),
+                      null,
+                      2
+                    )}
+                  </pre>
                 </div>
 
                 <h3 className="text-slate-300 font-semibold mb-3">
