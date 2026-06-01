@@ -229,6 +229,68 @@ export default function EndpointTester({
 
             {selectedFunction && (
               <div className="mt-4 bg-slate-900 border border-slate-700 rounded-lg p-4">
+                <div className="mb-4 bg-slate-800 border border-slate-700 rounded-lg p-4">
+                  <h3 className="text-slate-300 font-semibold mb-3">
+                    📊 Endpoint Summary
+                  </h3>
+
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+
+                    <div className="bg-slate-900 rounded p-3">
+                      <div className="text-slate-400">
+                        Parameters
+                      </div>
+
+                      <div className="text-white font-semibold">
+                        {selectedFunction.args?.length || 0}
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-900 rounded p-3">
+                      <div className="text-slate-400">
+                        Return Type
+                      </div>
+
+                      <div className="text-emerald-400 font-mono">
+                        {selectedFunction.return_type || "None"}
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-900 rounded p-3">
+                      <div className="text-slate-400">
+                        Required
+                      </div>
+
+                      <div className="text-red-400 font-semibold">
+                        {
+                          selectedFunction.args?.filter(
+                            arg =>
+                              arg.default === null ||
+                              arg.default === undefined
+                          ).length || 0
+                        }
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-900 rounded p-3">
+                      <div className="text-slate-400">
+                        Optional
+                      </div>
+
+                      <div className="text-blue-400 font-semibold">
+                        {
+                          selectedFunction.args?.filter(
+                            arg =>
+                              arg.default !== null &&
+                              arg.default !== undefined
+                          ).length || 0
+                        }
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+
                 <h3 className="text-slate-300 font-semibold mb-3">
                   📋 Type Information
                 </h3>
