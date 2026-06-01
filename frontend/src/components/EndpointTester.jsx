@@ -20,6 +20,7 @@ export default function EndpointTester({
   const [responseStatus, setResponseStatus] = useState(null)
   const [responseMeta, setResponseMeta] = useState(null)
   const [requestHistory, setRequestHistory] = useState([])
+  const [exampleResponse, setExampleResponse] = useState(null)
 
   const filteredEndpoints = endpoints.filter(endpoint =>
     endpoint.toLowerCase().includes(searchTerm.toLowerCase())
@@ -189,6 +190,10 @@ export default function EndpointTester({
                       )
                     )
                   }
+
+                  setExampleResponse(
+                    matchedFunction?.example_response || null
+                  )
                 }}
             className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white"
           >
@@ -216,6 +221,22 @@ export default function EndpointTester({
                 Selected: {selectedEndpoint}
               </p>
             </div>
+
+            {exampleResponse && (
+              <div className="mt-4">
+                <label className="block text-slate-300 text-sm mb-2">
+                  Example Response
+                </label>
+
+                <pre className="bg-slate-900 border border-slate-700 rounded-lg p-4 text-slate-300 text-sm overflow-auto">
+                  {JSON.stringify(
+                    exampleResponse,
+                    null,
+                    2
+                  )}
+                </pre>
+              </div>
+            )}
 
             <div>
               <label className="block text-slate-300 text-sm mb-2">
