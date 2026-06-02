@@ -53,11 +53,21 @@ def generate_fastapi_code(functions):
                 f"of type {arg_type}"
             )
 
-            lines.append(
-                f'    {arg_name}: {arg_type} = Field('
-                f'description="{field_description}"'
-                f')'
-            )
+            default_value = arg.get("default")
+
+            if default_value is not None:
+                lines.append(
+                    f'    {arg_name}: {arg_type} = Field('
+                    f'default={repr(default_value)}, '
+                    f'description="{field_description}"'
+                    f')'
+                )
+            else:
+                lines.append(
+                    f'    {arg_name}: {arg_type} = Field('
+                    f'description="{field_description}"'
+                    f')'
+                )
         lines.append("")
     # Generate endpoints
     for func in functions:
