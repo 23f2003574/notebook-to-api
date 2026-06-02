@@ -25,7 +25,13 @@ def generate_fastapi_code(functions):
     lines.append("from pydantic import BaseModel, Field")
     lines.append("import generated.runtime.notebook_module as notebook_module")
     lines.append("")
-    lines.append("app = FastAPI()")
+    lines.append(
+        'app = FastAPI('
+        'title="Notebook-to-API Generated Service", '
+        'description="Automatically generated from notebook analysis.", '
+        'version="1.0.0"'
+        ')'
+    )
     lines.append("")
     # Simple in‑memory task registry used by background endpoints
     lines.append("TASKS = {}")
