@@ -83,6 +83,7 @@ def generate_fastapi_code(functions):
     # Generate endpoints
     for func in functions:
         func_name = func["name"]
+        operation_id = func_name
         tag = "General"
         if "train" in func_name.lower():
             tag = "Training"
@@ -128,6 +129,7 @@ def generate_fastapi_code(functions):
                 f'summary="{summary}", '
                 f'description="{description}", '
                 f'tags=["{tag}"], '
+                f'operation_id="{operation_id}", '
                 f'responses={{200: {{"description": "{response_description}", "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
             )
             lines.append(f"def {func_name}(req: {model_name}, background_tasks: BackgroundTasks):")
@@ -143,6 +145,7 @@ def generate_fastapi_code(functions):
                 f'summary="{summary}", '
                 f'description="{description}", '
                 f'tags=["{tag}"], '
+                f'operation_id="{operation_id}", '
                 f'responses={{200: {{"description": "{response_description}", "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
             )
             lines.append(f"def {func_name}(req: {model_name}):")
