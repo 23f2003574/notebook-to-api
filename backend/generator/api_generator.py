@@ -22,7 +22,7 @@ def generate_fastapi_code(functions):
     # Imports for the generated FastAPI app
     lines.append("from fastapi import FastAPI, BackgroundTasks")
     lines.append("import uuid")
-    lines.append("from pydantic import BaseModel")
+    lines.append("from pydantic import BaseModel, Field")
     lines.append("import generated.runtime.notebook_module as notebook_module")
     lines.append("")
     lines.append("app = FastAPI()")
@@ -47,7 +47,17 @@ def generate_fastapi_code(functions):
         for arg in func.get("args", []):
             arg_name = arg.get("name", "param")
             arg_type = arg.get("type", "str")
-            lines.append(f"    {arg_name}: {arg_type}")
+
+            field_description = (
+                f"Parameter '{arg_name}' "
+                f"of type {arg_type}"
+            )
+
+            lines.append(
+                f'    {arg_name}: {arg_type} = Field('
+                f'description="{field_description}"'
+                f')'
+            )
         lines.append("")
     # Generate endpoints
     for func in functions:
