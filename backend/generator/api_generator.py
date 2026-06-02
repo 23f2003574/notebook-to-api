@@ -99,6 +99,7 @@ def generate_fastapi_code(functions):
             for kw in ["embed", "vector"]
         ):
             tag = "Embeddings"
+        category = tag
         args = func.get("args", [])
         example_response = func.get(
             "example_response",
@@ -130,6 +131,7 @@ def generate_fastapi_code(functions):
                 f'description="{description}", '
                 f'tags=["{tag}"], '
                 f'operation_id="{operation_id}", '
+                f'openapi_extra={{"x-notebook-to-api-category": "{category}"}}, '
                 f'responses={{200: {{"description": "{response_description}", "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
             )
             lines.append(f"def {func_name}(req: {model_name}, background_tasks: BackgroundTasks):")
@@ -146,6 +148,7 @@ def generate_fastapi_code(functions):
                 f'description="{description}", '
                 f'tags=["{tag}"], '
                 f'operation_id="{operation_id}", '
+                f'openapi_extra={{"x-notebook-to-api-category": "{category}"}}, '
                 f'responses={{200: {{"description": "{response_description}", "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
             )
             lines.append(f"def {func_name}(req: {model_name}):")
