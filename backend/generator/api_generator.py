@@ -83,6 +83,21 @@ def generate_fastapi_code(functions):
     # Generate endpoints
     for func in functions:
         func_name = func["name"]
+        tag = "General"
+        if "train" in func_name.lower():
+            tag = "Training"
+        elif "predict" in func_name.lower():
+            tag = "Inference"
+        elif any(
+            kw in func_name.lower()
+            for kw in ["scrape", "extract", "process"]
+        ):
+            tag = "Data Processing"
+        elif any(
+            kw in func_name.lower()
+            for kw in ["embed", "vector"]
+        ):
+            tag = "Embeddings"
         args = func.get("args", [])
         example_response = func.get(
             "example_response",
@@ -112,6 +127,7 @@ def generate_fastapi_code(functions):
                 f'@app.post("/{func_name}", '
                 f'summary="{summary}", '
                 f'description="{description}", '
+                f'tags=["{tag}"], '
                 f'responses={{200: {{"description": "{response_description}", "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
             )
             lines.append(f"def {func_name}(req: {model_name}, background_tasks: BackgroundTasks):")
@@ -126,6 +142,7 @@ def generate_fastapi_code(functions):
                 f'@app.post("/{func_name}", '
                 f'summary="{summary}", '
                 f'description="{description}", '
+                f'tags=["{tag}"], '
                 f'responses={{200: {{"description": "{response_description}", "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
             )
             lines.append(f"def {func_name}(req: {model_name}):")
