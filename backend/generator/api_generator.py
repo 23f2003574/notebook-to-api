@@ -29,7 +29,11 @@ def generate_fastapi_code(functions):
         'app = FastAPI('
         'title="Notebook-to-API Generated Service", '
         'description="Automatically generated from notebook analysis.", '
-        'version="1.0.0"'
+        'version="1.0.0", '
+        'contact={"name": "Notebook-to-API"}, '
+        'license_info={"name": "MIT"}, '
+        'servers=[{"url": "http://localhost:8000", '
+        '"description": "Local development server"}]'
         ')'
     )
     lines.append("")
