@@ -43,6 +43,10 @@ def generate_fastapi_code(functions):
     for func in functions:
         func_name = func["name"]
         model_name = f"{func_name[0].upper()}{func_name[1:]}Request"
+        example_payload = func.get(
+            "example_payload",
+            {}
+        )
         lines.append(f"class {model_name}(BaseModel):")
         for arg in func.get("args", []):
             arg_name = arg.get("name", "param")
@@ -68,6 +72,13 @@ def generate_fastapi_code(functions):
                     f'description="{field_description}"'
                     f')'
                 )
+        if example_payload:
+            lines.append("")
+            lines.append("    model_config = {")
+            lines.append(
+                f"        'json_schema_extra': {{'example': {repr(example_payload)}}}"
+            )
+            lines.append("    }")
         lines.append("")
     # Generate endpoints
     for func in functions:
