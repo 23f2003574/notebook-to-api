@@ -132,6 +132,7 @@ def generate_fastapi_code(functions):
         )
         description = (
             f"Auto-generated endpoint for {func_name}. "
+            f"Operation ID: {operation_id}. "
             f"Parameters: {', '.join(arg['name'] for arg in args) if args else 'None'}."
         )
         if is_background:
