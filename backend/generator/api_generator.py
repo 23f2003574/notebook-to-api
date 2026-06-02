@@ -88,6 +88,13 @@ def generate_fastapi_code(functions):
             "example_response",
             {"result": None}
         )
+        return_type = func.get(
+            "return_type",
+            "unknown"
+        )
+        response_description = (
+            f"Returns {return_type}"
+        )
         model_name = f"{func_name[0].upper()}{func_name[1:]}Request"
         call_args = ", ".join(f"req.{arg['name']}" for arg in args)
         is_background = any(kw in func_name.lower() for kw in LONG_RUNNING_KEYWORDS)
@@ -105,7 +112,7 @@ def generate_fastapi_code(functions):
                 f'@app.post("/{func_name}", '
                 f'summary="{summary}", '
                 f'description="{description}", '
-                f'responses={{200: {{"content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
+                f'responses={{200: {{"description": "{response_description}", "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
             )
             lines.append(f"def {func_name}(req: {model_name}, background_tasks: BackgroundTasks):")
             lines.append("    task_id = uuid.uuid4().hex")
@@ -119,7 +126,7 @@ def generate_fastapi_code(functions):
                 f'@app.post("/{func_name}", '
                 f'summary="{summary}", '
                 f'description="{description}", '
-                f'responses={{200: {{"content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
+                f'responses={{200: {{"description": "{response_description}", "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
             )
             lines.append(f"def {func_name}(req: {model_name}):")
             lines.append(f"    result = notebook_module.{func_name}({call_args})")
