@@ -44,12 +44,19 @@ def generate_fastapi_code(functions):
     lines.append("def health_check():")
     lines.append("    return {'status': 'healthy'}")
     lines.append("")
+    endpoint_list = [
+        f"/{func['name']}"
+        for func in functions
+    ]
     lines.append("@app.get('/info')")
     lines.append("def service_info():")
     lines.append("    return {")
     lines.append('        "service": "Notebook-to-API Generated Service",')
     lines.append('        "version": "1.0.0",')
-    lines.append('        "status": "running"')
+    lines.append('        "status": "running",')
+    lines.append(
+        f'        "endpoints": {repr(endpoint_list)}'
+    )
     lines.append("    }")
     lines.append("")
     lines.append("def _run_background_task(func, task_id, *args, **kwargs):")
