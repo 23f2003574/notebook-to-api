@@ -113,6 +113,23 @@ def generate_fastapi_code(functions):
     lines.append("")
     lines.append("    return task")
     lines.append("")
+    lines.append("@app.delete('/tasks/{task_id}')")
+    lines.append("def delete_task(task_id: str):")
+
+    lines.append("    if task_id not in TASKS:")
+    lines.append("        return {")
+    lines.append("            'error': 'Task not found'")
+    lines.append("        }")
+
+    lines.append("    deleted_task = TASKS.pop(task_id)")
+
+    lines.append("    return {")
+    lines.append("        'message': 'Task deleted',")
+    lines.append("        'task_id': task_id,")
+    lines.append("        'status': deleted_task.get('status')")
+    lines.append("    }")
+
+    lines.append("")
     lines.append("def _run_background_task(func, task_id, *args, **kwargs):")
     lines.append("    try:")
     lines.append("        result = func(*args, **kwargs)")
