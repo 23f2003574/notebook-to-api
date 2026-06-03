@@ -48,6 +48,14 @@ def generate_fastapi_code(functions):
         f"/{func['name']}"
         for func in functions
     ]
+    background_endpoint_count = sum(
+        1
+        for func in functions
+        if any(
+            kw in func["name"].lower()
+            for kw in LONG_RUNNING_KEYWORDS
+        )
+    )
     lines.append("@app.get('/info')")
     lines.append("def service_info():")
     lines.append("    return {")
@@ -55,7 +63,13 @@ def generate_fastapi_code(functions):
     lines.append('        "version": "1.0.0",')
     lines.append('        "status": "running",')
     lines.append(
-        f'        "endpoints": {repr(endpoint_list)}'
+        f'        "endpoints": {repr(endpoint_list)},'
+    )
+    lines.append(
+        f'        "endpoint_count": {len(endpoint_list)},'
+    )
+    lines.append(
+        f'        "background_endpoint_count": {background_endpoint_count}'
     )
     lines.append("    }")
     lines.append("")
