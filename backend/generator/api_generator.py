@@ -46,6 +46,15 @@ def generate_fastapi_code(functions):
     lines.append("def health_check():")
     lines.append("    return {'status': 'healthy'}")
     lines.append("")
+    lines.append("@app.get('/ready')")
+    lines.append("def readiness_check():")
+
+    lines.append("    return {")
+    lines.append("        'status': 'ready',")
+    lines.append("        'tasks_registered': len(TASKS)")
+    lines.append("    }")
+
+    lines.append("")
     endpoint_list = [
         f"/{func['name']}"
         for func in functions
