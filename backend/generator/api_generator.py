@@ -22,6 +22,7 @@ def generate_fastapi_code(functions):
     # Imports for the generated FastAPI app
     lines.append("from fastapi import FastAPI, BackgroundTasks")
     lines.append("import uuid")
+    lines.append("import time")
     lines.append("from pydantic import BaseModel, Field")
     lines.append("import generated.runtime.notebook_module as notebook_module")
     lines.append("")
@@ -39,6 +40,7 @@ def generate_fastapi_code(functions):
     lines.append("")
     # Simple in‑memory task registry used by background endpoints
     lines.append("TASKS = {}")
+    lines.append("START_TIME = time.time()")
     lines.append("")
     lines.append("@app.get('/health')")
     lines.append("def health_check():")
@@ -201,6 +203,14 @@ def generate_fastapi_code(functions):
     lines.append("        'processing': processing,")
     lines.append("        'completed': completed,")
     lines.append("        'failed': failed")
+    lines.append("    }")
+
+    lines.append("")
+    lines.append("@app.get('/uptime')")
+    lines.append("def uptime():")
+
+    lines.append("    return {")
+    lines.append("        'uptime_seconds': int(time.time() - START_TIME)")
     lines.append("    }")
 
     lines.append("")
