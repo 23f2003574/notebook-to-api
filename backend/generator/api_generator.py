@@ -149,6 +149,32 @@ def generate_fastapi_code(functions):
     lines.append("    }")
 
     lines.append("")
+    lines.append("@app.post('/tasks/cleanup')")
+    lines.append("def cleanup_tasks():")
+
+    lines.append("    completed_deleted = 0")
+    lines.append("    failed_deleted = 0")
+
+    lines.append("    task_ids = list(TASKS.keys())")
+
+    lines.append("    for task_id in task_ids:")
+    lines.append("        status = TASKS[task_id].get('status')")
+
+    lines.append("        if status == 'completed':")
+    lines.append("            TASKS.pop(task_id, None)")
+    lines.append("            completed_deleted += 1")
+
+    lines.append("        elif status == 'failed':")
+    lines.append("            TASKS.pop(task_id, None)")
+    lines.append("            failed_deleted += 1")
+
+    lines.append("    return {")
+    lines.append("        'completed_deleted': completed_deleted,")
+    lines.append("        'failed_deleted': failed_deleted,")
+    lines.append("        'remaining_tasks': len(TASKS)")
+    lines.append("    }")
+
+    lines.append("")
     lines.append("@app.delete('/tasks/{task_id}')")
     lines.append("def delete_task(task_id: str):")
 
