@@ -175,6 +175,35 @@ def generate_fastapi_code(functions):
     lines.append("    }")
 
     lines.append("")
+    lines.append("@app.get('/metrics')")
+    lines.append("def metrics():")
+
+    lines.append("    processing = sum(")
+    lines.append("        1")
+    lines.append("        for task in TASKS.values()")
+    lines.append("        if task.get('status') == 'processing'")
+    lines.append("    )")
+
+    lines.append("    completed = sum(")
+    lines.append("        1")
+    lines.append("        for task in TASKS.values()")
+    lines.append("        if task.get('status') == 'completed'")
+    lines.append("    )")
+
+    lines.append("    failed = sum(")
+    lines.append("        1")
+    lines.append("        for task in TASKS.values()")
+    lines.append("        if task.get('status') == 'failed'")
+    lines.append("    )")
+
+    lines.append("    return {")
+    lines.append("        'total_tasks': len(TASKS),")
+    lines.append("        'processing': processing,")
+    lines.append("        'completed': completed,")
+    lines.append("        'failed': failed")
+    lines.append("    }")
+
+    lines.append("")
     lines.append("@app.delete('/tasks/{task_id}')")
     lines.append("def delete_task(task_id: str):")
 
