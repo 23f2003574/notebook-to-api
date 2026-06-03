@@ -40,6 +40,10 @@ def generate_fastapi_code(functions):
     # Simple in‑memory task registry used by background endpoints
     lines.append("TASKS = {}")
     lines.append("")
+    lines.append("@app.get('/health')")
+    lines.append("def health_check():")
+    lines.append("    return {'status': 'healthy'}")
+    lines.append("")
     lines.append("def _run_background_task(func, task_id, *args, **kwargs):")
     lines.append("    try:")
     lines.append("        result = func(*args, **kwargs)")
