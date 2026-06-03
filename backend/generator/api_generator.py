@@ -204,6 +204,18 @@ def generate_fastapi_code(functions):
     lines.append("    }")
 
     lines.append("")
+    lines.append("@app.post('/tasks/reset')")
+    lines.append("def reset_tasks():")
+
+    lines.append("    deleted_tasks = len(TASKS)")
+
+    lines.append("    TASKS.clear()")
+
+    lines.append("    return {")
+    lines.append("        'deleted_tasks': deleted_tasks")
+    lines.append("    }")
+
+    lines.append("")
     lines.append("@app.delete('/tasks/{task_id}')")
     lines.append("def delete_task(task_id: str):")
 
