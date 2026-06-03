@@ -131,6 +131,24 @@ def generate_fastapi_code(functions):
     lines.append("    }")
 
     lines.append("")
+    lines.append("@app.delete('/tasks/failed')")
+    lines.append("def delete_failed_tasks():")
+
+    lines.append("    failed_task_ids = [")
+    lines.append("        task_id")
+    lines.append("        for task_id, task in TASKS.items()")
+    lines.append("        if task.get('status') == 'failed'")
+    lines.append("    ]")
+
+    lines.append("    for task_id in failed_task_ids:")
+    lines.append("        TASKS.pop(task_id, None)")
+
+    lines.append("    return {")
+    lines.append("        'deleted': len(failed_task_ids),")
+    lines.append("        'remaining_tasks': len(TASKS)")
+    lines.append("    }")
+
+    lines.append("")
     lines.append("@app.delete('/tasks/{task_id}')")
     lines.append("def delete_task(task_id: str):")
 
