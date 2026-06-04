@@ -99,15 +99,13 @@ def generate_fastapi_code(functions):
     lines.append('        "service": "Notebook-to-API Generated Service",')
     lines.append('        "version": "1.0.0",')
     lines.append('        "status": "running",')
-    lines.append(
-        f'        "endpoints": {repr(endpoint_list)},'
-    )
-    lines.append(
-        f'        "endpoint_count": {len(endpoint_list)},'
-    )
-    lines.append(
-        f'        "background_endpoint_count": {background_endpoint_count}'
-    )
+    lines.append(f'        "endpoints": {repr(endpoint_list)},')
+    lines.append(f'        "endpoint_count": {len(endpoint_list)},')
+    lines.append(f'        "background_endpoint_count": {background_endpoint_count},')
+    lines.append('        "authentication": {')
+    lines.append('            "enabled": True,')
+    lines.append('            "type": "api_key"')
+    lines.append('        }')
     lines.append("    }")
     lines.append("")
     lines.append("@app.get('/tasks')")
