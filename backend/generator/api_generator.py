@@ -112,6 +112,16 @@ def generate_fastapi_code(functions):
     lines.append("    }")
 
     lines.append("")
+    lines.append("@app.get('/auth/info')")
+    lines.append("def auth_info():")
+
+    lines.append("    return {")
+    lines.append("        'authentication': 'api_key',")
+    lines.append("        'header': API_KEY_HEADER_NAME,")
+    lines.append("        'environment_variable': 'NOTEBOOK_API_KEY'")
+    lines.append("    }")
+
+    lines.append("")
     endpoint_list = [
         f"/{func['name']}"
         for func in functions
