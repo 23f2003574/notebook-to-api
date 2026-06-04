@@ -122,6 +122,14 @@ def generate_fastapi_code(functions):
     lines.append("    }")
 
     lines.append("")
+    lines.append("@app.get('/auth/validate')")
+    lines.append("def validate_auth(_: None = Depends(verify_api_key)):")
+
+    lines.append("    return {")
+    lines.append("        'authenticated': True")
+    lines.append("    }")
+
+    lines.append("")
     endpoint_list = [
         f"/{func['name']}"
         for func in functions
