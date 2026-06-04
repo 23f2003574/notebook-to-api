@@ -21,7 +21,7 @@ def generate_fastapi_code(functions):
     lines = []
     # Imports for the generated FastAPI app
     lines.append(
-        "from fastapi import FastAPI, BackgroundTasks, Header, HTTPException"
+        "from fastapi import FastAPI, BackgroundTasks, Header, HTTPException, Depends"
     )
     lines.append("import uuid")
     lines.append("import os")
@@ -413,8 +413,7 @@ def generate_fastapi_code(functions):
                 f'openapi_extra={{"x-notebook-to-api-category": "{category}"}}, '
                 f'responses={{200: {{"description": "{response_description}", "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
             )
-            lines.append(f"def {func_name}(req: {model_name}, background_tasks: BackgroundTasks, x_api_key: str = Header(None)):")
-            lines.append("    verify_api_key(x_api_key)")
+            lines.append(f"def {func_name}(req: {model_name}, background_tasks: BackgroundTasks, _: None = Depends(verify_api_key)):")
             lines.append("    task_id = uuid.uuid4().hex")
             lines.append("    TASKS[task_id] = {\"status\": \"processing\"}")
             # Pass positional arguments to the background function
@@ -431,8 +430,7 @@ def generate_fastapi_code(functions):
                 f'openapi_extra={{"x-notebook-to-api-category": "{category}"}}, '
                 f'responses={{200: {{"description": "{response_description}", "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
             )
-            lines.append(f"def {func_name}(req: {model_name}, x_api_key: str = Header(None)):")
-            lines.append("    verify_api_key(x_api_key)")
+            lines.append(f"def {func_name}(req: {model_name}, _: None = Depends(verify_api_key)):")
             lines.append(f"    result = notebook_module.{func_name}({call_args})")
             lines.append("    return {\"result\": result}")
         lines.append("")
