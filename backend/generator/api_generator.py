@@ -82,8 +82,6 @@ def generate_fastapi_code(functions):
     lines.append("        'name': API_KEY_HEADER_NAME")
     lines.append("    }")
     lines.append("")
-    lines.append("    openapi_schema['security'] = [{'ApiKeyAuth': []}]")
-    lines.append("")
     lines.append("    app.openapi_schema = openapi_schema")
     lines.append("    return app.openapi_schema")
     lines.append("")
@@ -411,7 +409,7 @@ def generate_fastapi_code(functions):
                 f'description="{description}", '
                 f'tags=["{tag}"], '
                 f'operation_id="{operation_id}", '
-                f'openapi_extra={{"x-notebook-to-api-category": "{category}"}}, '
+                f'openapi_extra={{"x-notebook-to-api-category": "{category}", "security": [{{"ApiKeyAuth": []}}]}}, '
                 f'responses={{200: {{"description": "{response_description}", "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
             )
             lines.append(f"def {func_name}(req: {model_name}, background_tasks: BackgroundTasks, _: None = Depends(verify_api_key)):")
@@ -428,7 +426,7 @@ def generate_fastapi_code(functions):
                 f'description="{description}", '
                 f'tags=["{tag}"], '
                 f'operation_id="{operation_id}", '
-                f'openapi_extra={{"x-notebook-to-api-category": "{category}"}}, '
+                f'openapi_extra={{"x-notebook-to-api-category": "{category}", "security": [{{"ApiKeyAuth": []}}]}}, '
                 f'responses={{200: {{"description": "{response_description}", "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
             )
             lines.append(f"def {func_name}(req: {model_name}, _: None = Depends(verify_api_key)):")
