@@ -112,6 +112,7 @@ def generate_fastapi_code(functions):
     lines.append("    }")
 
     lines.append("")
+    protected_endpoint_count = len(functions)
     lines.append("@app.get('/auth/info')")
     lines.append("def auth_info():")
 
@@ -120,7 +121,10 @@ def generate_fastapi_code(functions):
     lines.append("        'header': API_KEY_HEADER_NAME,")
     lines.append("        'environment_variable': 'NOTEBOOK_API_KEY',")
     lines.append("        'rate_limiting': False,")
-    lines.append("        'key_rotation': True")
+    lines.append("        'key_rotation': True,")
+    lines.append(
+        f"        'protected_endpoints': {protected_endpoint_count}"
+    )
     lines.append("    }")
 
     lines.append("")
