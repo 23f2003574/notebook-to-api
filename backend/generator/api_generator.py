@@ -72,6 +72,15 @@ def generate_fastapi_code(functions):
     lines.append("    }")
 
     lines.append("")
+    lines.append("@app.get('/auth/status')")
+    lines.append("def auth_status():")
+
+    lines.append("    return {")
+    lines.append("        'authentication': 'enabled',")
+    lines.append("        'api_key_configured': bool(API_KEY)")
+    lines.append("    }")
+
+    lines.append("")
     endpoint_list = [
         f"/{func['name']}"
         for func in functions
