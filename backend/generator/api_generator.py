@@ -91,6 +91,7 @@ def generate_fastapi_code(functions):
     lines.append("")
     lines.append("START_TIME = time.time()")
     lines.append("")
+    lines.append("# Public infrastructure endpoints")
     lines.append("@app.get('/health')")
     lines.append("def health_check():")
     lines.append("    return {'status': 'healthy'}")
