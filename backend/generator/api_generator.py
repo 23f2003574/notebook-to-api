@@ -24,6 +24,7 @@ def generate_fastapi_code(functions):
         "from fastapi import FastAPI, BackgroundTasks, Header, HTTPException"
     )
     lines.append("import uuid")
+    lines.append("import os")
     lines.append("import time")
     lines.append("from pydantic import BaseModel, Field")
     lines.append("import generated.runtime.notebook_module as notebook_module")
@@ -42,7 +43,12 @@ def generate_fastapi_code(functions):
     lines.append("")
     # Simple in‑memory task registry used by background endpoints
     lines.append("TASKS = {}")
-    lines.append('API_KEY = "notebook-to-api-dev-key"')
+    lines.append(
+        'API_KEY = os.getenv('
+        '"NOTEBOOK_API_KEY", '
+        '"notebook-to-api-dev-key"'
+        ')'
+    )
     lines.append("")
     lines.append("def verify_api_key(x_api_key: str = Header(None)):")
     lines.append("    if x_api_key != API_KEY:")
