@@ -20,7 +20,9 @@ def generate_fastapi_code(functions):
     """
     lines = []
     # Imports for the generated FastAPI app
-    lines.append("from fastapi import FastAPI, BackgroundTasks")
+    lines.append(
+        "from fastapi import FastAPI, BackgroundTasks, Header, HTTPException"
+    )
     lines.append("import uuid")
     lines.append("import time")
     lines.append("from pydantic import BaseModel, Field")
@@ -40,6 +42,15 @@ def generate_fastapi_code(functions):
     lines.append("")
     # Simple in‑memory task registry used by background endpoints
     lines.append("TASKS = {}")
+    lines.append('API_KEY = "notebook-to-api-dev-key"')
+    lines.append("")
+    lines.append("def verify_api_key(x_api_key: str = Header(None)):")
+    lines.append("    if x_api_key != API_KEY:")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=401,")
+    lines.append("            detail='Invalid API key'")
+    lines.append("        )")
+    lines.append("")
     lines.append("START_TIME = time.time()")
     lines.append("")
     lines.append("@app.get('/health')")
@@ -357,7 +368,8 @@ def generate_fastapi_code(functions):
                 f'openapi_extra={{"x-notebook-to-api-category": "{category}"}}, '
                 f'responses={{200: {{"description": "{response_description}", "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
             )
-            lines.append(f"def {func_name}(req: {model_name}, background_tasks: BackgroundTasks):")
+            lines.append(f"def {func_name}(req: {model_name}, background_tasks: BackgroundTasks, x_api_key: str = Header(None)):")
+            lines.append("    verify_api_key(x_api_key)")
             lines.append("    task_id = uuid.uuid4().hex")
             lines.append("    TASKS[task_id] = {\"status\": \"processing\"}")
             # Pass positional arguments to the background function
@@ -374,7 +386,8 @@ def generate_fastapi_code(functions):
                 f'openapi_extra={{"x-notebook-to-api-category": "{category}"}}, '
                 f'responses={{200: {{"description": "{response_description}", "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
             )
-            lines.append(f"def {func_name}(req: {model_name}):")
+            lines.append(f"def {func_name}(req: {model_name}, x_api_key: str = Header(None)):")
+            lines.append("    verify_api_key(x_api_key)")
             lines.append(f"    result = notebook_module.{func_name}({call_args})")
             lines.append("    return {\"result\": result}")
         lines.append("")
