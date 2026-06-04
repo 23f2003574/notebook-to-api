@@ -118,7 +118,8 @@ def generate_fastapi_code(functions):
     lines.append("    return {")
     lines.append("        'authentication': 'api_key',")
     lines.append("        'header': API_KEY_HEADER_NAME,")
-    lines.append("        'environment_variable': 'NOTEBOOK_API_KEY'")
+    lines.append("        'environment_variable': 'NOTEBOOK_API_KEY',")
+    lines.append("        'rate_limiting': False")
     lines.append("    }")
 
     lines.append("")
