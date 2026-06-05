@@ -107,7 +107,11 @@ def generate_fastapi_code(functions):
         f"        'endpoint_count': {total_generated_endpoint_count},"
     )
     lines.append(
-        f"        'protected_endpoints': {protected_endpoint_count}"
+        f"        'protected_endpoints': {protected_endpoint_count},"
+    )
+
+    lines.append(
+        f"        'sample_endpoints': {repr(endpoint_list[:10])}"
     )
     lines.append("    }")
     lines.append("")
