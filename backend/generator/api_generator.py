@@ -171,8 +171,13 @@ def generate_fastapi_code(functions):
     lines.append("            'openapi': '/openapi.json',")
     lines.append("            'redoc': '/redoc'")
     lines.append("        },")
-    lines.append("        'health': '/health',")
-    lines.append("        'info': '/info',")
+    lines.append("        'operations': {")
+    lines.append("            'health': '/health',")
+    lines.append("            'ready': '/ready',")
+    lines.append("            'info': '/info',")
+    lines.append("            'metrics': '/metrics',")
+    lines.append("            'uptime': '/uptime'")
+    lines.append("        },")
     lines.append(
         f"        'endpoint_count': {total_generated_endpoint_count},"
     )
