@@ -166,9 +166,11 @@ def generate_fastapi_code(functions):
     lines.append(
         "        ],"
     )
-    lines.append("        'docs': '/docs',")
-    lines.append("        'swagger_ui': '/docs',")
-    lines.append("        'openapi_schema': '/openapi.json',")
+    lines.append("        'documentation': {")
+    lines.append("            'swagger': '/docs',")
+    lines.append("            'openapi': '/openapi.json',")
+    lines.append("            'redoc': '/redoc'")
+    lines.append("        },")
     lines.append("        'health': '/health',")
     lines.append("        'info': '/info',")
     lines.append(
