@@ -103,6 +103,14 @@ def generate_fastapi_code(functions):
         for func in functions
     ]
     total_generated_endpoint_count = len(endpoint_list)
+    background_endpoint_count = sum(
+        1
+        for func in functions
+        if any(
+            kw in func["name"].lower()
+            for kw in LONG_RUNNING_KEYWORDS
+        )
+    )
     lines.append("# Public infrastructure endpoints")
     lines.append("@app.get('/')")
     lines.append("def root():")
@@ -119,6 +127,13 @@ def generate_fastapi_code(functions):
 
     lines.append(
         "        'framework': 'FastAPI',"
+    )
+    lines.append(
+        "        'background_task_support': True,"
+    )
+
+    lines.append(
+        f"        'background_endpoint_count': {background_endpoint_count},"
     )
     lines.append("        'docs': '/docs',")
     lines.append("        'swagger_ui': '/docs',")
@@ -182,14 +197,6 @@ def generate_fastapi_code(functions):
     lines.append("    }")
 
     lines.append("")
-    background_endpoint_count = sum(
-        1
-        for func in functions
-        if any(
-            kw in func["name"].lower()
-            for kw in LONG_RUNNING_KEYWORDS
-        )
-    )
     lines.append("@app.get('/info')")
     lines.append("def service_info():")
     lines.append("    return {")
