@@ -25,6 +25,7 @@ def generate_fastapi_code(functions):
     )
     lines.append("import uuid")
     lines.append("import os")
+    lines.append("import sys")
     lines.append("from datetime import datetime")
     lines.append("import time")
     lines.append("from pydantic import BaseModel, Field")
@@ -92,6 +93,9 @@ def generate_fastapi_code(functions):
     lines.append(
         "GENERATED_AT = datetime.utcnow().isoformat() + 'Z'"
     )
+    lines.append(
+        "PYTHON_VERSION = sys.version.split()[0]"
+    )
     lines.append("")
     protected_endpoint_count = len(functions)
     endpoint_list = [
@@ -108,6 +112,13 @@ def generate_fastapi_code(functions):
     lines.append("        'generator_version': '1.0.0',")
     lines.append(
         "        'generated_at': GENERATED_AT,"
+    )
+    lines.append(
+        "        'python_version': PYTHON_VERSION,"
+    )
+
+    lines.append(
+        "        'framework': 'FastAPI',"
     )
     lines.append("        'docs': '/docs',")
     lines.append("        'swagger_ui': '/docs',")
