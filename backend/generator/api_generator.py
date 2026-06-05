@@ -101,6 +101,8 @@ def generate_fastapi_code(functions):
     lines.append("    return {")
     lines.append("        'service': 'Notebook-to-API Generated Service',")
     lines.append("        'docs': '/docs',")
+    lines.append("        'swagger_ui': '/docs',")
+    lines.append("        'openapi_schema': '/openapi.json',")
     lines.append("        'health': '/health',")
     lines.append("        'info': '/info',")
     lines.append(
