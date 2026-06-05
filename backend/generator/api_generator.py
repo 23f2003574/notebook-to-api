@@ -178,6 +178,12 @@ def generate_fastapi_code(functions):
     lines.append("            'metrics': '/metrics',")
     lines.append("            'uptime': '/uptime'")
     lines.append("        },")
+    lines.append("        'task_management': {")
+    lines.append("            'list': '/tasks',")
+    lines.append("            'metrics': '/metrics',")
+    lines.append("            'cleanup': '/tasks/cleanup',")
+    lines.append("            'reset': '/tasks/reset'")
+    lines.append("        },")
     lines.append(
         f"        'endpoint_count': {total_generated_endpoint_count},"
     )
