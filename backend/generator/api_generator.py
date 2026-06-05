@@ -25,6 +25,7 @@ def generate_fastapi_code(functions):
     )
     lines.append("import uuid")
     lines.append("import os")
+    lines.append("from datetime import datetime")
     lines.append("import time")
     lines.append("from pydantic import BaseModel, Field")
     lines.append("import generated.runtime.notebook_module as notebook_module")
@@ -88,6 +89,9 @@ def generate_fastapi_code(functions):
     lines.append("app.openapi = custom_openapi")
     lines.append("")
     lines.append("START_TIME = time.time()")
+    lines.append(
+        "GENERATED_AT = datetime.utcnow().isoformat() + 'Z'"
+    )
     lines.append("")
     protected_endpoint_count = len(functions)
     endpoint_list = [
@@ -102,6 +106,9 @@ def generate_fastapi_code(functions):
     lines.append("        'service': 'Notebook-to-API Generated Service',")
     lines.append("        'generator': 'notebook-to-api',")
     lines.append("        'generator_version': '1.0.0',")
+    lines.append(
+        "        'generated_at': GENERATED_AT,"
+    )
     lines.append("        'docs': '/docs',")
     lines.append("        'swagger_ui': '/docs',")
     lines.append("        'openapi_schema': '/openapi.json',")
