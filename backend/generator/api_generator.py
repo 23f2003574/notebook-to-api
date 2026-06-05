@@ -135,6 +135,37 @@ def generate_fastapi_code(functions):
     lines.append(
         f"        'background_endpoint_count': {background_endpoint_count},"
     )
+    lines.append(
+        "        'available_features': ["
+    )
+
+    lines.append(
+        "            'authentication',"
+    )
+
+    lines.append(
+        "            'background_tasks',"
+    )
+
+    lines.append(
+        "            'openapi_docs',"
+    )
+
+    lines.append(
+        "            'metrics',"
+    )
+
+    lines.append(
+        "            'task_monitoring',"
+    )
+
+    lines.append(
+        "            'health_checks'"
+    )
+
+    lines.append(
+        "        ],"
+    )
     lines.append("        'docs': '/docs',")
     lines.append("        'swagger_ui': '/docs',")
     lines.append("        'openapi_schema': '/openapi.json',")
