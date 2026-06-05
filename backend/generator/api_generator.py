@@ -100,6 +100,8 @@ def generate_fastapi_code(functions):
     lines.append("def root():")
     lines.append("    return {")
     lines.append("        'service': 'Notebook-to-API Generated Service',")
+    lines.append("        'generator': 'notebook-to-api',")
+    lines.append("        'generator_version': '1.0.0',")
     lines.append("        'docs': '/docs',")
     lines.append("        'swagger_ui': '/docs',")
     lines.append("        'openapi_schema': '/openapi.json',")
