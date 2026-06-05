@@ -184,6 +184,11 @@ def generate_fastapi_code(functions):
     lines.append("            'cleanup': '/tasks/cleanup',")
     lines.append("            'reset': '/tasks/reset'")
     lines.append("        },")
+    lines.append("        'authentication': {")
+    lines.append("            'status': '/auth/status',")
+    lines.append("            'info': '/auth/info',")
+    lines.append("            'validate': '/auth/validate'")
+    lines.append("        },")
     lines.append(
         f"        'endpoint_count': {total_generated_endpoint_count},"
     )
