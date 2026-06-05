@@ -89,6 +89,12 @@ def generate_fastapi_code(functions):
     lines.append("")
     lines.append("START_TIME = time.time()")
     lines.append("")
+    protected_endpoint_count = len(functions)
+    endpoint_list = [
+        f"/{func['name']}"
+        for func in functions
+    ]
+    total_generated_endpoint_count = len(endpoint_list)
     lines.append("# Public infrastructure endpoints")
     lines.append("@app.get('/')")
     lines.append("def root():")
@@ -96,7 +102,13 @@ def generate_fastapi_code(functions):
     lines.append("        'service': 'Notebook-to-API Generated Service',")
     lines.append("        'docs': '/docs',")
     lines.append("        'health': '/health',")
-    lines.append("        'info': '/info'")
+    lines.append("        'info': '/info',")
+    lines.append(
+        f"        'endpoint_count': {total_generated_endpoint_count},"
+    )
+    lines.append(
+        f"        'protected_endpoints': {protected_endpoint_count}"
+    )
     lines.append("    }")
     lines.append("")
     lines.append("@app.get('/health')")
@@ -121,7 +133,6 @@ def generate_fastapi_code(functions):
     lines.append("    }")
 
     lines.append("")
-    protected_endpoint_count = len(functions)
     lines.append("@app.get('/auth/info')")
     lines.append("def auth_info():")
 
@@ -145,10 +156,6 @@ def generate_fastapi_code(functions):
     lines.append("    }")
 
     lines.append("")
-    endpoint_list = [
-        f"/{func['name']}"
-        for func in functions
-    ]
     background_endpoint_count = sum(
         1
         for func in functions
