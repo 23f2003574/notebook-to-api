@@ -38,11 +38,18 @@ class SDKGenerator:
             self._build_models_file(functions)
         )
 
+        exceptions_file = sdk_dir / "exceptions.py"
+
+        exceptions_file.write_text(
+            self._build_exceptions_file()
+        )
+
         init_file = sdk_dir / "__init__.py"
 
         init_file.write_text(
             "from .client import APIClient\n"
             "from .models import *\n"
+            "from .exceptions import *\n"
         )
 
         client_file = sdk_dir / "client.py"
@@ -234,6 +241,7 @@ import requests
 from typing import Any
 
 from .models import *
+from .exceptions import *
 
 
 class APIClient:
@@ -269,7 +277,25 @@ class APIClient:
             **kwargs
         )
 
-        response.raise_for_status()
+        if response.status_code == 401:
+            raise AuthenticationError(
+                response.text
+            )
+
+        if response.status_code == 404:
+            raise NotFoundError(
+                response.text
+            )
+
+        if response.status_code >= 500:
+            raise ServerError(
+                response.text
+            )
+
+        if response.status_code >= 400:
+            raise APIError(
+                response.text
+            )
 
         if response.content:
             return response.json()
@@ -328,3 +354,21 @@ class APIClient:
             ])
 
         return "\n".join(lines)
+
+    def _build_exceptions_file(self):
+        return """
+class APIError(Exception):
+    pass
+
+
+class AuthenticationError(APIError):
+    pass
+
+
+class NotFoundError(APIError):
+    pass
+
+
+class ServerError(APIError):
+    pass
+"""
