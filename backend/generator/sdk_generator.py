@@ -191,6 +191,42 @@ class SDKGenerator:
             "GET",
             "/uptime"
         )
+
+    def list_tasks(self):
+        return self._request(
+            "GET",
+            "/tasks"
+        )
+
+    def get_task(
+        self,
+        task_id: str
+    ):
+        return self._request(
+            "GET",
+            f"/tasks/{task_id}"
+        )
+
+    def cleanup_tasks(self):
+        return self._request(
+            "POST",
+            "/tasks/cleanup"
+        )
+
+    def reset_tasks(self):
+        return self._request(
+            "POST",
+            "/tasks/reset"
+        )
+
+    def delete_task(
+        self,
+        task_id: str
+    ):
+        return self._request(
+            "DELETE",
+            f"/tasks/{task_id}"
+        )
 """
 
         return f'''
