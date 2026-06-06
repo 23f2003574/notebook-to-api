@@ -155,7 +155,7 @@ class SDKGenerator:
             json=payload
         )
 
-        return response
+        return {response_model_name}(**response)
 """
             )
 
