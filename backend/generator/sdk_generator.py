@@ -32,10 +32,17 @@ class SDKGenerator:
             exist_ok=True
         )
 
+        models_file = sdk_dir / "models.py"
+
+        models_file.write_text(
+            self._build_models_file(functions)
+        )
+
         init_file = sdk_dir / "__init__.py"
 
         init_file.write_text(
             "from .client import APIClient\n"
+            "from .models import *\n"
         )
 
         client_file = sdk_dir / "client.py"
@@ -158,6 +165,8 @@ class SDKGenerator:
 import requests
 from typing import Any
 
+from .models import *
+
 
 class APIClient:
     def __init__(
@@ -201,3 +210,51 @@ class APIClient:
 
 {generated_methods}
 '''
+
+    def _build_models_file(
+        self,
+        functions
+    ):
+        lines = [
+            "from dataclasses import dataclass",
+            "from typing import Any",
+            "",
+        ]
+
+        for func in functions:
+            func_name = func["name"]
+
+            response_model_name = (
+                "".join(
+                    part.capitalize()
+                    for part in func_name.split("_")
+                ) + "Response"
+            )
+
+            return_type = func.get(
+                "return_type",
+                "Any"
+            )
+
+            type_mapping = {
+                "int": "int",
+                "float": "float",
+                "str": "str",
+                "bool": "bool",
+                "list": "list",
+                "dict": "dict"
+            }
+
+            python_type = type_mapping.get(
+                return_type,
+                "Any"
+            )
+
+            lines.extend([
+                "@dataclass",
+                f"class {response_model_name}:",
+                f"    result: {python_type}",
+                ""
+            ])
+
+        return "\n".join(lines)
