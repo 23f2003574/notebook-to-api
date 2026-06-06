@@ -41,13 +41,34 @@ class SDKGenerator:
         client_file = sdk_dir / "client.py"
 
         client_file.write_text(
-            self._build_client_template()
+            self._build_client_template(functions)
         )
 
         return sdk_dir
 
-    def _build_client_template(self):
-        return """
+    def _build_client_template(
+        self,
+        functions
+    ):
+        methods = []
+
+        for func in functions:
+            func_name = func["name"]
+
+            methods.append(
+                f"""
+    def {func_name}(self, **payload):
+        return self._request(
+            "POST",
+            "/{func_name}",
+            json=payload
+        )
+"""
+            )
+
+        generated_methods = "".join(methods)
+
+        return f'''
 import requests
 
 
@@ -63,7 +84,7 @@ class APIClient:
         self.timeout = timeout
 
     def _headers(self):
-        headers = {}
+        headers = {{}}
 
         if self.api_key:
             headers["X-API-Key"] = self.api_key
@@ -78,7 +99,7 @@ class APIClient:
     ):
         response = requests.request(
             method=method,
-            url=f"{self.base_url}{endpoint}",
+            url=f"{{self.base_url}}{{endpoint}}",
             headers=self._headers(),
             timeout=self.timeout,
             **kwargs
@@ -90,4 +111,6 @@ class APIClient:
             return response.json()
 
         return None
-"""
+
+{generated_methods}
+'''
