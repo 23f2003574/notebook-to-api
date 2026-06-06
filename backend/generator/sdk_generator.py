@@ -161,6 +161,38 @@ class SDKGenerator:
 
         generated_methods = "".join(methods)
 
+        infrastructure_methods = """
+    def health(self):
+        return self._request(
+            "GET",
+            "/health"
+        )
+
+    def ready(self):
+        return self._request(
+            "GET",
+            "/ready"
+        )
+
+    def info(self):
+        return self._request(
+            "GET",
+            "/info"
+        )
+
+    def metrics(self):
+        return self._request(
+            "GET",
+            "/metrics"
+        )
+
+    def uptime(self):
+        return self._request(
+            "GET",
+            "/uptime"
+        )
+"""
+
         return f'''
 import requests
 from typing import Any
@@ -207,6 +239,8 @@ class APIClient:
             return response.json()
 
         return None
+
+{infrastructure_methods}
 
 {generated_methods}
 '''
