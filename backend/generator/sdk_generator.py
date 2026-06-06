@@ -60,12 +60,48 @@ class SDKGenerator:
                 []
             )
 
+            typed_args = []
+
+            for arg in args:
+                arg_name = arg["name"]
+
+                arg_type = arg.get(
+                    "type",
+                    "Any"
+                )
+
+                type_mapping = {
+                    "int": "int",
+                    "float": "float",
+                    "str": "str",
+                    "bool": "bool",
+                    "list": "list",
+                    "dict": "dict"
+                }
+
+                python_type = type_mapping.get(
+                    arg_type,
+                    "Any"
+                )
+
+                typed_args.append(
+                    (
+                        arg_name,
+                        python_type
+                    )
+                )
+
             arg_names = [
-                arg["name"]
-                for arg in args
+                name
+                for name, _
+                in typed_args
             ]
 
-            signature_args = ", ".join(arg_names)
+            signature_args = ", ".join(
+                f"{name}: {arg_type}"
+                for name, arg_type
+                in typed_args
+            )
 
             payload_entries = []
 
@@ -106,6 +142,7 @@ class SDKGenerator:
 
         return f'''
 import requests
+from typing import Any
 
 
 class APIClient:
