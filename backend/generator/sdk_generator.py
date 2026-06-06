@@ -55,9 +55,45 @@ class SDKGenerator:
         for func in functions:
             func_name = func["name"]
 
+            args = func.get(
+                "args",
+                []
+            )
+
+            arg_names = [
+                arg["name"]
+                for arg in args
+            ]
+
+            signature_args = ", ".join(arg_names)
+
+            payload_entries = []
+
+            for arg_name in arg_names:
+                payload_entries.append(
+                    f'"{arg_name}": {arg_name}'
+                )
+
+            payload_dict = ", ".join(
+                payload_entries
+            )
+
+            if signature_args:
+                method_signature = (
+                    f"self, {signature_args}"
+                )
+            else:
+                method_signature = "self"
+
             methods.append(
                 f"""
-    def {func_name}(self, **payload):
+    def {func_name}(
+        {method_signature}
+    ):
+        payload = {{
+            {payload_dict}
+        }}
+
         return self._request(
             "POST",
             "/{func_name}",
