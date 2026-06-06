@@ -44,6 +44,12 @@ class SDKGenerator:
             self._build_exceptions_file()
         )
 
+        readme_file = sdk_dir / "README.md"
+
+        readme_file.write_text(
+            self._build_readme(functions)
+        )
+
         init_file = sdk_dir / "__init__.py"
 
         init_file.write_text(
@@ -372,3 +378,57 @@ class NotFoundError(APIError):
 class ServerError(APIError):
     pass
 """
+
+    def _build_readme(
+        self,
+        functions
+    ):
+        lines = [
+            "# Generated Python SDK",
+            "",
+            "## Installation",
+            "",
+            "```bash",
+            "pip install requests",
+            "```",
+            "",
+            "## Usage",
+            "",
+            "```python",
+            "from python_sdk import APIClient",
+            "",
+            "client = APIClient(",
+            "    base_url='http://localhost:8000',",
+            "    api_key='your-api-key'",
+            ")",
+            "```",
+            "",
+            "## Available Methods",
+            ""
+        ]
+
+        for func in functions:
+            lines.append(
+                f"- `client.{func['name']}(...)`"
+            )
+
+        lines.extend([
+            "",
+            "## Infrastructure Methods",
+            "",
+            "- `client.health()`",
+            "- `client.ready()`",
+            "- `client.info()`",
+            "- `client.metrics()`",
+            "- `client.uptime()`",
+            "",
+            "## Task Management",
+            "",
+            "- `client.list_tasks()`",
+            "- `client.get_task(task_id)`",
+            "- `client.cleanup_tasks()`",
+            "- `client.reset_tasks()`",
+            "- `client.delete_task(task_id)`",
+        ])
+
+        return "\n".join(lines)
