@@ -55,8 +55,39 @@ class APIClient:
     def __init__(
         self,
         base_url,
-        api_key=None
+        api_key=None,
+        timeout=30
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        self.timeout = timeout
+
+    def _headers(self):
+        headers = {}
+
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+
+        return headers
+
+    def _request(
+        self,
+        method,
+        endpoint,
+        **kwargs
+    ):
+        response = requests.request(
+            method=method,
+            url=f"{self.base_url}{endpoint}",
+            headers=self._headers(),
+            timeout=self.timeout,
+            **kwargs
+        )
+
+        response.raise_for_status()
+
+        if response.content:
+            return response.json()
+
+        return None
 """
