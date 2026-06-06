@@ -60,6 +60,18 @@ class SDKGenerator:
                 []
             )
 
+            return_type = func.get(
+                "return_type",
+                "Any"
+            )
+
+            response_model_name = (
+                "".join(
+                    part.capitalize()
+                    for part in func_name.split("_")
+                ) + "Response"
+            )
+
             typed_args = []
 
             for arg in args:
@@ -125,16 +137,18 @@ class SDKGenerator:
                 f"""
     def {func_name}(
         {method_signature}
-    ):
+    ) -> {response_model_name}:
         payload = {{
             {payload_dict}
         }}
 
-        return self._request(
+        response = self._request(
             "POST",
             "/{func_name}",
             json=payload
         )
+
+        return response
 """
             )
 
