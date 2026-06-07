@@ -281,6 +281,22 @@ class APIClient:
             ""
         ])
 
+        lines.extend([
+            "",
+            "def _validate_nested(value):",
+            "    if hasattr(value, '__post_init__'):",
+            "        value.__post_init__()",
+            "",
+            "    if isinstance(value, list):",
+            "        for item in value:",
+            "            _validate_nested(item)",
+            "",
+            "    if isinstance(value, dict):",
+            "        for item in value.values():",
+            "            _validate_nested(item)",
+            ""
+        ])
+
         for func in functions:
             func_name = func["name"]
 
@@ -513,6 +529,10 @@ class APIClient:
 
                         lines.append(
                             f'            raise ValidationError("{arg_name} must be a {python_type}")'
+                        )
+
+                        lines.append(
+                            f"        _validate_nested(self.{arg_name})"
                         )
 
                 lines.extend([
