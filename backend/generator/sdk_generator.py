@@ -258,6 +258,7 @@ class APIClient:
         lines = [
             "from dataclasses import dataclass",
             "from typing import Any",
+            "from .exceptions import ValidationError",
             "",
         ]
 
@@ -345,7 +346,7 @@ class APIClient:
                         )
 
                         lines.append(
-                            f'            raise TypeError("{arg_name} must be of type {python_type}")'
+                            f'            raise ValidationError("{arg_name} must be of type {python_type}")'
                         )
 
                 lines.extend([
@@ -406,6 +407,10 @@ class APIClient:
     def _build_exceptions_file(self):
         return """
 class APIError(Exception):
+    pass
+
+
+class ValidationError(APIError):
     pass
 
 
