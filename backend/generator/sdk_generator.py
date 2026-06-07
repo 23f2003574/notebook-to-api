@@ -412,6 +412,37 @@ class APIClient:
                     if ptype.startswith("Dict[")
                 ]
 
+                lines.append("")
+                lines.append("    __sdk_schema__ = {")
+
+                for arg_name, python_type, _default in typed_args:
+                    constraints = constraints_map.get(arg_name, {})
+
+                    constraint_parts = []
+
+                    for key, value in constraints.items():
+                        constraint_parts.append(
+                            f'"{key}": {repr(value)}'
+                        )
+
+                    constraint_string = ", ".join(
+                        constraint_parts
+                    )
+
+                    lines.append(
+                        f'        "{arg_name}": {{'
+                        f'"type": "{python_type}"'
+                        + (
+                            f", {constraint_string}"
+                            if constraint_string
+                            else ""
+                        )
+                        + "},"
+                    )
+
+                lines.append("    }")
+                lines.append("")
+
                 lines.extend([
                     "",
                     "    def __post_init__(self):"
