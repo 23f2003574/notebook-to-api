@@ -310,6 +310,44 @@ class APIClient:
                         f"    {arg_name}: {python_type}"
                     )
 
+                typed_args = [
+                    (
+                        arg["name"],
+                        {
+                            "int": "int",
+                            "float": "float",
+                            "str": "str",
+                            "bool": "bool",
+                            "list": "list",
+                            "dict": "dict"
+                        }.get(arg.get("type", "Any"), "Any")
+                    )
+                    for arg in args
+                ]
+
+                validatable = [
+                    (name, ptype)
+                    for name, ptype in typed_args
+                    if ptype != "Any"
+                ]
+
+                lines.extend([
+                    "",
+                    "    def __post_init__(self):"
+                ])
+
+                if not validatable:
+                    lines.append("        pass")
+                else:
+                    for arg_name, python_type in validatable:
+                        lines.append(
+                            f"        if not isinstance(self.{arg_name}, {python_type}):"
+                        )
+
+                        lines.append(
+                            f'            raise TypeError("{arg_name} must be of type {python_type}")'
+                        )
+
                 lines.extend([
                     "",
                     "    def to_dict(self):",
