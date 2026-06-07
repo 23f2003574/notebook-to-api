@@ -257,7 +257,7 @@ class APIClient:
     ):
         lines = [
             "from dataclasses import dataclass",
-            "from typing import Optional, Any",
+            "from typing import Optional, Any, List, Dict",
             "from .exceptions import ValidationError",
             "",
         ]
@@ -297,37 +297,18 @@ class APIClient:
                     "Optional[int]": "Optional[int]",
                     "Optional[float]": "Optional[float]",
                     "Optional[str]": "Optional[str]",
-                    "Optional[bool]": "Optional[bool]"
+                    "Optional[bool]": "Optional[bool]",
+                    "List[str]": "List[str]",
+                    "List[int]": "List[int]",
+                    "List[float]": "List[float]",
+                    "List[bool]": "List[bool]",
+                    "Dict[str, str]": "Dict[str, str]",
+                    "Dict[str, int]": "Dict[str, int]",
+                    "Dict[str, float]": "Dict[str, float]",
+                    "Dict[str, Any]": "Dict[str, Any]"
                 }
 
-                for arg in args:
-                    arg_name = arg["name"]
-
-                    arg_type = arg.get(
-                        "type",
-                        "Any"
-                    )
-
-                    default_value = arg.get(
-                        "default",
-                        _MISSING
-                    )
-
-                    python_type = TYPE_MAPPING.get(
-                        arg_type,
-                        "Any"
-                    )
-
-                    if default_value is _MISSING:
-                        lines.append(
-                            f"    {arg_name}: {python_type}"
-                        )
-                    else:
-                        lines.append(
-                            f"    {arg_name}: {python_type} = {repr(default_value)}"
-                        )
-
-                typed_args = [
+                resolved = [
                     (
                         arg["name"],
                         TYPE_MAPPING.get(
@@ -339,12 +320,36 @@ class APIClient:
                     for arg in args
                 ]
 
+                required_fields = [
+                    (name, ptype, default)
+                    for name, ptype, default in resolved
+                    if default is _MISSING
+                ]
+
+                defaulted_fields = [
+                    (name, ptype, default)
+                    for name, ptype, default in resolved
+                    if default is not _MISSING
+                ]
+
+                for name, ptype, _default in required_fields:
+                    lines.append(f"    {name}: {ptype}")
+
+                for name, ptype, default in defaulted_fields:
+                    lines.append(
+                        f"    {name}: {ptype} = {repr(default)}"
+                    )
+
+                typed_args = required_fields + defaulted_fields
+
                 required_validatable = [
                     (name, ptype)
                     for name, ptype, _default
                     in typed_args
                     if ptype != "Any"
                     and not ptype.startswith("Optional")
+                    and not ptype.startswith("List[")
+                    and not ptype.startswith("Dict[")
                 ]
 
                 optional_validatable = [
@@ -354,12 +359,33 @@ class APIClient:
                     if ptype.startswith("Optional")
                 ]
 
+                list_validatable = [
+                    (name, ptype)
+                    for name, ptype, _default
+                    in typed_args
+                    if ptype.startswith("List[")
+                ]
+
+                dict_validatable = [
+                    (name, ptype)
+                    for name, ptype, _default
+                    in typed_args
+                    if ptype.startswith("Dict[")
+                ]
+
                 lines.extend([
                     "",
                     "    def __post_init__(self):"
                 ])
 
-                if not required_validatable and not optional_validatable:
+                has_validation = (
+                    required_validatable
+                    or optional_validatable
+                    or list_validatable
+                    or dict_validatable
+                )
+
+                if not has_validation:
                     lines.append("        pass")
                 else:
                     for arg_name, python_type in required_validatable:
@@ -384,6 +410,40 @@ class APIClient:
 
                         lines.append(
                             f'            raise ValidationError("{arg_name} must be Optional[{inner_type}]")'
+                        )
+
+                    for arg_name, python_type in list_validatable:
+                        inner_type = (
+                            python_type[len("List["):-1]
+                        )
+
+                        lines.append(
+                            f"        if not isinstance(self.{arg_name}, list):"
+                        )
+
+                        lines.append(
+                            f'            raise ValidationError("{arg_name} must be a list")'
+                        )
+
+                        lines.append(
+                            f"        for item in self.{arg_name}:"
+                        )
+
+                        lines.append(
+                            f"            if not isinstance(item, {inner_type}):"
+                        )
+
+                        lines.append(
+                            f'                raise ValidationError("{arg_name} contains invalid item type")'
+                        )
+
+                    for arg_name, python_type in dict_validatable:
+                        lines.append(
+                            f"        if not isinstance(self.{arg_name}, dict):"
+                        )
+
+                        lines.append(
+                            f'            raise ValidationError("{arg_name} must be a dict")'
                         )
 
                 lines.extend([
