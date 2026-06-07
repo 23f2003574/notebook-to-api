@@ -75,16 +75,6 @@ class SDKGenerator:
         for func in functions:
             func_name = func["name"]
 
-            args = func.get(
-                "args",
-                []
-            )
-
-            return_type = func.get(
-                "return_type",
-                "Any"
-            )
-
             response_model_name = (
                 "".join(
                     part.capitalize()
@@ -92,75 +82,23 @@ class SDKGenerator:
                 ) + "Response"
             )
 
-            typed_args = []
-
-            for arg in args:
-                arg_name = arg["name"]
-
-                arg_type = arg.get(
-                    "type",
-                    "Any"
-                )
-
-                type_mapping = {
-                    "int": "int",
-                    "float": "float",
-                    "str": "str",
-                    "bool": "bool",
-                    "list": "list",
-                    "dict": "dict"
-                }
-
-                python_type = type_mapping.get(
-                    arg_type,
-                    "Any"
-                )
-
-                typed_args.append(
-                    (
-                        arg_name,
-                        python_type
-                    )
-                )
-
-            arg_names = [
-                name
-                for name, _
-                in typed_args
-            ]
-
-            signature_args = ", ".join(
-                f"{name}: {arg_type}"
-                for name, arg_type
-                in typed_args
+            request_model_name = (
+                "".join(
+                    part.capitalize()
+                    for part in func_name.split("_")
+                ) + "Request"
             )
 
-            payload_entries = []
-
-            for arg_name in arg_names:
-                payload_entries.append(
-                    f'"{arg_name}": {arg_name}'
-                )
-
-            payload_dict = ", ".join(
-                payload_entries
+            method_signature = (
+                f"self, request: {request_model_name}"
             )
-
-            if signature_args:
-                method_signature = (
-                    f"self, {signature_args}"
-                )
-            else:
-                method_signature = "self"
 
             methods.append(
                 f"""
     def {func_name}(
         {method_signature}
     ) -> {response_model_name}:
-        payload = {{
-            {payload_dict}
-        }}
+        payload = request.to_dict()
 
         response = self._request(
             "POST",
