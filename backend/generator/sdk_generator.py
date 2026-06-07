@@ -372,6 +372,24 @@ class APIClient:
                         f"    {arg_name}: {python_type}"
                     )
 
+                lines.extend([
+                    "",
+                    "    def to_dict(self):",
+                    "        return {"
+                ])
+
+                for arg in args:
+                    arg_name = arg["name"]
+
+                    lines.append(
+                        f'            "{arg_name}": self.{arg_name},'
+                    )
+
+                lines.extend([
+                    "        }",
+                    ""
+                ])
+
             lines.append("")
 
             response_model_name = (
