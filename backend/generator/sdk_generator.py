@@ -262,6 +262,25 @@ class APIClient:
             "",
         ]
 
+        lines.extend([
+            "",
+            "def _serialize_value(value):",
+            "    if hasattr(value, 'to_dict'):",
+            "        return value.to_dict()",
+            "",
+            "    if isinstance(value, list):",
+            "        return [_serialize_value(v) for v in value]",
+            "",
+            "    if isinstance(value, dict):",
+            "        return {",
+            "            k: _serialize_value(v)",
+            "            for k, v in value.items()",
+            "        }",
+            "",
+            "    return value",
+            ""
+        ])
+
         for func in functions:
             func_name = func["name"]
 
@@ -505,12 +524,9 @@ class APIClient:
                 for arg in args:
                     arg_name = arg["name"]
 
-                    lines.extend([
-                        f"            \"{arg_name}\": "
-                        f"self.{arg_name}.to_dict() "
-                        f"if hasattr(self.{arg_name}, 'to_dict') "
-                        f"else self.{arg_name},"
-                    ])
+                    lines.append(
+                        f'            "{arg_name}": _serialize_value(self.{arg_name}),'
+                    )
 
                 lines.extend([
                     "        }",
