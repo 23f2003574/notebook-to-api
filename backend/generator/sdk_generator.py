@@ -313,7 +313,7 @@ class APIClient:
                         arg["name"],
                         TYPE_MAPPING.get(
                             arg.get("type", "Any"),
-                            "Any"
+                            arg.get("type", "Any")
                         ),
                         arg.get("default", _MISSING)
                     )
@@ -378,11 +378,33 @@ class APIClient:
                     "    def __post_init__(self):"
                 ])
 
+                primitive_types_check = {
+                    "int",
+                    "float",
+                    "str",
+                    "bool",
+                    "list",
+                    "dict",
+                    "Any"
+                }
+
+                nested_validatable = [
+                    (name, ptype)
+                    for name, ptype, _default in typed_args
+                    if (
+                        ptype not in primitive_types_check
+                        and not ptype.startswith("Optional")
+                        and not ptype.startswith("List[")
+                        and not ptype.startswith("Dict[")
+                    )
+                ]
+
                 has_validation = (
                     required_validatable
                     or optional_validatable
                     or list_validatable
                     or dict_validatable
+                    or nested_validatable
                 )
 
                 if not has_validation:
@@ -446,6 +468,34 @@ class APIClient:
                             f'            raise ValidationError("{arg_name} must be a dict")'
                         )
 
+                    primitive_types = {
+                        "int",
+                        "float",
+                        "str",
+                        "bool",
+                        "list",
+                        "dict",
+                        "Any"
+                    }
+
+                    for arg_name, python_type in [
+                        (name, ptype)
+                        for name, ptype, _default in typed_args
+                        if (
+                            ptype not in primitive_types
+                            and not ptype.startswith("Optional")
+                            and not ptype.startswith("List")
+                            and not ptype.startswith("Dict")
+                        )
+                    ]:
+                        lines.append(
+                            f"        if not hasattr(self.{arg_name}, 'to_dict'):"
+                        )
+
+                        lines.append(
+                            f'            raise ValidationError("{arg_name} must be a {python_type}")'
+                        )
+
                 lines.extend([
                     "",
                     "    def to_dict(self):",
@@ -455,9 +505,12 @@ class APIClient:
                 for arg in args:
                     arg_name = arg["name"]
 
-                    lines.append(
-                        f'            "{arg_name}": self.{arg_name},'
-                    )
+                    lines.extend([
+                        f"            \"{arg_name}\": "
+                        f"self.{arg_name}.to_dict() "
+                        f"if hasattr(self.{arg_name}, 'to_dict') "
+                        f"else self.{arg_name},"
+                    ])
 
                 lines.extend([
                     "        }",
