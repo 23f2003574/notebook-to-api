@@ -293,6 +293,11 @@ class APIClient:
                         "Any"
                     )
 
+                    default_value = arg.get(
+                        "default",
+                        None
+                    )
+
                     type_mapping = {
                         "int": "int",
                         "float": "float",
@@ -307,9 +312,14 @@ class APIClient:
                         "Any"
                     )
 
-                    lines.append(
-                        f"    {arg_name}: {python_type}"
-                    )
+                    if default_value is None:
+                        lines.append(
+                            f"    {arg_name}: {python_type}"
+                        )
+                    else:
+                        lines.append(
+                            f"    {arg_name}: {python_type} = {repr(default_value)}"
+                        )
 
                 typed_args = [
                     (
@@ -321,14 +331,16 @@ class APIClient:
                             "bool": "bool",
                             "list": "list",
                             "dict": "dict"
-                        }.get(arg.get("type", "Any"), "Any")
+                        }.get(arg.get("type", "Any"), "Any"),
+                        arg.get("default", None)
                     )
                     for arg in args
                 ]
 
                 validatable = [
                     (name, ptype)
-                    for name, ptype in typed_args
+                    for name, ptype, _default
+                    in typed_args
                     if ptype != "Any"
                 ]
 
