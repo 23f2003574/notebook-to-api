@@ -355,6 +355,10 @@ class APIClient:
                     for arg in args
                 ]
 
+                constraints_map = {
+                    arg["name"]: arg.get("constraints", {})
+                    for arg in args
+                }
                 required_fields = [
                     (name, ptype, default)
                     for name, ptype, default in resolved
@@ -440,6 +444,7 @@ class APIClient:
                     or list_validatable
                     or dict_validatable
                     or nested_validatable
+                    or any(constraints_map.values())
                 )
 
                 if not has_validation:
@@ -534,6 +539,53 @@ class APIClient:
                         lines.append(
                             f"        _validate_nested(self.{arg_name})"
                         )
+
+                    for arg_name, _python_type, _default in typed_args:
+                        constraints = constraints_map.get(arg_name, {})
+
+                        min_value = constraints.get("min")
+
+                        if min_value is not None:
+                            lines.append(
+                                f"        if self.{arg_name} < {repr(min_value)}:"
+                            )
+
+                            lines.append(
+                                f'            raise ValidationError("{arg_name} must be >= {min_value}")'
+                            )
+
+                        max_value = constraints.get("max")
+
+                        if max_value is not None:
+                            lines.append(
+                                f"        if self.{arg_name} > {repr(max_value)}:"
+                            )
+
+                            lines.append(
+                                f'            raise ValidationError("{arg_name} must be <= {max_value}")'
+                            )
+
+                        min_length = constraints.get("min_length")
+
+                        if min_length is not None:
+                            lines.append(
+                                f"        if len(self.{arg_name}) < {min_length}:"
+                            )
+
+                            lines.append(
+                                f'            raise ValidationError("{arg_name} must contain at least {min_length} characters")'
+                            )
+
+                        max_length = constraints.get("max_length")
+
+                        if max_length is not None:
+                            lines.append(
+                                f"        if len(self.{arg_name}) > {max_length}:"
+                            )
+
+                            lines.append(
+                                f'            raise ValidationError("{arg_name} exceeds maximum length of {max_length}")'
+                            )
 
                 lines.extend([
                     "",
