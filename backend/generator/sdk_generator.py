@@ -257,7 +257,7 @@ class APIClient:
     ):
         lines = [
             "from dataclasses import dataclass",
-            "from typing import Any",
+            "from typing import Optional, Any",
             "from .exceptions import ValidationError",
             "",
         ]
@@ -285,6 +285,21 @@ class APIClient:
             if not args:
                 lines.append("    pass")
             else:
+                _MISSING = object()
+
+                TYPE_MAPPING = {
+                    "int": "int",
+                    "float": "float",
+                    "str": "str",
+                    "bool": "bool",
+                    "list": "list",
+                    "dict": "dict",
+                    "Optional[int]": "Optional[int]",
+                    "Optional[float]": "Optional[float]",
+                    "Optional[str]": "Optional[str]",
+                    "Optional[bool]": "Optional[bool]"
+                }
+
                 for arg in args:
                     arg_name = arg["name"]
 
@@ -295,24 +310,15 @@ class APIClient:
 
                     default_value = arg.get(
                         "default",
-                        None
+                        _MISSING
                     )
 
-                    type_mapping = {
-                        "int": "int",
-                        "float": "float",
-                        "str": "str",
-                        "bool": "bool",
-                        "list": "list",
-                        "dict": "dict"
-                    }
-
-                    python_type = type_mapping.get(
+                    python_type = TYPE_MAPPING.get(
                         arg_type,
                         "Any"
                     )
 
-                    if default_value is None:
+                    if default_value is _MISSING:
                         lines.append(
                             f"    {arg_name}: {python_type}"
                         )
@@ -324,24 +330,28 @@ class APIClient:
                 typed_args = [
                     (
                         arg["name"],
-                        {
-                            "int": "int",
-                            "float": "float",
-                            "str": "str",
-                            "bool": "bool",
-                            "list": "list",
-                            "dict": "dict"
-                        }.get(arg.get("type", "Any"), "Any"),
-                        arg.get("default", None)
+                        TYPE_MAPPING.get(
+                            arg.get("type", "Any"),
+                            "Any"
+                        ),
+                        arg.get("default", _MISSING)
                     )
                     for arg in args
                 ]
 
-                validatable = [
+                required_validatable = [
                     (name, ptype)
                     for name, ptype, _default
                     in typed_args
                     if ptype != "Any"
+                    and not ptype.startswith("Optional")
+                ]
+
+                optional_validatable = [
+                    (name, ptype)
+                    for name, ptype, _default
+                    in typed_args
+                    if ptype.startswith("Optional")
                 ]
 
                 lines.extend([
@@ -349,16 +359,31 @@ class APIClient:
                     "    def __post_init__(self):"
                 ])
 
-                if not validatable:
+                if not required_validatable and not optional_validatable:
                     lines.append("        pass")
                 else:
-                    for arg_name, python_type in validatable:
+                    for arg_name, python_type in required_validatable:
                         lines.append(
                             f"        if not isinstance(self.{arg_name}, {python_type}):"
                         )
 
                         lines.append(
                             f'            raise ValidationError("{arg_name} must be of type {python_type}")'
+                        )
+
+                    for arg_name, python_type in optional_validatable:
+                        inner_type = (
+                            python_type
+                            .replace("Optional[", "")
+                            .replace("]", "")
+                        )
+
+                        lines.append(
+                            f"        if self.{arg_name} is not None and not isinstance(self.{arg_name}, {inner_type}):"
+                        )
+
+                        lines.append(
+                            f'            raise ValidationError("{arg_name} must be Optional[{inner_type}]")'
                         )
 
                 lines.extend([
