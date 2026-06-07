@@ -326,6 +326,54 @@ class APIClient:
         for func in functions:
             func_name = func["name"]
 
+            request_model_name = (
+                "".join(
+                    part.capitalize()
+                    for part in func_name.split("_")
+                ) + "Request"
+            )
+
+            lines.extend([
+                "@dataclass",
+                f"class {request_model_name}:"
+            ])
+
+            args = func.get(
+                "args",
+                []
+            )
+
+            if not args:
+                lines.append("    pass")
+            else:
+                for arg in args:
+                    arg_name = arg["name"]
+
+                    arg_type = arg.get(
+                        "type",
+                        "Any"
+                    )
+
+                    type_mapping = {
+                        "int": "int",
+                        "float": "float",
+                        "str": "str",
+                        "bool": "bool",
+                        "list": "list",
+                        "dict": "dict"
+                    }
+
+                    python_type = type_mapping.get(
+                        arg_type,
+                        "Any"
+                    )
+
+                    lines.append(
+                        f"    {arg_name}: {python_type}"
+                    )
+
+            lines.append("")
+
             response_model_name = (
                 "".join(
                     part.capitalize()
