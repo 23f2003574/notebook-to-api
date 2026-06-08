@@ -24,6 +24,11 @@ class DependencyNode:
     dependencies: Set[str]
     dependents: Set[str]
 
+    dependency_reasons: Dict[
+        str,
+        Set[str]
+    ]
+
 
 class DependencyGraph:
 
@@ -42,14 +47,16 @@ class DependencyGraph:
                 DependencyNode(
                     name=name,
                     dependencies=set(),
-                    dependents=set()
+                    dependents=set(),
+                    dependency_reasons={}
                 )
             )
 
     def add_dependency(
         self,
         source: str,
-        target: str
+        target: str,
+        reason=None
     ):
         self.add_node(source)
         self.add_node(target)
@@ -57,6 +64,16 @@ class DependencyGraph:
         self.nodes[source].dependencies.add(
             target
         )
+
+        if reason:
+
+            self.nodes[source]\
+                .dependency_reasons\
+                .setdefault(
+                    target,
+                    set()
+                )\
+                .add(reason)
 
         self.nodes[target].dependents.add(
             source

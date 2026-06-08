@@ -58,9 +58,12 @@ class NotebookDependencyAnalyzer:
 
                 if shared_variables:
 
-                    graph.add_dependency(
-                        f"cell_{current_cell.cell_id}",
-                        f"cell_{previous_cell.cell_id}"
-                    )
+                    for variable in shared_variables:
+
+                        graph.add_dependency(
+                            f"cell_{current_cell.cell_id}",
+                            f"cell_{previous_cell.cell_id}",
+                            reason=variable
+                        )
 
         return graph
