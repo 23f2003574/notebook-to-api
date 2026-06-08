@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Dict, List, Set
+from collections import deque
 
 
 @dataclass
@@ -103,3 +104,55 @@ class DependencyGraph:
             for node
             in self.nodes.values()
         )
+
+    def topological_sort(self):
+
+        indegree = {
+            node_name: len(node.dependencies)
+            for node_name, node
+            in self.nodes.items()
+        }
+
+        queue = deque(
+            node_name
+            for node_name, degree
+            in indegree.items()
+            if degree == 0
+        )
+
+        ordering = []
+
+        while queue:
+
+            current = queue.popleft()
+
+            ordering.append(current)
+
+            for dependent in (
+                self.nodes[current]
+                .dependents
+            ):
+
+                indegree[dependent] -= 1
+
+                if (
+                    indegree[dependent]
+                    == 0
+                ):
+                    queue.append(
+                        dependent
+                    )
+
+        if (
+            len(ordering)
+            != len(self.nodes)
+        ):
+            raise ValueError(
+                "Cycle detected in dependency graph"
+            )
+
+        return ordering
+
+    def execution_order(self):
+
+        return self.topological_sort()
