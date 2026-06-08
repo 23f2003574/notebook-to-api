@@ -1,47 +1,54 @@
+import ast
 from dataclasses import dataclass
-from typing import Dict, List, Set
+from typing import Set
 
 
 @dataclass
-class DependencyNode:
-    name: str
-    dependencies: Set[str]
-    dependents: Set[str]
+class VariableUsage:
+    defined: Set[str]
+    used: Set[str]
 
 
-class DependencyGraph:
+class VariableTracker(ast.NodeVisitor):
 
     def __init__(self):
-        self.nodes: Dict[
-            str,
-            DependencyNode
-        ] = {}
+        self.defined = set()
+        self.used = set()
 
-    def add_node(
+    def visit_Name(
         self,
-        name: str
+        node
     ):
-        if name not in self.nodes:
-            self.nodes[name] = (
-                DependencyNode(
-                    name=name,
-                    dependencies=set(),
-                    dependents=set()
-                )
+        if isinstance(
+            node.ctx,
+            ast.Store
+        ):
+            self.defined.add(
+                node.id
             )
 
-    def add_dependency(
-        self,
-        source: str,
-        target: str
-    ):
-        self.add_node(source)
-        self.add_node(target)
+        elif isinstance(
+            node.ctx,
+            ast.Load
+        ):
+            self.used.add(
+                node.id
+            )
 
-        self.nodes[source].dependencies.add(
-            target
+        self.generic_visit(node)
+
+    def analyze(
+        self,
+        source_code: str
+    ) -> VariableUsage:
+
+        tree = ast.parse(
+            source_code
         )
 
-        self.nodes[target].dependents.add(
-            source
+        self.visit(tree)
+
+        return VariableUsage(
+            defined=self.defined,
+            used=self.used
         )
