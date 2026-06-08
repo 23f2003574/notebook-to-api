@@ -347,8 +347,76 @@ class DependencyGraph:
             "has_cycles": False,
 
             "critical_path":
-                self.critical_path()
+                self.critical_path(),
+
+            "redundant_dependencies":
+                self.redundant_dependencies()
         }
+
+    def redundant_dependencies(self):
+
+        redundant = []
+
+        for (
+            source_name,
+            source_node
+        ) in self.nodes.items():
+
+            for dependency in (
+                source_node.dependencies
+            ):
+
+                visited = set()
+
+                for intermediate in (
+                    source_node.dependencies
+                ):
+
+                    if (
+                        intermediate
+                        == dependency
+                    ):
+                        continue
+
+                    self._reachable_nodes(
+                        intermediate,
+                        visited
+                    )
+
+                if dependency in visited:
+
+                    redundant.append(
+                        {
+                            "source":
+                                source_name,
+                            "target":
+                                dependency
+                        }
+                    )
+
+        return redundant
+
+    def _reachable_nodes(
+        self,
+        node_name,
+        visited
+    ):
+
+        if node_name in visited:
+            return
+
+        visited.add(
+            node_name
+        )
+
+        for dependency in (
+            self.nodes[node_name]
+            .dependencies
+        ):
+            self._reachable_nodes(
+                dependency,
+                visited
+            )
 
     def find_cycle(self):
 
