@@ -230,6 +230,77 @@ class DependencyGraph:
 
         return self.topological_sort()
 
+    def critical_path(self):
+
+        memo = {}
+
+        def longest_path(node_name):
+
+            if node_name in memo:
+                return memo[node_name]
+
+            node = self.nodes[node_name]
+
+            if not node.dependencies:
+                memo[node_name] = [node_name]
+                return memo[node_name]
+
+            best_path = []
+
+            for dependency in node.dependencies:
+
+                candidate = longest_path(
+                    dependency
+                )
+
+                if (
+                    len(candidate)
+                    > len(best_path)
+                ):
+                    best_path = candidate
+
+            memo[node_name] = (
+                [node_name]
+                + best_path
+            )
+
+            return memo[node_name]
+
+        longest = []
+
+        for node_name in self.nodes:
+
+            candidate = longest_path(
+                node_name
+            )
+
+            if (
+                len(candidate)
+                > len(longest)
+            ):
+                longest = candidate
+
+        return list(
+            reversed(longest)
+        )
+
+    def critical_path_length(self):
+
+        return len(
+            self.critical_path()
+        )
+
+    def graph_metrics(self):
+
+        return {
+            "nodes": self.node_count(),
+            "edges": self.edge_count(),
+            "critical_path_length":
+                self.critical_path_length(),
+            "critical_path":
+                self.critical_path()
+        }
+
     def find_cycle(self):
 
         visited = set()
