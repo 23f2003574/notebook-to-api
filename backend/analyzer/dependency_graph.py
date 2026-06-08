@@ -85,10 +85,26 @@ class DependencyGraph:
 
         for name, node in self.nodes.items():
 
+            dependency_details = []
+
+            for dependency in sorted(
+                node.dependencies
+            ):
+
+                dependency_details.append(
+                    {
+                        "cell": dependency,
+                        "variables": sorted(
+                            node.dependency_reasons.get(
+                                dependency,
+                                set()
+                            )
+                        )
+                    }
+                )
+
             result[name] = {
-                "dependencies": sorted(
-                    node.dependencies
-                ),
+                "dependencies": dependency_details,
                 "dependents": sorted(
                     node.dependents
                 )
@@ -107,11 +123,33 @@ class DependencyGraph:
                 edges.append(
                     {
                         "source": node_name,
-                        "target": dependency
+                        "target": dependency,
+                        "variables": sorted(
+                            node.dependency_reasons.get(
+                                dependency,
+                                set()
+                            )
+                        )
                     }
                 )
 
         return edges
+
+    def dependency_provenance(self):
+
+        provenance = {}
+
+        for node_name, node in self.nodes.items():
+
+            provenance[node_name] = {
+                dependency: sorted(
+                    variables
+                )
+                for dependency, variables
+                in node.dependency_reasons.items()
+            }
+
+        return provenance
 
     def to_adjacency_list(self):
 
