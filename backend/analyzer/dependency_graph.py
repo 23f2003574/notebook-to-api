@@ -3,6 +3,21 @@ from typing import Dict, List, Set
 from collections import deque
 
 
+class DependencyCycleError(
+    Exception
+):
+    def __init__(
+        self,
+        cycle_path
+    ):
+        self.cycle_path = cycle_path
+
+        super().__init__(
+            "Dependency cycle detected: "
+            + " -> ".join(cycle_path)
+        )
+
+
 @dataclass
 class DependencyNode:
     name: str
@@ -147,8 +162,11 @@ class DependencyGraph:
             len(ordering)
             != len(self.nodes)
         ):
-            raise ValueError(
-                "Cycle detected in dependency graph"
+
+            cycle = self.find_cycle()
+
+            raise DependencyCycleError(
+                cycle or []
             )
 
         return ordering
@@ -156,3 +174,81 @@ class DependencyGraph:
     def execution_order(self):
 
         return self.topological_sort()
+
+    def find_cycle(self):
+
+        visited = set()
+        recursion_stack = set()
+
+        path = []
+
+        def dfs(node_name):
+
+            visited.add(node_name)
+
+            recursion_stack.add(
+                node_name
+            )
+
+            path.append(
+                node_name
+            )
+
+            for dependency in (
+                self.nodes[node_name]
+                .dependencies
+            ):
+
+                if (
+                    dependency
+                    not in visited
+                ):
+
+                    result = dfs(
+                        dependency
+                    )
+
+                    if result:
+                        return result
+
+                elif (
+                    dependency
+                    in recursion_stack
+                ):
+
+                    cycle_start = (
+                        path.index(
+                            dependency
+                        )
+                    )
+
+                    return (
+                        path[
+                            cycle_start:
+                        ]
+                        + [dependency]
+                    )
+
+            recursion_stack.remove(
+                node_name
+            )
+
+            path.pop()
+
+            return None
+
+        for node_name in self.nodes:
+
+            if (
+                node_name
+                not in visited
+            ):
+
+                cycle = dfs(
+                    node_name
+                )
+
+                if cycle:
+                    return cycle
+
+        return None
