@@ -295,8 +295,57 @@ class DependencyGraph:
         return {
             "nodes": self.node_count(),
             "edges": self.edge_count(),
+
             "critical_path_length":
                 self.critical_path_length(),
+
+            "critical_path":
+                self.critical_path(),
+
+            "orphan_count":
+                len(
+                    self.orphan_nodes()
+                ),
+
+            "orphans":
+                self.orphan_nodes()
+        }
+
+    def orphan_nodes(self):
+
+        orphans = []
+
+        for (
+            node_name,
+            node
+        ) in self.nodes.items():
+
+            if (
+                not node.dependencies
+                and not node.dependents
+            ):
+                orphans.append(
+                    node_name
+                )
+
+        return sorted(
+            orphans
+        )
+
+    def has_orphans(self):
+
+        return bool(
+            self.orphan_nodes()
+        )
+
+    def diagnostics(self):
+
+        return {
+            "orphans":
+                self.orphan_nodes(),
+
+            "has_cycles": False,
+
             "critical_path":
                 self.critical_path()
         }
