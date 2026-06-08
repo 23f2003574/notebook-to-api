@@ -340,18 +340,77 @@ class DependencyGraph:
 
     def diagnostics(self):
 
+        report = self.analysis_report()
+
         return {
+            "orphans":
+                report["orphans"],
+
+            "has_cycles":
+                report["cycle_detected"],
+
+            "critical_path":
+                report["critical_path"],
+
+            "redundant_dependencies":
+                report["redundant_dependencies"]
+        }
+
+    def analysis_report(self):
+
+        cycle = self.find_cycle()
+        has_cycle = cycle is not None
+
+        if has_cycle:
+            execution_order = []
+            critical_path = []
+        else:
+            execution_order = self.execution_order()
+            critical_path = self.critical_path()
+
+        report = {
+            "graph_metrics": {
+                "nodes": self.node_count(),
+                "edges": self.edge_count(),
+                "critical_path_length":
+                    len(critical_path),
+                "critical_path":
+                    critical_path,
+                "orphan_count":
+                    len(self.orphan_nodes()),
+                "orphans":
+                    self.orphan_nodes()
+            },
+
+            "execution_order":
+                execution_order,
+
+            "critical_path":
+                critical_path,
+
+            "dependency_provenance":
+                self.dependency_provenance(),
+
             "orphans":
                 self.orphan_nodes(),
 
-            "has_cycles": False,
-
-            "critical_path":
-                self.critical_path(),
-
             "redundant_dependencies":
-                self.redundant_dependencies()
+                self.redundant_dependencies(),
+
+            "adjacency":
+                self.to_adjacency_list(),
+
+            "edges":
+                self.to_edge_list(),
+
+            "cycle_detected":
+                has_cycle,
+
+            "cycle":
+                cycle
         }
+
+        return report
 
     def redundant_dependencies(self):
 
