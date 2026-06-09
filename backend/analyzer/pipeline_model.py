@@ -16,6 +16,12 @@ class PipelineStage:
 
 
 @dataclass
+class PipelineArtifact:
+    name: str
+    artifact_type: str
+
+
+@dataclass
 class ExecutionPipeline:
     stages: List[PipelineStage]
 
@@ -167,4 +173,66 @@ class ExecutionPipeline:
 
             "terminal_nodes":
                 graph.terminal_nodes()
+        }
+
+    def input_artifacts(self):
+
+        return [
+            PipelineArtifact(
+                name=name,
+                artifact_type="input"
+            )
+            for name in self.pipeline_inputs()
+        ]
+
+    def output_artifacts(self):
+
+        return [
+            PipelineArtifact(
+                name=name,
+                artifact_type="output"
+            )
+            for name in self.pipeline_outputs()
+        ]
+
+    def intermediate_artifacts(self):
+
+        return [
+            PipelineArtifact(
+                name=name,
+                artifact_type="intermediate"
+            )
+            for name in self.intermediate_variables()
+        ]
+
+    def artifact_inventory(self):
+
+        return {
+            "inputs": [
+                artifact.name
+                for artifact
+                in self.input_artifacts()
+            ],
+
+            "outputs": [
+                artifact.name
+                for artifact
+                in self.output_artifacts()
+            ],
+
+            "intermediates": [
+                artifact.name
+                for artifact
+                in self.intermediate_artifacts()
+            ]
+        }
+
+    def io_contract(self):
+
+        return {
+            "required_inputs":
+                self.pipeline_inputs(),
+
+            "produced_outputs":
+                self.pipeline_outputs()
         }
