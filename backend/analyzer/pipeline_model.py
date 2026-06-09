@@ -31,6 +31,29 @@ class ExecutionPipeline:
             self.stages
         )
 
+    def _excluded_input_symbols(self):
+
+        return {
+            "print",
+            "len",
+            "str",
+            "int",
+            "float",
+            "bool",
+            "dict",
+            "list",
+            "set",
+            "tuple",
+
+            "pd",
+            "np",
+
+            "load_data",
+            "preprocess",
+            "train",
+            "predict"
+        }
+
     def pipeline_inputs(self):
 
         produced = set()
@@ -47,8 +70,18 @@ class ExecutionPipeline:
                 stage.used_variables
             )
 
-        return sorted(
+        inputs = (
             consumed - produced
+        )
+
+        inputs = (
+            inputs
+            -
+            self._excluded_input_symbols()
+        )
+
+        return sorted(
+            inputs
         )
 
     def pipeline_outputs(self):
