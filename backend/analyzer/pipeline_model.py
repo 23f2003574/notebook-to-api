@@ -1,6 +1,10 @@
 from dataclasses import dataclass
 from typing import List
 
+from .pipeline_endpoint_spec import (
+    PipelineEndpointSpec
+)
+
 
 @dataclass
 class PipelineStage:
@@ -235,4 +239,51 @@ class ExecutionPipeline:
 
             "produced_outputs":
                 self.pipeline_outputs()
+        }
+
+    def endpoint_spec(
+        self,
+        execution_plan
+    ):
+
+        return PipelineEndpointSpec(
+            endpoint_name="run_pipeline",
+
+            input_fields=
+                self.pipeline_inputs(),
+
+            output_fields=
+                self.pipeline_outputs(),
+
+            execution_stages=
+                execution_plan.stage_count(),
+
+            parallelism_score=
+                execution_plan.parallelism_score()
+        )
+
+    def endpoint_summary(
+        self,
+        execution_plan
+    ):
+
+        spec = self.endpoint_spec(
+            execution_plan
+        )
+
+        return {
+            "endpoint":
+                spec.endpoint_name,
+
+            "inputs":
+                spec.input_fields,
+
+            "outputs":
+                spec.output_fields,
+
+            "execution_stages":
+                spec.execution_stages,
+
+            "parallelism_score":
+                spec.parallelism_score
         }

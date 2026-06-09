@@ -5,6 +5,10 @@ from .dependency_graph import (
     DependencyGraph
 )
 
+from .pipeline_endpoint_spec import (
+    PipelineEndpointSpec
+)
+
 
 @dataclass
 class ExecutionStage:
