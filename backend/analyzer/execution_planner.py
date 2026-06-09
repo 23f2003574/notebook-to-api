@@ -18,6 +18,90 @@ class ExecutionPlan:
     def stage_count(self):
         return len(self.stages)
 
+    def parallelizable_nodes(self):
+
+        nodes = []
+
+        for stage in self.stages:
+
+            if len(stage.nodes) > 1:
+
+                nodes.extend(
+                    stage.nodes
+                )
+
+        return sorted(nodes)
+
+    def sequential_nodes(self):
+
+        nodes = []
+
+        for stage in self.stages:
+
+            if len(stage.nodes) == 1:
+
+                nodes.extend(
+                    stage.nodes
+                )
+
+        return nodes
+
+    def total_nodes(self):
+
+        return sum(
+            len(stage.nodes)
+            for stage
+            in self.stages
+        )
+
+    def parallelism_score(self):
+
+        total = self.total_nodes()
+
+        if total == 0:
+            return 0.0
+
+        parallel = len(
+            self.parallelizable_nodes()
+        )
+
+        return round(
+            parallel / total,
+            3
+        )
+
+    def largest_parallel_stage(self):
+
+        if not self.stages:
+            return 0
+
+        return max(
+            len(stage.nodes)
+            for stage
+            in self.stages
+        )
+
+    def execution_metrics(self):
+
+        return {
+            "stage_count":
+                self.stage_count(),
+
+            "total_nodes":
+                self.total_nodes(),
+
+            "parallelizable_nodes":
+                len(
+                    self.parallelizable_nodes()
+                ),
+
+            "parallelism_score":
+                self.parallelism_score(),
+
+            "largest_parallel_stage":
+                self.largest_parallel_stage()
+        }
+
 
 class ExecutionPlanner:
 
