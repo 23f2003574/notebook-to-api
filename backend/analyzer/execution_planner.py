@@ -10,6 +10,12 @@ from .dependency_graph import (
 class ExecutionStage:
     nodes: List[str]
 
+    def width(self):
+
+        return len(
+            self.nodes
+        )
+
 
 @dataclass
 class ExecutionPlan:
@@ -24,7 +30,7 @@ class ExecutionPlan:
 
         for stage in self.stages:
 
-            if len(stage.nodes) > 1:
+            if stage.width() > 1:
 
                 nodes.extend(
                     stage.nodes
@@ -38,7 +44,7 @@ class ExecutionPlan:
 
         for stage in self.stages:
 
-            if len(stage.nodes) == 1:
+            if stage.width() == 1:
 
                 nodes.extend(
                     stage.nodes
@@ -76,9 +82,60 @@ class ExecutionPlan:
             return 0
 
         return max(
-            len(stage.nodes)
+            stage.width()
             for stage
             in self.stages
+        )
+
+    def bottleneck_stages(self):
+
+        bottlenecks = []
+
+        for idx, stage in enumerate(
+            self.stages
+        ):
+
+            if stage.width() == 1:
+
+                bottlenecks.append(
+                    {
+                        "stage_index": idx,
+                        "nodes": stage.nodes
+                    }
+                )
+
+        return bottlenecks
+
+    def bottleneck_nodes(self):
+
+        nodes = []
+
+        for bottleneck in (
+            self.bottleneck_stages()
+        ):
+
+            nodes.extend(
+                bottleneck["nodes"]
+            )
+
+        return sorted(nodes)
+
+    def bottleneck_ratio(self):
+
+        total_stages = (
+            self.stage_count()
+        )
+
+        if total_stages == 0:
+            return 0.0
+
+        return round(
+            len(
+                self.bottleneck_stages()
+            )
+            /
+            total_stages,
+            3
         )
 
     def execution_metrics(self):
@@ -99,7 +156,15 @@ class ExecutionPlan:
                 self.parallelism_score(),
 
             "largest_parallel_stage":
-                self.largest_parallel_stage()
+                self.largest_parallel_stage(),
+
+            "bottleneck_count":
+                len(
+                    self.bottleneck_stages()
+                ),
+
+            "bottleneck_ratio":
+                self.bottleneck_ratio()
         }
 
 
