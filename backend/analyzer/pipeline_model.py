@@ -155,3 +155,16 @@ class ExecutionPipeline:
             "largest_partition_size":
                 graph.largest_partition_size()
         }
+
+    def execution_boundaries(
+        self,
+        graph
+    ):
+
+        return {
+            "entry_points":
+                graph.entry_points(),
+
+            "terminal_nodes":
+                graph.terminal_nodes()
+        }

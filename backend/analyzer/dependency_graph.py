@@ -383,7 +383,15 @@ class DependencyGraph:
                 "partition_count":
                     self.partition_count(),
                 "largest_partition_size":
-                    self.largest_partition_size()
+                    self.largest_partition_size(),
+                "entry_point_count":
+                    len(
+                        self.entry_points()
+                    ),
+                "terminal_node_count":
+                    len(
+                        self.terminal_nodes()
+                    ),
             },
 
             "execution_order":
@@ -487,6 +495,34 @@ class DependencyGraph:
             for partition
             in partitions
         )
+
+    def entry_points(self):
+
+        return sorted([
+            node_name
+            for node_name, node
+            in self.nodes.items()
+            if not node.dependencies
+        ])
+
+    def terminal_nodes(self):
+
+        return sorted([
+            node_name
+            for node_name, node
+            in self.nodes.items()
+            if not node.dependents
+        ])
+
+    def stage_roles(self):
+
+        return {
+            "entry_points":
+                self.entry_points(),
+
+            "terminal_nodes":
+                self.terminal_nodes()
+        }
 
     def redundant_dependencies(self):
 
