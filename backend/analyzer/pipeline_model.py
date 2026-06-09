@@ -139,3 +139,19 @@ class ExecutionPipeline:
             "intermediate_variables":
                 self.intermediate_variables()
         }
+
+    def partition_summary(
+        self,
+        graph
+    ):
+
+        return {
+            "partition_count":
+                graph.partition_count(),
+
+            "partitions":
+                graph.connected_components(),
+
+            "largest_partition_size":
+                graph.largest_partition_size()
+        }

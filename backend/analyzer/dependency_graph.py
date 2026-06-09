@@ -379,7 +379,11 @@ class DependencyGraph:
                 "orphan_count":
                     len(self.orphan_nodes()),
                 "orphans":
-                    self.orphan_nodes()
+                    self.orphan_nodes(),
+                "partition_count":
+                    self.partition_count(),
+                "largest_partition_size":
+                    self.largest_partition_size()
             },
 
             "execution_order":
@@ -411,6 +415,78 @@ class DependencyGraph:
         }
 
         return report
+
+    def connected_components(self):
+
+        visited = set()
+
+        components = []
+
+        def dfs(node_name, component):
+
+            if node_name in visited:
+                return
+
+            visited.add(
+                node_name
+            )
+
+            component.add(
+                node_name
+            )
+
+            neighbors = (
+                self.nodes[node_name]
+                .dependencies
+                |
+                self.nodes[node_name]
+                .dependents
+            )
+
+            for neighbor in neighbors:
+
+                dfs(
+                    neighbor,
+                    component
+                )
+
+        for node_name in self.nodes:
+
+            if node_name not in visited:
+
+                component = set()
+
+                dfs(
+                    node_name,
+                    component
+                )
+
+                components.append(
+                    sorted(component)
+                )
+
+        return components
+
+    def partition_count(self):
+
+        return len(
+            self.connected_components()
+        )
+
+    def largest_partition_size(self):
+
+        partitions = (
+            self.connected_components()
+        )
+
+        if not partitions:
+            return 0
+
+        return max(
+            len(partition)
+            for partition
+            in partitions
+        )
 
     def redundant_dependencies(self):
 
