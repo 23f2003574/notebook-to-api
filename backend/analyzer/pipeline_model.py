@@ -5,7 +5,14 @@ from typing import List
 @dataclass
 class PipelineStage:
     name: str
+
     dependencies: List[str]
+
+    defined_variables: List[str]
+
+    used_variables: List[str]
+
+    dependency_variables: List[str]
 
 
 @dataclass
