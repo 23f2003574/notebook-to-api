@@ -33,8 +33,15 @@ class PipelineExecutor:
     def execute_pipeline(
         self,
         stage_names,
-        runtime: PipelineRuntime
+        runtime: PipelineRuntime,
+        inputs=None
     ):
+
+        if inputs:
+
+            runtime.load_inputs(
+                inputs
+            )
 
         results = {}
 

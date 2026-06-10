@@ -38,6 +38,20 @@ class PipelineRuntime:
 
         self.context.clear()
 
+    def load_inputs(
+        self,
+        inputs: dict
+    ):
+
+        for key, value in (
+            inputs.items()
+        ):
+
+            self.set_value(
+                key,
+                value
+            )
+
     def all_values(
         self
     ):
@@ -45,3 +59,19 @@ class PipelineRuntime:
         return dict(
             self.context
         )
+
+    def export_outputs(
+        self,
+        output_keys
+    ):
+
+        return {
+            key: self.get_value(
+                key
+            )
+            for key
+            in output_keys
+            if self.has_value(
+                key
+            )
+        }
