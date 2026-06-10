@@ -9,3 +9,7 @@ from .executable_stage import (
 from .stage_registry import (
     StageRegistry
 )
+
+from .pipeline_executor import (
+    PipelineExecutor
+)
