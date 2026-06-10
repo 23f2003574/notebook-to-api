@@ -18,3 +18,8 @@ from .pipeline_contract_validator import (
     PipelineContractValidator,
     PipelineContractError
 )
+
+from .execution_report import (
+    ExecutionReport,
+    StageExecutionResult
+)

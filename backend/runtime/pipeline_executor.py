@@ -10,6 +10,11 @@ from .pipeline_contract_validator import (
     PipelineContractValidator
 )
 
+from .execution_report import (
+    ExecutionReport,
+    StageExecutionResult
+)
+
 
 class PipelineExecutor:
 
@@ -54,14 +59,37 @@ class PipelineExecutor:
 
         results = {}
 
+        stage_reports = []
+
         for stage_name in stage_names:
 
-            results[
-                stage_name
-            ] = self.execute_stage(
-                stage_name,
-                runtime
-            )
+            try:
+
+                results[
+                    stage_name
+                ] = self.execute_stage(
+                    stage_name,
+                    runtime
+                )
+
+                stage_reports.append(
+                    StageExecutionResult(
+                        stage_name=stage_name,
+                        success=True
+                    )
+                )
+
+            except Exception as e:
+
+                stage_reports.append(
+                    StageExecutionResult(
+                        stage_name=stage_name,
+                        success=False,
+                        error=str(e)
+                    )
+                )
+
+                raise
 
         if expected_outputs:
 
@@ -70,6 +98,30 @@ class PipelineExecutor:
                     runtime,
                     expected_outputs
                 )
+
+        execution_report = (
+            ExecutionReport(
+                stages=stage_reports,
+
+                total_stages=len(
+                    stage_reports
+                ),
+
+                successful_stages=sum(
+                    1
+                    for stage
+                    in stage_reports
+                    if stage.success
+                ),
+
+                failed_stages=sum(
+                    1
+                    for stage
+                    in stage_reports
+                    if not stage.success
+                )
+            )
+        )
 
         return {
             "stage_results":
@@ -82,5 +134,8 @@ class PipelineExecutor:
                 runtime.export_outputs(
                     expected_outputs
                     or []
-                )
+                ),
+
+            "execution_report":
+                execution_report,
         }
