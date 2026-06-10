@@ -19,13 +19,18 @@ from .execution_hooks import (
     ExecutionHooks
 )
 
+from .event_bus import (
+    EventBus
+)
+
 
 class PipelineExecutor:
 
     def __init__(
         self,
         registry: StageRegistry,
-        hooks: ExecutionHooks | None = None
+        hooks: ExecutionHooks | None = None,
+        event_bus: EventBus | None = None
     ):
 
         self.registry = registry
@@ -33,6 +38,11 @@ class PipelineExecutor:
         self.hooks = (
             hooks
             or ExecutionHooks()
+        )
+
+        self.event_bus = (
+            event_bus
+            or EventBus()
         )
 
         self.contract_validator = (
@@ -92,6 +102,10 @@ class PipelineExecutor:
             runtime
         )
 
+        self.event_bus.publish(
+            "pipeline_started"
+        )
+
         results = {}
 
         stage_reports = []
@@ -105,6 +119,14 @@ class PipelineExecutor:
                 self.hooks.before_stage(
                     stage_name,
                     runtime
+                )
+
+                self.event_bus.publish(
+                    "stage_started",
+                    {
+                        "stage":
+                            stage_name
+                    }
                 )
 
                 result, retries = (
@@ -124,6 +146,14 @@ class PipelineExecutor:
                     result
                 )
 
+                self.event_bus.publish(
+                    "stage_completed",
+                    {
+                        "stage":
+                            stage_name
+                    }
+                )
+
                 stage_reports.append(
                     StageExecutionResult(
                         stage_name=stage_name,
@@ -140,6 +170,16 @@ class PipelineExecutor:
                     e
                 )
 
+                self.event_bus.publish(
+                    "stage_failed",
+                    {
+                        "stage":
+                            stage_name,
+                        "error":
+                            str(e)
+                    }
+                )
+
                 stage_reports.append(
                     StageExecutionResult(
                         stage_name=stage_name,
@@ -153,6 +193,10 @@ class PipelineExecutor:
 
         self.hooks.after_pipeline(
             runtime
+        )
+
+        self.event_bus.publish(
+            "pipeline_completed"
         )
 
         if expected_outputs:

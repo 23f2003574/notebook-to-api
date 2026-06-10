@@ -27,3 +27,7 @@ from .execution_report import (
 from .execution_hooks import (
     ExecutionHooks
 )
+
+from .event_bus import (
+    EventBus
+)
