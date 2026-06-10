@@ -47,4 +47,10 @@ class PipelineExecutor:
                 runtime
             )
 
-        return results
+        return {
+            "stage_results":
+                results,
+
+            "runtime_context":
+                runtime.all_values()
+        }

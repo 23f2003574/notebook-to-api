@@ -9,11 +9,22 @@ class ExecutableStage:
 
     function: Callable
 
+    output_key: str | None = None
+
     def execute(
         self,
         runtime
     ):
 
-        return self.function(
+        result = self.function(
             runtime
         )
+
+        if self.output_key:
+
+            runtime.set_value(
+                self.output_key,
+                result
+            )
+
+        return result

@@ -37,3 +37,11 @@ class PipelineRuntime:
     def clear(self):
 
         self.context.clear()
+
+    def all_values(
+        self
+    ):
+
+        return dict(
+            self.context
+        )
