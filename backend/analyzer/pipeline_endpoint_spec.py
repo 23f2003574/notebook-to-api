@@ -14,3 +14,15 @@ class PipelineEndpointSpec:
     execution_stages: int
 
     parallelism_score: float
+
+    def route_name(
+        self
+    ):
+
+        return (
+            self.endpoint_name
+            .replace(
+                "-",
+                "_"
+            )
+        )
