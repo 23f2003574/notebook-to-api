@@ -11,6 +11,8 @@ class ExecutableStage:
 
     output_key: str | None = None
 
+    max_retries: int = 0
+
     def execute(
         self,
         runtime

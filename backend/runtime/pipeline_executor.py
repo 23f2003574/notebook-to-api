@@ -39,9 +39,30 @@ class PipelineExecutor:
             stage_name
         )
 
-        return stage.execute(
-            runtime
-        )
+        retries = 0
+
+        while True:
+
+            try:
+
+                result = stage.execute(
+                    runtime
+                )
+
+                return (
+                    result,
+                    retries
+                )
+
+            except Exception:
+
+                retries += 1
+
+                if (
+                    retries
+                    > stage.max_retries
+                ):
+                    raise
 
     def execute_pipeline(
         self,
@@ -63,19 +84,26 @@ class PipelineExecutor:
 
         for stage_name in stage_names:
 
+            retries = 0
+
             try:
+
+                result, retries = (
+                    self.execute_stage(
+                        stage_name,
+                        runtime
+                    )
+                )
 
                 results[
                     stage_name
-                ] = self.execute_stage(
-                    stage_name,
-                    runtime
-                )
+                ] = result
 
                 stage_reports.append(
                     StageExecutionResult(
                         stage_name=stage_name,
-                        success=True
+                        success=True,
+                        retry_count=retries
                     )
                 )
 
@@ -85,6 +113,7 @@ class PipelineExecutor:
                     StageExecutionResult(
                         stage_name=stage_name,
                         success=False,
+                        retry_count=retries,
                         error=str(e)
                     )
                 )

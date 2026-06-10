@@ -9,6 +9,8 @@ class StageExecutionResult:
 
     success: bool
 
+    retry_count: int = 0
+
     error: str | None = None
 
 
