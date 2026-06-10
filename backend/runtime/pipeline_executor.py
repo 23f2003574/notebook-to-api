@@ -6,6 +6,10 @@ from .stage_registry import (
     StageRegistry
 )
 
+from .pipeline_contract_validator import (
+    PipelineContractValidator
+)
+
 
 class PipelineExecutor:
 
@@ -15,6 +19,10 @@ class PipelineExecutor:
     ):
 
         self.registry = registry
+
+        self.contract_validator = (
+            PipelineContractValidator()
+        )
 
     def execute_stage(
         self,
@@ -34,7 +42,8 @@ class PipelineExecutor:
         self,
         stage_names,
         runtime: PipelineRuntime,
-        inputs=None
+        inputs=None,
+        expected_outputs=None
     ):
 
         if inputs:
@@ -54,10 +63,24 @@ class PipelineExecutor:
                 runtime
             )
 
+        if expected_outputs:
+
+            self.contract_validator\
+                .validate_outputs(
+                    runtime,
+                    expected_outputs
+                )
+
         return {
             "stage_results":
                 results,
 
             "runtime_context":
-                runtime.all_values()
+                runtime.all_values(),
+
+            "outputs":
+                runtime.export_outputs(
+                    expected_outputs
+                    or []
+                )
         }

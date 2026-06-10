@@ -13,3 +13,8 @@ from .stage_registry import (
 from .pipeline_executor import (
     PipelineExecutor
 )
+
+from .pipeline_contract_validator import (
+    PipelineContractValidator,
+    PipelineContractError
+)
