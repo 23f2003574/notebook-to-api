@@ -26,3 +26,24 @@ class PipelineEndpointSpec:
                 "_"
             )
         )
+
+    def execution_summary(
+        self
+    ):
+
+        return {
+            "endpoint":
+                self.endpoint_name,
+
+            "inputs":
+                self.input_fields,
+
+            "outputs":
+                self.output_fields,
+
+            "execution_stages":
+                self.execution_stages,
+
+            "parallelism_score":
+                self.parallelism_score
+        }

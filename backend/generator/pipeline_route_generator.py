@@ -1,5 +1,9 @@
 from textwrap import dedent
 
+from backend.runtime import (
+    PipelineRuntime
+)
+
 from backend.analyzer.pipeline_endpoint_spec import (
     PipelineEndpointSpec
 )
@@ -39,9 +43,26 @@ class PipelineRouteGenerator:
                 {parameter_string}
             ):
 
-                return {{
-                    "status":
-                        "accepted"
-                }}
+                runtime = PipelineRuntime()
+
+                result = executor.execute_pipeline(
+                    stage_names=PIPELINE_STAGES,
+
+                    runtime=runtime,
+
+                    inputs={{
+                        {",".join(
+                            f'"{field}": {field}'
+                            for field
+                            in spec.input_fields
+                        )}
+                    }},
+
+                    expected_outputs={
+                        spec.output_fields
+                    }
+                )
+
+                return result
             """
         )

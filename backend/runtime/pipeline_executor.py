@@ -55,6 +55,29 @@ class PipelineExecutor:
             PipelineContractValidator()
         )
 
+    def execute_endpoint_pipeline(
+        self,
+        stage_names,
+        inputs,
+        expected_outputs
+    ):
+
+        runtime = PipelineRuntime()
+
+        return self.execute_pipeline(
+            stage_names=
+                stage_names,
+
+            runtime=
+                runtime,
+
+            inputs=
+                inputs,
+
+            expected_outputs=
+                expected_outputs
+        )
+
     def execute_stage(
         self,
         stage_name: str,
