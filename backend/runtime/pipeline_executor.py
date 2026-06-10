@@ -15,15 +15,25 @@ from .execution_report import (
     StageExecutionResult
 )
 
+from .execution_hooks import (
+    ExecutionHooks
+)
+
 
 class PipelineExecutor:
 
     def __init__(
         self,
-        registry: StageRegistry
+        registry: StageRegistry,
+        hooks: ExecutionHooks | None = None
     ):
 
         self.registry = registry
+
+        self.hooks = (
+            hooks
+            or ExecutionHooks()
+        )
 
         self.contract_validator = (
             PipelineContractValidator()
@@ -78,6 +88,10 @@ class PipelineExecutor:
                 inputs
             )
 
+        self.hooks.before_pipeline(
+            runtime
+        )
+
         results = {}
 
         stage_reports = []
@@ -87,6 +101,11 @@ class PipelineExecutor:
             retries = 0
 
             try:
+
+                self.hooks.before_stage(
+                    stage_name,
+                    runtime
+                )
 
                 result, retries = (
                     self.execute_stage(
@@ -99,6 +118,12 @@ class PipelineExecutor:
                     stage_name
                 ] = result
 
+                self.hooks.after_stage(
+                    stage_name,
+                    runtime,
+                    result
+                )
+
                 stage_reports.append(
                     StageExecutionResult(
                         stage_name=stage_name,
@@ -108,6 +133,12 @@ class PipelineExecutor:
                 )
 
             except Exception as e:
+
+                self.hooks.on_stage_failure(
+                    stage_name,
+                    runtime,
+                    e
+                )
 
                 stage_reports.append(
                     StageExecutionResult(
@@ -119,6 +150,10 @@ class PipelineExecutor:
                 )
 
                 raise
+
+        self.hooks.after_pipeline(
+            runtime
+        )
 
         if expected_outputs:
 
