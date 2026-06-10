@@ -1,3 +1,5 @@
+import time
+
 from .pipeline_runtime import (
     PipelineRuntime
 )
@@ -21,6 +23,10 @@ from .execution_hooks import (
 
 from .event_bus import (
     EventBus
+)
+
+from .execution_metrics import (
+    ExecutionMetrics
 )
 
 
@@ -110,11 +116,21 @@ class PipelineExecutor:
 
         stage_reports = []
 
+        stage_durations = {}
+
+        pipeline_start_time = (
+            time.perf_counter()
+        )
+
         for stage_name in stage_names:
 
             retries = 0
 
             try:
+
+                stage_start_time = (
+                    time.perf_counter()
+                )
 
                 self.hooks.before_stage(
                     stage_name,
@@ -139,6 +155,14 @@ class PipelineExecutor:
                 results[
                     stage_name
                 ] = result
+
+                stage_durations[
+                    stage_name
+                ] = (
+                    time.perf_counter()
+                    -
+                    stage_start_time
+                )
 
                 self.hooks.after_stage(
                     stage_name,
@@ -207,6 +231,20 @@ class PipelineExecutor:
                     expected_outputs
                 )
 
+        metrics = (
+            ExecutionMetrics(
+                stage_durations=
+                    stage_durations,
+
+                total_duration=
+                    (
+                        time.perf_counter()
+                        -
+                        pipeline_start_time
+                    )
+            )
+        )
+
         execution_report = (
             ExecutionReport(
                 stages=stage_reports,
@@ -246,4 +284,7 @@ class PipelineExecutor:
 
             "execution_report":
                 execution_report,
+
+            "execution_metrics":
+                metrics,
         }

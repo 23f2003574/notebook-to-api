@@ -31,3 +31,7 @@ from .execution_hooks import (
 from .event_bus import (
     EventBus
 )
+
+from .execution_metrics import (
+    ExecutionMetrics
+)
