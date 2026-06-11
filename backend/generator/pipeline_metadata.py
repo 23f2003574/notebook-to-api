@@ -40,3 +40,13 @@ class PipelineMetadata:
         return len(
             self.outputs
         )
+
+    def all_fields(
+        self
+    ):
+
+        return (
+            self.inputs
+            +
+            self.outputs
+        )

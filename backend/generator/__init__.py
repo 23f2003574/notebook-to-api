@@ -17,3 +17,6 @@ from .openapi_schema_generator import (
 from .pipeline_contract_validator import (
     PipelineContractValidator
 )
+from .sdk_type_generator import (
+    SDKTypeGenerator
+)

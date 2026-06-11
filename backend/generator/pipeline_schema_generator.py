@@ -13,6 +13,9 @@ from .openapi_schema_generator import (
 from .pipeline_contract_validator import (
     PipelineContractValidator
 )
+from .sdk_type_generator import (
+    SDKTypeGenerator
+)
 
 
 class PipelineSchemaGenerator:
@@ -27,6 +30,10 @@ class PipelineSchemaGenerator:
 
         self.contract_validator = (
             PipelineContractValidator()
+        )
+
+        self.sdk_type_generator = (
+            SDKTypeGenerator()
         )
 
     def infer_field_type(
@@ -152,3 +159,21 @@ class PipelineSchemaGenerator:
             )
 
         return schema
+
+    def generate_sdk_types(
+        self,
+        spec
+    ):
+
+        metadata = (
+            self.generate_metadata(
+                spec
+            )
+        )
+
+        return (
+            self.sdk_type_generator
+            .generate_types(
+                metadata
+            )
+        )

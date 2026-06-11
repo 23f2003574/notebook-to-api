@@ -96,6 +96,7 @@ def test_pipeline_model_generator():
     metadata = generator.schema_generator.generate_metadata(spec)
     assert metadata.input_count() == 3
     assert metadata.output_count() == 2
+    assert len(metadata.all_fields()) == 5
 
     openapi_schema = generator.schema_generator.generate_openapi_schema(spec)
     assert openapi_schema["endpoint"] == "run_pipeline"
@@ -103,6 +104,12 @@ def test_pipeline_model_generator():
     assert openapi_schema["request"]["input_size"] == {"type": "int"}
     assert openapi_schema["response"]["result"] == {"type": "str"}
     assert openapi_schema["response"]["metric_count"] == {"type": "int"}
+
+    sdk_types = generator.schema_generator.generate_sdk_types(spec)
+    assert sdk_types["request_types"]["source"] == "str"
+    assert sdk_types["request_types"]["input_size"] == "int"
+    assert sdk_types["response_types"]["result"] == "str"
+    assert sdk_types["response_types"]["metric_count"] == "int"
 
 
 def test_pipeline_contract_validator():
