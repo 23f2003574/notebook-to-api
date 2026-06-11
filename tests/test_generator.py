@@ -140,9 +140,19 @@ def test_pipeline_model_generator():
     assert 'export * from "./run_pipeline_sdk";' in sdk_index
 
     assert spec.npm_package_name() == "run-pipeline-sdk"
+    assert spec.package_directory() == "run-pipeline-sdk"
     sdk_package = generator.schema_generator.generate_sdk_package(spec.npm_package_name())
     assert '"name": "run-pipeline-sdk"' in sdk_package["package_json"]
     assert '"compilerOptions": {' in sdk_package["tsconfig"]
+
+    sdk_project = generator.schema_generator.generate_sdk_project([spec])
+    assert sdk_project.file_count() == 4  # package.json, tsconfig.json, src/index.ts, src/run_pipeline_sdk.ts
+    file_names = sdk_project.file_names()
+    assert "package.json" in file_names
+    assert "tsconfig.json" in file_names
+    assert "src/index.ts" in file_names
+    assert "src/run_pipeline_sdk.ts" in file_names
+    assert "export interface RunPipelineRequest {" in sdk_project.files["src/run_pipeline_sdk.ts"]
 
 
 def test_pipeline_contract_validator():

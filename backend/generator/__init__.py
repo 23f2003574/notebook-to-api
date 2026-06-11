@@ -35,3 +35,7 @@ from .sdk_index_generator import (
 from .typescript_package_generator import (
     TypeScriptPackageGenerator
 )
+from .sdk_project_generator import (
+    SDKProject,
+    SDKProjectGenerator
+)

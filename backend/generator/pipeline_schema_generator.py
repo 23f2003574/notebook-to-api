@@ -31,6 +31,9 @@ from .sdk_index_generator import (
 from .typescript_package_generator import (
     TypeScriptPackageGenerator
 )
+from .sdk_project_generator import (
+    SDKProjectGenerator
+)
 
 
 class PipelineSchemaGenerator:
@@ -69,6 +72,10 @@ class PipelineSchemaGenerator:
 
         self.package_generator = (
             TypeScriptPackageGenerator()
+        )
+
+        self.project_generator = (
+            SDKProjectGenerator()
         )
 
     def infer_field_type(
@@ -319,3 +326,61 @@ class PipelineSchemaGenerator:
                 self.package_generator
                 .generate_tsconfig()
         }
+
+    def generate_sdk_project(
+        self,
+        specs
+    ):
+
+        if not specs:
+
+            raise ValueError(
+                "At least one endpoint "
+                "spec is required"
+            )
+
+        package_artifacts = (
+            self.generate_sdk_package(
+                specs[0]
+                .npm_package_name()
+            )
+        )
+
+        sdk_modules = {}
+
+        for spec in specs:
+
+            sdk_modules[
+                spec.sdk_module_name()
+            ] = (
+                self.generate_typescript_sdk(
+                    spec
+                )
+            )
+
+        sdk_index = (
+            self.generate_sdk_index(
+                specs
+            )
+        )
+
+        return (
+            self.project_generator
+            .generate_project(
+                package_json=
+                    package_artifacts[
+                        "package_json"
+                    ],
+
+                tsconfig=
+                    package_artifacts[
+                        "tsconfig"
+                    ],
+
+                sdk_index=
+                    sdk_index,
+
+                sdk_modules=
+                    sdk_modules
+            )
+        )
