@@ -55,6 +55,22 @@ class PipelineEndpointSpec:
             + "Response"
         )
 
+    def typescript_request_name(
+        self
+    ):
+
+        return (
+            self.request_model_name()
+        )
+
+    def typescript_response_name(
+        self
+    ):
+
+        return (
+            self.response_model_name()
+        )
+
     def metadata_name(
         self
     ):

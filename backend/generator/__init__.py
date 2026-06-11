@@ -20,3 +20,6 @@ from .pipeline_contract_validator import (
 from .sdk_type_generator import (
     SDKTypeGenerator
 )
+from .typescript_interface_generator import (
+    TypeScriptInterfaceGenerator
+)

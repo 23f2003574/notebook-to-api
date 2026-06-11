@@ -111,6 +111,17 @@ def test_pipeline_model_generator():
     assert sdk_types["response_types"]["result"] == "str"
     assert sdk_types["response_types"]["metric_count"] == "int"
 
+    assert spec.typescript_request_name() == "RunPipelineRequest"
+    assert spec.typescript_response_name() == "RunPipelineResponse"
+
+    ts_interfaces = generator.schema_generator.generate_typescript_interfaces(spec)
+    assert "export interface RunPipelineRequest {" in ts_interfaces["request"]
+    assert "source: string;" in ts_interfaces["request"]
+    assert "input_size: number;" in ts_interfaces["request"]
+    assert "export interface RunPipelineResponse {" in ts_interfaces["response"]
+    assert "result: string;" in ts_interfaces["response"]
+    assert "metric_count: number;" in ts_interfaces["response"]
+
 
 def test_pipeline_contract_validator():
     import pytest

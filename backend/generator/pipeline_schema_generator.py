@@ -16,6 +16,9 @@ from .pipeline_contract_validator import (
 from .sdk_type_generator import (
     SDKTypeGenerator
 )
+from .typescript_interface_generator import (
+    TypeScriptInterfaceGenerator
+)
 
 
 class PipelineSchemaGenerator:
@@ -34,6 +37,10 @@ class PipelineSchemaGenerator:
 
         self.sdk_type_generator = (
             SDKTypeGenerator()
+        )
+
+        self.ts_generator = (
+            TypeScriptInterfaceGenerator()
         )
 
     def infer_field_type(
@@ -177,3 +184,42 @@ class PipelineSchemaGenerator:
                 metadata
             )
         )
+
+    def generate_typescript_interfaces(
+        self,
+        spec
+    ):
+
+        sdk_types = (
+            self.generate_sdk_types(
+                spec
+            )
+        )
+
+        request_interface = (
+            self.ts_generator
+            .generate_interface(
+                spec.request_model_name(),
+                sdk_types[
+                    "request_types"
+                ]
+            )
+        )
+
+        response_interface = (
+            self.ts_generator
+            .generate_interface(
+                spec.response_model_name(),
+                sdk_types[
+                    "response_types"
+                ]
+            )
+        )
+
+        return {
+            "request":
+                request_interface,
+
+            "response":
+                response_interface
+        }
