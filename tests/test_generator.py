@@ -94,13 +94,12 @@ def test_pipeline_model_generator():
 
     assert spec.metadata_name() == "RunPipelineMetadata"
     metadata = generator.schema_generator.generate_metadata(spec)
-    assert metadata.endpoint_name == "run_pipeline"
-    assert len(metadata.inputs) == 3
-    assert metadata.inputs[0].name == "source"
-    assert metadata.inputs[0].field_type == "str"
-    assert metadata.inputs[2].name == "input_size"
-    assert metadata.inputs[2].field_type == "int"
-    assert len(metadata.outputs) == 2
-    assert metadata.outputs[0].name == "result"
-    assert metadata.outputs[1].name == "metric_count"
-    assert metadata.outputs[1].field_type == "int"
+    assert metadata.input_count() == 3
+    assert metadata.output_count() == 2
+
+    openapi_schema = generator.schema_generator.generate_openapi_schema(spec)
+    assert openapi_schema["endpoint"] == "run_pipeline"
+    assert openapi_schema["request"]["source"] == {"type": "str"}
+    assert openapi_schema["request"]["input_size"] == {"type": "int"}
+    assert openapi_schema["response"]["result"] == {"type": "str"}
+    assert openapi_schema["response"]["metric_count"] == {"type": "int"}

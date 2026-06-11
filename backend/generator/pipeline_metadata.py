@@ -24,3 +24,19 @@ class PipelineMetadata:
     outputs: List[
         PipelineFieldMetadata
     ]
+
+    def input_count(
+        self
+    ):
+
+        return len(
+            self.inputs
+        )
+
+    def output_count(
+        self
+    ):
+
+        return len(
+            self.outputs
+        )

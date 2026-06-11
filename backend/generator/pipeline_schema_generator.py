@@ -7,9 +7,20 @@ from .pipeline_metadata import (
     PipelineMetadata,
     PipelineFieldMetadata
 )
+from .openapi_schema_generator import (
+    OpenAPISchemaGenerator
+)
 
 
 class PipelineSchemaGenerator:
+
+    def __init__(
+        self
+    ):
+
+        self.openapi_generator = (
+            OpenAPISchemaGenerator()
+        )
 
     def infer_field_type(
         self,
@@ -107,4 +118,22 @@ class PipelineSchemaGenerator:
 
             outputs=
                 outputs
+        )
+
+    def generate_openapi_schema(
+        self,
+        spec
+    ):
+
+        metadata = (
+            self.generate_metadata(
+                spec
+            )
+        )
+
+        return (
+            self.openapi_generator
+            .generate_schema(
+                metadata
+            )
         )

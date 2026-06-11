@@ -11,3 +11,6 @@ from .pipeline_metadata import (
     PipelineMetadata,
     PipelineFieldMetadata
 )
+from .openapi_schema_generator import (
+    OpenAPISchemaGenerator
+)
