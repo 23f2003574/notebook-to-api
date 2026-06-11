@@ -68,8 +68,8 @@ def test_pipeline_model_generator():
 
     spec = PipelineEndpointSpec(
         endpoint_name="run_pipeline",
-        input_fields=["source", "config"],
-        output_fields=["result"],
+        input_fields=["source", "config", "input_size"],
+        output_fields=["result", "metric_count"],
         execution_stages=1,
         parallelism_score=1.0,
     )
@@ -80,10 +80,12 @@ def test_pipeline_model_generator():
     assert "class RunPipelineRequest(" in generated_code
     assert "source: str" in generated_code
     assert "config: str" in generated_code
+    assert "input_size: int" in generated_code
 
     generated_resp = generator.generate_response_model(spec)
     assert "class RunPipelineResponse(" in generated_resp
     assert "result: str" in generated_resp
+    assert "metric_count: int" in generated_resp
 
     from backend.generator.pipeline_route_generator import PipelineRouteGenerator
     route_gen = PipelineRouteGenerator()

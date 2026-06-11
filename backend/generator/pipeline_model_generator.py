@@ -3,27 +3,31 @@ from textwrap import dedent
 from backend.analyzer.pipeline_endpoint_spec import (
     PipelineEndpointSpec
 )
+from .pipeline_schema_generator import (
+    PipelineSchemaGenerator
+)
 
 
 class PipelineModelGenerator:
+
+    def __init__(
+        self
+    ):
+
+        self.schema_generator = (
+            PipelineSchemaGenerator()
+        )
 
     def generate_request_model(
         self,
         spec: PipelineEndpointSpec
     ):
 
-        fields = []
-
-        for field in (
-            spec.input_fields
-        ):
-
-            fields.append(
-                f"{field}: str"
+        field_block = (
+            self.schema_generator
+            .generate_fields(
+                spec.input_fields
             )
-
-        field_block = "\n".join(
-            fields
         )
 
         return dedent(
@@ -45,18 +49,11 @@ class PipelineModelGenerator:
         spec: PipelineEndpointSpec
     ):
 
-        fields = []
-
-        for field in (
-            spec.output_fields
-        ):
-
-            fields.append(
-                f"{field}: str"
+        field_block = (
+            self.schema_generator
+            .generate_fields(
+                spec.output_fields
             )
-
-        field_block = "\n".join(
-            fields
         )
 
         return dedent(

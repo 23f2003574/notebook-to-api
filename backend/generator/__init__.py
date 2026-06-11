@@ -4,3 +4,6 @@ from .pipeline_route_generator import (
 from .pipeline_model_generator import (
     PipelineModelGenerator
 )
+from .pipeline_schema_generator import (
+    PipelineSchemaGenerator
+)
