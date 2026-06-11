@@ -139,6 +139,11 @@ def test_pipeline_model_generator():
     sdk_index = generator.schema_generator.generate_sdk_index([spec])
     assert 'export * from "./run_pipeline_sdk";' in sdk_index
 
+    assert spec.npm_package_name() == "run-pipeline-sdk"
+    sdk_package = generator.schema_generator.generate_sdk_package(spec.npm_package_name())
+    assert '"name": "run-pipeline-sdk"' in sdk_package["package_json"]
+    assert '"compilerOptions": {' in sdk_package["tsconfig"]
+
 
 def test_pipeline_contract_validator():
     import pytest

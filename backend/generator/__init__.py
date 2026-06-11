@@ -32,3 +32,6 @@ from .typescript_sdk_generator import (
 from .sdk_index_generator import (
     SDKIndexGenerator
 )
+from .typescript_package_generator import (
+    TypeScriptPackageGenerator
+)

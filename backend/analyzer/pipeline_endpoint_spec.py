@@ -95,6 +95,19 @@ class PipelineEndpointSpec:
             + ".ts"
         )
 
+    def npm_package_name(
+        self
+    ):
+
+        return (
+            self.route_name()
+            .replace(
+                "_",
+                "-"
+            )
+            + "-sdk"
+        )
+
     def metadata_name(
         self
     ):
