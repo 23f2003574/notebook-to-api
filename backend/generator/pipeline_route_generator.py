@@ -35,7 +35,10 @@ class PipelineRouteGenerator:
         return dedent(
             f"""
             @router.post(
-                "/{spec.endpoint_name}"
+                "/{spec.endpoint_name}",
+
+                response_model=
+                    {spec.response_model_name()}
             )
             async def {
                 spec.route_name()
