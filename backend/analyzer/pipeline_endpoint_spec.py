@@ -77,6 +77,15 @@ class PipelineEndpointSpec:
 
         return self.route_name()
 
+    def sdk_module_name(
+        self
+    ):
+
+        return (
+            self.route_name()
+            + "_sdk"
+        )
+
     def metadata_name(
         self
     ):

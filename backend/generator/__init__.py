@@ -26,3 +26,6 @@ from .typescript_interface_generator import (
 from .typescript_client_generator import (
     TypeScriptClientGenerator
 )
+from .typescript_sdk_generator import (
+    TypeScriptSDKGenerator
+)
