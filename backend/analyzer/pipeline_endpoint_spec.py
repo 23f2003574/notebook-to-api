@@ -55,6 +55,20 @@ class PipelineEndpointSpec:
             + "Response"
         )
 
+    def metadata_name(
+        self
+    ):
+
+        return (
+            self.route_name()
+            .title()
+            .replace(
+                "_",
+                ""
+            )
+            + "Metadata"
+        )
+
     def execution_summary(
         self
     ):

@@ -7,3 +7,7 @@ from .pipeline_model_generator import (
 from .pipeline_schema_generator import (
     PipelineSchemaGenerator
 )
+from .pipeline_metadata import (
+    PipelineMetadata,
+    PipelineFieldMetadata
+)

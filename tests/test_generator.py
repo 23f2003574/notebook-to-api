@@ -91,3 +91,16 @@ def test_pipeline_model_generator():
     route_gen = PipelineRouteGenerator()
     generated_route = route_gen.generate_route(spec)
     assert "response_model=\n        RunPipelineResponse" in generated_route or "response_model=RunPipelineResponse" in generated_route or "response_model=" in generated_route
+
+    assert spec.metadata_name() == "RunPipelineMetadata"
+    metadata = generator.schema_generator.generate_metadata(spec)
+    assert metadata.endpoint_name == "run_pipeline"
+    assert len(metadata.inputs) == 3
+    assert metadata.inputs[0].name == "source"
+    assert metadata.inputs[0].field_type == "str"
+    assert metadata.inputs[2].name == "input_size"
+    assert metadata.inputs[2].field_type == "int"
+    assert len(metadata.outputs) == 2
+    assert metadata.outputs[0].name == "result"
+    assert metadata.outputs[1].name == "metric_count"
+    assert metadata.outputs[1].field_type == "int"
