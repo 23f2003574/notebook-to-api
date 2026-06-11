@@ -86,6 +86,15 @@ class PipelineEndpointSpec:
             + "_sdk"
         )
 
+    def sdk_filename(
+        self
+    ):
+
+        return (
+            self.sdk_module_name()
+            + ".ts"
+        )
+
     def metadata_name(
         self
     ):

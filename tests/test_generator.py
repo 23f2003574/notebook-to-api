@@ -130,10 +130,14 @@ def test_pipeline_model_generator():
     assert '"/run_pipeline"' in ts_client
 
     assert spec.sdk_module_name() == "run_pipeline_sdk"
+    assert spec.sdk_filename() == "run_pipeline_sdk.ts"
     ts_sdk = generator.schema_generator.generate_typescript_sdk(spec)
     assert "export interface RunPipelineRequest {" in ts_sdk
     assert "export interface RunPipelineResponse {" in ts_sdk
     assert "export async function run_pipeline(" in ts_sdk
+
+    sdk_index = generator.schema_generator.generate_sdk_index([spec])
+    assert 'export * from "./run_pipeline_sdk";' in sdk_index
 
 
 def test_pipeline_contract_validator():

@@ -25,6 +25,9 @@ from .typescript_client_generator import (
 from .typescript_sdk_generator import (
     TypeScriptSDKGenerator
 )
+from .sdk_index_generator import (
+    SDKIndexGenerator
+)
 
 
 class PipelineSchemaGenerator:
@@ -55,6 +58,10 @@ class PipelineSchemaGenerator:
 
         self.ts_sdk_generator = (
             TypeScriptSDKGenerator()
+        )
+
+        self.sdk_index_generator = (
+            SDKIndexGenerator()
         )
 
     def infer_field_type(
@@ -266,5 +273,25 @@ class PipelineSchemaGenerator:
             .generate_sdk(
                 spec,
                 sdk_types
+            )
+        )
+
+    def generate_sdk_index(
+        self,
+        specs
+    ):
+
+        module_names = []
+
+        for spec in specs:
+
+            module_names.append(
+                spec.sdk_module_name()
+            )
+
+        return (
+            self.sdk_index_generator
+            .generate_index(
+                module_names
             )
         )

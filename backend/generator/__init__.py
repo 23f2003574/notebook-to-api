@@ -29,3 +29,6 @@ from .typescript_client_generator import (
 from .typescript_sdk_generator import (
     TypeScriptSDKGenerator
 )
+from .sdk_index_generator import (
+    SDKIndexGenerator
+)
