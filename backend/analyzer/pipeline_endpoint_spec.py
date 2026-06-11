@@ -27,6 +27,20 @@ class PipelineEndpointSpec:
             )
         )
 
+    def request_model_name(
+        self
+    ):
+
+        return (
+            self.route_name()
+            .title()
+            .replace(
+                "_",
+                ""
+            )
+            + "Request"
+        )
+
     def execution_summary(
         self
     ):

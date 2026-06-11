@@ -60,3 +60,23 @@ def test_pydantic_model_generation():
     code = generate_fastapi_code(functions)
 
     assert "BaseModel" in code
+
+
+def test_pipeline_model_generator():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineModelGenerator
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source", "config"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+
+    generator = PipelineModelGenerator()
+    generated_code = generator.generate_request_model(spec)
+
+    assert "class RunPipelineRequest(" in generated_code
+    assert "source: str" in generated_code
+    assert "config: str" in generated_code
