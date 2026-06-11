@@ -19,6 +19,9 @@ from .sdk_type_generator import (
 from .typescript_interface_generator import (
     TypeScriptInterfaceGenerator
 )
+from .typescript_client_generator import (
+    TypeScriptClientGenerator
+)
 
 
 class PipelineSchemaGenerator:
@@ -41,6 +44,10 @@ class PipelineSchemaGenerator:
 
         self.ts_generator = (
             TypeScriptInterfaceGenerator()
+        )
+
+        self.ts_client_generator = (
+            TypeScriptClientGenerator()
         )
 
     def infer_field_type(
@@ -223,3 +230,15 @@ class PipelineSchemaGenerator:
             "response":
                 response_interface
         }
+
+    def generate_typescript_client(
+        self,
+        spec
+    ):
+
+        return (
+            self.ts_client_generator
+            .generate_method(
+                spec
+            )
+        )

@@ -122,6 +122,13 @@ def test_pipeline_model_generator():
     assert "result: string;" in ts_interfaces["response"]
     assert "metric_count: number;" in ts_interfaces["response"]
 
+    assert spec.client_method_name() == "run_pipeline"
+    ts_client = generator.schema_generator.generate_typescript_client(spec)
+    assert "export async function run_pipeline(" in ts_client
+    assert "request: RunPipelineRequest" in ts_client
+    assert "Promise<RunPipelineResponse>" in ts_client
+    assert '"/run_pipeline"' in ts_client
+
 
 def test_pipeline_contract_validator():
     import pytest

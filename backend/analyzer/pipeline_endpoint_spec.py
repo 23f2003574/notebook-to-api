@@ -71,6 +71,12 @@ class PipelineEndpointSpec:
             self.response_model_name()
         )
 
+    def client_method_name(
+        self
+    ):
+
+        return self.route_name()
+
     def metadata_name(
         self
     ):
