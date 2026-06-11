@@ -103,3 +103,42 @@ def test_pipeline_model_generator():
     assert openapi_schema["request"]["input_size"] == {"type": "int"}
     assert openapi_schema["response"]["result"] == {"type": "str"}
     assert openapi_schema["response"]["metric_count"] == {"type": "int"}
+
+
+def test_pipeline_contract_validator():
+    import pytest
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineContractValidator
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+
+    validator = PipelineContractValidator()
+
+    # Valid schema
+    valid_schema = {
+        "request": {"source": {"type": "str"}},
+        "response": {"result": {"type": "str"}}
+    }
+    assert validator.validate_schema(spec, valid_schema) is True
+
+    # Invalid request schema
+    invalid_req_schema = {
+        "request": {"mismatch": {"type": "str"}},
+        "response": {"result": {"type": "str"}}
+    }
+    with pytest.raises(ValueError, match="Request schema does not match endpoint spec"):
+        validator.validate_schema(spec, invalid_req_schema)
+
+    # Invalid response schema
+    invalid_resp_schema = {
+        "request": {"source": {"type": "str"}},
+        "response": {"mismatch": {"type": "str"}}
+    }
+    with pytest.raises(ValueError, match="Response schema does not match endpoint spec"):
+        validator.validate_schema(spec, invalid_resp_schema)

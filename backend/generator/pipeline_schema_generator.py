@@ -10,6 +10,9 @@ from .pipeline_metadata import (
 from .openapi_schema_generator import (
     OpenAPISchemaGenerator
 )
+from .pipeline_contract_validator import (
+    PipelineContractValidator
+)
 
 
 class PipelineSchemaGenerator:
@@ -20,6 +23,10 @@ class PipelineSchemaGenerator:
 
         self.openapi_generator = (
             OpenAPISchemaGenerator()
+        )
+
+        self.contract_validator = (
+            PipelineContractValidator()
         )
 
     def infer_field_type(
@@ -131,9 +138,17 @@ class PipelineSchemaGenerator:
             )
         )
 
-        return (
+        schema = (
             self.openapi_generator
             .generate_schema(
                 metadata
             )
         )
+
+        self.contract_validator\
+            .validate_schema(
+                spec,
+                schema
+            )
+
+        return schema

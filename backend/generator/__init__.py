@@ -14,3 +14,6 @@ from .pipeline_metadata import (
 from .openapi_schema_generator import (
     OpenAPISchemaGenerator
 )
+from .pipeline_contract_validator import (
+    PipelineContractValidator
+)
