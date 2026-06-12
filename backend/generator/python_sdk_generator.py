@@ -27,11 +27,21 @@ class PythonSDKGenerator:
 
                 def __init__(
                     self,
-                    base_url: str
+                    base_url: str,
+                    timeout: int = 30,
+                    max_retries: int = 3
                 ):
 
                     self.base_url = (
                         base_url
+                    )
+
+                    self.timeout = (
+                        timeout
+                    )
+
+                    self.max_retries = (
+                        max_retries
                     )
 
                 def {
@@ -41,15 +51,38 @@ class PythonSDKGenerator:
                     payload: dict
                 ):
 
-                    response = (
-                        requests.post(
-                            self.base_url
-                            +
-                            "/{spec.endpoint_name}",
-
-                            json=payload
-                        )
+                    url = (
+                        self.base_url
+                        +
+                        "/{spec.endpoint_name}"
                     )
+
+                    last_exception = None
+
+                    for _ in range(
+                        self.max_retries
+                    ):
+
+                        try:
+
+                            response = (
+                                requests.post(
+                                    url,
+                                    json=payload,
+                                    timeout=
+                                        self.timeout
+                                )
+                            )
+
+                            break
+
+                        except Exception as e:
+
+                            last_exception = e
+
+                    else:
+
+                        raise last_exception
 
                     if not response.ok:
 
@@ -80,4 +113,35 @@ if not response.ok:
             response.text
     )
 """
+
+    def generate_retry_loop(
+        self
+    ):
+
+        return """
+last_exception = None
+
+for _ in range(
+    self.max_retries
+):
+
+    try:
+
+        response = (
+            requests.post(
+                url,
+                json=payload,
+                timeout=self.timeout
+            )
+        )
+
+        return response
+
+    except Exception as e:
+
+        last_exception = e
+
+raise last_exception
+"""
+
 

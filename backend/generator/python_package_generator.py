@@ -36,6 +36,16 @@ class PythonPackage:
             in self.files
         )
 
+    def has_client(
+        self
+    ):
+
+        return (
+            "client.py"
+            in self.files
+        )
+
+
 
 
 class PythonPackageGenerator:

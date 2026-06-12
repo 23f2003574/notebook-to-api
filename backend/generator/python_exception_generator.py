@@ -38,5 +38,12 @@ class PythonExceptionGenerator:
                 SDKError
             ):
                 pass
+
+
+            class RetryError(
+                SDKError
+            ):
+                pass
             """
         )
+

@@ -226,10 +226,15 @@ def test_python_sdk_generation():
     assert package.file_names() == ["__init__.py", "client.py", "exceptions.py", "models.py"]
     assert package.contains_file("client.py") is True
     assert package.contains_file("nonexistent.py") is False
+    assert package.has_client() is True
     assert "from .client import *" in package.files["__init__.py"]
     assert "from .exceptions import *" in package.files["__init__.py"]
     assert "class TrainModelClient:" in package.files["client.py"]
     assert "from .exceptions import (\n    APIError\n)" in package.files["client.py"]
     assert "raise APIError(" in package.files["client.py"]
+    assert "max_retries: int = 3" in package.files["client.py"]
+    assert "timeout: int = 30" in package.files["client.py"]
+    assert "for _ in range(" in package.files["client.py"]
     assert "class TrainModelRequest(" in package.files["models.py"]
     assert "class SDKError(" in package.files["exceptions.py"]
+    assert "class RetryError(" in package.files["exceptions.py"]
