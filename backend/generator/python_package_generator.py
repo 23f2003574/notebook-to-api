@@ -33,7 +33,8 @@ class PythonPackageGenerator:
         self,
         client_code: str,
         request_model: str,
-        response_model: str
+        response_model: str,
+        exceptions_code: str
     ):
 
         models_code = (
@@ -52,15 +53,21 @@ class PythonPackageGenerator:
                 "import *\n"
                 "from .models "
                 "import *\n"
+                "from .exceptions "
+                "import *\n"
             ),
 
             "client.py":
                 client_code,
 
             "models.py":
-                models_code
+                models_code,
+
+            "exceptions.py":
+                exceptions_code
         }
 
         return PythonPackage(
             files=files
         )
+

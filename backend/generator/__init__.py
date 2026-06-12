@@ -49,3 +49,6 @@ from .python_package_generator import (
     PythonPackage,
     PythonPackageGenerator
 )
+from .python_exception_generator import (
+    PythonExceptionGenerator
+)

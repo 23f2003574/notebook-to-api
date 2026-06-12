@@ -43,6 +43,10 @@ from .python_model_generator import (
 from .python_package_generator import (
     PythonPackageGenerator
 )
+from .python_exception_generator import (
+    PythonExceptionGenerator
+)
+
 
 
 
@@ -101,6 +105,11 @@ class PipelineSchemaGenerator:
         self.python_package_generator = (
             PythonPackageGenerator()
         )
+
+        self.python_exception_generator = (
+            PythonExceptionGenerator()
+        )
+
 
 
 
@@ -480,6 +489,10 @@ class PipelineSchemaGenerator:
             )
         )
 
+        exceptions_code = (
+            self.generate_python_exceptions()
+        )
+
         return (
             self.python_package_generator
             .generate_package(
@@ -494,9 +507,22 @@ class PipelineSchemaGenerator:
                 response_model=
                     models[
                         "response"
-                    ]
+                    ],
+
+                exceptions_code=
+                    exceptions_code
             )
         )
+
+    def generate_python_exceptions(
+        self
+    ):
+
+        return (
+            self.python_exception_generator
+            .generate_exceptions()
+        )
+
 
 
 

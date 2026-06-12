@@ -222,8 +222,10 @@ def test_python_sdk_generation():
     assert spec.python_package_name() == "train_model_sdk"
 
     package = generator.generate_python_package(spec)
-    assert package.file_count() == 3
-    assert package.file_names() == ["__init__.py", "client.py", "models.py"]
+    assert package.file_count() == 4
+    assert package.file_names() == ["__init__.py", "client.py", "exceptions.py", "models.py"]
     assert "from .client import *" in package.files["__init__.py"]
+    assert "from .exceptions import *" in package.files["__init__.py"]
     assert "class TrainModelClient:" in package.files["client.py"]
     assert "class TrainModelRequest(" in package.files["models.py"]
+    assert "class SDKError(" in package.files["exceptions.py"]
