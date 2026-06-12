@@ -40,6 +40,10 @@ from .python_sdk_generator import (
 from .python_model_generator import (
     PythonModelGenerator
 )
+from .python_package_generator import (
+    PythonPackageGenerator
+)
+
 
 
 
@@ -93,6 +97,11 @@ class PipelineSchemaGenerator:
         self.python_model_generator = (
             PythonModelGenerator()
         )
+
+        self.python_package_generator = (
+            PythonPackageGenerator()
+        )
+
 
 
 
@@ -453,5 +462,41 @@ class PipelineSchemaGenerator:
             "response":
                 response_model
         }
+
+    def generate_python_package(
+        self,
+        spec
+    ):
+
+        client_code = (
+            self.generate_python_sdk(
+                spec
+            )
+        )
+
+        models = (
+            self.generate_python_models(
+                spec
+            )
+        )
+
+        return (
+            self.python_package_generator
+            .generate_package(
+                client_code=
+                    client_code,
+
+                request_model=
+                    models[
+                        "request"
+                    ],
+
+                response_model=
+                    models[
+                        "response"
+                    ]
+            )
+        )
+
 
 

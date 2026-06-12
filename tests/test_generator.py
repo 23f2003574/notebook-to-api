@@ -218,3 +218,12 @@ def test_python_sdk_generation():
     assert "source: str" in models["request"]
     assert "class TrainModelResponse(" in models["response"]
     assert "result: str" in models["response"]
+
+    assert spec.python_package_name() == "train_model_sdk"
+
+    package = generator.generate_python_package(spec)
+    assert package.file_count() == 3
+    assert package.file_names() == ["__init__.py", "client.py", "models.py"]
+    assert "from .client import *" in package.files["__init__.py"]
+    assert "class TrainModelClient:" in package.files["client.py"]
+    assert "class TrainModelRequest(" in package.files["models.py"]
