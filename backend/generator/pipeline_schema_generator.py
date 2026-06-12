@@ -49,6 +49,10 @@ from .python_exception_generator import (
 from .python_async_sdk_generator import (
     PythonAsyncSDKGenerator
 )
+from .python_pagination_generator import (
+    PythonPaginationGenerator
+)
+
 
 
 
@@ -117,6 +121,11 @@ class PipelineSchemaGenerator:
         self.python_async_sdk_generator = (
             PythonAsyncSDKGenerator()
         )
+
+        self.pagination_generator = (
+            PythonPaginationGenerator()
+        )
+
 
 
 
@@ -517,6 +526,10 @@ class PipelineSchemaGenerator:
             )
         )
 
+        pagination_code = (
+            self.generate_pagination_models()
+        )
+
         exceptions_code = (
             self.generate_python_exceptions()
         )
@@ -540,6 +553,9 @@ class PipelineSchemaGenerator:
                         "response"
                     ],
 
+                pagination_code=
+                    pagination_code,
+
                 exceptions_code=
                     exceptions_code
             )
@@ -554,6 +570,16 @@ class PipelineSchemaGenerator:
             self.python_exception_generator
             .generate_exceptions()
         )
+
+    def generate_pagination_models(
+        self
+    ):
+
+        return (
+            self.pagination_generator
+            .generate_page_model()
+        )
+
 
 
 

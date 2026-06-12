@@ -56,6 +56,7 @@ class PythonPackageGenerator:
         async_client_code: str,
         request_model: str,
         response_model: str,
+        pagination_code: str,
         exceptions_code: str
     ):
 
@@ -65,6 +66,10 @@ class PythonPackageGenerator:
             "\n\n"
             +
             response_model
+            +
+            "\n\n"
+            +
+            pagination_code
         )
 
         files = {

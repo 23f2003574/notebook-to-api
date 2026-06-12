@@ -84,7 +84,9 @@ class PythonSDKGenerator:
                     spec.client_method_name()
                 }(
                     self,
-                    payload: dict
+                    payload: dict,
+                    page: int = 1,
+                    limit: int = 100
                 ):
 
                     url = (
@@ -110,10 +112,19 @@ class PythonSDKGenerator:
                                     headers=
                                         self.build_headers(),
 
+                                    params={{
+                                        "page":
+                                            page,
+
+                                        "limit":
+                                            limit
+                                    }},
+
                                     timeout=
                                         self.timeout
                                 )
                             )
+
 
                             break
 

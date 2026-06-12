@@ -250,3 +250,27 @@ def test_python_sdk_generation():
     assert "class TrainModelRequest(" in package.files["models.py"]
     assert "class SDKError(" in package.files["exceptions.py"]
     assert "class RetryError(" in package.files["exceptions.py"]
+
+    # Pagination: method signatures
+    assert "page: int = 1" in package.files["client.py"]
+    assert "limit: int = 100" in package.files["client.py"]
+    assert "page: int = 1" in package.files["async_client.py"]
+    assert "limit: int = 100" in package.files["async_client.py"]
+
+    # Pagination: params dict in requests
+    assert '"page"' in package.files["client.py"]
+    assert '"limit"' in package.files["client.py"]
+    assert '"page"' in package.files["async_client.py"]
+    assert '"limit"' in package.files["async_client.py"]
+
+    # Pagination: PaginationInfo model included in models.py
+    assert "class PaginationInfo(" in package.files["models.py"]
+    assert "page: int" in package.files["models.py"]
+    assert "total: int" in package.files["models.py"]
+
+    # generate_pagination_models standalone check
+    pagination = generator.generate_pagination_models()
+    assert "class PaginationInfo(" in pagination
+    assert "page: int" in pagination
+    assert "limit: int" in pagination
+    assert "total: int" in pagination

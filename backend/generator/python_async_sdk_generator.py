@@ -79,7 +79,9 @@ class PythonAsyncSDKGenerator:
                     spec.client_method_name()
                 }(
                     self,
-                    payload: dict
+                    payload: dict,
+                    page: int = 1,
+                    limit: int = 100
                 ):
 
                     async with (
@@ -98,9 +100,18 @@ class PythonAsyncSDKGenerator:
                                 json=payload,
 
                                 headers=
-                                    self.build_headers()
+                                    self.build_headers(),
+
+                                params={{
+                                    "page":
+                                        page,
+
+                                    "limit":
+                                        limit
+                                }}
                             )
                         )
+
 
                     if not response.is_success:
 
