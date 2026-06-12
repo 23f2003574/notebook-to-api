@@ -53,6 +53,7 @@ class PythonPackageGenerator:
     def generate_package(
         self,
         client_code: str,
+        async_client_code: str,
         request_model: str,
         response_model: str,
         exceptions_code: str
@@ -72,6 +73,8 @@ class PythonPackageGenerator:
             (
                 "from .client "
                 "import *\n"
+                "from .async_client "
+                "import *\n"
                 "from .models "
                 "import *\n"
                 "from .exceptions "
@@ -80,6 +83,9 @@ class PythonPackageGenerator:
 
             "client.py":
                 client_code,
+
+            "async_client.py":
+                async_client_code,
 
             "models.py":
                 models_code,
@@ -91,4 +97,5 @@ class PythonPackageGenerator:
         return PythonPackage(
             files=files
         )
+
 

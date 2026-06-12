@@ -46,6 +46,10 @@ from .python_package_generator import (
 from .python_exception_generator import (
     PythonExceptionGenerator
 )
+from .python_async_sdk_generator import (
+    PythonAsyncSDKGenerator
+)
+
 
 
 
@@ -109,6 +113,11 @@ class PipelineSchemaGenerator:
         self.python_exception_generator = (
             PythonExceptionGenerator()
         )
+
+        self.python_async_sdk_generator = (
+            PythonAsyncSDKGenerator()
+        )
+
 
 
 
@@ -433,6 +442,19 @@ class PipelineSchemaGenerator:
             )
         )
 
+    def generate_async_python_sdk(
+        self,
+        spec
+    ):
+
+        return (
+            self.python_async_sdk_generator
+            .generate_client(
+                spec
+            )
+        )
+
+
     def generate_python_models(
         self,
         spec
@@ -483,6 +505,12 @@ class PipelineSchemaGenerator:
             )
         )
 
+        async_client_code = (
+            self.generate_async_python_sdk(
+                spec
+            )
+        )
+
         models = (
             self.generate_python_models(
                 spec
@@ -499,6 +527,9 @@ class PipelineSchemaGenerator:
                 client_code=
                     client_code,
 
+                async_client_code=
+                    async_client_code,
+
                 request_model=
                     models[
                         "request"
@@ -513,6 +544,7 @@ class PipelineSchemaGenerator:
                     exceptions_code
             )
         )
+
 
     def generate_python_exceptions(
         self

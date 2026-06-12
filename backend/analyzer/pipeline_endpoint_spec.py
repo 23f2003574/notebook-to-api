@@ -91,6 +91,21 @@ class PipelineEndpointSpec:
             + "Client"
         )
 
+    def python_async_client_name(
+        self
+    ):
+
+        return (
+            self.route_name()
+            .title()
+            .replace(
+                "_",
+                ""
+            )
+            + "AsyncClient"
+        )
+
+
     def python_request_model_name(
         self
     ):

@@ -220,16 +220,20 @@ def test_python_sdk_generation():
     assert "result: str" in models["response"]
 
     assert spec.python_package_name() == "train_model_sdk"
+    assert spec.python_async_client_name() == "TrainModelAsyncClient"
 
     package = generator.generate_python_package(spec)
-    assert package.file_count() == 4
-    assert package.file_names() == ["__init__.py", "client.py", "exceptions.py", "models.py"]
+    assert package.file_count() == 5
+    assert package.file_names() == ["__init__.py", "async_client.py", "client.py", "exceptions.py", "models.py"]
     assert package.contains_file("client.py") is True
+    assert package.contains_file("async_client.py") is True
     assert package.contains_file("nonexistent.py") is False
     assert package.has_client() is True
     assert "from .client import *" in package.files["__init__.py"]
+    assert "from .async_client import *" in package.files["__init__.py"]
     assert "from .exceptions import *" in package.files["__init__.py"]
     assert "class TrainModelClient:" in package.files["client.py"]
+    assert "class TrainModelAsyncClient:" in package.files["async_client.py"]
     assert "from .exceptions import (\n    APIError\n)" in package.files["client.py"]
     assert "raise APIError(" in package.files["client.py"]
     assert "max_retries: int = 3" in package.files["client.py"]
