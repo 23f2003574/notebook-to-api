@@ -339,3 +339,38 @@ def test_python_sdk_generation():
     assert bundle["manifest"]["artifact_count"] == 8
     assert "client.py" in bundle["manifest"]["artifacts"]
     assert bundle["package"].has_client() is True
+
+    # supported_sdk_targets on spec
+    assert spec.supported_sdk_targets() == ["python", "typescript"]
+
+    # generate_multilanguage_bundle end-to-end check
+    from backend.generator import MultiLanguageRelease
+    ml_bundle = generator.generate_multilanguage_bundle(spec)
+    assert isinstance(ml_bundle, MultiLanguageRelease)
+
+    # manifest structure
+    assert "languages" in ml_bundle.manifest
+    assert "python" in ml_bundle.manifest["languages"]
+    assert "typescript" in ml_bundle.manifest["languages"]
+    assert "artifacts" in ml_bundle.manifest
+    assert "python" in ml_bundle.manifest["artifacts"]
+    assert "typescript" in ml_bundle.manifest["artifacts"]
+
+    # python artifacts nested correctly
+    py_artifacts = ml_bundle.manifest["artifacts"]["python"]
+    assert py_artifacts["artifact_count"] == 8
+    assert "client.py" in py_artifacts["artifacts"]
+
+    # typescript manifest nested correctly
+    ts_manifest = ml_bundle.manifest["artifacts"]["typescript"]
+    assert "module" in ts_manifest
+    assert "package" in ts_manifest
+    assert ts_manifest["package"] == "train-model-sdk"
+
+    # metadata
+    assert ml_bundle.metadata["release_version"] == "1.0.0"
+    assert ml_bundle.metadata["sdk_count"] == 2
+
+    # python and typescript bundles accessible on the release object
+    assert ml_bundle.python_bundle["package"].has_client() is True
+    assert "sdk" in ml_bundle.typescript_bundle

@@ -68,3 +68,7 @@ from .sdk_release_generator import (
     SDKReleaseMetadata,
     SDKReleaseGenerator
 )
+from .multilanguage_release_generator import (
+    MultiLanguageRelease,
+    MultiLanguageReleaseGenerator
+)

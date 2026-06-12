@@ -61,6 +61,9 @@ from .python_packaging_generator import (
 from .sdk_release_generator import (
     SDKReleaseGenerator
 )
+from .multilanguage_release_generator import (
+    MultiLanguageReleaseGenerator
+)
 
 
 
@@ -145,6 +148,10 @@ class PipelineSchemaGenerator:
 
         self.release_generator = (
             SDKReleaseGenerator()
+        )
+
+        self.multilang_generator = (
+            MultiLanguageReleaseGenerator()
         )
 
 
@@ -644,6 +651,43 @@ class PipelineSchemaGenerator:
             "manifest":
                 manifest
         }
+
+
+    def generate_multilanguage_bundle(
+        self,
+        spec
+    ):
+
+        python_bundle = (
+            self.generate_release_bundle(
+                spec
+            )
+        )
+
+        typescript_bundle = {
+
+            "sdk":
+                self.generate_typescript_sdk(
+                    spec
+                ),
+
+            "manifest": {
+
+                "module":
+                    spec.sdk_module_name(),
+
+                "package":
+                    spec.npm_package_name()
+            }
+        }
+
+        return (
+            self.multilang_generator
+            .generate_release(
+                python_bundle,
+                typescript_bundle
+            )
+        )
 
 
     def generate_python_exceptions(

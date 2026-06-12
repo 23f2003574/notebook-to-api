@@ -162,6 +162,15 @@ class PipelineEndpointSpec:
             + "-sdk"
         )
 
+    def supported_sdk_targets(
+        self
+    ):
+
+        return [
+            "python",
+            "typescript"
+        ]
+
     def package_directory(
         self
     ):
