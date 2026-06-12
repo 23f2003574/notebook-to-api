@@ -105,6 +105,13 @@ class PipelineEndpointSpec:
             + "AsyncClient"
         )
 
+    def supports_authentication(
+        self
+    ):
+
+        return True
+
+
 
     def python_request_model_name(
         self

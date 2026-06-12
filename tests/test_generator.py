@@ -222,6 +222,8 @@ def test_python_sdk_generation():
     assert spec.python_package_name() == "train_model_sdk"
     assert spec.python_async_client_name() == "TrainModelAsyncClient"
 
+    assert spec.supports_authentication() is True
+
     package = generator.generate_python_package(spec)
     assert package.file_count() == 5
     assert package.file_names() == ["__init__.py", "async_client.py", "client.py", "exceptions.py", "models.py"]
@@ -234,6 +236,12 @@ def test_python_sdk_generation():
     assert "from .exceptions import *" in package.files["__init__.py"]
     assert "class TrainModelClient:" in package.files["client.py"]
     assert "class TrainModelAsyncClient:" in package.files["async_client.py"]
+    assert "api_key: str | None = None" in package.files["client.py"]
+    assert "bearer_token: str | None = None" in package.files["client.py"]
+    assert "def build_headers(" in package.files["client.py"]
+    assert "api_key: str | None = None" in package.files["async_client.py"]
+    assert "bearer_token: str | None = None" in package.files["async_client.py"]
+    assert "def build_headers(" in package.files["async_client.py"]
     assert "from .exceptions import (\n    APIError\n)" in package.files["client.py"]
     assert "raise APIError(" in package.files["client.py"]
     assert "max_retries: int = 3" in package.files["client.py"]

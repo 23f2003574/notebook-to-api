@@ -29,7 +29,9 @@ class PythonSDKGenerator:
                     self,
                     base_url: str,
                     timeout: int = 30,
-                    max_retries: int = 3
+                    max_retries: int = 3,
+                    api_key: str | None = None,
+                    bearer_token: str | None = None
                 ):
 
                     self.base_url = (
@@ -43,6 +45,40 @@ class PythonSDKGenerator:
                     self.max_retries = (
                         max_retries
                     )
+
+                    self.api_key = (
+                        api_key
+                    )
+
+                    self.bearer_token = (
+                        bearer_token
+                    )
+
+                def build_headers(
+                    self
+                ):
+
+                    headers = {{}}
+
+                    if self.api_key:
+
+                        headers[
+                            "X-API-Key"
+                        ] = (
+                            self.api_key
+                        )
+
+                    if self.bearer_token:
+
+                        headers[
+                            "Authorization"
+                        ] = (
+                            "Bearer "
+                            +
+                            self.bearer_token
+                        )
+
+                    return headers
 
                 def {
                     spec.client_method_name()
@@ -68,7 +104,12 @@ class PythonSDKGenerator:
                             response = (
                                 requests.post(
                                     url,
+
                                     json=payload,
+
+                                    headers=
+                                        self.build_headers(),
+
                                     timeout=
                                         self.timeout
                                 )
@@ -96,6 +137,7 @@ class PythonSDKGenerator:
 
                     return response.json()
             """
+
         )
 
     def generate_error_handler(

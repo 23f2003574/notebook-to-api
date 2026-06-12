@@ -28,7 +28,9 @@ class PythonAsyncSDKGenerator:
                 def __init__(
                     self,
                     base_url: str,
-                    timeout: int = 30
+                    timeout: int = 30,
+                    api_key: str | None = None,
+                    bearer_token: str | None = None
                 ):
 
                     self.base_url = (
@@ -38,6 +40,40 @@ class PythonAsyncSDKGenerator:
                     self.timeout = (
                         timeout
                     )
+
+                    self.api_key = (
+                        api_key
+                    )
+
+                    self.bearer_token = (
+                        bearer_token
+                    )
+
+                def build_headers(
+                    self
+                ):
+
+                    headers = {{}}
+
+                    if self.api_key:
+
+                        headers[
+                            "X-API-Key"
+                        ] = (
+                            self.api_key
+                        )
+
+                    if self.bearer_token:
+
+                        headers[
+                            "Authorization"
+                        ] = (
+                            "Bearer "
+                            +
+                            self.bearer_token
+                        )
+
+                    return headers
 
                 async def {
                     spec.client_method_name()
@@ -59,7 +95,10 @@ class PythonAsyncSDKGenerator:
                                 +
                                 "/{spec.endpoint_name}",
 
-                                json=payload
+                                json=payload,
+
+                                headers=
+                                    self.build_headers()
                             )
                         )
 
@@ -77,4 +116,5 @@ class PythonAsyncSDKGenerator:
                         response.json()
                     )
             """
+
         )
