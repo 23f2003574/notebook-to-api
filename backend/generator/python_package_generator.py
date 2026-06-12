@@ -58,7 +58,9 @@ class PythonPackageGenerator:
         response_model: str,
         pagination_code: str,
         exceptions_code: str,
-        readme_content: str
+        readme_content: str,
+        pyproject_content: str,
+        requirements_content: str
     ):
 
         models_code = (
@@ -77,6 +79,12 @@ class PythonPackageGenerator:
 
             "README.md":
                 readme_content,
+
+            "pyproject.toml":
+                pyproject_content,
+
+            "requirements.txt":
+                requirements_content,
 
             "__init__.py":
             (

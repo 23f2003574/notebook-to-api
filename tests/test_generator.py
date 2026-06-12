@@ -225,8 +225,17 @@ def test_python_sdk_generation():
     assert spec.supports_authentication() is True
 
     package = generator.generate_python_package(spec)
-    assert package.file_count() == 6
-    assert package.file_names() == ["README.md", "__init__.py", "async_client.py", "client.py", "exceptions.py", "models.py"]
+    assert package.file_count() == 8
+    assert package.file_names() == [
+        "README.md",
+        "__init__.py",
+        "async_client.py",
+        "client.py",
+        "exceptions.py",
+        "models.py",
+        "pyproject.toml",
+        "requirements.txt",
+    ]
     assert package.contains_file("client.py") is True
     assert package.contains_file("async_client.py") is True
     assert package.contains_file("nonexistent.py") is False
@@ -287,3 +296,19 @@ def test_python_sdk_generation():
     assert "# train_model_sdk" in readme
     assert "pip install train_model_sdk" in readme
     assert "TrainModelClient" in readme
+
+    # PyPI packaging
+    assert package.contains_file("pyproject.toml") is True
+    assert package.contains_file("requirements.txt") is True
+    assert 'name =\n    "train_model_sdk"' in package.files["pyproject.toml"]
+    assert "setuptools" in package.files["pyproject.toml"]
+    assert "requests>=2.0.0" in package.files["requirements.txt"]
+    assert "pydantic>=2.0.0" in package.files["requirements.txt"]
+    assert "httpx>=0.25.0" in package.files["requirements.txt"]
+
+    # generate_python_packaging standalone check
+    packaging = generator.generate_python_packaging(spec)
+    assert "pyproject" in packaging
+    assert "requirements" in packaging
+    assert "train_model_sdk" in packaging["pyproject"]
+    assert "httpx" in packaging["requirements"]

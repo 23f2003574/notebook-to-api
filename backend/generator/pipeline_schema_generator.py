@@ -55,6 +55,9 @@ from .python_pagination_generator import (
 from .python_docs_generator import (
     PythonDocsGenerator
 )
+from .python_packaging_generator import (
+    PythonPackagingGenerator
+)
 
 
 
@@ -131,6 +134,10 @@ class PipelineSchemaGenerator:
 
         self.docs_generator = (
             PythonDocsGenerator()
+        )
+
+        self.packaging_generator = (
+            PythonPackagingGenerator()
         )
 
 
@@ -547,6 +554,12 @@ class PipelineSchemaGenerator:
             )
         )
 
+        packaging = (
+            self.generate_python_packaging(
+                spec
+            )
+        )
+
         return (
             self.python_package_generator
             .generate_package(
@@ -573,7 +586,17 @@ class PipelineSchemaGenerator:
                     exceptions_code,
 
                 readme_content=
-                    readme_content
+                    readme_content,
+
+                pyproject_content=
+                    packaging[
+                        "pyproject"
+                    ],
+
+                requirements_content=
+                    packaging[
+                        "requirements"
+                    ]
             )
         )
 
@@ -607,6 +630,28 @@ class PipelineSchemaGenerator:
                 spec
             )
         )
+
+    def generate_python_packaging(
+        self,
+        spec
+    ):
+
+        return {
+
+            "pyproject":
+            (
+                self.packaging_generator
+                .generate_pyproject(
+                    spec.python_package_name()
+                )
+            ),
+
+            "requirements":
+            (
+                self.packaging_generator
+                .generate_requirements()
+            )
+        }
 
 
 

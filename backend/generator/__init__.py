@@ -61,3 +61,6 @@ from .python_pagination_generator import (
 from .python_docs_generator import (
     PythonDocsGenerator
 )
+from .python_packaging_generator import (
+    PythonPackagingGenerator
+)
