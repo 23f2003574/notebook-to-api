@@ -212,3 +212,9 @@ def test_python_sdk_generation():
     assert "class TrainModelClient:" in python_code
     assert "def train_model(" in python_code
     assert "requests.post(" in python_code
+
+    models = generator.generate_python_models(spec)
+    assert "class TrainModelRequest(" in models["request"]
+    assert "source: str" in models["request"]
+    assert "class TrainModelResponse(" in models["response"]
+    assert "result: str" in models["response"]

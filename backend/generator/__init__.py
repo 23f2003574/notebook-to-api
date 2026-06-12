@@ -42,3 +42,6 @@ from .sdk_project_generator import (
 from .python_sdk_generator import (
     PythonSDKGenerator
 )
+from .python_model_generator import (
+    PythonModelGenerator
+)

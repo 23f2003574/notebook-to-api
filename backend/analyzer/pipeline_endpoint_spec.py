@@ -91,6 +91,23 @@ class PipelineEndpointSpec:
             + "Client"
         )
 
+    def python_request_model_name(
+        self
+    ):
+
+        return (
+            self.request_model_name()
+        )
+
+    def python_response_model_name(
+        self
+    ):
+
+        return (
+            self.response_model_name()
+        )
+
+
 
     def sdk_module_name(
         self

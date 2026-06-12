@@ -37,6 +37,10 @@ from .sdk_project_generator import (
 from .python_sdk_generator import (
     PythonSDKGenerator
 )
+from .python_model_generator import (
+    PythonModelGenerator
+)
+
 
 
 
@@ -85,6 +89,11 @@ class PipelineSchemaGenerator:
         self.python_sdk_generator = (
             PythonSDKGenerator()
         )
+
+        self.python_model_generator = (
+            PythonModelGenerator()
+        )
+
 
 
     def infer_field_type(
@@ -405,4 +414,44 @@ class PipelineSchemaGenerator:
                 spec
             )
         )
+
+    def generate_python_models(
+        self,
+        spec
+    ):
+
+        sdk_types = (
+            self.generate_sdk_types(
+                spec
+            )
+        )
+
+        request_model = (
+            self.python_model_generator
+            .generate_model(
+                spec.request_model_name(),
+                sdk_types[
+                    "request_types"
+                ]
+            )
+        )
+
+        response_model = (
+            self.python_model_generator
+            .generate_model(
+                spec.response_model_name(),
+                sdk_types[
+                    "response_types"
+                ]
+            )
+        )
+
+        return {
+            "request":
+                request_model,
+
+            "response":
+                response_model
+        }
+
 
