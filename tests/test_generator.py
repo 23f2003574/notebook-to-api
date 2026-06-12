@@ -225,8 +225,8 @@ def test_python_sdk_generation():
     assert spec.supports_authentication() is True
 
     package = generator.generate_python_package(spec)
-    assert package.file_count() == 5
-    assert package.file_names() == ["__init__.py", "async_client.py", "client.py", "exceptions.py", "models.py"]
+    assert package.file_count() == 6
+    assert package.file_names() == ["README.md", "__init__.py", "async_client.py", "client.py", "exceptions.py", "models.py"]
     assert package.contains_file("client.py") is True
     assert package.contains_file("async_client.py") is True
     assert package.contains_file("nonexistent.py") is False
@@ -274,3 +274,16 @@ def test_python_sdk_generation():
     assert "page: int" in pagination
     assert "limit: int" in pagination
     assert "total: int" in pagination
+
+    # README docs
+    assert package.contains_file("README.md") is True
+    assert "# train_model_sdk" in package.files["README.md"]
+    assert "pip install train_model_sdk" in package.files["README.md"]
+    assert "TrainModelClient" in package.files["README.md"]
+    assert "POST /train_model" in package.files["README.md"]
+
+    # generate_python_docs standalone check
+    readme = generator.generate_python_docs(spec)
+    assert "# train_model_sdk" in readme
+    assert "pip install train_model_sdk" in readme
+    assert "TrainModelClient" in readme

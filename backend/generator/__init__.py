@@ -58,3 +58,6 @@ from .python_async_sdk_generator import (
 from .python_pagination_generator import (
     PythonPaginationGenerator
 )
+from .python_docs_generator import (
+    PythonDocsGenerator
+)

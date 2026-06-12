@@ -57,7 +57,8 @@ class PythonPackageGenerator:
         request_model: str,
         response_model: str,
         pagination_code: str,
-        exceptions_code: str
+        exceptions_code: str,
+        readme_content: str
     ):
 
         models_code = (
@@ -73,6 +74,9 @@ class PythonPackageGenerator:
         )
 
         files = {
+
+            "README.md":
+                readme_content,
 
             "__init__.py":
             (

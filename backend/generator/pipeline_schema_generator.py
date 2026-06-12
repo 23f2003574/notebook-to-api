@@ -52,6 +52,9 @@ from .python_async_sdk_generator import (
 from .python_pagination_generator import (
     PythonPaginationGenerator
 )
+from .python_docs_generator import (
+    PythonDocsGenerator
+)
 
 
 
@@ -124,6 +127,10 @@ class PipelineSchemaGenerator:
 
         self.pagination_generator = (
             PythonPaginationGenerator()
+        )
+
+        self.docs_generator = (
+            PythonDocsGenerator()
         )
 
 
@@ -534,6 +541,12 @@ class PipelineSchemaGenerator:
             self.generate_python_exceptions()
         )
 
+        readme_content = (
+            self.generate_python_docs(
+                spec
+            )
+        )
+
         return (
             self.python_package_generator
             .generate_package(
@@ -557,7 +570,10 @@ class PipelineSchemaGenerator:
                     pagination_code,
 
                 exceptions_code=
-                    exceptions_code
+                    exceptions_code,
+
+                readme_content=
+                    readme_content
             )
         )
 
@@ -578,6 +594,18 @@ class PipelineSchemaGenerator:
         return (
             self.pagination_generator
             .generate_page_model()
+        )
+
+    def generate_python_docs(
+        self,
+        spec
+    ):
+
+        return (
+            self.docs_generator
+            .generate_readme(
+                spec
+            )
         )
 
 
