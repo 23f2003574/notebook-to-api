@@ -58,6 +58,9 @@ from .python_docs_generator import (
 from .python_packaging_generator import (
     PythonPackagingGenerator
 )
+from .sdk_release_generator import (
+    SDKReleaseGenerator
+)
 
 
 
@@ -138,6 +141,10 @@ class PipelineSchemaGenerator:
 
         self.packaging_generator = (
             PythonPackagingGenerator()
+        )
+
+        self.release_generator = (
+            SDKReleaseGenerator()
         )
 
 
@@ -601,6 +608,44 @@ class PipelineSchemaGenerator:
         )
 
 
+    def generate_release_bundle(
+        self,
+        spec
+    ):
+
+        package = (
+            self.generate_python_package(
+                spec
+            )
+        )
+
+        metadata = (
+            self.generate_release_metadata(
+                spec,
+                package.file_count()
+            )
+        )
+
+        manifest = (
+            self.release_generator
+            .generate_manifest(
+                package
+            )
+        )
+
+        return {
+
+            "package":
+                package,
+
+            "metadata":
+                metadata,
+
+            "manifest":
+                manifest
+        }
+
+
     def generate_python_exceptions(
         self
     ):
@@ -653,7 +698,19 @@ class PipelineSchemaGenerator:
             )
         }
 
+    def generate_release_metadata(
+        self,
+        spec,
+        artifact_count: int
+    ):
 
+        return (
+            self.release_generator
+            .generate_release_metadata(
+                package_name=
+                    spec.python_package_name(),
 
-
-
+                artifact_count=
+                    artifact_count
+            )
+        )

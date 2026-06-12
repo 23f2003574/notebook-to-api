@@ -312,3 +312,30 @@ def test_python_sdk_generation():
     assert "requirements" in packaging
     assert "train_model_sdk" in packaging["pyproject"]
     assert "httpx" in packaging["requirements"]
+
+    # PythonPackage.manifest()
+    m = package.manifest()
+    assert m["file_count"] == 8
+    assert "client.py" in m["files"]
+    assert "README.md" in m["files"]
+    assert "pyproject.toml" in m["files"]
+
+    # generate_release_metadata standalone check
+    from backend.generator import SDKReleaseMetadata
+    meta = generator.generate_release_metadata(spec, 8)
+    assert isinstance(meta, SDKReleaseMetadata)
+    assert meta.package_name == "train_model_sdk"
+    assert meta.version == "1.0.0"
+    assert meta.artifact_count == 8
+    assert meta.generated_at != ""
+
+    # generate_release_bundle end-to-end check
+    bundle = generator.generate_release_bundle(spec)
+    assert "package" in bundle
+    assert "metadata" in bundle
+    assert "manifest" in bundle
+    assert bundle["metadata"].package_name == "train_model_sdk"
+    assert bundle["metadata"].artifact_count == 8
+    assert bundle["manifest"]["artifact_count"] == 8
+    assert "client.py" in bundle["manifest"]["artifacts"]
+    assert bundle["package"].has_client() is True

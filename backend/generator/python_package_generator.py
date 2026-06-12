@@ -45,6 +45,19 @@ class PythonPackage:
             in self.files
         )
 
+    def manifest(
+        self
+    ):
+
+        return {
+
+            "file_count":
+                self.file_count(),
+
+            "files":
+                self.file_names()
+        }
+
 
 
 

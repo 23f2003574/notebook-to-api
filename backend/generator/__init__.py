@@ -64,3 +64,7 @@ from .python_docs_generator import (
 from .python_packaging_generator import (
     PythonPackagingGenerator
 )
+from .sdk_release_generator import (
+    SDKReleaseMetadata,
+    SDKReleaseGenerator
+)
