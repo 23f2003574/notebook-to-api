@@ -224,8 +224,12 @@ def test_python_sdk_generation():
     package = generator.generate_python_package(spec)
     assert package.file_count() == 4
     assert package.file_names() == ["__init__.py", "client.py", "exceptions.py", "models.py"]
+    assert package.contains_file("client.py") is True
+    assert package.contains_file("nonexistent.py") is False
     assert "from .client import *" in package.files["__init__.py"]
     assert "from .exceptions import *" in package.files["__init__.py"]
     assert "class TrainModelClient:" in package.files["client.py"]
+    assert "from .exceptions import (\n    APIError\n)" in package.files["client.py"]
+    assert "raise APIError(" in package.files["client.py"]
     assert "class TrainModelRequest(" in package.files["models.py"]
     assert "class SDKError(" in package.files["exceptions.py"]

@@ -16,6 +16,10 @@ class PythonSDKGenerator:
             f"""
             import requests
 
+            from .exceptions import (
+                APIError
+            )
+
 
             class {
                 spec.python_client_name()
@@ -47,10 +51,33 @@ class PythonSDKGenerator:
                         )
                     )
 
-                    response.raise_for_status()
+                    if not response.ok:
 
-                    return (
-                        response.json()
-                    )
+                        raise APIError(
+                            status_code=
+                                response.status_code,
+
+                            message=
+                                response.text
+                        )
+
+                    return response.json()
             """
         )
+
+    def generate_error_handler(
+        self
+    ):
+
+        return """
+if not response.ok:
+
+    raise APIError(
+        status_code=
+            response.status_code,
+
+        message=
+            response.text
+    )
+"""
+

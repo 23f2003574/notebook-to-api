@@ -26,6 +26,17 @@ class PythonPackage:
             self.files.keys()
         )
 
+    def contains_file(
+        self,
+        filename: str
+    ):
+
+        return (
+            filename
+            in self.files
+        )
+
+
 
 class PythonPackageGenerator:
 
