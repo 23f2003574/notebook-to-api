@@ -34,6 +34,10 @@ from .typescript_package_generator import (
 from .sdk_project_generator import (
     SDKProjectGenerator
 )
+from .python_sdk_generator import (
+    PythonSDKGenerator
+)
+
 
 
 class PipelineSchemaGenerator:
@@ -77,6 +81,11 @@ class PipelineSchemaGenerator:
         self.project_generator = (
             SDKProjectGenerator()
         )
+
+        self.python_sdk_generator = (
+            PythonSDKGenerator()
+        )
+
 
     def infer_field_type(
         self,
@@ -384,3 +393,16 @@ class PipelineSchemaGenerator:
                     sdk_modules
             )
         )
+
+    def generate_python_sdk(
+        self,
+        spec
+    ):
+
+        return (
+            self.python_sdk_generator
+            .generate_client(
+                spec
+            )
+        )
+

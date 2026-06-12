@@ -192,3 +192,23 @@ def test_pipeline_contract_validator():
     }
     with pytest.raises(ValueError, match="Response schema does not match endpoint spec"):
         validator.validate_schema(spec, invalid_resp_schema)
+
+
+def test_python_sdk_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="train_model",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+
+    generator = PipelineSchemaGenerator()
+    python_code = generator.generate_python_sdk(spec)
+
+    assert "class TrainModelClient:" in python_code
+    assert "def train_model(" in python_code
+    assert "requests.post(" in python_code

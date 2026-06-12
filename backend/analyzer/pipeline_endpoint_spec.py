@@ -77,6 +77,21 @@ class PipelineEndpointSpec:
 
         return self.route_name()
 
+    def python_client_name(
+        self
+    ):
+
+        return (
+            self.route_name()
+            .title()
+            .replace(
+                "_",
+                ""
+            )
+            + "Client"
+        )
+
+
     def sdk_module_name(
         self
     ):
