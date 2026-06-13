@@ -144,3 +144,37 @@ class SDKReleaseGenerator:
                     targets
                 ) > 1
         }
+
+    def validation_manifest(
+        self,
+        validation_results
+    ):
+
+        passed = len(
+            [
+                result
+                for result
+                in validation_results
+                if result.passed
+            ]
+        )
+
+        return {
+
+            "total":
+                len(
+                    validation_results
+                ),
+
+            "passed":
+                passed,
+
+            "failed":
+                (
+                    len(
+                        validation_results
+                    )
+                    -
+                    passed
+                )
+        }

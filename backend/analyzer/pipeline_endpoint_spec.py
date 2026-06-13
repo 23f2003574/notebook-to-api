@@ -187,6 +187,14 @@ class PipelineEndpointSpec:
             "gcp"
         ]
 
+    def validation_targets(
+        self
+    ):
+
+        return (
+            self.deployment_targets()
+        )
+
     def package_directory(
         self
     ):

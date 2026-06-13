@@ -150,6 +150,24 @@ class SDKProject:
             cloud_files
         )
 
+    def validation_ready(
+        self
+    ):
+
+        required = [
+
+            "Dockerfile",
+
+            "docker-compose.yml"
+        ]
+
+        return all(
+            filename
+            in self.files
+            for filename
+            in required
+        )
+
 
 class SDKProjectGenerator:
 

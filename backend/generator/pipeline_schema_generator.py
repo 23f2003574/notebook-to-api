@@ -67,6 +67,9 @@ from .multilanguage_release_generator import (
 from .sdk_container_generator import (
     SDKContainerGenerator
 )
+from .deployment_validator import (
+    DeploymentValidator
+)
 
 
 
@@ -159,6 +162,10 @@ class PipelineSchemaGenerator:
 
         self.container_generator = (
             SDKContainerGenerator()
+        )
+
+        self.deployment_validator = (
+            DeploymentValidator()
         )
 
 
@@ -818,6 +825,28 @@ class PipelineSchemaGenerator:
                 )
             )
         }
+
+    def validate_deployment_artifacts(
+        self,
+        artifacts: dict
+    ):
+
+        results = []
+
+        for (
+            target,
+            content
+        ) in artifacts.items():
+
+            results.append(
+                self.deployment_validator
+                .validate_artifact(
+                    target,
+                    content
+                )
+            )
+
+        return results
 
     def generate_python_exceptions(
         self
