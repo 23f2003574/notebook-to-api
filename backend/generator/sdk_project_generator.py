@@ -126,6 +126,30 @@ class SDKProject:
             ]
         )
 
+    def cloud_target_count(
+        self
+    ):
+
+        cloud_files = [
+
+            filename
+
+            for filename
+            in self.files
+
+            if (
+                "aws" in filename
+                or
+                "azure" in filename
+                or
+                "gcp" in filename
+            )
+        ]
+
+        return len(
+            cloud_files
+        )
+
 
 class SDKProjectGenerator:
 

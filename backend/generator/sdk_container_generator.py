@@ -326,3 +326,57 @@ class SDKContainerGenerator:
             }
             """
         )
+
+    def generate_aws_deployment(
+        self,
+        package_name: str
+    ):
+
+        return dedent(
+            f"""
+            service:
+              {package_name}
+
+            region:
+              us-east-1
+
+            runtime:
+              container
+            """
+        )
+
+    def generate_azure_deployment(
+        self,
+        package_name: str
+    ):
+
+        return dedent(
+            f"""
+            resource_group:
+              {package_name}
+
+            location:
+              eastus
+
+            runtime:
+              container
+            """
+        )
+
+    def generate_gcp_deployment(
+        self,
+        package_name: str
+    ):
+
+        return dedent(
+            f"""
+            project:
+              {package_name}
+
+            region:
+              us-central1
+
+            runtime:
+              container
+            """
+        )

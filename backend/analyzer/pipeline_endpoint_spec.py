@@ -181,7 +181,10 @@ class PipelineEndpointSpec:
             "kubernetes",
             "github-actions",
             "helm",
-            "terraform"
+            "terraform",
+            "aws",
+            "azure",
+            "gcp"
         ]
 
     def package_directory(

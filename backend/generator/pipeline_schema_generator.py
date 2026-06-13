@@ -792,6 +792,30 @@ class PipelineSchemaGenerator:
             (
                 self.container_generator
                 .generate_terraform_outputs()
+            ),
+
+            "aws_deployment":
+            (
+                self.container_generator
+                .generate_aws_deployment(
+                    spec.python_package_name()
+                )
+            ),
+
+            "azure_deployment":
+            (
+                self.container_generator
+                .generate_azure_deployment(
+                    spec.python_package_name()
+                )
+            ),
+
+            "gcp_deployment":
+            (
+                self.container_generator
+                .generate_gcp_deployment(
+                    spec.python_package_name()
+                )
             )
         }
 

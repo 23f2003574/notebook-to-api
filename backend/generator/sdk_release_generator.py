@@ -128,3 +128,19 @@ class SDKReleaseGenerator:
                 "terraform"
                 in targets
         }
+
+    def cloud_manifest(
+        self,
+        targets
+    ):
+
+        return {
+
+            "cloud_targets":
+                targets,
+
+            "multi_cloud":
+                len(
+                    targets
+                ) > 1
+        }
