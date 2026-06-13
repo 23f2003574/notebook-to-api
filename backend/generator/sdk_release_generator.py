@@ -83,3 +83,19 @@ class SDKReleaseGenerator:
                     targets
                 )
         }
+
+    def cicd_manifest(
+        self,
+        workflows
+    ):
+
+        return {
+
+            "workflow_count":
+                len(
+                    workflows
+                ),
+
+            "workflows":
+                workflows
+        }

@@ -159,3 +159,76 @@ class SDKContainerGenerator:
               type: ClusterIP
             """
         )
+
+    def generate_github_actions(
+        self
+    ):
+
+        return dedent(
+            """
+            name: SDK Release
+
+            on:
+
+              push:
+
+                branches:
+
+                  - main
+
+            jobs:
+
+              build:
+
+                runs-on:
+                  ubuntu-latest
+
+                steps:
+
+                - uses:
+                    actions/checkout@v4
+
+                - uses:
+                    actions/setup-python@v5
+
+                  with:
+
+                    python-version:
+                      "3.12"
+
+                - run:
+                    pip install -r requirements.txt
+
+                - run:
+                    pytest
+            """
+        )
+
+    def generate_release_workflow(
+        self
+    ):
+
+        return dedent(
+            """
+            name: Release
+
+            on:
+
+              workflow_dispatch:
+
+            jobs:
+
+              publish:
+
+                runs-on:
+                  ubuntu-latest
+
+                steps:
+
+                - uses:
+                    actions/checkout@v4
+
+                - run:
+                    echo "Publishing SDK"
+            """
+        )

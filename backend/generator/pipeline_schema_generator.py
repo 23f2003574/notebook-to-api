@@ -746,6 +746,18 @@ class PipelineSchemaGenerator:
                 .generate_kubernetes_service(
                     spec.python_package_name()
                 )
+            ),
+
+            "github_actions":
+            (
+                self.container_generator
+                .generate_github_actions()
+            ),
+
+            "release_workflow":
+            (
+                self.container_generator
+                .generate_release_workflow()
             )
         }
 

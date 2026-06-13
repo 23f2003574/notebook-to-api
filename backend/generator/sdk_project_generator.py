@@ -58,6 +58,28 @@ class SDKProject:
             deployment_files
         )
 
+    def workflow_count(
+        self
+    ):
+
+        workflow_files = [
+
+            filename
+
+            for filename
+            in self.files
+
+            if (
+                "workflow" in filename
+                or
+                "action" in filename
+            )
+        ]
+
+        return len(
+            workflow_files
+        )
+
 
 class SDKProjectGenerator:
 
