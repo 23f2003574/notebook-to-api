@@ -72,3 +72,6 @@ from .multilanguage_release_generator import (
     MultiLanguageRelease,
     MultiLanguageReleaseGenerator
 )
+from .sdk_container_generator import (
+    SDKContainerGenerator
+)

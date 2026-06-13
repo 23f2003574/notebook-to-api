@@ -171,6 +171,14 @@ class PipelineEndpointSpec:
             "typescript"
         ]
 
+    def deployment_targets(
+        self
+    ):
+
+        return [
+            "docker"
+        ]
+
     def package_directory(
         self
     ):

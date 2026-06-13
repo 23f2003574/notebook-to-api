@@ -26,6 +26,16 @@ class SDKProject:
             self.files.keys()
         )
 
+    def contains(
+        self,
+        filename: str
+    ):
+
+        return (
+            filename
+            in self.files
+        )
+
 
 class SDKProjectGenerator:
 

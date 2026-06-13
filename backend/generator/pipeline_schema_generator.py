@@ -64,6 +64,9 @@ from .sdk_release_generator import (
 from .multilanguage_release_generator import (
     MultiLanguageReleaseGenerator
 )
+from .sdk_container_generator import (
+    SDKContainerGenerator
+)
 
 
 
@@ -152,6 +155,10 @@ class PipelineSchemaGenerator:
 
         self.multilang_generator = (
             MultiLanguageReleaseGenerator()
+        )
+
+        self.container_generator = (
+            SDKContainerGenerator()
         )
 
 
@@ -689,6 +696,28 @@ class PipelineSchemaGenerator:
             )
         )
 
+
+    def generate_sdk_container_artifacts(
+        self,
+        spec
+    ):
+
+        return {
+
+            "dockerfile":
+            (
+                self.container_generator
+                .generate_dockerfile(
+                    spec.python_package_name()
+                )
+            ),
+
+            "dockerignore":
+            (
+                self.container_generator
+                .generate_dockerignore()
+            )
+        }
 
     def generate_python_exceptions(
         self
