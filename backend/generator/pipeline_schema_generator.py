@@ -76,6 +76,9 @@ from .deployment_compatibility import (
 from .deployment_recommender import (
     DeploymentRecommender
 )
+from .deployment_cost_analyzer import (
+    DeploymentCostAnalyzer
+)
 
 
 
@@ -180,6 +183,10 @@ class PipelineSchemaGenerator:
 
         self.recommender = (
             DeploymentRecommender()
+        )
+
+        self.cost_analyzer = (
+            DeploymentCostAnalyzer()
         )
 
 
@@ -888,6 +895,24 @@ class PipelineSchemaGenerator:
         return (
             self.recommender
             .recommend(
+                compatibility
+            )
+        )
+
+    def generate_deployment_costs(
+        self,
+        project
+    ):
+
+        compatibility = (
+            self.generate_compatibility_matrix(
+                project
+            )
+        )
+
+        return (
+            self.cost_analyzer
+            .analyze(
                 compatibility
             )
         )

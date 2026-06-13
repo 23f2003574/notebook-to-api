@@ -213,6 +213,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def cost_analysis_enabled(
+        self
+    ):
+
+        return True
+
     def package_directory(
         self
     ):

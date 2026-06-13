@@ -226,3 +226,26 @@ class SDKReleaseGenerator:
                 recommendation
                 .unsupported
         }
+
+    def cost_manifest(
+        self,
+        costs
+    ):
+
+        return {
+
+            cost.target: {
+
+                "complexity":
+                    cost.complexity,
+
+                "operational_cost":
+                    cost.operational_cost,
+
+                "score":
+                    cost.score
+            }
+
+            for cost
+            in costs
+        }

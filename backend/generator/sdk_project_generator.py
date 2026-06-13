@@ -193,6 +193,17 @@ class SDKProject:
             .primary_target
         )
 
+    def cheapest_target(
+        self,
+        costs
+    ):
+
+        if not costs:
+
+            return None
+
+        return costs[0].target
+
 
 class SDKProjectGenerator:
 

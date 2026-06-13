@@ -92,3 +92,7 @@ from .deployment_recommender import (
     DeploymentRecommendation,
     DeploymentRecommender
 )
+from .deployment_cost_analyzer import (
+    DeploymentCost,
+    DeploymentCostAnalyzer
+)
