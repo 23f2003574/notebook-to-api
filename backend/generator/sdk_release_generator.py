@@ -178,3 +178,17 @@ class SDKReleaseGenerator:
                     passed
                 )
         }
+
+    def validation_summary(
+        self,
+        results
+    ):
+
+        return {
+
+            result.target:
+            result.passed
+
+            for result
+            in results
+        }

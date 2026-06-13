@@ -79,3 +79,8 @@ from .deployment_validator import (
     ValidationResult,
     DeploymentValidator
 )
+from .deployment_target_validators import (
+    DockerValidator,
+    KubernetesValidator,
+    TerraformValidator
+)

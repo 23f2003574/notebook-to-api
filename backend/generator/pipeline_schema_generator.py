@@ -840,7 +840,7 @@ class PipelineSchemaGenerator:
 
             results.append(
                 self.deployment_validator
-                .validate_artifact(
+                .validate_target(
                     target,
                     content
                 )

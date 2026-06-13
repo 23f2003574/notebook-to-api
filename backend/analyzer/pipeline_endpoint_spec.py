@@ -195,6 +195,12 @@ class PipelineEndpointSpec:
             self.deployment_targets()
         )
 
+    def strict_validation(
+        self
+    ):
+
+        return True
+
     def package_directory(
         self
     ):
