@@ -88,3 +88,7 @@ from .deployment_compatibility import (
     DeploymentCompatibility,
     DeploymentCompatibilityAnalyzer
 )
+from .deployment_recommender import (
+    DeploymentRecommendation,
+    DeploymentRecommender
+)

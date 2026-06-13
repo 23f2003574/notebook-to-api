@@ -183,6 +183,16 @@ class SDKProject:
             if result.supported
         ]
 
+    def recommended_target(
+        self,
+        recommendation
+    ):
+
+        return (
+            recommendation
+            .primary_target
+        )
+
 
 class SDKProjectGenerator:
 

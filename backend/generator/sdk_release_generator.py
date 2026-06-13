@@ -206,3 +206,23 @@ class SDKReleaseGenerator:
             for result
             in compatibility_results
         }
+
+    def recommendation_manifest(
+        self,
+        recommendation
+    ):
+
+        return {
+
+            "primary":
+                recommendation
+                .primary_target,
+
+            "alternatives":
+                recommendation
+                .alternatives,
+
+            "unsupported":
+                recommendation
+                .unsupported
+        }

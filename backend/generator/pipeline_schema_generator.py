@@ -73,6 +73,9 @@ from .deployment_validator import (
 from .deployment_compatibility import (
     DeploymentCompatibilityAnalyzer
 )
+from .deployment_recommender import (
+    DeploymentRecommender
+)
 
 
 
@@ -173,6 +176,10 @@ class PipelineSchemaGenerator:
 
         self.compatibility_analyzer = (
             DeploymentCompatibilityAnalyzer()
+        )
+
+        self.recommender = (
+            DeploymentRecommender()
         )
 
 
@@ -864,6 +871,24 @@ class PipelineSchemaGenerator:
             self.compatibility_analyzer
             .analyze(
                 project
+            )
+        )
+
+    def generate_deployment_recommendation(
+        self,
+        project
+    ):
+
+        compatibility = (
+            self.generate_compatibility_matrix(
+                project
+            )
+        )
+
+        return (
+            self.recommender
+            .recommend(
+                compatibility
             )
         )
 

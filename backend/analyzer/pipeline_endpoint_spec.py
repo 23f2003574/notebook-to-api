@@ -207,6 +207,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def recommendation_enabled(
+        self
+    ):
+
+        return True
+
     def package_directory(
         self
     ):
