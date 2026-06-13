@@ -84,3 +84,7 @@ from .deployment_target_validators import (
     KubernetesValidator,
     TerraformValidator
 )
+from .deployment_compatibility import (
+    DeploymentCompatibility,
+    DeploymentCompatibilityAnalyzer
+)

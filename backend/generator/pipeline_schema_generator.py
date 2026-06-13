@@ -70,6 +70,9 @@ from .sdk_container_generator import (
 from .deployment_validator import (
     DeploymentValidator
 )
+from .deployment_compatibility import (
+    DeploymentCompatibilityAnalyzer
+)
 
 
 
@@ -166,6 +169,10 @@ class PipelineSchemaGenerator:
 
         self.deployment_validator = (
             DeploymentValidator()
+        )
+
+        self.compatibility_analyzer = (
+            DeploymentCompatibilityAnalyzer()
         )
 
 
@@ -847,6 +854,18 @@ class PipelineSchemaGenerator:
             )
 
         return results
+
+    def generate_compatibility_matrix(
+        self,
+        project
+    ):
+
+        return (
+            self.compatibility_analyzer
+            .analyze(
+                project
+            )
+        )
 
     def generate_python_exceptions(
         self

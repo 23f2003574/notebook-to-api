@@ -201,6 +201,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def deployment_analysis_enabled(
+        self
+    ):
+
+        return True
+
     def package_directory(
         self
     ):

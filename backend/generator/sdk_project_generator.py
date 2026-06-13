@@ -168,6 +168,21 @@ class SDKProject:
             in required
         )
 
+    def supported_targets(
+        self,
+        compatibility_results
+    ):
+
+        return [
+
+            result.target
+
+            for result
+            in compatibility_results
+
+            if result.supported
+        ]
+
 
 class SDKProjectGenerator:
 

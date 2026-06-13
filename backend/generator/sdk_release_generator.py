@@ -192,3 +192,17 @@ class SDKReleaseGenerator:
             for result
             in results
         }
+
+    def compatibility_manifest(
+        self,
+        compatibility_results
+    ):
+
+        return {
+
+            result.target:
+            result.supported
+
+            for result
+            in compatibility_results
+        }
