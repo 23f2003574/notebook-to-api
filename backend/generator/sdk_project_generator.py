@@ -36,6 +36,28 @@ class SDKProject:
             in self.files
         )
 
+    def deployment_file_count(
+        self
+    ):
+
+        deployment_files = [
+
+            filename
+
+            for filename
+            in self.files
+
+            if (
+                "docker" in filename
+                or
+                "k8s" in filename
+            )
+        ]
+
+        return len(
+            deployment_files
+        )
+
 
 class SDKProjectGenerator:
 

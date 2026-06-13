@@ -730,6 +730,22 @@ class PipelineSchemaGenerator:
             (
                 self.container_generator
                 .generate_env_file()
+            ),
+
+            "k8s_deployment":
+            (
+                self.container_generator
+                .generate_kubernetes_deployment(
+                    spec.python_package_name()
+                )
+            ),
+
+            "k8s_service":
+            (
+                self.container_generator
+                .generate_kubernetes_service(
+                    spec.python_package_name()
+                )
             )
         }
 

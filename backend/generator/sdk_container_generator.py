@@ -74,3 +74,88 @@ class SDKContainerGenerator:
             LOG_LEVEL=INFO
             """
         )
+
+    def generate_kubernetes_deployment(
+        self,
+        package_name: str
+    ):
+
+        return dedent(
+            f"""
+            apiVersion: apps/v1
+
+            kind: Deployment
+
+            metadata:
+
+              name:
+                {package_name}
+
+            spec:
+
+              replicas: 1
+
+              selector:
+
+                matchLabels:
+
+                  app:
+                    {package_name}
+
+              template:
+
+                metadata:
+
+                  labels:
+
+                    app:
+                      {package_name}
+
+                spec:
+
+                  containers:
+
+                  - name:
+                      {package_name}
+
+                    image:
+                      {package_name}:latest
+
+                    ports:
+
+                    - containerPort: 8000
+            """
+        )
+
+    def generate_kubernetes_service(
+        self,
+        package_name: str
+    ):
+
+        return dedent(
+            f"""
+            apiVersion: v1
+
+            kind: Service
+
+            metadata:
+
+              name:
+                {package_name}
+
+            spec:
+
+              selector:
+
+                app:
+                  {package_name}
+
+              ports:
+
+              - port: 80
+
+                targetPort: 8000
+
+              type: ClusterIP
+            """
+        )

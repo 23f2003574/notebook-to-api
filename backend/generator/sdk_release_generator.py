@@ -67,3 +67,19 @@ class SDKReleaseGenerator:
                     deployment_targets
                 )
         }
+
+    def infrastructure_manifest(
+        self,
+        targets
+    ):
+
+        return {
+
+            "infrastructure":
+                targets,
+
+            "count":
+                len(
+                    targets
+                )
+        }

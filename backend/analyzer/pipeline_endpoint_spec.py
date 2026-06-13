@@ -177,7 +177,8 @@ class PipelineEndpointSpec:
 
         return [
             "docker",
-            "docker-compose"
+            "docker-compose",
+            "kubernetes"
         ]
 
     def package_directory(
