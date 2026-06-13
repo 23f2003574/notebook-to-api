@@ -99,3 +99,17 @@ class SDKReleaseGenerator:
             "workflows":
                 workflows
         }
+
+    def deployment_package_manifest(
+        self,
+        targets
+    ):
+
+        return {
+
+            "deployment_targets":
+                targets,
+
+            "supports_helm":
+                "helm" in targets
+        }

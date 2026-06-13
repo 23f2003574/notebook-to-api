@@ -80,6 +80,35 @@ class SDKProject:
             workflow_files
         )
 
+    def supports_target(
+        self,
+        target: str
+    ):
+
+        deployment_files = {
+
+            "docker":
+                "Dockerfile",
+
+            "helm":
+                "Chart.yaml",
+
+            "kubernetes":
+                "k8s-deployment.yaml"
+        }
+
+        expected = (
+            deployment_files.get(
+                target
+            )
+        )
+
+        if expected is None:
+
+            return False
+
+        return expected in self.files
+
 
 class SDKProjectGenerator:
 

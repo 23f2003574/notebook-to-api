@@ -232,3 +232,49 @@ class SDKContainerGenerator:
                     echo "Publishing SDK"
             """
         )
+
+    def generate_helm_chart(
+        self,
+        package_name: str
+    ):
+
+        return dedent(
+            f"""
+            apiVersion: v2
+
+            name:
+              {package_name}
+
+            version:
+              1.0.0
+
+            appVersion:
+              1.0.0
+            """
+        )
+
+    def generate_helm_values(
+        self
+    ):
+
+        return dedent(
+            """
+            replicaCount: 1
+
+            image:
+
+              repository:
+                sdk-image
+
+              tag:
+                latest
+
+            service:
+
+              type:
+                ClusterIP
+
+              port:
+                80
+            """
+        )

@@ -758,6 +758,20 @@ class PipelineSchemaGenerator:
             (
                 self.container_generator
                 .generate_release_workflow()
+            ),
+
+            "helm_chart":
+            (
+                self.container_generator
+                .generate_helm_chart(
+                    spec.python_package_name()
+                )
+            ),
+
+            "helm_values":
+            (
+                self.container_generator
+                .generate_helm_values()
             )
         }
 

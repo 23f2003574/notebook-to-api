@@ -179,7 +179,8 @@ class PipelineEndpointSpec:
             "docker",
             "docker-compose",
             "kubernetes",
-            "github-actions"
+            "github-actions",
+            "helm"
         ]
 
     def package_directory(
