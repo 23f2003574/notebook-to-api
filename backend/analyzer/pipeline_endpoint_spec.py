@@ -176,7 +176,8 @@ class PipelineEndpointSpec:
     ):
 
         return [
-            "docker"
+            "docker",
+            "docker-compose"
         ]
 
     def package_directory(

@@ -51,3 +51,19 @@ class SDKReleaseGenerator:
             "artifacts":
                 package.file_names()
         }
+
+    def deployment_manifest(
+        self,
+        deployment_targets
+    ):
+
+        return {
+
+            "targets":
+                deployment_targets,
+
+            "count":
+                len(
+                    deployment_targets
+                )
+        }

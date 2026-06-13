@@ -39,3 +39,38 @@ class SDKContainerGenerator:
             build/
             """
         )
+
+    def generate_docker_compose(
+        self,
+        package_name: str
+    ):
+
+        return dedent(
+            f"""
+            version: "3.9"
+
+            services:
+
+              {package_name}:
+
+                build: .
+
+                container_name:
+                  {package_name}
+
+                restart:
+                  unless-stopped
+            """
+        )
+
+    def generate_env_file(
+        self
+    ):
+
+        return dedent(
+            """
+            API_URL=http://localhost
+
+            LOG_LEVEL=INFO
+            """
+        )

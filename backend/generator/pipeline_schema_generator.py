@@ -716,6 +716,20 @@ class PipelineSchemaGenerator:
             (
                 self.container_generator
                 .generate_dockerignore()
+            ),
+
+            "docker_compose":
+            (
+                self.container_generator
+                .generate_docker_compose(
+                    spec.python_package_name()
+                )
+            ),
+
+            "env":
+            (
+                self.container_generator
+                .generate_env_file()
             )
         }
 
