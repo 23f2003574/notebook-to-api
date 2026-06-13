@@ -249,3 +249,27 @@ class SDKReleaseGenerator:
             for cost
             in costs
         }
+
+    def deployment_plan_manifest(
+        self,
+        plan
+    ):
+
+        return {
+
+            "recommended":
+                plan
+                .recommended_target,
+
+            "complexity":
+                plan
+                .estimated_complexity,
+
+            "fallbacks":
+                plan
+                .fallback_targets,
+
+            "rationale":
+                plan
+                .rationale
+        }

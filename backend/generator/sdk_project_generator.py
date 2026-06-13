@@ -204,6 +204,16 @@ class SDKProject:
 
         return costs[0].target
 
+    def deployment_strategy(
+        self,
+        plan
+    ):
+
+        return (
+            plan
+            .recommended_target
+        )
+
 
 class SDKProjectGenerator:
 

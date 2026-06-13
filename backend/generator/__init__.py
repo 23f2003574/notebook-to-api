@@ -96,3 +96,7 @@ from .deployment_cost_analyzer import (
     DeploymentCost,
     DeploymentCostAnalyzer
 )
+from .deployment_planner import (
+    DeploymentPlan,
+    DeploymentPlanner
+)
