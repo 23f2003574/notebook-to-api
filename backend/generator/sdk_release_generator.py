@@ -113,3 +113,18 @@ class SDKReleaseGenerator:
             "supports_helm":
                 "helm" in targets
         }
+
+    def infrastructure_as_code_manifest(
+        self,
+        targets
+    ):
+
+        return {
+
+            "iac_targets":
+                targets,
+
+            "supports_terraform":
+                "terraform"
+                in targets
+        }

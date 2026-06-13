@@ -180,7 +180,8 @@ class PipelineEndpointSpec:
             "docker-compose",
             "kubernetes",
             "github-actions",
-            "helm"
+            "helm",
+            "terraform"
         ]
 
     def package_directory(

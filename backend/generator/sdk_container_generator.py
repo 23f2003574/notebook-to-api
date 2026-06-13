@@ -278,3 +278,51 @@ class SDKContainerGenerator:
                 80
             """
         )
+
+    def generate_terraform_main(
+        self,
+        package_name: str
+    ):
+
+        return dedent(
+            f"""
+            terraform {{
+
+              required_version =
+                ">= 1.0"
+            }}
+
+            resource "null_resource" "{package_name}" {{}}
+            """
+        )
+
+    def generate_terraform_variables(
+        self
+    ):
+
+        return dedent(
+            """
+            variable "environment" {
+
+              type =
+                string
+
+              default =
+                "development"
+            }
+            """
+        )
+
+    def generate_terraform_outputs(
+        self
+    ):
+
+        return dedent(
+            """
+            output "environment" {
+
+              value =
+                var.environment
+            }
+            """
+        )

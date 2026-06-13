@@ -772,6 +772,26 @@ class PipelineSchemaGenerator:
             (
                 self.container_generator
                 .generate_helm_values()
+            ),
+
+            "terraform_main":
+            (
+                self.container_generator
+                .generate_terraform_main(
+                    spec.python_package_name()
+                )
+            ),
+
+            "terraform_variables":
+            (
+                self.container_generator
+                .generate_terraform_variables()
+            ),
+
+            "terraform_outputs":
+            (
+                self.container_generator
+                .generate_terraform_outputs()
             )
         }
 

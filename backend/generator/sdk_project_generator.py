@@ -109,6 +109,23 @@ class SDKProject:
 
         return expected in self.files
 
+    def infrastructure_file_count(
+        self
+    ):
+
+        return len(
+            [
+                filename
+
+                for filename
+                in self.files
+
+                if filename.endswith(
+                    ".tf"
+                )
+            ]
+        )
+
 
 class SDKProjectGenerator:
 
