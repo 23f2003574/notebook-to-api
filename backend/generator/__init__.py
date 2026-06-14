@@ -108,3 +108,7 @@ from .deployment_readiness import (
     DeploymentReadiness,
     DeploymentReadinessAnalyzer
 )
+from .deployment_risk import (
+    DeploymentRisk,
+    DeploymentRiskAnalyzer
+)

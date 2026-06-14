@@ -310,3 +310,20 @@ class SDKReleaseGenerator:
             "reasons":
                 readiness.reasons
         }
+
+    def risk_manifest(
+        self,
+        risk
+    ):
+
+        return {
+
+            "level":
+                risk.level,
+
+            "score":
+                risk.score,
+
+            "factors":
+                risk.factors
+        }

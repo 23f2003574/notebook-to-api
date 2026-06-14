@@ -232,6 +232,15 @@ class SDKProject:
             readiness.ready
         )
 
+    def deployment_risk_level(
+        self,
+        risk
+    ):
+
+        return (
+            risk.level
+        )
+
 
 class SDKProjectGenerator:
 
