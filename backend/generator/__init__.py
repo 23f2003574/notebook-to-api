@@ -133,3 +133,7 @@ from .deployment_timeline import (
     DeploymentTimeline,
     DeploymentTimelineGenerator
 )
+from .deployment_audit import (
+    DeploymentAudit,
+    DeploymentAuditGenerator
+)

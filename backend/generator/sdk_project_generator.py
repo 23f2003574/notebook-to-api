@@ -297,6 +297,15 @@ class SDKProject:
             .event_type
         )
 
+    def compliance_status(
+        self,
+        audit
+    ):
+
+        return (
+            audit.compliant
+        )
+
 
 class SDKProjectGenerator:
 

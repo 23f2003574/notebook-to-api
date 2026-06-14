@@ -430,3 +430,23 @@ class SDKReleaseGenerator:
                 in timeline.events
             ]
         }
+
+    def audit_manifest(
+        self,
+        audit
+    ):
+
+        return {
+
+            "compliant":
+                audit.compliant,
+
+            "validation_passed":
+                audit.validation_passed,
+
+            "deployment_ready":
+                audit.deployment_ready,
+
+            "findings":
+                audit.findings
+        }

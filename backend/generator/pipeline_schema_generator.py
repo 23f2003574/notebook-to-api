@@ -106,6 +106,9 @@ from .deployment_dashboard import (
 from .deployment_timeline import (
     DeploymentTimelineGenerator
 )
+from .deployment_audit import (
+    DeploymentAuditGenerator
+)
 
 
 
@@ -250,6 +253,10 @@ class PipelineSchemaGenerator:
 
         self.timeline_generator = (
             DeploymentTimelineGenerator()
+        )
+
+        self.audit_generator = (
+            DeploymentAuditGenerator()
         )
 
 
@@ -1266,6 +1273,33 @@ class PipelineSchemaGenerator:
                 readiness,
                 risk,
                 incident
+            )
+        )
+
+    def generate_deployment_audit(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        readiness = (
+            self.generate_deployment_readiness(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        validation_results = (
+            self.validate_deployment_artifacts(
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.audit_generator
+            .generate(
+                readiness,
+                validation_results
             )
         )
 
