@@ -269,6 +269,20 @@ class SDKProject:
             .reliability_score
         )
 
+    def dashboard_summary(
+        self,
+        dashboard
+    ):
+
+        return {
+
+            "health":
+                dashboard.health_score,
+
+            "risk":
+                dashboard.risk_level
+        }
+
 
 class SDKProjectGenerator:
 

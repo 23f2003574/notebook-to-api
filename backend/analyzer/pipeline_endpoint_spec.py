@@ -261,6 +261,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def deployment_dashboard_enabled(
+        self
+    ):
+
+        return True
+
     def package_directory(
         self
     ):

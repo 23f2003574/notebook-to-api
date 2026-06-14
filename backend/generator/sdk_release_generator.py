@@ -384,3 +384,29 @@ class SDKReleaseGenerator:
             "slo_compliant":
                 metrics.slo_compliant
         }
+
+    def dashboard_manifest(
+        self,
+        dashboard
+    ):
+
+        return {
+
+            "health":
+                dashboard.health_score,
+
+            "readiness":
+                dashboard.readiness_score,
+
+            "reliability":
+                dashboard.reliability_score,
+
+            "risk":
+                dashboard.risk_level,
+
+            "alerts":
+                dashboard.active_alerts,
+
+            "incidents":
+                dashboard.active_incidents
+        }

@@ -124,3 +124,7 @@ from .deployment_metrics import (
     DeploymentMetrics,
     DeploymentMetricsAnalyzer
 )
+from .deployment_dashboard import (
+    DeploymentDashboard,
+    DeploymentDashboardGenerator
+)

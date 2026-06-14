@@ -100,6 +100,9 @@ from .deployment_alert import (
 from .deployment_metrics import (
     DeploymentMetricsAnalyzer
 )
+from .deployment_dashboard import (
+    DeploymentDashboardGenerator
+)
 
 
 
@@ -236,6 +239,10 @@ class PipelineSchemaGenerator:
 
         self.metrics_analyzer = (
             DeploymentMetricsAnalyzer()
+        )
+
+        self.dashboard_generator = (
+            DeploymentDashboardGenerator()
         )
 
 
@@ -1150,6 +1157,65 @@ class PipelineSchemaGenerator:
             .analyze(
                 health,
                 readiness
+            )
+        )
+
+    def generate_deployment_dashboard(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        health = (
+            self.generate_deployment_health(
+                project
+            )
+        )
+
+        readiness = (
+            self.generate_deployment_readiness(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        risk = (
+            self.generate_deployment_risk(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        incident = (
+            self.generate_deployment_incident(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        alert = (
+            self.generate_deployment_alert(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        metrics = (
+            self.generate_deployment_metrics(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.dashboard_generator
+            .generate(
+                health,
+                readiness,
+                risk,
+                alert,
+                incident,
+                metrics
             )
         )
 
