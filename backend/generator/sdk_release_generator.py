@@ -273,3 +273,23 @@ class SDKReleaseGenerator:
                 plan
                 .rationale
         }
+
+    def health_manifest(
+        self,
+        health
+    ):
+
+        return {
+
+            "target":
+                health.target,
+
+            "healthy":
+                health.healthy,
+
+            "score":
+                health.score,
+
+            "message":
+                health.message
+        }

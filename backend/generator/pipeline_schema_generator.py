@@ -82,6 +82,9 @@ from .deployment_cost_analyzer import (
 from .deployment_planner import (
     DeploymentPlanner
 )
+from .deployment_health import (
+    DeploymentHealthAnalyzer
+)
 
 
 
@@ -194,6 +197,10 @@ class PipelineSchemaGenerator:
 
         self.deployment_planner = (
             DeploymentPlanner()
+        )
+
+        self.health_analyzer = (
+            DeploymentHealthAnalyzer()
         )
 
 
@@ -962,6 +969,24 @@ class PipelineSchemaGenerator:
                 recommendation,
                 costs,
                 validation
+            )
+        )
+
+    def generate_deployment_health(
+        self,
+        project
+    ):
+
+        recommendation = (
+            self.generate_deployment_recommendation(
+                project
+            )
+        )
+
+        return (
+            self.health_analyzer
+            .analyze(
+                recommendation
             )
         )
 

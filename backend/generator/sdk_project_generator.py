@@ -214,6 +214,15 @@ class SDKProject:
             .recommended_target
         )
 
+    def deployment_health_score(
+        self,
+        health
+    ):
+
+        return (
+            health.score
+        )
+
 
 class SDKProjectGenerator:
 
