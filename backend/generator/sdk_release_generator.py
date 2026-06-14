@@ -410,3 +410,23 @@ class SDKReleaseGenerator:
             "incidents":
                 dashboard.active_incidents
         }
+
+    def timeline_manifest(
+        self,
+        timeline
+    ):
+
+        return {
+
+            "event_count":
+                len(
+                    timeline.events
+                ),
+
+            "events": [
+                event.event_type
+
+                for event
+                in timeline.events
+            ]
+        }

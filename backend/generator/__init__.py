@@ -128,3 +128,8 @@ from .deployment_dashboard import (
     DeploymentDashboard,
     DeploymentDashboardGenerator
 )
+from .deployment_timeline import (
+    DeploymentEvent,
+    DeploymentTimeline,
+    DeploymentTimelineGenerator
+)

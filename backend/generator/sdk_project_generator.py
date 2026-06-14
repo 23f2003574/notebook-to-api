@@ -283,6 +283,20 @@ class SDKProject:
                 dashboard.risk_level
         }
 
+    def latest_event(
+        self,
+        timeline
+    ):
+
+        if not timeline.events:
+
+            return None
+
+        return (
+            timeline.events[-1]
+            .event_type
+        )
+
 
 class SDKProjectGenerator:
 

@@ -103,6 +103,9 @@ from .deployment_metrics import (
 from .deployment_dashboard import (
     DeploymentDashboardGenerator
 )
+from .deployment_timeline import (
+    DeploymentTimelineGenerator
+)
 
 
 
@@ -243,6 +246,10 @@ class PipelineSchemaGenerator:
 
         self.dashboard_generator = (
             DeploymentDashboardGenerator()
+        )
+
+        self.timeline_generator = (
+            DeploymentTimelineGenerator()
         )
 
 
@@ -1216,6 +1223,49 @@ class PipelineSchemaGenerator:
                 alert,
                 incident,
                 metrics
+            )
+        )
+
+    def generate_deployment_timeline(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        health = (
+            self.generate_deployment_health(
+                project
+            )
+        )
+
+        readiness = (
+            self.generate_deployment_readiness(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        risk = (
+            self.generate_deployment_risk(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        incident = (
+            self.generate_deployment_incident(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.timeline_generator
+            .generate(
+                health,
+                readiness,
+                risk,
+                incident
             )
         )
 

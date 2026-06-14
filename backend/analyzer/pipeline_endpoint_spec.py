@@ -267,6 +267,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def deployment_timeline_enabled(
+        self
+    ):
+
+        return True
+
     def package_directory(
         self
     ):
