@@ -112,6 +112,9 @@ from .deployment_audit import (
 from .deployment_approval import (
     DeploymentApprovalEngine
 )
+from .deployment_execution import (
+    DeploymentExecutionEngine
+)
 
 
 
@@ -264,6 +267,10 @@ class PipelineSchemaGenerator:
 
         self.approval_engine = (
             DeploymentApprovalEngine()
+        )
+
+        self.execution_engine = (
+            DeploymentExecutionEngine()
         )
 
 
@@ -1335,6 +1342,34 @@ class PipelineSchemaGenerator:
             .evaluate(
                 audit,
                 risk
+            )
+        )
+
+    def generate_deployment_execution_plan(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        approval = (
+            self.generate_deployment_approval(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        deployment_plan = (
+            self.generate_deployment_plan(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.execution_engine
+            .generate(
+                approval,
+                deployment_plan
             )
         )
 

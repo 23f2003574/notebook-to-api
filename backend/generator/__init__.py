@@ -141,3 +141,8 @@ from .deployment_approval import (
     DeploymentApproval,
     DeploymentApprovalEngine
 )
+from .deployment_execution import (
+    DeploymentStep,
+    DeploymentExecutionPlan,
+    DeploymentExecutionEngine
+)

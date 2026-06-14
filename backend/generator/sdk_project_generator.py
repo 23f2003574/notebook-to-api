@@ -315,6 +315,18 @@ class SDKProject:
             approval.approved
         )
 
+    def deployment_steps(
+        self,
+        execution_plan
+    ):
+
+        return [
+            step.name
+
+            for step
+            in execution_plan.steps
+        ]
+
 
 class SDKProjectGenerator:
 

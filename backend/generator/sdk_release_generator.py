@@ -470,3 +470,27 @@ class SDKReleaseGenerator:
             "rationale":
                 approval.rationale
         }
+
+    def execution_manifest(
+        self,
+        execution_plan
+    ):
+
+        return {
+
+            "target":
+                execution_plan.target,
+
+            "steps": [
+
+                step.name
+
+                for step
+                in execution_plan.steps
+            ],
+
+            "step_count":
+                len(
+                    execution_plan.steps
+                )
+        }
