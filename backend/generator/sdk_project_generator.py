@@ -250,6 +250,15 @@ class SDKProject:
             incident.severity
         )
 
+    def requires_attention(
+        self,
+        alert
+    ):
+
+        return (
+            alert.notify
+        )
+
 
 class SDKProjectGenerator:
 

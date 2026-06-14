@@ -249,6 +249,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def deployment_alerting_enabled(
+        self
+    ):
+
+        return True
+
     def package_directory(
         self
     ):

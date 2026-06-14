@@ -116,3 +116,7 @@ from .deployment_incident import (
     DeploymentIncident,
     DeploymentIncidentAnalyzer
 )
+from .deployment_alert import (
+    DeploymentAlert,
+    DeploymentAlertGenerator
+)

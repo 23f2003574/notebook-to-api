@@ -94,6 +94,9 @@ from .deployment_risk import (
 from .deployment_incident import (
     DeploymentIncidentAnalyzer
 )
+from .deployment_alert import (
+    DeploymentAlertGenerator
+)
 
 
 
@@ -222,6 +225,10 @@ class PipelineSchemaGenerator:
 
         self.incident_analyzer = (
             DeploymentIncidentAnalyzer()
+        )
+
+        self.alert_generator = (
+            DeploymentAlertGenerator()
         )
 
 
@@ -1089,6 +1096,26 @@ class PipelineSchemaGenerator:
             self.incident_analyzer
             .analyze(
                 risk
+            )
+        )
+
+    def generate_deployment_alert(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        incident = (
+            self.generate_deployment_incident(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.alert_generator
+            .generate(
+                incident
             )
         )
 

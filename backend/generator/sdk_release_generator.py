@@ -344,3 +344,23 @@ class SDKReleaseGenerator:
             "actions":
                 incident.actions
         }
+
+    def alert_manifest(
+        self,
+        alert
+    ):
+
+        return {
+
+            "level":
+                alert.level,
+
+            "notify":
+                alert.notify,
+
+            "recipients":
+                alert.recipients,
+
+            "message":
+                alert.message
+        }
