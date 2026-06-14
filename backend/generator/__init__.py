@@ -112,3 +112,7 @@ from .deployment_risk import (
     DeploymentRisk,
     DeploymentRiskAnalyzer
 )
+from .deployment_incident import (
+    DeploymentIncident,
+    DeploymentIncidentAnalyzer
+)

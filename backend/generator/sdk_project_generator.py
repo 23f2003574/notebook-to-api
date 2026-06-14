@@ -241,6 +241,15 @@ class SDKProject:
             risk.level
         )
 
+    def deployment_incident_state(
+        self,
+        incident
+    ):
+
+        return (
+            incident.severity
+        )
+
 
 class SDKProjectGenerator:
 

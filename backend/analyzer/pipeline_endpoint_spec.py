@@ -243,6 +243,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def deployment_incident_enabled(
+        self
+    ):
+
+        return True
+
     def package_directory(
         self
     ):

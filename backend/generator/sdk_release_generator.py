@@ -327,3 +327,20 @@ class SDKReleaseGenerator:
             "factors":
                 risk.factors
         }
+
+    def incident_manifest(
+        self,
+        incident
+    ):
+
+        return {
+
+            "severity":
+                incident.severity,
+
+            "summary":
+                incident.summary,
+
+            "actions":
+                incident.actions
+        }

@@ -91,6 +91,9 @@ from .deployment_readiness import (
 from .deployment_risk import (
     DeploymentRiskAnalyzer
 )
+from .deployment_incident import (
+    DeploymentIncidentAnalyzer
+)
 
 
 
@@ -215,6 +218,10 @@ class PipelineSchemaGenerator:
 
         self.risk_analyzer = (
             DeploymentRiskAnalyzer()
+        )
+
+        self.incident_analyzer = (
+            DeploymentIncidentAnalyzer()
         )
 
 
@@ -1062,6 +1069,26 @@ class PipelineSchemaGenerator:
             .analyze(
                 readiness,
                 health
+            )
+        )
+
+    def generate_deployment_incident(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        risk = (
+            self.generate_deployment_risk(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.incident_analyzer
+            .analyze(
+                risk
             )
         )
 
