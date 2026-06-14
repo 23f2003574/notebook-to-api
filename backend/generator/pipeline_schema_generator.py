@@ -115,6 +115,9 @@ from .deployment_approval import (
 from .deployment_execution import (
     DeploymentExecutionEngine
 )
+from .deployment_automation import (
+    DeploymentAutomationEngine
+)
 
 
 
@@ -271,6 +274,10 @@ class PipelineSchemaGenerator:
 
         self.execution_engine = (
             DeploymentExecutionEngine()
+        )
+
+        self.automation_engine = (
+            DeploymentAutomationEngine()
         )
 
 
@@ -1370,6 +1377,26 @@ class PipelineSchemaGenerator:
             .generate(
                 approval,
                 deployment_plan
+            )
+        )
+
+    def generate_deployment_automation(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        execution_plan = (
+            self.generate_deployment_execution_plan(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.automation_engine
+            .generate(
+                execution_plan
             )
         )
 

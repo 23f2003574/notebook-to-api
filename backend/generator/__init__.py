@@ -146,3 +146,7 @@ from .deployment_execution import (
     DeploymentExecutionPlan,
     DeploymentExecutionEngine
 )
+from .deployment_automation import (
+    DeploymentAutomation,
+    DeploymentAutomationEngine
+)

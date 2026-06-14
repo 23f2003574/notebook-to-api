@@ -315,6 +315,15 @@ class SDKProject:
             approval.approved
         )
 
+    def automation_enabled(
+        self,
+        automation
+    ):
+
+        return (
+            automation.enabled
+        )
+
     def deployment_steps(
         self,
         execution_plan

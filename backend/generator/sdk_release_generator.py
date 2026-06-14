@@ -471,6 +471,23 @@ class SDKReleaseGenerator:
                 approval.rationale
         }
 
+    def automation_manifest(
+        self,
+        automation
+    ):
+
+        return {
+
+            "enabled":
+                automation.enabled,
+
+            "workflow":
+                automation.workflow_name,
+
+            "stages":
+                automation.stages
+        }
+
     def execution_manifest(
         self,
         execution_plan
