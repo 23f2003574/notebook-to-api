@@ -450,3 +450,23 @@ class SDKReleaseGenerator:
             "findings":
                 audit.findings
         }
+
+    def approval_manifest(
+        self,
+        approval
+    ):
+
+        return {
+
+            "approved":
+                approval.approved,
+
+            "decision":
+                approval.decision,
+
+            "approvers":
+                approval.approvers,
+
+            "rationale":
+                approval.rationale
+        }

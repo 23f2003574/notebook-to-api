@@ -306,6 +306,15 @@ class SDKProject:
             audit.compliant
         )
 
+    def deployment_approved(
+        self,
+        approval
+    ):
+
+        return (
+            approval.approved
+        )
+
 
 class SDKProjectGenerator:
 

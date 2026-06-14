@@ -109,6 +109,9 @@ from .deployment_timeline import (
 from .deployment_audit import (
     DeploymentAuditGenerator
 )
+from .deployment_approval import (
+    DeploymentApprovalEngine
+)
 
 
 
@@ -257,6 +260,10 @@ class PipelineSchemaGenerator:
 
         self.audit_generator = (
             DeploymentAuditGenerator()
+        )
+
+        self.approval_engine = (
+            DeploymentApprovalEngine()
         )
 
 
@@ -1300,6 +1307,34 @@ class PipelineSchemaGenerator:
             .generate(
                 readiness,
                 validation_results
+            )
+        )
+
+    def generate_deployment_approval(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        audit = (
+            self.generate_deployment_audit(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        risk = (
+            self.generate_deployment_risk(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.approval_engine
+            .evaluate(
+                audit,
+                risk
             )
         )
 

@@ -137,3 +137,7 @@ from .deployment_audit import (
     DeploymentAudit,
     DeploymentAuditGenerator
 )
+from .deployment_approval import (
+    DeploymentApproval,
+    DeploymentApprovalEngine
+)
