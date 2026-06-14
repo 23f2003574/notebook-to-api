@@ -293,3 +293,20 @@ class SDKReleaseGenerator:
             "message":
                 health.message
         }
+
+    def readiness_manifest(
+        self,
+        readiness
+    ):
+
+        return {
+
+            "ready":
+                readiness.ready,
+
+            "score":
+                readiness.score,
+
+            "reasons":
+                readiness.reasons
+        }

@@ -223,6 +223,15 @@ class SDKProject:
             health.score
         )
 
+    def deployment_ready(
+        self,
+        readiness
+    ):
+
+        return (
+            readiness.ready
+        )
+
 
 class SDKProjectGenerator:
 

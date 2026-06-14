@@ -85,6 +85,9 @@ from .deployment_planner import (
 from .deployment_health import (
     DeploymentHealthAnalyzer
 )
+from .deployment_readiness import (
+    DeploymentReadinessAnalyzer
+)
 
 
 
@@ -201,6 +204,10 @@ class PipelineSchemaGenerator:
 
         self.health_analyzer = (
             DeploymentHealthAnalyzer()
+        )
+
+        self.readiness_analyzer = (
+            DeploymentReadinessAnalyzer()
         )
 
 
@@ -987,6 +994,40 @@ class PipelineSchemaGenerator:
             self.health_analyzer
             .analyze(
                 recommendation
+            )
+        )
+
+    def generate_deployment_readiness(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        compatibility = (
+            self.generate_compatibility_matrix(
+                project
+            )
+        )
+
+        validation = (
+            self.validate_deployment_artifacts(
+                deployment_artifacts
+            )
+        )
+
+        plan = (
+            self.generate_deployment_plan(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.readiness_analyzer
+            .analyze(
+                compatibility,
+                validation,
+                plan
             )
         )
 
