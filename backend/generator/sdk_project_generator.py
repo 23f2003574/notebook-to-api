@@ -259,6 +259,16 @@ class SDKProject:
             alert.notify
         )
 
+    def reliability_score(
+        self,
+        metrics
+    ):
+
+        return (
+            metrics
+            .reliability_score
+        )
+
 
 class SDKProjectGenerator:
 

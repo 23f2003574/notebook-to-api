@@ -120,3 +120,7 @@ from .deployment_alert import (
     DeploymentAlert,
     DeploymentAlertGenerator
 )
+from .deployment_metrics import (
+    DeploymentMetrics,
+    DeploymentMetricsAnalyzer
+)

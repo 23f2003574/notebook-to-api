@@ -97,6 +97,9 @@ from .deployment_incident import (
 from .deployment_alert import (
     DeploymentAlertGenerator
 )
+from .deployment_metrics import (
+    DeploymentMetricsAnalyzer
+)
 
 
 
@@ -229,6 +232,10 @@ class PipelineSchemaGenerator:
 
         self.alert_generator = (
             DeploymentAlertGenerator()
+        )
+
+        self.metrics_analyzer = (
+            DeploymentMetricsAnalyzer()
         )
 
 
@@ -1116,6 +1123,33 @@ class PipelineSchemaGenerator:
             self.alert_generator
             .generate(
                 incident
+            )
+        )
+
+    def generate_deployment_metrics(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        health = (
+            self.generate_deployment_health(
+                project
+            )
+        )
+
+        readiness = (
+            self.generate_deployment_readiness(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.metrics_analyzer
+            .analyze(
+                health,
+                readiness
             )
         )
 

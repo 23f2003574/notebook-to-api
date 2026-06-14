@@ -364,3 +364,23 @@ class SDKReleaseGenerator:
             "message":
                 alert.message
         }
+
+    def metrics_manifest(
+        self,
+        metrics
+    ):
+
+        return {
+
+            "success_rate":
+                metrics.success_rate,
+
+            "availability":
+                metrics.availability,
+
+            "reliability_score":
+                metrics.reliability_score,
+
+            "slo_compliant":
+                metrics.slo_compliant
+        }
