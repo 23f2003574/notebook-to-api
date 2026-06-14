@@ -315,6 +315,24 @@ class SDKProject:
             approval.approved
         )
 
+    def operations_ready(
+        self,
+        control_center
+    ):
+
+        return (
+
+            control_center
+            .approval
+            .approved
+
+            and
+
+            control_center
+            .automation
+            .enabled
+        )
+
     def automation_enabled(
         self,
         automation

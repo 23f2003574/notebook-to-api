@@ -150,3 +150,7 @@ from .deployment_automation import (
     DeploymentAutomation,
     DeploymentAutomationEngine
 )
+from .deployment_control_center import (
+    DeploymentControlCenter,
+    DeploymentControlCenterGenerator
+)

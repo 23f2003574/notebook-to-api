@@ -471,6 +471,34 @@ class SDKReleaseGenerator:
                 approval.rationale
         }
 
+    def control_center_manifest(
+        self,
+        control_center
+    ):
+
+        return {
+
+            "health":
+                control_center
+                .health.score,
+
+            "readiness":
+                control_center
+                .readiness.score,
+
+            "risk":
+                control_center
+                .risk.level,
+
+            "approved":
+                control_center
+                .approval.approved,
+
+            "automation":
+                control_center
+                .automation.enabled
+        }
+
     def automation_manifest(
         self,
         automation

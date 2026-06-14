@@ -118,6 +118,9 @@ from .deployment_execution import (
 from .deployment_automation import (
     DeploymentAutomationEngine
 )
+from .deployment_control_center import (
+    DeploymentControlCenterGenerator
+)
 
 
 
@@ -278,6 +281,10 @@ class PipelineSchemaGenerator:
 
         self.automation_engine = (
             DeploymentAutomationEngine()
+        )
+
+        self.control_center_generator = (
+            DeploymentControlCenterGenerator()
         )
 
 
@@ -1397,6 +1404,113 @@ class PipelineSchemaGenerator:
             self.automation_engine
             .generate(
                 execution_plan
+            )
+        )
+
+    def generate_deployment_control_center(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        health = (
+            self.generate_deployment_health(
+                project
+            )
+        )
+
+        readiness = (
+            self.generate_deployment_readiness(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        risk = (
+            self.generate_deployment_risk(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        incident = (
+            self.generate_deployment_incident(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        alert = (
+            self.generate_deployment_alert(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        metrics = (
+            self.generate_deployment_metrics(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        dashboard = (
+            self.generate_deployment_dashboard(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        timeline = (
+            self.generate_deployment_timeline(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        audit = (
+            self.generate_deployment_audit(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        approval = (
+            self.generate_deployment_approval(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        execution = (
+            self.generate_deployment_execution_plan(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        automation = (
+            self.generate_deployment_automation(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.control_center_generator
+            .generate(
+                health,
+                readiness,
+                risk,
+                incident,
+                alert,
+                metrics,
+                dashboard,
+                timeline,
+                audit,
+                approval,
+                execution,
+                automation
             )
         )
 
