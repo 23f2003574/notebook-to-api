@@ -741,3 +741,23 @@ class SDKReleaseGenerator:
             "summary":
                 scorecard.summary
         }
+
+    def governance_manifest(
+        self,
+        governance
+    ):
+
+        return {
+
+            "compliant":
+                governance.compliant,
+
+            "policy_status":
+                governance.policy_status,
+
+            "decision":
+                governance.decision,
+
+            "required_actions":
+                governance.required_actions
+        }

@@ -193,3 +193,7 @@ from .reliability_scorecard import (
     ReliabilityScorecard,
     ReliabilityScorecardGenerator
 )
+from .reliability_governance import (
+    ReliabilityGovernance,
+    ReliabilityGovernanceEngine
+)

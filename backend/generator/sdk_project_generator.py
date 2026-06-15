@@ -452,6 +452,15 @@ class SDKProject:
             scorecard.grade
         )
 
+    def governance_decision(
+        self,
+        governance
+    ):
+
+        return (
+            governance.decision
+        )
+
 
 class SDKProjectGenerator:
 
