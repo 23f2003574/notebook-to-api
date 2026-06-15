@@ -121,6 +121,9 @@ from .deployment_automation import (
 from .deployment_control_center import (
     DeploymentControlCenterGenerator
 )
+from .deployment_runbook import (
+    DeploymentRunbookGenerator
+)
 
 
 
@@ -285,6 +288,10 @@ class PipelineSchemaGenerator:
 
         self.control_center_generator = (
             DeploymentControlCenterGenerator()
+        )
+
+        self.runbook_generator = (
+            DeploymentRunbookGenerator()
         )
 
 
@@ -1511,6 +1518,26 @@ class PipelineSchemaGenerator:
                 approval,
                 execution,
                 automation
+            )
+        )
+
+    def generate_deployment_runbook(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        execution_plan = (
+            self.generate_deployment_execution_plan(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.runbook_generator
+            .generate(
+                execution_plan
             )
         )
 

@@ -354,6 +354,19 @@ class SDKProject:
             in execution_plan.steps
         ]
 
+    def runbook_steps(
+        self,
+        runbook
+    ):
+
+        return [
+
+            step.title
+
+            for step
+            in runbook.steps
+        ]
+
 
 class SDKProjectGenerator:
 

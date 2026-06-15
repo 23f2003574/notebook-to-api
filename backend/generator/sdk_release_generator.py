@@ -539,3 +539,27 @@ class SDKReleaseGenerator:
                     execution_plan.steps
                 )
         }
+
+    def runbook_manifest(
+        self,
+        runbook
+    ):
+
+        return {
+
+            "target":
+                runbook.target,
+
+            "step_count":
+                len(
+                    runbook.steps
+                ),
+
+            "steps": [
+
+                step.title
+
+                for step
+                in runbook.steps
+            ]
+        }
