@@ -443,6 +443,15 @@ class SDKProject:
             forecast.projected_risk
         )
 
+    def reliability_grade(
+        self,
+        scorecard
+    ):
+
+        return (
+            scorecard.grade
+        )
+
 
 class SDKProjectGenerator:
 

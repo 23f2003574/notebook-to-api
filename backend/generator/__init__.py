@@ -189,3 +189,7 @@ from .reliability_forecast import (
     ReliabilityForecast,
     ReliabilityForecastEngine
 )
+from .reliability_scorecard import (
+    ReliabilityScorecard,
+    ReliabilityScorecardGenerator
+)

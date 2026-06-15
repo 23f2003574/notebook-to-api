@@ -351,6 +351,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def reliability_scorecard_enabled(
+        self
+    ):
+
+        return True
+
     def package_directory(
         self
     ):

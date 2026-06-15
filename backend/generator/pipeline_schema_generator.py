@@ -145,6 +145,9 @@ from .reliability_trend import (
 from .reliability_forecast import (
     ReliabilityForecastEngine
 )
+from .reliability_scorecard import (
+    ReliabilityScorecardGenerator
+)
 
 
 
@@ -341,6 +344,10 @@ class PipelineSchemaGenerator:
 
         self.forecast_engine = (
             ReliabilityForecastEngine()
+        )
+
+        self.scorecard_generator = (
+            ReliabilityScorecardGenerator()
         )
 
 
@@ -1751,6 +1758,42 @@ class PipelineSchemaGenerator:
             self.forecast_engine
             .forecast(
                 trend
+            )
+        )
+
+    def generate_reliability_scorecard(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        metrics = (
+            self.generate_deployment_metrics(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        trend = (
+            self.generate_reliability_trends(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        forecast = (
+            self.generate_reliability_forecast(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.scorecard_generator
+            .generate(
+                metrics,
+                trend,
+                forecast
             )
         )
 

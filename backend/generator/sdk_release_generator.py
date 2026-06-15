@@ -718,3 +718,26 @@ class SDKReleaseGenerator:
             "recommendation":
                 forecast.recommendation
         }
+
+    def scorecard_manifest(
+        self,
+        scorecard
+    ):
+
+        return {
+
+            "score":
+                scorecard.score,
+
+            "grade":
+                scorecard.grade,
+
+            "trend":
+                scorecard.trend,
+
+            "forecast_risk":
+                scorecard.forecast_risk,
+
+            "summary":
+                scorecard.summary
+        }
