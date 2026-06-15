@@ -563,3 +563,27 @@ class SDKReleaseGenerator:
                 in runbook.steps
             ]
         }
+
+    def rollback_manifest(
+        self,
+        rollback
+    ):
+
+        return {
+
+            "target":
+                rollback.target,
+
+            "step_count":
+                len(
+                    rollback.steps
+                ),
+
+            "actions": [
+
+                step.action
+
+                for step
+                in rollback.steps
+            ]
+        }

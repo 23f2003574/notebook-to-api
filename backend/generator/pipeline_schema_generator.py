@@ -124,6 +124,9 @@ from .deployment_control_center import (
 from .deployment_runbook import (
     DeploymentRunbookGenerator
 )
+from .deployment_rollback import (
+    DeploymentRollbackGenerator
+)
 
 
 
@@ -292,6 +295,10 @@ class PipelineSchemaGenerator:
 
         self.runbook_generator = (
             DeploymentRunbookGenerator()
+        )
+
+        self.rollback_generator = (
+            DeploymentRollbackGenerator()
         )
 
 
@@ -1536,6 +1543,26 @@ class PipelineSchemaGenerator:
 
         return (
             self.runbook_generator
+            .generate(
+                execution_plan
+            )
+        )
+
+    def generate_deployment_rollback(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        execution_plan = (
+            self.generate_deployment_execution_plan(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.rollback_generator
             .generate(
                 execution_plan
             )

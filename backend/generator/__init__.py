@@ -159,3 +159,8 @@ from .deployment_runbook import (
     DeploymentRunbook,
     DeploymentRunbookGenerator
 )
+from .deployment_rollback import (
+    RollbackStep,
+    DeploymentRollback,
+    DeploymentRollbackGenerator
+)

@@ -367,6 +367,17 @@ class SDKProject:
             in runbook.steps
         ]
 
+    def rollback_supported(
+        self,
+        rollback
+    ):
+
+        return (
+            len(
+                rollback.steps
+            ) > 0
+        )
+
 
 class SDKProjectGenerator:
 
