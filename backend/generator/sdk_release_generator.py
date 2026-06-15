@@ -698,3 +698,23 @@ class SDKReleaseGenerator:
             "summary":
                 trend.summary
         }
+
+    def forecast_manifest(
+        self,
+        forecast
+    ):
+
+        return {
+
+            "direction":
+                forecast.projected_direction,
+
+            "risk":
+                forecast.projected_risk,
+
+            "confidence":
+                forecast.confidence,
+
+            "recommendation":
+                forecast.recommendation
+        }

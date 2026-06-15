@@ -185,3 +185,7 @@ from .reliability_trend import (
     ReliabilityTrend,
     ReliabilityTrendAnalyzer
 )
+from .reliability_forecast import (
+    ReliabilityForecast,
+    ReliabilityForecastEngine
+)

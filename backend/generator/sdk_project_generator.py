@@ -434,6 +434,15 @@ class SDKProject:
             trend.direction
         )
 
+    def projected_reliability_risk(
+        self,
+        forecast
+    ):
+
+        return (
+            forecast.projected_risk
+        )
+
 
 class SDKProjectGenerator:
 
