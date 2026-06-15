@@ -151,6 +151,9 @@ from .reliability_scorecard import (
 from .reliability_governance import (
     ReliabilityGovernanceEngine
 )
+from .reliability_maturity import (
+    ReliabilityMaturityEngine
+)
 
 
 
@@ -355,6 +358,10 @@ class PipelineSchemaGenerator:
 
         self.governance_engine = (
             ReliabilityGovernanceEngine()
+        )
+
+        self.maturity_engine = (
+            ReliabilityMaturityEngine()
         )
 
 
@@ -1821,6 +1828,34 @@ class PipelineSchemaGenerator:
             self.governance_engine
             .evaluate(
                 scorecard
+            )
+        )
+
+    def generate_reliability_maturity(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        scorecard = (
+            self.generate_reliability_scorecard(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        governance = (
+            self.generate_reliability_governance(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.maturity_engine
+            .assess(
+                scorecard,
+                governance
             )
         )
 

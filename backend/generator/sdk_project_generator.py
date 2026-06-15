@@ -461,6 +461,15 @@ class SDKProject:
             governance.decision
         )
 
+    def maturity_level(
+        self,
+        maturity
+    ):
+
+        return (
+            maturity.level
+        )
+
 
 class SDKProjectGenerator:
 

@@ -363,6 +363,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def reliability_maturity_enabled(
+        self
+    ):
+
+        return True
+
     def package_directory(
         self
     ):

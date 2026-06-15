@@ -761,3 +761,23 @@ class SDKReleaseGenerator:
             "required_actions":
                 governance.required_actions
         }
+
+    def maturity_manifest(
+        self,
+        maturity
+    ):
+
+        return {
+
+            "level":
+                maturity.level,
+
+            "score":
+                maturity.score,
+
+            "strengths":
+                maturity.strengths,
+
+            "next_steps":
+                maturity.next_steps
+        }
