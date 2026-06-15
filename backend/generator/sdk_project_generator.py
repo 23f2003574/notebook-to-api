@@ -388,6 +388,16 @@ class SDKProject:
             != "normal"
         )
 
+    def prevention_actions(
+        self,
+        analysis
+    ):
+
+        return (
+            analysis
+            .prevention_actions
+        )
+
 
 class SDKProjectGenerator:
 

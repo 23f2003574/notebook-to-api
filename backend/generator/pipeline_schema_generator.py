@@ -130,6 +130,9 @@ from .deployment_rollback import (
 from .deployment_recovery import (
     DeploymentRecoveryGenerator
 )
+from .post_incident_analysis import (
+    PostIncidentAnalyzer
+)
 
 
 
@@ -306,6 +309,10 @@ class PipelineSchemaGenerator:
 
         self.recovery_generator = (
             DeploymentRecoveryGenerator()
+        )
+
+        self.post_incident_analyzer = (
+            PostIncidentAnalyzer()
         )
 
 
@@ -1592,6 +1599,34 @@ class PipelineSchemaGenerator:
             self.recovery_generator
             .generate(
                 incident
+            )
+        )
+
+    def generate_post_incident_analysis(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        incident = (
+            self.generate_deployment_incident(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        recovery = (
+            self.generate_deployment_recovery(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.post_incident_analyzer
+            .analyze(
+                incident,
+                recovery
             )
         )
 

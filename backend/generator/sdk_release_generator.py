@@ -611,3 +611,27 @@ class SDKReleaseGenerator:
                 in recovery.actions
             ]
         }
+
+    def post_incident_manifest(
+        self,
+        analysis
+    ):
+
+        return {
+
+            "summary":
+                analysis
+                .incident_summary,
+
+            "root_cause":
+                analysis
+                .root_cause,
+
+            "lessons":
+                analysis
+                .lessons_learned,
+
+            "prevention":
+                analysis
+                .prevention_actions
+        }

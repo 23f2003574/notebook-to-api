@@ -321,6 +321,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def post_incident_analysis_enabled(
+        self
+    ):
+
+        return True
+
     def package_directory(
         self
     ):
