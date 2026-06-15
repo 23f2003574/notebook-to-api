@@ -635,3 +635,25 @@ class SDKReleaseGenerator:
                 analysis
                 .prevention_actions
         }
+
+    def reliability_manifest(
+        self,
+        recommendations
+    ):
+
+        return {
+
+            "count":
+                len(
+                    recommendations
+                ),
+
+            "recommendations": [
+
+                recommendation
+                .recommendation
+
+                for recommendation
+                in recommendations
+            ]
+        }

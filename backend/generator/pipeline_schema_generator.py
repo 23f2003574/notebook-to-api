@@ -133,6 +133,9 @@ from .deployment_recovery import (
 from .post_incident_analysis import (
     PostIncidentAnalyzer
 )
+from .reliability_recommendation import (
+    ReliabilityRecommendationEngine
+)
 
 
 
@@ -313,6 +316,10 @@ class PipelineSchemaGenerator:
 
         self.post_incident_analyzer = (
             PostIncidentAnalyzer()
+        )
+
+        self.recommendation_engine = (
+            ReliabilityRecommendationEngine()
         )
 
 
@@ -1627,6 +1634,26 @@ class PipelineSchemaGenerator:
             .analyze(
                 incident,
                 recovery
+            )
+        )
+
+    def generate_reliability_recommendations(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        analysis = (
+            self.generate_post_incident_analysis(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.recommendation_engine
+            .generate(
+                analysis
             )
         )
 

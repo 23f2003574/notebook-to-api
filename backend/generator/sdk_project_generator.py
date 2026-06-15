@@ -398,6 +398,20 @@ class SDKProject:
             .prevention_actions
         )
 
+    def reliability_improvements(
+        self,
+        recommendations
+    ):
+
+        return [
+
+            recommendation
+            .recommendation
+
+            for recommendation
+            in recommendations
+        ]
+
 
 class SDKProjectGenerator:
 
