@@ -127,6 +127,9 @@ from .deployment_runbook import (
 from .deployment_rollback import (
     DeploymentRollbackGenerator
 )
+from .deployment_recovery import (
+    DeploymentRecoveryGenerator
+)
 
 
 
@@ -299,6 +302,10 @@ class PipelineSchemaGenerator:
 
         self.rollback_generator = (
             DeploymentRollbackGenerator()
+        )
+
+        self.recovery_generator = (
+            DeploymentRecoveryGenerator()
         )
 
 
@@ -1565,6 +1572,26 @@ class PipelineSchemaGenerator:
             self.rollback_generator
             .generate(
                 execution_plan
+            )
+        )
+
+    def generate_deployment_recovery(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        incident = (
+            self.generate_deployment_incident(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.recovery_generator
+            .generate(
+                incident
             )
         )
 

@@ -164,3 +164,8 @@ from .deployment_rollback import (
     DeploymentRollback,
     DeploymentRollbackGenerator
 )
+from .deployment_recovery import (
+    RecoveryAction,
+    DeploymentRecovery,
+    DeploymentRecoveryGenerator
+)

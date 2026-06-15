@@ -378,6 +378,16 @@ class SDKProject:
             ) > 0
         )
 
+    def recovery_required(
+        self,
+        recovery
+    ):
+
+        return (
+            recovery.severity
+            != "normal"
+        )
+
 
 class SDKProjectGenerator:
 

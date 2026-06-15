@@ -587,3 +587,27 @@ class SDKReleaseGenerator:
                 in rollback.steps
             ]
         }
+
+    def recovery_manifest(
+        self,
+        recovery
+    ):
+
+        return {
+
+            "severity":
+                recovery.severity,
+
+            "action_count":
+                len(
+                    recovery.actions
+                ),
+
+            "actions": [
+
+                action.action
+
+                for action
+                in recovery.actions
+            ]
+        }
