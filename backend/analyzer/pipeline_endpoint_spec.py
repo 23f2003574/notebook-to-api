@@ -333,6 +333,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def failure_pattern_detection_enabled(
+        self
+    ):
+
+        return True
+
     def package_directory(
         self
     ):

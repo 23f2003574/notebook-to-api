@@ -136,6 +136,9 @@ from .post_incident_analysis import (
 from .reliability_recommendation import (
     ReliabilityRecommendationEngine
 )
+from .failure_pattern import (
+    FailurePatternDetector
+)
 
 
 
@@ -320,6 +323,10 @@ class PipelineSchemaGenerator:
 
         self.recommendation_engine = (
             ReliabilityRecommendationEngine()
+        )
+
+        self.pattern_detector = (
+            FailurePatternDetector()
         )
 
 
@@ -1653,6 +1660,34 @@ class PipelineSchemaGenerator:
         return (
             self.recommendation_engine
             .generate(
+                analysis
+            )
+        )
+
+    def generate_failure_patterns(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        incident = (
+            self.generate_deployment_incident(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        analysis = (
+            self.generate_post_incident_analysis(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.pattern_detector
+            .detect(
+                incident,
                 analysis
             )
         )

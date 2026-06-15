@@ -412,6 +412,19 @@ class SDKProject:
             in recommendations
         ]
 
+    def detected_failure_patterns(
+        self,
+        patterns
+    ):
+
+        return [
+
+            pattern.pattern_type
+
+            for pattern
+            in patterns
+        ]
+
 
 class SDKProjectGenerator:
 

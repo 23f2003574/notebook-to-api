@@ -177,3 +177,7 @@ from .reliability_recommendation import (
     ReliabilityRecommendation,
     ReliabilityRecommendationEngine
 )
+from .failure_pattern import (
+    FailurePattern,
+    FailurePatternDetector
+)

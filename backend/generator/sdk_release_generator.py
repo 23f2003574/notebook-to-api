@@ -657,3 +657,24 @@ class SDKReleaseGenerator:
                 in recommendations
             ]
         }
+
+    def failure_pattern_manifest(
+        self,
+        patterns
+    ):
+
+        return {
+
+            "count":
+                len(
+                    patterns
+                ),
+
+            "patterns": [
+
+                pattern.pattern_type
+
+                for pattern
+                in patterns
+            ]
+        }
