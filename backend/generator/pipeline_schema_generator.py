@@ -139,6 +139,9 @@ from .reliability_recommendation import (
 from .failure_pattern import (
     FailurePatternDetector
 )
+from .reliability_trend import (
+    ReliabilityTrendAnalyzer
+)
 
 
 
@@ -327,6 +330,10 @@ class PipelineSchemaGenerator:
 
         self.pattern_detector = (
             FailurePatternDetector()
+        )
+
+        self.trend_analyzer = (
+            ReliabilityTrendAnalyzer()
         )
 
 
@@ -1689,6 +1696,34 @@ class PipelineSchemaGenerator:
             .detect(
                 incident,
                 analysis
+            )
+        )
+
+    def generate_reliability_trends(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        patterns = (
+            self.generate_failure_patterns(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        metrics = (
+            self.generate_deployment_metrics(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.trend_analyzer
+            .analyze(
+                patterns,
+                metrics
             )
         )
 

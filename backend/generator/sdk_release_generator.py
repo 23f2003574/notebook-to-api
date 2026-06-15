@@ -678,3 +678,23 @@ class SDKReleaseGenerator:
                 in patterns
             ]
         }
+
+    def trend_manifest(
+        self,
+        trend
+    ):
+
+        return {
+
+            "direction":
+                trend.direction,
+
+            "score":
+                trend.score,
+
+            "confidence":
+                trend.confidence,
+
+            "summary":
+                trend.summary
+        }

@@ -425,6 +425,15 @@ class SDKProject:
             in patterns
         ]
 
+    def reliability_direction(
+        self,
+        trend
+    ):
+
+        return (
+            trend.direction
+        )
+
 
 class SDKProjectGenerator:
 

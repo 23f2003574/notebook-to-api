@@ -181,3 +181,7 @@ from .failure_pattern import (
     FailurePattern,
     FailurePatternDetector
 )
+from .reliability_trend import (
+    ReliabilityTrend,
+    ReliabilityTrendAnalyzer
+)
