@@ -470,6 +470,15 @@ class SDKProject:
             maturity.level
         )
 
+    def roadmap_target(
+        self,
+        roadmap
+    ):
+
+        return (
+            roadmap.target_level
+        )
+
 
 class SDKProjectGenerator:
 

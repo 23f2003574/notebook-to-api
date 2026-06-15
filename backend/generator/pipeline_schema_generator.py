@@ -154,6 +154,9 @@ from .reliability_governance import (
 from .reliability_maturity import (
     ReliabilityMaturityEngine
 )
+from .reliability_roadmap import (
+    ReliabilityRoadmapEngine
+)
 
 
 
@@ -362,6 +365,10 @@ class PipelineSchemaGenerator:
 
         self.maturity_engine = (
             ReliabilityMaturityEngine()
+        )
+
+        self.roadmap_engine = (
+            ReliabilityRoadmapEngine()
         )
 
 
@@ -1856,6 +1863,26 @@ class PipelineSchemaGenerator:
             .assess(
                 scorecard,
                 governance
+            )
+        )
+
+    def generate_reliability_roadmap(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        maturity = (
+            self.generate_reliability_maturity(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.roadmap_engine
+            .generate(
+                maturity
             )
         )
 

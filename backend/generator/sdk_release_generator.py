@@ -781,3 +781,30 @@ class SDKReleaseGenerator:
             "next_steps":
                 maturity.next_steps
         }
+
+    def roadmap_manifest(
+        self,
+        roadmap
+    ):
+
+        return {
+
+            "current_level":
+                roadmap.current_level,
+
+            "target_level":
+                roadmap.target_level,
+
+            "milestone_count":
+                len(
+                    roadmap.milestones
+                ),
+
+            "milestones": [
+
+                milestone.title
+
+                for milestone
+                in roadmap.milestones
+            ]
+        }
