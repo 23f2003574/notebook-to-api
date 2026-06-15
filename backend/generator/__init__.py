@@ -206,3 +206,7 @@ from .reliability_roadmap import (
     ReliabilityRoadmap,
     ReliabilityRoadmapEngine
 )
+from .reliability_control_center import (
+    ReliabilityControlCenter,
+    ReliabilityControlCenterGenerator
+)

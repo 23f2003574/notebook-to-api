@@ -375,6 +375,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def reliability_control_center_enabled(
+        self
+    ):
+
+        return True
+
     def package_directory(
         self
     ):

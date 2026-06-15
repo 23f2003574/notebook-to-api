@@ -479,6 +479,26 @@ class SDKProject:
             roadmap.target_level
         )
 
+    def reliability_ready(
+        self,
+        control_center
+    ):
+
+        return (
+
+            control_center
+            .governance
+            .compliant
+
+            and
+
+            control_center
+            .scorecard
+            .grade
+
+            in ["A", "B"]
+        )
+
 
 class SDKProjectGenerator:
 

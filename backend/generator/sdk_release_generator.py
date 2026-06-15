@@ -808,3 +808,41 @@ class SDKReleaseGenerator:
                 in roadmap.milestones
             ]
         }
+
+    def reliability_control_manifest(
+        self,
+        control_center
+    ):
+
+        return {
+
+            "score":
+                control_center
+                .scorecard
+                .score,
+
+            "grade":
+                control_center
+                .scorecard
+                .grade,
+
+            "trend":
+                control_center
+                .trends
+                .direction,
+
+            "forecast":
+                control_center
+                .forecast
+                .projected_risk,
+
+            "governance":
+                control_center
+                .governance
+                .decision,
+
+            "maturity":
+                control_center
+                .maturity
+                .level
+        }

@@ -157,6 +157,9 @@ from .reliability_maturity import (
 from .reliability_roadmap import (
     ReliabilityRoadmapEngine
 )
+from .reliability_control_center import (
+    ReliabilityControlCenterGenerator
+)
 
 
 
@@ -369,6 +372,10 @@ class PipelineSchemaGenerator:
 
         self.roadmap_engine = (
             ReliabilityRoadmapEngine()
+        )
+
+        self.reliability_control_center = (
+            ReliabilityControlCenterGenerator()
         )
 
 
@@ -1883,6 +1890,98 @@ class PipelineSchemaGenerator:
             self.roadmap_engine
             .generate(
                 maturity
+            )
+        )
+
+    def generate_reliability_control_center(
+        self,
+        project,
+        deployment_artifacts
+    ):
+
+        recovery = (
+            self.generate_deployment_recovery(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        analysis = (
+            self.generate_post_incident_analysis(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        recommendations = (
+            self.generate_reliability_recommendations(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        patterns = (
+            self.generate_failure_patterns(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        trends = (
+            self.generate_reliability_trends(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        forecast = (
+            self.generate_reliability_forecast(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        scorecard = (
+            self.generate_reliability_scorecard(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        governance = (
+            self.generate_reliability_governance(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        maturity = (
+            self.generate_reliability_maturity(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        roadmap = (
+            self.generate_reliability_roadmap(
+                project,
+                deployment_artifacts
+            )
+        )
+
+        return (
+            self.reliability_control_center
+            .generate(
+                recovery,
+                analysis,
+                recommendations,
+                patterns,
+                trends,
+                forecast,
+                scorecard,
+                governance,
+                maturity,
+                roadmap
             )
         )
 
