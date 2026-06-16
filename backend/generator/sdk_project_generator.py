@@ -581,6 +581,19 @@ class SDKProject:
             in guide.issues
         ]
 
+    def migration_steps(
+        self,
+        guide
+    ):
+
+        return [
+
+            step.title
+
+            for step
+            in guide.steps
+        ]
+
 
 class SDKProjectGenerator:
 

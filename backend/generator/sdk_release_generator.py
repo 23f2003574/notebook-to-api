@@ -1023,3 +1023,22 @@ class SDKReleaseGenerator:
                 in guide.issues
             ]
         }
+
+    def migration_manifest(
+        self,
+        guide
+    ):
+
+        return {
+
+            "from":
+                guide.from_version,
+
+            "to":
+                guide.to_version,
+
+            "step_count":
+                len(
+                    guide.steps
+                )
+        }

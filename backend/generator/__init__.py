@@ -250,3 +250,8 @@ from .api_troubleshooting import (
     APITroubleshootingGuide,
     APITroubleshootingGenerator
 )
+from .api_migration import (
+    MigrationStep,
+    APIMigrationGuide,
+    APIMigrationGuideGenerator
+)

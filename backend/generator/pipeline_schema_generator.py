@@ -187,6 +187,9 @@ from .api_faq import (
 from .api_troubleshooting import (
     APITroubleshootingGenerator
 )
+from .api_migration import (
+    APIMigrationGuideGenerator
+)
 
 
 
@@ -439,6 +442,10 @@ class PipelineSchemaGenerator:
 
         self.troubleshooting_generator = (
             APITroubleshootingGenerator()
+        )
+
+        self.migration_generator = (
+            APIMigrationGuideGenerator()
         )
 
 
@@ -2216,5 +2223,14 @@ class PipelineSchemaGenerator:
 
         return (
             self.troubleshooting_generator
+            .generate()
+        )
+
+    def generate_api_migration_guide(
+        self
+    ):
+
+        return (
+            self.migration_generator
             .generate()
         )

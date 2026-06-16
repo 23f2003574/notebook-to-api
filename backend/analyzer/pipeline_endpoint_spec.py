@@ -487,3 +487,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def api_migration_guides_enabled(
+        self
+    ):
+
+        return True
