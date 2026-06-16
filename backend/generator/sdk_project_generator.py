@@ -10,6 +10,8 @@ class SDKProject:
         str
     ]
 
+    name: str = "house-price-sdk"
+
     def file_count(
         self
     ):
@@ -511,6 +513,20 @@ class SDKProject:
 
             "response":
                 example.response_example
+        }
+
+    def quickstart(
+        self,
+        quickstart
+    ):
+
+        return {
+
+            "install":
+                quickstart.install_command,
+
+            "example":
+                quickstart.example_code
         }
 
 

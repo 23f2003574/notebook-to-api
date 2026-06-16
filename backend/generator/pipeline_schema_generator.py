@@ -169,6 +169,9 @@ from .openapi_description import (
 from .api_examples import (
     APIUsageExampleGenerator
 )
+from .sdk_quickstart import (
+    SDKQuickStartGenerator
+)
 
 
 
@@ -397,6 +400,10 @@ class PipelineSchemaGenerator:
 
         self.example_generator = (
             APIUsageExampleGenerator()
+        )
+
+        self.quickstart_generator = (
+            SDKQuickStartGenerator()
         )
 
 
@@ -2108,5 +2115,17 @@ class PipelineSchemaGenerator:
             self.example_generator
             .generate(
                 endpoint
+            )
+        )
+
+    def generate_sdk_quickstart(
+        self,
+        sdk_project
+    ):
+
+        return (
+            self.quickstart_generator
+            .generate(
+                sdk_project
             )
         )

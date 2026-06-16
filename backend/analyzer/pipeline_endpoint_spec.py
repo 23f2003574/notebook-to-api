@@ -451,3 +451,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def sdk_quickstart_enabled(
+        self
+    ):
+
+        return True

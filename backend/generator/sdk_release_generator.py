@@ -900,3 +900,20 @@ class SDKReleaseGenerator:
             "response":
                 example.response_example
         }
+
+    def quickstart_manifest(
+        self,
+        quickstart
+    ):
+
+        return {
+
+            "package":
+                quickstart.package_name,
+
+            "install":
+                quickstart.install_command,
+
+            "example":
+                quickstart.example_code
+        }
