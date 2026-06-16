@@ -433,3 +433,9 @@ class PipelineEndpointSpec:
             "parallelism_score":
                 self.parallelism_score
         }
+
+    def api_documentation_enabled(
+        self
+    ):
+
+        return True

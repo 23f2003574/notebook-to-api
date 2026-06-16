@@ -210,3 +210,7 @@ from .reliability_control_center import (
     ReliabilityControlCenter,
     ReliabilityControlCenterGenerator
 )
+from .api_documentation import (
+    EndpointDocumentation,
+    APIDocumentationGenerator
+)

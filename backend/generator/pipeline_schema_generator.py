@@ -160,6 +160,9 @@ from .reliability_roadmap import (
 from .reliability_control_center import (
     ReliabilityControlCenterGenerator
 )
+from .api_documentation import (
+    APIDocumentationGenerator
+)
 
 
 
@@ -376,6 +379,10 @@ class PipelineSchemaGenerator:
 
         self.reliability_control_center = (
             ReliabilityControlCenterGenerator()
+        )
+
+        self.documentation_generator = (
+            APIDocumentationGenerator()
         )
 
 
@@ -2051,5 +2058,17 @@ class PipelineSchemaGenerator:
 
                 artifact_count=
                     artifact_count
+            )
+        )
+
+    def generate_api_documentation(
+        self,
+        endpoint
+    ):
+
+        return (
+            self.documentation_generator
+            .generate(
+                endpoint
             )
         )

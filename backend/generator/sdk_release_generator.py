@@ -846,3 +846,23 @@ class SDKReleaseGenerator:
                 .maturity
                 .level
         }
+
+    def documentation_manifest(
+        self,
+        documentation
+    ):
+
+        return {
+
+            "endpoint":
+                documentation.endpoint,
+
+            "description":
+                documentation.description,
+
+            "parameters":
+                documentation.parameters,
+
+            "returns":
+                documentation.returns
+        }
