@@ -175,6 +175,9 @@ from .sdk_quickstart import (
 from .api_error_documentation import (
     APIErrorDocumentationGenerator
 )
+from .api_tutorial import (
+    APITutorialGenerator
+)
 
 
 
@@ -411,6 +414,10 @@ class PipelineSchemaGenerator:
 
         self.error_doc_generator = (
             APIErrorDocumentationGenerator()
+        )
+
+        self.tutorial_generator = (
+            APITutorialGenerator()
         )
 
 
@@ -2144,4 +2151,16 @@ class PipelineSchemaGenerator:
         return (
             self.error_doc_generator
             .generate()
+        )
+
+    def generate_api_tutorial(
+        self,
+        endpoint
+    ):
+
+        return (
+            self.tutorial_generator
+            .generate(
+                endpoint
+            )
         )

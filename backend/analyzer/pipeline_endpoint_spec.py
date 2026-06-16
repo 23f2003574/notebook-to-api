@@ -463,3 +463,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def api_tutorials_enabled(
+        self
+    ):
+
+        return True

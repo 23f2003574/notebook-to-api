@@ -529,6 +529,19 @@ class SDKProject:
                 quickstart.example_code
         }
 
+    def tutorial_steps(
+        self,
+        tutorial
+    ):
+
+        return [
+
+            step.title
+
+            for step
+            in tutorial.steps
+        ]
+
 
 class SDKProjectGenerator:
 

@@ -936,3 +936,27 @@ class SDKReleaseGenerator:
                 in errors
             ]
         }
+
+    def tutorial_manifest(
+        self,
+        tutorial
+    ):
+
+        return {
+
+            "title":
+                tutorial.title,
+
+            "step_count":
+                len(
+                    tutorial.steps
+                ),
+
+            "steps": [
+
+                step.title
+
+                for step
+                in tutorial.steps
+            ]
+        }
