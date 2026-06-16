@@ -883,3 +883,20 @@ class SDKReleaseGenerator:
             "tags":
                 description.tags
         }
+
+    def example_manifest(
+        self,
+        example
+    ):
+
+        return {
+
+            "endpoint":
+                example.endpoint,
+
+            "request":
+                example.request_example,
+
+            "response":
+                example.response_example
+        }

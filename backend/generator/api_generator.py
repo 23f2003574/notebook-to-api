@@ -590,6 +590,28 @@ def endpoint_openapi_metadata(
             description.tags
     }
 
+
+def endpoint_examples(
+    schema_generator,
+    endpoint
+):
+
+    example = (
+        schema_generator
+        .generate_api_examples(
+            endpoint
+        )
+    )
+
+    return {
+
+        "request":
+            example.request_example,
+
+        "response":
+            example.response_example
+    }
+
 # Simple demo when run directly
 if __name__ == "__main__":
     sample_functions = [

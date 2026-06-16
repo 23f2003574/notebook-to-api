@@ -166,6 +166,9 @@ from .api_documentation import (
 from .openapi_description import (
     OpenAPIDescriptionGenerator
 )
+from .api_examples import (
+    APIUsageExampleGenerator
+)
 
 
 
@@ -390,6 +393,10 @@ class PipelineSchemaGenerator:
 
         self.openapi_generator = (
             OpenAPIDescriptionGenerator()
+        )
+
+        self.example_generator = (
+            APIUsageExampleGenerator()
         )
 
 
@@ -2087,6 +2094,18 @@ class PipelineSchemaGenerator:
 
         return (
             self.openapi_generator
+            .generate(
+                endpoint
+            )
+        )
+
+    def generate_api_examples(
+        self,
+        endpoint
+    ):
+
+        return (
+            self.example_generator
             .generate(
                 endpoint
             )

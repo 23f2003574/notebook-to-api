@@ -445,3 +445,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def api_examples_enabled(
+        self
+    ):
+
+        return True

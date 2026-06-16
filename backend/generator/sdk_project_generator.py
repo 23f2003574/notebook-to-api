@@ -499,6 +499,20 @@ class SDKProject:
             in ["A", "B"]
         )
 
+    def endpoint_example(
+        self,
+        example
+    ):
+
+        return {
+
+            "request":
+                example.request_example,
+
+            "response":
+                example.response_example
+        }
+
 
 class SDKProjectGenerator:
 
