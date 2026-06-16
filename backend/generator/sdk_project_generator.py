@@ -542,6 +542,19 @@ class SDKProject:
             in tutorial.steps
         ]
 
+    def cookbook_recipes(
+        self,
+        cookbook
+    ):
+
+        return [
+
+            recipe.title
+
+            for recipe
+            in cookbook.recipes
+        ]
+
 
 class SDKProjectGenerator:
 

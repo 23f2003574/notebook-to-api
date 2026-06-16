@@ -178,6 +178,9 @@ from .api_error_documentation import (
 from .api_tutorial import (
     APITutorialGenerator
 )
+from .api_cookbook import (
+    APICookbookGenerator
+)
 
 
 
@@ -418,6 +421,10 @@ class PipelineSchemaGenerator:
 
         self.tutorial_generator = (
             APITutorialGenerator()
+        )
+
+        self.cookbook_generator = (
+            APICookbookGenerator()
         )
 
 
@@ -2160,6 +2167,18 @@ class PipelineSchemaGenerator:
 
         return (
             self.tutorial_generator
+            .generate(
+                endpoint
+            )
+        )
+
+    def generate_api_cookbook(
+        self,
+        endpoint
+    ):
+
+        return (
+            self.cookbook_generator
             .generate(
                 endpoint
             )

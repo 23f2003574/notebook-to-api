@@ -235,3 +235,8 @@ from .api_tutorial import (
     APITutorial,
     APITutorialGenerator
 )
+from .api_cookbook import (
+    CookbookRecipe,
+    APICookbook,
+    APICookbookGenerator
+)

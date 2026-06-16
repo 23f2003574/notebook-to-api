@@ -469,3 +469,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def api_cookbooks_enabled(
+        self
+    ):
+
+        return True

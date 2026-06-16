@@ -960,3 +960,24 @@ class SDKReleaseGenerator:
                 in tutorial.steps
             ]
         }
+
+    def cookbook_manifest(
+        self,
+        cookbook
+    ):
+
+        return {
+
+            "recipe_count":
+                len(
+                    cookbook.recipes
+                ),
+
+            "recipes": [
+
+                recipe.title
+
+                for recipe
+                in cookbook.recipes
+            ]
+        }
