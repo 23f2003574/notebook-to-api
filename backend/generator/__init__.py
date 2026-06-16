@@ -255,3 +255,8 @@ from .api_migration import (
     APIMigrationGuide,
     APIMigrationGuideGenerator
 )
+from .api_changelog import (
+    ChangelogEntry,
+    APIChangelog,
+    APIChangelogGenerator
+)

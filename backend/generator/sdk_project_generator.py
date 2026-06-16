@@ -594,6 +594,19 @@ class SDKProject:
             in guide.steps
         ]
 
+    def changelog_entries(
+        self,
+        changelog
+    ):
+
+        return [
+
+            entry.description
+
+            for entry
+            in changelog.entries
+        ]
+
 
 class SDKProjectGenerator:
 

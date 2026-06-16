@@ -493,3 +493,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def api_changelog_enabled(
+        self
+    ):
+
+        return True

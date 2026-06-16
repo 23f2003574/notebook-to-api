@@ -190,6 +190,9 @@ from .api_troubleshooting import (
 from .api_migration import (
     APIMigrationGuideGenerator
 )
+from .api_changelog import (
+    APIChangelogGenerator
+)
 
 
 
@@ -446,6 +449,10 @@ class PipelineSchemaGenerator:
 
         self.migration_generator = (
             APIMigrationGuideGenerator()
+        )
+
+        self.changelog_generator = (
+            APIChangelogGenerator()
         )
 
 
@@ -2233,4 +2240,16 @@ class PipelineSchemaGenerator:
         return (
             self.migration_generator
             .generate()
+        )
+
+    def generate_api_changelog(
+        self,
+        version
+    ):
+
+        return (
+            self.changelog_generator
+            .generate(
+                version
+            )
         )

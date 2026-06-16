@@ -1042,3 +1042,27 @@ class SDKReleaseGenerator:
                     guide.steps
                 )
         }
+
+    def changelog_manifest(
+        self,
+        changelog
+    ):
+
+        return {
+
+            "version":
+                changelog.version,
+
+            "entry_count":
+                len(
+                    changelog.entries
+                ),
+
+            "categories": [
+
+                entry.category
+
+                for entry
+                in changelog.entries
+            ]
+        }
