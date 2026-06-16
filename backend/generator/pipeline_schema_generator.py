@@ -193,6 +193,9 @@ from .api_migration import (
 from .api_changelog import (
     APIChangelogGenerator
 )
+from .developer_portal import (
+    DeveloperPortalGenerator
+)
 
 
 
@@ -453,6 +456,10 @@ class PipelineSchemaGenerator:
 
         self.changelog_generator = (
             APIChangelogGenerator()
+        )
+
+        self.portal_generator = (
+            DeveloperPortalGenerator()
         )
 
 
@@ -2252,4 +2259,13 @@ class PipelineSchemaGenerator:
             .generate(
                 version
             )
+        )
+
+    def generate_developer_portal(
+        self
+    ):
+
+        return (
+            self.portal_generator
+            .generate()
         )

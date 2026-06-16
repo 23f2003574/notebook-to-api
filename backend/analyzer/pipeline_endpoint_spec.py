@@ -499,3 +499,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def developer_portal_enabled(
+        self
+    ):
+
+        return True

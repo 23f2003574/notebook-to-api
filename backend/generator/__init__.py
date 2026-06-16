@@ -260,3 +260,7 @@ from .api_changelog import (
     APIChangelog,
     APIChangelogGenerator
 )
+from .developer_portal import (
+    DeveloperPortal,
+    DeveloperPortalGenerator
+)

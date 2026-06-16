@@ -1066,3 +1066,20 @@ class SDKReleaseGenerator:
                 in changelog.entries
             ]
         }
+
+    def portal_manifest(
+        self,
+        portal
+    ):
+
+        return {
+
+            "title":
+                portal.title,
+
+            "sections":
+                portal.sections,
+
+            "documentation_count":
+                portal.documentation_count
+        }

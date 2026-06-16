@@ -607,6 +607,15 @@ class SDKProject:
             in changelog.entries
         ]
 
+    def developer_portal_sections(
+        self,
+        portal
+    ):
+
+        return (
+            portal.sections
+        )
+
 
 class SDKProjectGenerator:
 
