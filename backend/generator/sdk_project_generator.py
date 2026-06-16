@@ -555,6 +555,19 @@ class SDKProject:
             in cookbook.recipes
         ]
 
+    def faq_questions(
+        self,
+        faq
+    ):
+
+        return [
+
+            item.question
+
+            for item
+            in faq.items
+        ]
+
 
 class SDKProjectGenerator:
 

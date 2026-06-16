@@ -475,3 +475,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def api_faq_enabled(
+        self
+    ):
+
+        return True

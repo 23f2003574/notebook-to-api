@@ -240,3 +240,8 @@ from .api_cookbook import (
     APICookbook,
     APICookbookGenerator
 )
+from .api_faq import (
+    FAQItem,
+    APIFAQ,
+    APIFAQGenerator
+)

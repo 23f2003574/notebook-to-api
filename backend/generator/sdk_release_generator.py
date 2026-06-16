@@ -981,3 +981,24 @@ class SDKReleaseGenerator:
                 in cookbook.recipes
             ]
         }
+
+    def faq_manifest(
+        self,
+        faq
+    ):
+
+        return {
+
+            "question_count":
+                len(
+                    faq.items
+                ),
+
+            "questions": [
+
+                item.question
+
+                for item
+                in faq.items
+            ]
+        }

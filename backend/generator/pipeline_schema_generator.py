@@ -181,6 +181,9 @@ from .api_tutorial import (
 from .api_cookbook import (
     APICookbookGenerator
 )
+from .api_faq import (
+    APIFAQGenerator
+)
 
 
 
@@ -425,6 +428,10 @@ class PipelineSchemaGenerator:
 
         self.cookbook_generator = (
             APICookbookGenerator()
+        )
+
+        self.faq_generator = (
+            APIFAQGenerator()
         )
 
 
@@ -2179,6 +2186,18 @@ class PipelineSchemaGenerator:
 
         return (
             self.cookbook_generator
+            .generate(
+                endpoint
+            )
+        )
+
+    def generate_api_faq(
+        self,
+        endpoint
+    ):
+
+        return (
+            self.faq_generator
             .generate(
                 endpoint
             )
