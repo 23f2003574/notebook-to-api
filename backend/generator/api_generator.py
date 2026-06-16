@@ -565,6 +565,31 @@ def write_generated_api(code, output_path="generated/app.py"):
         f.write(code)
     print(f"Generated API written to: {output_path}")
 
+
+def endpoint_openapi_metadata(
+    schema_generator,
+    endpoint
+):
+
+    description = (
+        schema_generator
+        .generate_openapi_description(
+            endpoint
+        )
+    )
+
+    return {
+
+        "summary":
+            description.summary,
+
+        "description":
+            description.description,
+
+        "tags":
+            description.tags
+    }
+
 # Simple demo when run directly
 if __name__ == "__main__":
     sample_functions = [

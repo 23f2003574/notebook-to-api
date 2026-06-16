@@ -163,6 +163,9 @@ from .reliability_control_center import (
 from .api_documentation import (
     APIDocumentationGenerator
 )
+from .openapi_description import (
+    OpenAPIDescriptionGenerator
+)
 
 
 
@@ -383,6 +386,10 @@ class PipelineSchemaGenerator:
 
         self.documentation_generator = (
             APIDocumentationGenerator()
+        )
+
+        self.openapi_generator = (
+            OpenAPIDescriptionGenerator()
         )
 
 
@@ -2068,6 +2075,18 @@ class PipelineSchemaGenerator:
 
         return (
             self.documentation_generator
+            .generate(
+                endpoint
+            )
+        )
+
+    def generate_openapi_description(
+        self,
+        endpoint
+    ):
+
+        return (
+            self.openapi_generator
             .generate(
                 endpoint
             )

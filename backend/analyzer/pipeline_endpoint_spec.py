@@ -439,3 +439,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def openapi_descriptions_enabled(
+        self
+    ):
+
+        return True

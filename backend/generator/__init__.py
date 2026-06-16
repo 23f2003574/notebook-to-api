@@ -214,3 +214,7 @@ from .api_documentation import (
     EndpointDocumentation,
     APIDocumentationGenerator
 )
+from .openapi_description import (
+    OpenAPIDescription,
+    OpenAPIDescriptionGenerator
+)

@@ -866,3 +866,20 @@ class SDKReleaseGenerator:
             "returns":
                 documentation.returns
         }
+
+    def openapi_manifest(
+        self,
+        description
+    ):
+
+        return {
+
+            "summary":
+                description.summary,
+
+            "description":
+                description.description,
+
+            "tags":
+                description.tags
+        }
