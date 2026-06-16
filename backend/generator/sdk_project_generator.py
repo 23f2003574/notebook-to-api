@@ -568,6 +568,19 @@ class SDKProject:
             in faq.items
         ]
 
+    def troubleshooting_issues(
+        self,
+        guide
+    ):
+
+        return [
+
+            issue.issue
+
+            for issue
+            in guide.issues
+        ]
+
 
 class SDKProjectGenerator:
 

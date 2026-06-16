@@ -184,6 +184,9 @@ from .api_cookbook import (
 from .api_faq import (
     APIFAQGenerator
 )
+from .api_troubleshooting import (
+    APITroubleshootingGenerator
+)
 
 
 
@@ -432,6 +435,10 @@ class PipelineSchemaGenerator:
 
         self.faq_generator = (
             APIFAQGenerator()
+        )
+
+        self.troubleshooting_generator = (
+            APITroubleshootingGenerator()
         )
 
 
@@ -2201,4 +2208,13 @@ class PipelineSchemaGenerator:
             .generate(
                 endpoint
             )
+        )
+
+    def generate_api_troubleshooting(
+        self
+    ):
+
+        return (
+            self.troubleshooting_generator
+            .generate()
         )

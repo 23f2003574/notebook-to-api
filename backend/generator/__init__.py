@@ -245,3 +245,8 @@ from .api_faq import (
     APIFAQ,
     APIFAQGenerator
 )
+from .api_troubleshooting import (
+    TroubleshootingIssue,
+    APITroubleshootingGuide,
+    APITroubleshootingGenerator
+)

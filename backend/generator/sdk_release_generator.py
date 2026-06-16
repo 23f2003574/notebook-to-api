@@ -1002,3 +1002,24 @@ class SDKReleaseGenerator:
                 in faq.items
             ]
         }
+
+    def troubleshooting_manifest(
+        self,
+        guide
+    ):
+
+        return {
+
+            "issue_count":
+                len(
+                    guide.issues
+                ),
+
+            "issues": [
+
+                issue.issue
+
+                for issue
+                in guide.issues
+            ]
+        }

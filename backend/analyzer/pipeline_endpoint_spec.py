@@ -481,3 +481,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def api_troubleshooting_enabled(
+        self
+    ):
+
+        return True
