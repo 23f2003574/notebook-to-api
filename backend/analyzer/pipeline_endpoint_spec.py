@@ -505,3 +505,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def developer_experience_enabled(
+        self
+    ):
+
+        return True

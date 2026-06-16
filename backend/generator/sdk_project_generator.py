@@ -616,6 +616,30 @@ class SDKProject:
             portal.sections
         )
 
+    def developer_ready(
+        self,
+        control_center
+    ):
+
+        return (
+
+            control_center
+            .portal
+            .documentation_count
+
+            > 0
+
+            and
+
+            len(
+                control_center
+                .tutorial
+                .steps
+            )
+
+            > 0
+        )
+
 
 class SDKProjectGenerator:
 

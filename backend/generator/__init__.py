@@ -264,3 +264,7 @@ from .developer_portal import (
     DeveloperPortal,
     DeveloperPortalGenerator
 )
+from .developer_experience_control_center import (
+    DeveloperExperienceControlCenter,
+    DeveloperExperienceControlCenterGenerator
+)

@@ -1083,3 +1083,48 @@ class SDKReleaseGenerator:
             "documentation_count":
                 portal.documentation_count
         }
+
+    def developer_experience_manifest(
+        self,
+        control_center
+    ):
+
+        return {
+
+            "endpoint":
+                control_center
+                .documentation
+                .endpoint,
+
+            "portal":
+                control_center
+                .portal
+                .title,
+
+            "faq_count":
+                len(
+                    control_center
+                    .faq
+                    .items
+                ),
+
+            "tutorial_steps":
+                len(
+                    control_center
+                    .tutorial
+                    .steps
+                ),
+
+            "cookbook_recipes":
+                len(
+                    control_center
+                    .cookbook
+                    .recipes
+                ),
+
+            "error_docs":
+                len(
+                    control_center
+                    .errors
+                )
+        }

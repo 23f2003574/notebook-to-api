@@ -196,6 +196,9 @@ from .api_changelog import (
 from .developer_portal import (
     DeveloperPortalGenerator
 )
+from .developer_experience_control_center import (
+    DeveloperExperienceControlCenterGenerator
+)
 
 
 
@@ -460,6 +463,10 @@ class PipelineSchemaGenerator:
 
         self.portal_generator = (
             DeveloperPortalGenerator()
+        )
+
+        self.developer_experience_control_center = (
+            DeveloperExperienceControlCenterGenerator()
         )
 
 
@@ -2268,4 +2275,107 @@ class PipelineSchemaGenerator:
         return (
             self.portal_generator
             .generate()
+        )
+
+    def generate_developer_experience_control_center(
+        self,
+        endpoint,
+        sdk_project,
+        version="1.0.0"
+    ):
+
+        documentation = (
+            self.generate_api_documentation(
+                endpoint
+            )
+        )
+
+        openapi = (
+            self.generate_openapi_description(
+                endpoint
+            )
+        )
+
+        examples = (
+            self.generate_api_examples(
+                endpoint
+            )
+        )
+
+        quickstart = (
+            self.generate_sdk_quickstart(
+                sdk_project
+            )
+        )
+
+        errors = (
+            self.generate_api_error_docs()
+        )
+
+        tutorial = (
+            self.generate_api_tutorial(
+                endpoint
+            )
+        )
+
+        cookbook = (
+            self.generate_api_cookbook(
+                endpoint
+            )
+        )
+
+        faq = (
+            self.generate_api_faq(
+                endpoint
+            )
+        )
+
+        troubleshooting = (
+            self.generate_api_troubleshooting()
+        )
+
+        migration = (
+            self.generate_api_migration_guide()
+        )
+
+        changelog = (
+            self.generate_api_changelog(
+                version
+            )
+        )
+
+        portal = (
+            self.generate_developer_portal()
+        )
+
+        return (
+
+            self
+            .developer_experience_control_center
+            .generate(
+
+                documentation,
+
+                openapi,
+
+                examples,
+
+                quickstart,
+
+                errors,
+
+                tutorial,
+
+                cookbook,
+
+                faq,
+
+                troubleshooting,
+
+                migration,
+
+                changelog,
+
+                portal
+            )
         )
