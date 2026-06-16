@@ -457,3 +457,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def api_error_docs_enabled(
+        self
+    ):
+
+        return True

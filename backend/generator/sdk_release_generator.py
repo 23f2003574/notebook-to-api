@@ -917,3 +917,22 @@ class SDKReleaseGenerator:
             "example":
                 quickstart.example_code
         }
+
+    def error_manifest(
+        self,
+        errors
+    ):
+
+        return {
+
+            "count":
+                len(errors),
+
+            "errors": [
+
+                error.error_name
+
+                for error
+                in errors
+            ]
+        }

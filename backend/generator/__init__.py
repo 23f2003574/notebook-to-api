@@ -226,3 +226,7 @@ from .sdk_quickstart import (
     SDKQuickStart,
     SDKQuickStartGenerator
 )
+from .api_error_documentation import (
+    APIErrorDocumentation,
+    APIErrorDocumentationGenerator
+)

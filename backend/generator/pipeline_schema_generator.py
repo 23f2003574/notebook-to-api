@@ -172,6 +172,9 @@ from .api_examples import (
 from .sdk_quickstart import (
     SDKQuickStartGenerator
 )
+from .api_error_documentation import (
+    APIErrorDocumentationGenerator
+)
 
 
 
@@ -404,6 +407,10 @@ class PipelineSchemaGenerator:
 
         self.quickstart_generator = (
             SDKQuickStartGenerator()
+        )
+
+        self.error_doc_generator = (
+            APIErrorDocumentationGenerator()
         )
 
 
@@ -2128,4 +2135,13 @@ class PipelineSchemaGenerator:
             .generate(
                 sdk_project
             )
+        )
+
+    def generate_api_error_docs(
+        self
+    ):
+
+        return (
+            self.error_doc_generator
+            .generate()
         )

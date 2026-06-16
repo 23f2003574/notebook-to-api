@@ -612,6 +612,16 @@ def endpoint_examples(
             example.response_example
     }
 
+
+def endpoint_errors(
+    schema_generator
+):
+
+    return (
+        schema_generator
+        .generate_api_error_docs()
+    )
+
 # Simple demo when run directly
 if __name__ == "__main__":
     sample_functions = [
