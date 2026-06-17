@@ -211,6 +211,9 @@ from .notebook_readme import (
 from .notebook_endpoint_suggestions import (
     NotebookEndpointSuggestionEngine
 )
+from .notebook_understanding_control_center import (
+    NotebookUnderstandingControlCenterGenerator
+)
 
 
 
@@ -495,6 +498,10 @@ class PipelineSchemaGenerator:
 
         self.endpoint_suggestion_generator = (
             NotebookEndpointSuggestionEngine()
+        )
+
+        self.notebook_understanding_control_center = (
+            NotebookUnderstandingControlCenterGenerator()
         )
 
 
@@ -2455,4 +2462,14 @@ class PipelineSchemaGenerator:
             .generate(
                 understanding
             )
+        )
+
+    def generate_notebook_understanding_control_center(
+        self
+    ):
+
+        return (
+            self
+            .notebook_understanding_control_center
+            .generate()
         )

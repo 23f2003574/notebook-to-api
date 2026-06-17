@@ -681,6 +681,22 @@ class SDKProject:
             in suggestions
         ]
 
+    def notebook_understanding_features(
+        self,
+        control_center
+    ):
+
+        return [
+
+            "summary",
+
+            "report",
+
+            "readme",
+
+            "endpoint_suggestions"
+        ]
+
 
 class SDKProjectGenerator:
 

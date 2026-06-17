@@ -583,3 +583,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def notebook_understanding_control_center_enabled(
+        self
+    ):
+
+        return True

@@ -284,3 +284,7 @@ from .notebook_endpoint_suggestions import (
     EndpointSuggestion,
     NotebookEndpointSuggestionEngine
 )
+from .notebook_understanding_control_center import (
+    NotebookUnderstandingControlCenter,
+    NotebookUnderstandingControlCenterGenerator
+)

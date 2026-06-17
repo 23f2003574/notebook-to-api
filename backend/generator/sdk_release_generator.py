@@ -1182,3 +1182,23 @@ class SDKReleaseGenerator:
 
             in suggestions
         ]
+
+    def notebook_understanding_manifest(
+        self,
+        control_center
+    ):
+
+        return {
+
+            "summary_enabled":
+                control_center.summary_enabled,
+
+            "report_enabled":
+                control_center.report_enabled,
+
+            "readme_enabled":
+                control_center.readme_enabled,
+
+            "endpoint_suggestions_enabled":
+                control_center.endpoint_suggestions_enabled
+        }
