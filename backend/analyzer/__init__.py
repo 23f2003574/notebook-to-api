@@ -22,3 +22,8 @@ from .notebook_input_analyzer import (
     NotebookInput,
     NotebookInputAnalyzer
 )
+
+from .notebook_output_analyzer import (
+    NotebookOutput,
+    NotebookOutputAnalyzer
+)
