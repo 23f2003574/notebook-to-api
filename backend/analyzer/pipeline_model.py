@@ -5,6 +5,10 @@ from .pipeline_endpoint_spec import (
     PipelineEndpointSpec
 )
 
+from .notebook_metadata_analyzer import (
+    NotebookMetadataAnalyzer
+)
+
 
 @dataclass
 class PipelineStage:
@@ -28,6 +32,20 @@ class PipelineArtifact:
 @dataclass
 class ExecutionPipeline:
     stages: List[PipelineStage]
+
+    notebook_metadata_analyzer: NotebookMetadataAnalyzer = (
+        None
+    )
+
+    def __post_init__(self):
+
+        if (
+            self.notebook_metadata_analyzer
+            is None
+        ):
+            self.notebook_metadata_analyzer = (
+                NotebookMetadataAnalyzer()
+            )
 
     def stage_names(self):
         return [
@@ -287,3 +305,18 @@ class ExecutionPipeline:
             "parallelism_score":
                 spec.parallelism_score
         }
+
+    def notebook_metadata(
+        self,
+        notebook_name,
+        notebook
+    ):
+
+        return (
+            self
+            .notebook_metadata_analyzer
+            .analyze(
+                notebook_name,
+                notebook
+            )
+        )

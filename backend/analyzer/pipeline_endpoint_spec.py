@@ -511,3 +511,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def notebook_metadata_enabled(
+        self
+    ):
+
+        return True
