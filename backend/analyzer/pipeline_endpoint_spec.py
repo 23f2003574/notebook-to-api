@@ -565,3 +565,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def notebook_report_enabled(
+        self
+    ):
+
+        return True

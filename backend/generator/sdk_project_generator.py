@@ -649,6 +649,15 @@ class SDKProject:
             summary.summary
         )
 
+    def notebook_report_sections(
+        self,
+        report
+    ):
+
+        return (
+            report.sections
+        )
+
 
 class SDKProjectGenerator:
 

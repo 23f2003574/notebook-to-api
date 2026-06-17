@@ -272,3 +272,7 @@ from .notebook_summary import (
     NotebookSummary,
     NotebookSummaryGenerator
 )
+from .notebook_report import (
+    NotebookReport,
+    NotebookReportGenerator
+)

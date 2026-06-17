@@ -1128,3 +1128,20 @@ class SDKReleaseGenerator:
                     .errors
                 )
         }
+
+    def notebook_report_manifest(
+        self,
+        report
+    ):
+
+        return {
+
+            "title":
+                report.title,
+
+            "sections":
+                report.sections,
+
+            "section_count":
+                report.section_count
+        }

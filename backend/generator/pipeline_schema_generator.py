@@ -202,6 +202,9 @@ from .developer_experience_control_center import (
 from .notebook_summary import (
     NotebookSummaryGenerator
 )
+from .notebook_report import (
+    NotebookReportGenerator
+)
 
 
 
@@ -474,6 +477,10 @@ class PipelineSchemaGenerator:
 
         self.notebook_summary_generator = (
             NotebookSummaryGenerator()
+        )
+
+        self.notebook_report_generator = (
+            NotebookReportGenerator()
         )
 
 
@@ -2398,4 +2405,14 @@ class PipelineSchemaGenerator:
             .generate(
                 understanding
             )
+        )
+
+    def generate_notebook_report(
+        self
+    ):
+
+        return (
+            self
+            .notebook_report_generator
+            .generate()
         )
