@@ -7,3 +7,8 @@ from .cell_classifier import (
     CellClassification,
     CellClassifier
 )
+
+from .notebook_intent_analyzer import (
+    NotebookIntent,
+    NotebookIntentAnalyzer
+)

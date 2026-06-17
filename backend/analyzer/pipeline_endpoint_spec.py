@@ -523,3 +523,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def notebook_intent_enabled(
+        self
+    ):
+
+        return True

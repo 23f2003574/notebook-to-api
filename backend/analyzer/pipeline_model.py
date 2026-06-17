@@ -13,6 +13,10 @@ from .cell_classifier import (
     CellClassifier
 )
 
+from .notebook_intent_analyzer import (
+    NotebookIntentAnalyzer
+)
+
 
 @dataclass
 class PipelineStage:
@@ -45,6 +49,10 @@ class ExecutionPipeline:
         None
     )
 
+    notebook_intent_analyzer: NotebookIntentAnalyzer = (
+        None
+    )
+
     def __post_init__(self):
 
         if (
@@ -61,6 +69,14 @@ class ExecutionPipeline:
         ):
             self.cell_classifier = (
                 CellClassifier()
+            )
+
+        if (
+            self.notebook_intent_analyzer
+            is None
+        ):
+            self.notebook_intent_analyzer = (
+                NotebookIntentAnalyzer()
             )
 
     def stage_names(self):
@@ -349,5 +365,18 @@ class ExecutionPipeline:
             .classify(
                 cell,
                 cell_index
+            )
+        )
+
+    def notebook_intent(
+        self,
+        notebook
+    ):
+
+        return (
+            self
+            .notebook_intent_analyzer
+            .analyze(
+                notebook
             )
         )
