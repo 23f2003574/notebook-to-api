@@ -640,6 +640,15 @@ class SDKProject:
             > 0
         )
 
+    def notebook_summary(
+        self,
+        summary
+    ):
+
+        return (
+            summary.summary
+        )
+
 
 class SDKProjectGenerator:
 

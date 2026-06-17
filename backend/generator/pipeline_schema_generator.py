@@ -199,6 +199,9 @@ from .developer_portal import (
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
+from .notebook_summary import (
+    NotebookSummaryGenerator
+)
 
 
 
@@ -467,6 +470,10 @@ class PipelineSchemaGenerator:
 
         self.developer_experience_control_center = (
             DeveloperExperienceControlCenterGenerator()
+        )
+
+        self.notebook_summary_generator = (
+            NotebookSummaryGenerator()
         )
 
 
@@ -2377,5 +2384,18 @@ class PipelineSchemaGenerator:
                 changelog,
 
                 portal
+            )
+        )
+
+    def generate_notebook_summary(
+        self,
+        understanding
+    ):
+
+        return (
+            self
+            .notebook_summary_generator
+            .generate(
+                understanding
             )
         )

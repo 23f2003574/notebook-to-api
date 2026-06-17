@@ -268,3 +268,7 @@ from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator
 )
+from .notebook_summary import (
+    NotebookSummary,
+    NotebookSummaryGenerator
+)
