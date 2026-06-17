@@ -276,3 +276,7 @@ from .notebook_report import (
     NotebookReport,
     NotebookReportGenerator
 )
+from .notebook_readme import (
+    NotebookREADME,
+    NotebookREADMEGenerator
+)

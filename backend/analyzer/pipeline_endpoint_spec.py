@@ -571,3 +571,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def notebook_readme_enabled(
+        self
+    ):
+
+        return True

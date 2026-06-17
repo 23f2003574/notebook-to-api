@@ -1145,3 +1145,17 @@ class SDKReleaseGenerator:
             "section_count":
                 report.section_count
         }
+
+    def notebook_readme_manifest(
+        self,
+        readme
+    ):
+
+        return {
+
+            "title":
+                readme.title,
+
+            "sections":
+                readme.sections
+        }

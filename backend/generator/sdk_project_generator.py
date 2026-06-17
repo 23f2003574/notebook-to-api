@@ -658,6 +658,15 @@ class SDKProject:
             report.sections
         )
 
+    def notebook_readme_sections(
+        self,
+        readme
+    ):
+
+        return (
+            readme.sections
+        )
+
 
 class SDKProjectGenerator:
 

@@ -205,6 +205,9 @@ from .notebook_summary import (
 from .notebook_report import (
     NotebookReportGenerator
 )
+from .notebook_readme import (
+    NotebookREADMEGenerator
+)
 
 
 
@@ -481,6 +484,10 @@ class PipelineSchemaGenerator:
 
         self.notebook_report_generator = (
             NotebookReportGenerator()
+        )
+
+        self.notebook_readme_generator = (
+            NotebookREADMEGenerator()
         )
 
 
@@ -2415,4 +2422,17 @@ class PipelineSchemaGenerator:
             self
             .notebook_report_generator
             .generate()
+        )
+
+    def generate_notebook_readme(
+        self,
+        understanding
+    ):
+
+        return (
+            self
+            .notebook_readme_generator
+            .generate(
+                understanding
+            )
         )
