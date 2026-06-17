@@ -33,6 +33,10 @@ from .api_candidate_analyzer import (
     APICandidateAnalyzer
 )
 
+from .notebook_understanding import (
+    NotebookUnderstandingEngine
+)
+
 
 @dataclass
 class PipelineStage:
@@ -82,6 +86,10 @@ class ExecutionPipeline:
     )
 
     api_candidate_analyzer: APICandidateAnalyzer = (
+        None
+    )
+
+    notebook_understanding_engine: NotebookUnderstandingEngine = (
         None
     )
 
@@ -141,6 +149,27 @@ class ExecutionPipeline:
         ):
             self.api_candidate_analyzer = (
                 APICandidateAnalyzer()
+            )
+
+        if (
+            self.notebook_understanding_engine
+            is None
+        ):
+            self.notebook_understanding_engine = (
+                NotebookUnderstandingEngine(
+
+                    self.notebook_metadata_analyzer,
+
+                    self.notebook_intent_analyzer,
+
+                    self.notebook_model_analyzer,
+
+                    self.notebook_input_analyzer,
+
+                    self.notebook_output_analyzer,
+
+                    self.api_candidate_analyzer
+                )
             )
 
     def stage_names(self):
@@ -493,6 +522,21 @@ class ExecutionPipeline:
             self
             .api_candidate_analyzer
             .analyze(
+                notebook
+            )
+        )
+
+    def notebook_understanding(
+        self,
+        notebook_name,
+        notebook
+    ):
+
+        return (
+            self
+            .notebook_understanding_engine
+            .analyze(
+                notebook_name,
                 notebook
             )
         )

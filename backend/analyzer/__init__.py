@@ -32,3 +32,8 @@ from .api_candidate_analyzer import (
     APICandidate,
     APICandidateAnalyzer
 )
+
+from .notebook_understanding import (
+    NotebookUnderstanding,
+    NotebookUnderstandingEngine
+)
