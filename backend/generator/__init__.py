@@ -280,3 +280,7 @@ from .notebook_readme import (
     NotebookREADME,
     NotebookREADMEGenerator
 )
+from .notebook_endpoint_suggestions import (
+    EndpointSuggestion,
+    NotebookEndpointSuggestionEngine
+)

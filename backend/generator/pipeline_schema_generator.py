@@ -208,6 +208,9 @@ from .notebook_report import (
 from .notebook_readme import (
     NotebookREADMEGenerator
 )
+from .notebook_endpoint_suggestions import (
+    NotebookEndpointSuggestionEngine
+)
 
 
 
@@ -488,6 +491,10 @@ class PipelineSchemaGenerator:
 
         self.notebook_readme_generator = (
             NotebookREADMEGenerator()
+        )
+
+        self.endpoint_suggestion_generator = (
+            NotebookEndpointSuggestionEngine()
         )
 
 
@@ -2432,6 +2439,19 @@ class PipelineSchemaGenerator:
         return (
             self
             .notebook_readme_generator
+            .generate(
+                understanding
+            )
+        )
+
+    def generate_endpoint_suggestions(
+        self,
+        understanding
+    ):
+
+        return (
+            self
+            .endpoint_suggestion_generator
             .generate(
                 understanding
             )

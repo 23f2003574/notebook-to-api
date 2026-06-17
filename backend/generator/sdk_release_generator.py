@@ -1159,3 +1159,26 @@ class SDKReleaseGenerator:
             "sections":
                 readme.sections
         }
+
+    def endpoint_manifest(
+        self,
+        suggestions
+    ):
+
+        return [
+
+            {
+                "endpoint_name":
+                    suggestion.endpoint_name,
+
+                "route":
+                    suggestion.route,
+
+                "confidence":
+                    suggestion.confidence
+            }
+
+            for suggestion
+
+            in suggestions
+        ]

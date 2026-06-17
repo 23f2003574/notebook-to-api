@@ -667,6 +667,20 @@ class SDKProject:
             readme.sections
         )
 
+    def endpoint_routes(
+        self,
+        suggestions
+    ):
+
+        return [
+
+            suggestion.route
+
+            for suggestion
+
+            in suggestions
+        ]
+
 
 class SDKProjectGenerator:
 

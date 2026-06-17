@@ -577,3 +577,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def endpoint_suggestions_enabled(
+        self
+    ):
+
+        return True
