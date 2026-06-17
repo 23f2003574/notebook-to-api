@@ -12,3 +12,8 @@ from .notebook_intent_analyzer import (
     NotebookIntent,
     NotebookIntentAnalyzer
 )
+
+from .notebook_model_analyzer import (
+    NotebookModel,
+    NotebookModelAnalyzer
+)

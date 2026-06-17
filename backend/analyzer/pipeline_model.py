@@ -17,6 +17,10 @@ from .notebook_intent_analyzer import (
     NotebookIntentAnalyzer
 )
 
+from .notebook_model_analyzer import (
+    NotebookModelAnalyzer
+)
+
 
 @dataclass
 class PipelineStage:
@@ -53,6 +57,10 @@ class ExecutionPipeline:
         None
     )
 
+    notebook_model_analyzer: NotebookModelAnalyzer = (
+        None
+    )
+
     def __post_init__(self):
 
         if (
@@ -77,6 +85,14 @@ class ExecutionPipeline:
         ):
             self.notebook_intent_analyzer = (
                 NotebookIntentAnalyzer()
+            )
+
+        if (
+            self.notebook_model_analyzer
+            is None
+        ):
+            self.notebook_model_analyzer = (
+                NotebookModelAnalyzer()
             )
 
     def stage_names(self):
@@ -376,6 +392,19 @@ class ExecutionPipeline:
         return (
             self
             .notebook_intent_analyzer
+            .analyze(
+                notebook
+            )
+        )
+
+    def notebook_models(
+        self,
+        notebook
+    ):
+
+        return (
+            self
+            .notebook_model_analyzer
             .analyze(
                 notebook
             )

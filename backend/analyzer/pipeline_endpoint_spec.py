@@ -529,3 +529,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def notebook_model_analysis_enabled(
+        self
+    ):
+
+        return True
