@@ -9,6 +9,10 @@ from .notebook_metadata_analyzer import (
     NotebookMetadataAnalyzer
 )
 
+from .cell_classifier import (
+    CellClassifier
+)
+
 
 @dataclass
 class PipelineStage:
@@ -37,6 +41,10 @@ class ExecutionPipeline:
         None
     )
 
+    cell_classifier: CellClassifier = (
+        None
+    )
+
     def __post_init__(self):
 
         if (
@@ -45,6 +53,14 @@ class ExecutionPipeline:
         ):
             self.notebook_metadata_analyzer = (
                 NotebookMetadataAnalyzer()
+            )
+
+        if (
+            self.cell_classifier
+            is None
+        ):
+            self.cell_classifier = (
+                CellClassifier()
             )
 
     def stage_names(self):
@@ -318,5 +334,20 @@ class ExecutionPipeline:
             .analyze(
                 notebook_name,
                 notebook
+            )
+        )
+
+    def classify_cell(
+        self,
+        cell,
+        cell_index
+    ):
+
+        return (
+            self
+            .cell_classifier
+            .classify(
+                cell,
+                cell_index
             )
         )

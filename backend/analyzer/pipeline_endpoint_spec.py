@@ -517,3 +517,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def cell_classification_enabled(
+        self
+    ):
+
+        return True
