@@ -547,3 +547,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def api_candidate_analysis_enabled(
+        self
+    ):
+
+        return True

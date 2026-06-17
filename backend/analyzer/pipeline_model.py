@@ -29,6 +29,10 @@ from .notebook_output_analyzer import (
     NotebookOutputAnalyzer
 )
 
+from .api_candidate_analyzer import (
+    APICandidateAnalyzer
+)
+
 
 @dataclass
 class PipelineStage:
@@ -74,6 +78,10 @@ class ExecutionPipeline:
     )
 
     notebook_output_analyzer: NotebookOutputAnalyzer = (
+        None
+    )
+
+    api_candidate_analyzer: APICandidateAnalyzer = (
         None
     )
 
@@ -125,6 +133,14 @@ class ExecutionPipeline:
         ):
             self.notebook_output_analyzer = (
                 NotebookOutputAnalyzer()
+            )
+
+        if (
+            self.api_candidate_analyzer
+            is None
+        ):
+            self.api_candidate_analyzer = (
+                APICandidateAnalyzer()
             )
 
     def stage_names(self):
@@ -463,6 +479,19 @@ class ExecutionPipeline:
         return (
             self
             .notebook_output_analyzer
+            .analyze(
+                notebook
+            )
+        )
+
+    def api_candidates(
+        self,
+        notebook
+    ):
+
+        return (
+            self
+            .api_candidate_analyzer
             .analyze(
                 notebook
             )
