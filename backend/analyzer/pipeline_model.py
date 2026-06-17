@@ -21,6 +21,10 @@ from .notebook_model_analyzer import (
     NotebookModelAnalyzer
 )
 
+from .notebook_input_analyzer import (
+    NotebookInputAnalyzer
+)
+
 
 @dataclass
 class PipelineStage:
@@ -61,6 +65,10 @@ class ExecutionPipeline:
         None
     )
 
+    notebook_input_analyzer: NotebookInputAnalyzer = (
+        None
+    )
+
     def __post_init__(self):
 
         if (
@@ -93,6 +101,14 @@ class ExecutionPipeline:
         ):
             self.notebook_model_analyzer = (
                 NotebookModelAnalyzer()
+            )
+
+        if (
+            self.notebook_input_analyzer
+            is None
+        ):
+            self.notebook_input_analyzer = (
+                NotebookInputAnalyzer()
             )
 
     def stage_names(self):
@@ -405,6 +421,19 @@ class ExecutionPipeline:
         return (
             self
             .notebook_model_analyzer
+            .analyze(
+                notebook
+            )
+        )
+
+    def notebook_inputs(
+        self,
+        notebook
+    ):
+
+        return (
+            self
+            .notebook_input_analyzer
             .analyze(
                 notebook
             )

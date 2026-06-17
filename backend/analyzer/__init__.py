@@ -17,3 +17,8 @@ from .notebook_model_analyzer import (
     NotebookModel,
     NotebookModelAnalyzer
 )
+
+from .notebook_input_analyzer import (
+    NotebookInput,
+    NotebookInputAnalyzer
+)

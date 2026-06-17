@@ -535,3 +535,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def notebook_input_analysis_enabled(
+        self
+    ):
+
+        return True
