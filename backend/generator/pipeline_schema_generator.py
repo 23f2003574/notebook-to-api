@@ -421,7 +421,7 @@ class PipelineSchemaGenerator:
             APIDocumentationGenerator()
         )
 
-        self.openapi_generator = (
+        self.openapi_description_generator = (
             OpenAPIDescriptionGenerator()
         )
 
@@ -2163,7 +2163,7 @@ class PipelineSchemaGenerator:
     ):
 
         return (
-            self.openapi_generator
+            self.openapi_description_generator
             .generate(
                 endpoint
             )
