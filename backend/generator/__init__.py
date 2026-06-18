@@ -305,3 +305,7 @@ from .swagger_specification import (
     SwaggerSpecification,
     SwaggerSpecificationEngine
 )
+from .openapi_documentation import (
+    OpenAPIDocumentation,
+    OpenAPIDocumentationEngine
+)

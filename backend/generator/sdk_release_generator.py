@@ -1269,3 +1269,22 @@ class SDKReleaseGenerator:
                     specification.paths
                 )
         }
+
+    def openapi_documentation_manifest(
+        self,
+        documentation
+    ):
+
+        return {
+
+            "endpoint_name":
+                documentation.endpoint_name,
+
+            "summary":
+                documentation.summary,
+
+            "tag_count":
+                len(
+                    documentation.tags
+                )
+        }
