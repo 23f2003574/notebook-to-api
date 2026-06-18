@@ -1347,3 +1347,22 @@ class SDKReleaseGenerator:
                     sdk.methods
                 )
         }
+
+    def typescript_sdk_manifest(
+        self,
+        sdk
+    ):
+
+        return {
+
+            "package_name":
+                sdk.package_name,
+
+            "version":
+                sdk.version,
+
+            "method_count":
+                len(
+                    sdk.methods
+                )
+        }

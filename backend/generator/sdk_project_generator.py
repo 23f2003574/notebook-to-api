@@ -754,3 +754,12 @@ class SDKProjectGenerator:
         return (
             sdk.methods
         )
+
+    def typescript_sdk_methods(
+        self,
+        sdk
+    ):
+
+        return (
+            sdk.methods
+        )

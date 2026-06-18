@@ -2633,3 +2633,16 @@ class PipelineSchemaGenerator:
                 sdk_methods
             )
         )
+
+    def generate_typescript_sdk_package(
+        self,
+        sdk_methods
+    ):
+
+        return (
+            self
+            .ts_sdk_generator
+            .generate(
+                sdk_methods
+            )
+        )

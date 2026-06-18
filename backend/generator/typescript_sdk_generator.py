@@ -1,5 +1,7 @@
 from textwrap import dedent
 
+from dataclasses import dataclass
+
 from backend.analyzer.pipeline_endpoint_spec import (
     PipelineEndpointSpec
 )
@@ -11,6 +13,16 @@ from .typescript_interface_generator import (
 from .typescript_client_generator import (
     TypeScriptClientGenerator
 )
+
+
+@dataclass
+class TypeScriptSDK:
+
+    package_name: str
+
+    methods: list[str]
+
+    version: str
 
 
 class TypeScriptSDKGenerator:
@@ -68,4 +80,27 @@ class TypeScriptSDKGenerator:
 
             {client_method}
             """
+        )
+
+    def generate(
+        self,
+        sdk_methods
+    ):
+
+        return TypeScriptSDK(
+
+            package_name=
+                "generated-sdk",
+
+            methods=[
+
+                method.method_name
+
+                for method
+
+                in sdk_methods
+            ],
+
+            version=
+                "1.0.0"
         )

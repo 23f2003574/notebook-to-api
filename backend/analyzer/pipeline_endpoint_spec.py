@@ -637,3 +637,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def typescript_sdk_enabled(
+        self
+    ):
+
+        return True

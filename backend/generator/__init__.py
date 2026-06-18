@@ -27,6 +27,7 @@ from .typescript_client_generator import (
     TypeScriptClientGenerator
 )
 from .typescript_sdk_generator import (
+    TypeScriptSDK,
     TypeScriptSDKGenerator
 )
 from .sdk_index_generator import (
