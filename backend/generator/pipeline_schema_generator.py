@@ -244,6 +244,9 @@ from .sdk_release import (
 from .sdk_changelog import (
     SDKChangelogEngine
 )
+from .sdk_platform_control_center import (
+    SDKPlatformControlCenterGenerator
+)
 
 
 
@@ -572,6 +575,10 @@ class PipelineSchemaGenerator:
 
         self.sdk_changelog_engine = (
             SDKChangelogEngine()
+        )
+
+        self.sdk_platform_control_center = (
+            SDKPlatformControlCenterGenerator()
         )
 
 
@@ -2711,4 +2718,14 @@ class PipelineSchemaGenerator:
             .generate(
                 version
             )
+        )
+
+    def generate_sdk_platform_control_center(
+        self
+    ):
+
+        return (
+            self
+            .sdk_platform_control_center
+            .generate()
         )

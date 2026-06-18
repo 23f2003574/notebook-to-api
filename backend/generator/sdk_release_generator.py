@@ -1429,3 +1429,29 @@ class SDKReleaseGenerator:
                     changelog.fixed
                 )
         }
+
+    def sdk_platform_manifest(
+        self,
+        control_center
+    ):
+
+        return {
+
+            "sdk_methods_enabled":
+                control_center.sdk_methods_enabled,
+
+            "python_sdk_enabled":
+                control_center.python_sdk_enabled,
+
+            "typescript_sdk_enabled":
+                control_center.typescript_sdk_enabled,
+
+            "packaging_enabled":
+                control_center.packaging_enabled,
+
+            "release_enabled":
+                control_center.release_enabled,
+
+            "changelog_enabled":
+                control_center.changelog_enabled
+        }

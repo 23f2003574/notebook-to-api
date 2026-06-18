@@ -329,3 +329,7 @@ from .sdk_changelog import (
     SDKChangelog,
     SDKChangelogEngine
 )
+from .sdk_platform_control_center import (
+    SDKPlatformControlCenter,
+    SDKPlatformControlCenterGenerator
+)

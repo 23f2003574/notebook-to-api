@@ -661,3 +661,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def sdk_platform_control_center_enabled(
+        self
+    ):
+
+        return True
