@@ -1366,3 +1366,23 @@ class SDKReleaseGenerator:
                     sdk.methods
                 )
         }
+
+    def sdk_package_manifest(
+        self,
+        package
+    ):
+
+        return {
+
+            "package_name":
+                package.package_name,
+
+            "version":
+                package.version,
+
+            "language":
+                package.language,
+
+            "install_command":
+                package.install_command
+        }

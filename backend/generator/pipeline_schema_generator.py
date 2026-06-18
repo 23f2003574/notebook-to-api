@@ -235,6 +235,9 @@ from .api_examples import (
 from .sdk_method_generator import (
     SDKMethodGenerator
 )
+from .sdk_packaging import (
+    SDKPackagingEngine
+)
 
 
 
@@ -551,6 +554,10 @@ class PipelineSchemaGenerator:
 
         self.sdk_method_generator = (
             SDKMethodGenerator()
+        )
+
+        self.sdk_packaging_engine = (
+            SDKPackagingEngine()
         )
 
 
@@ -2644,5 +2651,22 @@ class PipelineSchemaGenerator:
             .ts_sdk_generator
             .generate(
                 sdk_methods
+            )
+        )
+
+    def generate_sdk_packaging(
+        self,
+        package_name,
+        version,
+        language
+    ):
+
+        return (
+            self
+            .sdk_packaging_engine
+            .generate(
+                package_name,
+                version,
+                language
             )
         )
