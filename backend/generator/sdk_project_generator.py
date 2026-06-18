@@ -745,3 +745,12 @@ class SDKProjectGenerator:
 
             in methods
         ]
+
+    def python_sdk_methods(
+        self,
+        sdk
+    ):
+
+        return (
+            sdk.methods
+        )

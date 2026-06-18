@@ -1,8 +1,20 @@
 from textwrap import dedent
 
+from dataclasses import dataclass
+
 from backend.analyzer.pipeline_endpoint_spec import (
     PipelineEndpointSpec
 )
+
+
+@dataclass
+class PythonSDK:
+
+    package_name: str
+
+    methods: list[str]
+
+    version: str
 
 
 class PythonSDKGenerator:
@@ -198,3 +210,25 @@ raise last_exception
 """
 
 
+    def generate(
+        self,
+        sdk_methods
+    ):
+
+        return PythonSDK(
+
+            package_name=
+                "generated_sdk",
+
+            methods=[
+
+                method.method_name
+
+                for method
+
+                in sdk_methods
+            ],
+
+            version=
+                "1.0.0"
+        )

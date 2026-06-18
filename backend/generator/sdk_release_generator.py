@@ -1328,3 +1328,22 @@ class SDKReleaseGenerator:
                     method.request_fields
                 )
         }
+
+    def python_sdk_manifest(
+        self,
+        sdk
+    ):
+
+        return {
+
+            "package_name":
+                sdk.package_name,
+
+            "version":
+                sdk.version,
+
+            "method_count":
+                len(
+                    sdk.methods
+                )
+        }

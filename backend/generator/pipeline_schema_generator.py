@@ -2620,3 +2620,16 @@ class PipelineSchemaGenerator:
                 request_schema
             )
         )
+
+    def generate_python_sdk_package(
+        self,
+        sdk_methods
+    ):
+
+        return (
+            self
+            .python_sdk_generator
+            .generate(
+                sdk_methods
+            )
+        )

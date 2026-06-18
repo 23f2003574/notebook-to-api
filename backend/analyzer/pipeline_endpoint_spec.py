@@ -631,3 +631,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def python_sdk_enabled(
+        self
+    ):
+
+        return True
