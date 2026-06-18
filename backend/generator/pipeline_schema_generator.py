@@ -214,6 +214,9 @@ from .notebook_endpoint_suggestions import (
 from .notebook_understanding_control_center import (
     NotebookUnderstandingControlCenterGenerator
 )
+from .deployment_target import (
+    DeploymentTargetEngine
+)
 
 
 
@@ -502,6 +505,10 @@ class PipelineSchemaGenerator:
 
         self.notebook_understanding_control_center = (
             NotebookUnderstandingControlCenterGenerator()
+        )
+
+        self.deployment_target_engine = (
+            DeploymentTargetEngine()
         )
 
 
@@ -2471,5 +2478,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .notebook_understanding_control_center
+            .generate()
+        )
+
+    def generate_deployment_targets(
+        self
+    ):
+
+        return (
+            self
+            .deployment_target_engine
             .generate()
         )

@@ -589,3 +589,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def deployment_targets_enabled(
+        self
+    ):
+
+        return True

@@ -1202,3 +1202,16 @@ class SDKReleaseGenerator:
             "endpoint_suggestions_enabled":
                 control_center.endpoint_suggestions_enabled
         }
+
+    def deployment_target_manifest(
+        self,
+        targets
+    ):
+
+        return {
+
+            "target_count":
+                len(
+                    targets
+                )
+        }
