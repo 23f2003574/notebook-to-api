@@ -321,3 +321,7 @@ from .sdk_packaging import (
     SDKPackage,
     SDKPackagingEngine
 )
+from .sdk_release import (
+    SDKRelease,
+    SDKReleaseEngine
+)

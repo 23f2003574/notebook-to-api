@@ -238,6 +238,9 @@ from .sdk_method_generator import (
 from .sdk_packaging import (
     SDKPackagingEngine
 )
+from .sdk_release import (
+    SDKReleaseEngine
+)
 
 
 
@@ -558,6 +561,10 @@ class PipelineSchemaGenerator:
 
         self.sdk_packaging_engine = (
             SDKPackagingEngine()
+        )
+
+        self.sdk_release_engine = (
+            SDKReleaseEngine()
         )
 
 
@@ -2668,5 +2675,20 @@ class PipelineSchemaGenerator:
                 package_name,
                 version,
                 language
+            )
+        )
+
+    def generate_sdk_release(
+        self,
+        package_name,
+        version
+    ):
+
+        return (
+            self
+            .sdk_release_engine
+            .generate(
+                package_name,
+                version
             )
         )

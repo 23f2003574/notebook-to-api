@@ -649,3 +649,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def sdk_release_enabled(
+        self
+    ):
+
+        return True

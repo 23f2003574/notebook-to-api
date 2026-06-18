@@ -1386,3 +1386,20 @@ class SDKReleaseGenerator:
             "install_command":
                 package.install_command
         }
+
+    def release_manifest(
+        self,
+        release
+    ):
+
+        return {
+
+            "package_name":
+                release.package_name,
+
+            "version":
+                release.version,
+
+            "release_tag":
+                release.release_tag
+        }
