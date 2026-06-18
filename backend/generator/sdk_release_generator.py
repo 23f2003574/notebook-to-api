@@ -1215,3 +1215,19 @@ class SDKReleaseGenerator:
                     targets
                 )
         }
+
+    def response_schema_manifest(
+        self,
+        schema
+    ):
+
+        return {
+
+            "title":
+                schema.title,
+
+            "field_count":
+                len(
+                    schema.fields
+                )
+        }
