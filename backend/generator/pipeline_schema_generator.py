@@ -241,6 +241,9 @@ from .sdk_packaging import (
 from .sdk_release import (
     SDKReleaseEngine
 )
+from .sdk_changelog import (
+    SDKChangelogEngine
+)
 
 
 
@@ -565,6 +568,10 @@ class PipelineSchemaGenerator:
 
         self.sdk_release_engine = (
             SDKReleaseEngine()
+        )
+
+        self.sdk_changelog_engine = (
+            SDKChangelogEngine()
         )
 
 
@@ -2689,6 +2696,19 @@ class PipelineSchemaGenerator:
             .sdk_release_engine
             .generate(
                 package_name,
+                version
+            )
+        )
+
+    def generate_sdk_changelog(
+        self,
+        version
+    ):
+
+        return (
+            self
+            .sdk_changelog_engine
+            .generate(
                 version
             )
         )

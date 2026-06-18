@@ -1403,3 +1403,29 @@ class SDKReleaseGenerator:
             "release_tag":
                 release.release_tag
         }
+
+    def changelog_manifest(
+        self,
+        changelog
+    ):
+
+        return {
+
+            "version":
+                changelog.version,
+
+            "added":
+                len(
+                    changelog.added
+                ),
+
+            "improved":
+                len(
+                    changelog.improved
+                ),
+
+            "fixed":
+                len(
+                    changelog.fixed
+                )
+        }

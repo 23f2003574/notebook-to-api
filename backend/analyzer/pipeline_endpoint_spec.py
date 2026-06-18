@@ -655,3 +655,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def sdk_changelog_enabled(
+        self
+    ):
+
+        return True

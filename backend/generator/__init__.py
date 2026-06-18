@@ -325,3 +325,7 @@ from .sdk_release import (
     SDKRelease,
     SDKReleaseEngine
 )
+from .sdk_changelog import (
+    SDKChangelog,
+    SDKChangelogEngine
+)
