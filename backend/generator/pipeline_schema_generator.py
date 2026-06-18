@@ -223,6 +223,9 @@ from .response_schema import (
 from .openapi_specification import (
     OpenAPISpecificationEngine
 )
+from .swagger_specification import (
+    SwaggerSpecificationEngine
+)
 
 
 
@@ -523,6 +526,10 @@ class PipelineSchemaGenerator:
 
         self.openapi_specification_engine = (
             OpenAPISpecificationEngine()
+        )
+
+        self.swagger_specification_engine = (
+            SwaggerSpecificationEngine()
         )
 
 
@@ -2532,5 +2539,18 @@ class PipelineSchemaGenerator:
                 endpoint_name,
                 request_schema,
                 response_schema
+            )
+        )
+
+    def generate_swagger_specification(
+        self,
+        openapi_specification
+    ):
+
+        return (
+            self
+            .swagger_specification_engine
+            .generate(
+                openapi_specification
             )
         )

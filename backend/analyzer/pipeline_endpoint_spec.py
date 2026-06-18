@@ -607,3 +607,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def swagger_specification_enabled(
+        self
+    ):
+
+        return True

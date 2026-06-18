@@ -1250,3 +1250,22 @@ class SDKReleaseGenerator:
                     specification.paths
                 )
         }
+
+    def swagger_manifest(
+        self,
+        specification
+    ):
+
+        return {
+
+            "title":
+                specification.title,
+
+            "version":
+                specification.version,
+
+            "path_count":
+                len(
+                    specification.paths
+                )
+        }
