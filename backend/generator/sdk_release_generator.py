@@ -1309,3 +1309,22 @@ class SDKReleaseGenerator:
                     example.response_example
                 )
         }
+
+    def sdk_method_manifest(
+        self,
+        method
+    ):
+
+        return {
+
+            "method_name":
+                method.method_name,
+
+            "endpoint_name":
+                method.endpoint_name,
+
+            "parameter_count":
+                len(
+                    method.request_fields
+                )
+        }

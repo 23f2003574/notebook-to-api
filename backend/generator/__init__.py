@@ -311,3 +311,7 @@ from .openapi_documentation import (
     OpenAPIDocumentation,
     OpenAPIDocumentationEngine
 )
+from .sdk_method_generator import (
+    SDKMethod,
+    SDKMethodGenerator
+)

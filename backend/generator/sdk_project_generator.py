@@ -731,3 +731,17 @@ class SDKProjectGenerator:
         return SDKProject(
             files=files
         )
+
+    def sdk_method_names(
+        self,
+        methods
+    ):
+
+        return [
+
+            method.method_name
+
+            for method
+
+            in methods
+        ]

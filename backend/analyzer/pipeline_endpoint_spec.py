@@ -625,3 +625,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def sdk_methods_enabled(
+        self
+    ):
+
+        return True

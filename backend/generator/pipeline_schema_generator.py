@@ -232,6 +232,9 @@ from .openapi_documentation import (
 from .api_examples import (
     APIExampleEngine
 )
+from .sdk_method_generator import (
+    SDKMethodGenerator
+)
 
 
 
@@ -544,6 +547,10 @@ class PipelineSchemaGenerator:
 
         self.api_example_engine = (
             APIExampleEngine()
+        )
+
+        self.sdk_method_generator = (
+            SDKMethodGenerator()
         )
 
 
@@ -2596,5 +2603,20 @@ class PipelineSchemaGenerator:
                 endpoint_name,
                 request_schema,
                 response_schema
+            )
+        )
+
+    def generate_sdk_method(
+        self,
+        endpoint_name,
+        request_schema
+    ):
+
+        return (
+            self
+            .sdk_method_generator
+            .generate(
+                endpoint_name,
+                request_schema
             )
         )
