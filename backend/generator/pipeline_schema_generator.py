@@ -220,6 +220,9 @@ from .deployment_target import (
 from .response_schema import (
     ResponseSchemaEngine
 )
+from .openapi_specification import (
+    OpenAPISpecificationEngine
+)
 
 
 
@@ -516,6 +519,10 @@ class PipelineSchemaGenerator:
 
         self.response_schema_engine = (
             ResponseSchemaEngine()
+        )
+
+        self.openapi_specification_engine = (
+            OpenAPISpecificationEngine()
         )
 
 
@@ -2508,5 +2515,22 @@ class PipelineSchemaGenerator:
             .response_schema_engine
             .generate(
                 outputs
+            )
+        )
+
+    def generate_openapi_specification(
+        self,
+        endpoint_name,
+        request_schema,
+        response_schema
+    ):
+
+        return (
+            self
+            .openapi_specification_engine
+            .generate(
+                endpoint_name,
+                request_schema,
+                response_schema
             )
         )

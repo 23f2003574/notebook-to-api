@@ -297,3 +297,7 @@ from .response_schema import (
     ResponseSchema,
     ResponseSchemaEngine
 )
+from .openapi_specification import (
+    OpenAPISpecification,
+    OpenAPISpecificationEngine
+)

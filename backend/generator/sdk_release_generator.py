@@ -1231,3 +1231,22 @@ class SDKReleaseGenerator:
                     schema.fields
                 )
         }
+
+    def openapi_manifest(
+        self,
+        specification
+    ):
+
+        return {
+
+            "title":
+                specification.title,
+
+            "version":
+                specification.version,
+
+            "path_count":
+                len(
+                    specification.paths
+                )
+        }
