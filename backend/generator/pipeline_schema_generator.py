@@ -229,6 +229,9 @@ from .swagger_specification import (
 from .openapi_documentation import (
     OpenAPIDocumentationEngine
 )
+from .api_examples import (
+    APIExampleEngine
+)
 
 
 
@@ -537,6 +540,10 @@ class PipelineSchemaGenerator:
 
         self.openapi_documentation_engine = (
             OpenAPIDocumentationEngine()
+        )
+
+        self.api_example_engine = (
+            APIExampleEngine()
         )
 
 
@@ -2572,5 +2579,22 @@ class PipelineSchemaGenerator:
             .openapi_documentation_engine
             .generate(
                 endpoint_name
+            )
+        )
+
+    def generate_api_examples(
+        self,
+        endpoint_name,
+        request_schema,
+        response_schema
+    ):
+
+        return (
+            self
+            .api_example_engine
+            .generate(
+                endpoint_name,
+                request_schema,
+                response_schema
             )
         )

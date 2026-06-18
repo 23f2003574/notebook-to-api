@@ -1288,3 +1288,24 @@ class SDKReleaseGenerator:
                     documentation.tags
                 )
         }
+
+    def api_example_manifest(
+        self,
+        example
+    ):
+
+        return {
+
+            "endpoint_name":
+                example.endpoint_name,
+
+            "request_fields":
+                len(
+                    example.request_example
+                ),
+
+            "response_fields":
+                len(
+                    example.response_example
+                )
+        }

@@ -220,7 +220,9 @@ from .openapi_description import (
 )
 from .api_examples import (
     APIUsageExample,
-    APIUsageExampleGenerator
+    APIUsageExampleGenerator,
+    APIExample,
+    APIExampleEngine
 )
 from .sdk_quickstart import (
     SDKQuickStart,
