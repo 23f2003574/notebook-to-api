@@ -340,6 +340,10 @@ from .deployment_report import (
     DeploymentReport,
     DeploymentReportGenerator
 )
+from .deployment_intelligence_control_center import (
+    DeploymentIntelligenceControlCenter,
+    DeploymentIntelligenceControlCenterGenerator
+)
 from .response_schema import (
     ResponseField,
     ResponseSchema,

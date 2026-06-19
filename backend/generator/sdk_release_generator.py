@@ -1412,6 +1412,50 @@ class SDKReleaseGenerator:
                 report.section_count
         }
 
+    def deployment_intelligence_manifest(
+        self,
+        control_center
+    ):
+
+        return {
+
+            "deployment_targets_enabled":
+                control_center.deployment_targets_enabled,
+
+            "deployment_blueprints_enabled":
+                control_center.deployment_blueprints_enabled,
+
+            "infrastructure_enabled":
+                control_center.infrastructure_enabled,
+
+            "runtime_enabled":
+                control_center.runtime_enabled,
+
+            "container_enabled":
+                control_center.container_enabled,
+
+            "scaling_enabled":
+                control_center.scaling_enabled,
+
+            "resource_sizing_enabled":
+                control_center.resource_sizing_enabled,
+
+            "environment_variables_enabled":
+                control_center.environment_variables_enabled,
+
+            "validation_enabled":
+                control_center.validation_enabled,
+
+            "checklist_enabled":
+                control_center.checklist_enabled,
+
+            "production_readiness_enabled":
+                control_center.production_readiness_enabled,
+
+            "deployment_report_enabled":
+                control_center.deployment_report_enabled
+        }
+
     def response_schema_manifest(
         self,
         schema
