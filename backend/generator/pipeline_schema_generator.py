@@ -247,6 +247,9 @@ from .deployment_checklist import (
 from .production_readiness import (
     ProductionReadinessEngine
 )
+from .deployment_report import (
+    DeploymentReportGenerator
+)
 from .response_schema import (
     ResponseSchemaEngine
 )
@@ -609,6 +612,10 @@ class PipelineSchemaGenerator:
 
         self.production_readiness_engine = (
             ProductionReadinessEngine()
+        )
+
+        self.deployment_report_generator = (
+            DeploymentReportGenerator()
         )
 
         self.response_schema_engine = (
@@ -2731,6 +2738,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .production_readiness_engine
+            .generate()
+        )
+
+    def generate_deployment_report(
+        self
+    ):
+
+        return (
+            self
+            .deployment_report_generator
             .generate()
         )
 

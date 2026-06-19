@@ -1398,6 +1398,20 @@ class SDKReleaseGenerator:
                 )
         }
 
+    def deployment_report_manifest(
+        self,
+        report
+    ):
+
+        return {
+
+            "title":
+                report.title,
+
+            "section_count":
+                report.section_count
+        }
+
     def response_schema_manifest(
         self,
         schema

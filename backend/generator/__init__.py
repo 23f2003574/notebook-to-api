@@ -336,6 +336,10 @@ from .production_readiness import (
     ProductionReadiness,
     ProductionReadinessEngine
 )
+from .deployment_report import (
+    DeploymentReport,
+    DeploymentReportGenerator
+)
 from .response_schema import (
     ResponseField,
     ResponseSchema,
