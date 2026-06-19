@@ -1379,6 +1379,25 @@ class SDKReleaseGenerator:
                 checklist.total_items
         }
 
+    def production_readiness_manifest(
+        self,
+        readiness
+    ):
+
+        return {
+
+            "readiness_score":
+                readiness.readiness_score,
+
+            "production_ready":
+                readiness.production_ready,
+
+            "recommendation_count":
+                len(
+                    readiness.recommendations
+                )
+        }
+
     def response_schema_manifest(
         self,
         schema

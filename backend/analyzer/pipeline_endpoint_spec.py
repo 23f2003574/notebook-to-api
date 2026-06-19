@@ -650,6 +650,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def production_readiness_enabled(
+        self
+    ):
+
+        return True
+
     def response_schema_enabled(
         self
     ):
