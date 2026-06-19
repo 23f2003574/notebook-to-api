@@ -1233,6 +1233,26 @@ class SDKReleaseGenerator:
                 blueprint.port
         }
 
+    def infrastructure_manifest(
+        self,
+        recommendation
+    ):
+
+        return {
+
+            "cpu":
+                recommendation.cpu,
+
+            "memory":
+                recommendation.memory,
+
+            "storage":
+                recommendation.storage,
+
+            "recommendation_level":
+                recommendation.recommendation_level
+        }
+
     def response_schema_manifest(
         self,
         schema

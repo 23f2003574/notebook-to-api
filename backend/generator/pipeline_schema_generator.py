@@ -220,6 +220,9 @@ from .deployment_target import (
 from .deployment_blueprint import (
     DeploymentBlueprintEngine
 )
+from .infrastructure_recommendation import (
+    InfrastructureRecommendationEngine
+)
 from .response_schema import (
     ResponseSchemaEngine
 )
@@ -546,6 +549,10 @@ class PipelineSchemaGenerator:
 
         self.deployment_blueprint_engine = (
             DeploymentBlueprintEngine()
+        )
+
+        self.infrastructure_recommendation_engine = (
+            InfrastructureRecommendationEngine()
         )
 
         self.response_schema_engine = (
@@ -2579,6 +2586,16 @@ class PipelineSchemaGenerator:
             .generate(
                 target
             )
+        )
+
+    def generate_infrastructure_recommendation(
+        self
+    ):
+
+        return (
+            self
+            .infrastructure_recommendation_engine
+            .generate()
         )
 
     def generate_response_schema(

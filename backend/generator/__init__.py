@@ -300,6 +300,10 @@ from .deployment_blueprint import (
     DeploymentBlueprint,
     DeploymentBlueprintEngine
 )
+from .infrastructure_recommendation import (
+    InfrastructureRecommendation,
+    InfrastructureRecommendationEngine
+)
 from .response_schema import (
     ResponseField,
     ResponseSchema,
