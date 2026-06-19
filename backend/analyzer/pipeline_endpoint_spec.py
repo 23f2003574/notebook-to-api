@@ -614,6 +614,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def container_recommendation_enabled(
+        self
+    ):
+
+        return True
+
     def response_schema_enabled(
         self
     ):

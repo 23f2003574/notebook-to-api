@@ -308,6 +308,10 @@ from .runtime_requirement import (
     RuntimeRequirement,
     RuntimeRequirementEngine
 )
+from .container_recommendation import (
+    ContainerRecommendation,
+    ContainerRecommendationEngine
+)
 from .response_schema import (
     ResponseField,
     ResponseSchema,

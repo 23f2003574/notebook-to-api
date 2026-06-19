@@ -1273,6 +1273,26 @@ class SDKReleaseGenerator:
                 requirement.framework_version
         }
 
+    def container_recommendation_manifest(
+        self,
+        recommendation
+    ):
+
+        return {
+
+            "container_required":
+                recommendation.container_required,
+
+            "container_runtime":
+                recommendation.container_runtime,
+
+            "image_strategy":
+                recommendation.image_strategy,
+
+            "confidence":
+                recommendation.confidence
+        }
+
     def response_schema_manifest(
         self,
         schema
