@@ -668,6 +668,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def deployment_intelligence_automation_enabled(
+        self
+    ):
+
+        return True
+
     def response_schema_enabled(
         self
     ):

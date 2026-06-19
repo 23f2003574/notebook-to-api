@@ -1456,6 +1456,20 @@ class SDKReleaseGenerator:
                 control_center.deployment_report_enabled
         }
 
+    def deployment_intelligence_automation_manifest(
+        self,
+        automation
+    ):
+
+        return {
+
+            "deployment_target":
+                automation.deployment_target,
+
+            "workflow_steps":
+                automation.workflow_steps
+        }
+
     def response_schema_manifest(
         self,
         schema

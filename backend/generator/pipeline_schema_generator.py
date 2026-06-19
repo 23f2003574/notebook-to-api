@@ -253,6 +253,9 @@ from .deployment_report import (
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenterGenerator
 )
+from .deployment_intelligence_automation import (
+    DeploymentIntelligenceAutomationEngine
+)
 from .response_schema import (
     ResponseSchemaEngine
 )
@@ -623,6 +626,10 @@ class PipelineSchemaGenerator:
 
         self.deployment_intelligence_control_center = (
             DeploymentIntelligenceControlCenterGenerator()
+        )
+
+        self.deployment_intelligence_automation_engine = (
+            DeploymentIntelligenceAutomationEngine()
         )
 
         self.response_schema_engine = (
@@ -2766,6 +2773,19 @@ class PipelineSchemaGenerator:
             self
             .deployment_intelligence_control_center
             .generate()
+        )
+
+    def generate_deployment_automation(
+        self,
+        deployment_target
+    ):
+
+        return (
+            self
+            .deployment_intelligence_automation_engine
+            .generate(
+                deployment_target
+            )
         )
 
     def generate_response_schema(

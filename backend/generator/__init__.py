@@ -344,6 +344,10 @@ from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator
 )
+from .deployment_intelligence_automation import (
+    DeploymentIntelligenceAutomation,
+    DeploymentIntelligenceAutomationEngine
+)
 from .response_schema import (
     ResponseField,
     ResponseSchema,
