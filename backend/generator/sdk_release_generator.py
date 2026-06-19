@@ -1216,6 +1216,23 @@ class SDKReleaseGenerator:
                 )
         }
 
+    def deployment_blueprint_manifest(
+        self,
+        blueprint
+    ):
+
+        return {
+
+            "target":
+                blueprint.target,
+
+            "runtime":
+                blueprint.runtime,
+
+            "port":
+                blueprint.port
+        }
+
     def response_schema_manifest(
         self,
         schema

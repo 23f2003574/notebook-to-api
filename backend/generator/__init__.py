@@ -296,6 +296,10 @@ from .deployment_target import (
     DeploymentTarget,
     DeploymentTargetEngine
 )
+from .deployment_blueprint import (
+    DeploymentBlueprint,
+    DeploymentBlueprintEngine
+)
 from .response_schema import (
     ResponseField,
     ResponseSchema,

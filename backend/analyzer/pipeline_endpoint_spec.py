@@ -596,6 +596,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def deployment_blueprint_enabled(
+        self
+    ):
+
+        return True
+
     def response_schema_enabled(
         self
     ):

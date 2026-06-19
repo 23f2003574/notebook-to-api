@@ -217,6 +217,9 @@ from .notebook_understanding_control_center import (
 from .deployment_target import (
     DeploymentTargetEngine
 )
+from .deployment_blueprint import (
+    DeploymentBlueprintEngine
+)
 from .response_schema import (
     ResponseSchemaEngine
 )
@@ -539,6 +542,10 @@ class PipelineSchemaGenerator:
 
         self.deployment_target_engine = (
             DeploymentTargetEngine()
+        )
+
+        self.deployment_blueprint_engine = (
+            DeploymentBlueprintEngine()
         )
 
         self.response_schema_engine = (
@@ -2559,6 +2566,19 @@ class PipelineSchemaGenerator:
             self
             .deployment_target_engine
             .generate()
+        )
+
+    def generate_deployment_blueprint(
+        self,
+        target
+    ):
+
+        return (
+            self
+            .deployment_blueprint_engine
+            .generate(
+                target
+            )
         )
 
     def generate_response_schema(
