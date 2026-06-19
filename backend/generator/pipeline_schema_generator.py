@@ -223,6 +223,9 @@ from .deployment_blueprint import (
 from .infrastructure_recommendation import (
     InfrastructureRecommendationEngine
 )
+from .runtime_requirement import (
+    RuntimeRequirementEngine
+)
 from .response_schema import (
     ResponseSchemaEngine
 )
@@ -553,6 +556,10 @@ class PipelineSchemaGenerator:
 
         self.infrastructure_recommendation_engine = (
             InfrastructureRecommendationEngine()
+        )
+
+        self.runtime_requirement_engine = (
+            RuntimeRequirementEngine()
         )
 
         self.response_schema_engine = (
@@ -2595,6 +2602,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .infrastructure_recommendation_engine
+            .generate()
+        )
+
+    def generate_runtime_requirement(
+        self
+    ):
+
+        return (
+            self
+            .runtime_requirement_engine
             .generate()
         )
 

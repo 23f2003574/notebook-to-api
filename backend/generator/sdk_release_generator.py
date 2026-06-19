@@ -1253,6 +1253,26 @@ class SDKReleaseGenerator:
                 recommendation.recommendation_level
         }
 
+    def runtime_requirement_manifest(
+        self,
+        requirement
+    ):
+
+        return {
+
+            "language":
+                requirement.language,
+
+            "version":
+                requirement.version,
+
+            "framework":
+                requirement.framework,
+
+            "framework_version":
+                requirement.framework_version
+        }
+
     def response_schema_manifest(
         self,
         schema
