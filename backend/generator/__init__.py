@@ -328,6 +328,10 @@ from .deployment_validation import (
     DeploymentValidation,
     DeploymentValidationEngine
 )
+from .deployment_checklist import (
+    DeploymentChecklist,
+    DeploymentChecklistGenerator
+)
 from .response_schema import (
     ResponseField,
     ResponseSchema,

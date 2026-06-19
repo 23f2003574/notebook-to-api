@@ -644,6 +644,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def deployment_checklist_enabled(
+        self
+    ):
+
+        return True
+
     def response_schema_enabled(
         self
     ):

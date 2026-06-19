@@ -241,6 +241,9 @@ from .environment_variable import (
 from .deployment_validation import (
     DeploymentValidationEngine
 )
+from .deployment_checklist import (
+    DeploymentChecklistGenerator
+)
 from .response_schema import (
     ResponseSchemaEngine
 )
@@ -595,6 +598,10 @@ class PipelineSchemaGenerator:
 
         self.deployment_validation_engine = (
             DeploymentValidationEngine()
+        )
+
+        self.deployment_checklist_generator = (
+            DeploymentChecklistGenerator()
         )
 
         self.response_schema_engine = (
@@ -2697,6 +2704,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .deployment_validation_engine
+            .generate()
+        )
+
+    def generate_deployment_checklist(
+        self
+    ):
+
+        return (
+            self
+            .deployment_checklist_generator
             .generate()
         )
 

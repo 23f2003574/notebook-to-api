@@ -1365,6 +1365,20 @@ class SDKReleaseGenerator:
                 )
         }
 
+    def deployment_checklist_manifest(
+        self,
+        checklist
+    ):
+
+        return {
+
+            "completed_items":
+                checklist.completed_items,
+
+            "total_items":
+                checklist.total_items
+        }
+
     def response_schema_manifest(
         self,
         schema
