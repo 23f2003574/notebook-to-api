@@ -320,6 +320,10 @@ from .resource_sizing import (
     ResourceSizing,
     ResourceSizingEngine
 )
+from .environment_variable import (
+    EnvironmentVariable,
+    EnvironmentVariableEngine
+)
 from .response_schema import (
     ResponseField,
     ResponseSchema,

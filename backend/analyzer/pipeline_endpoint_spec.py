@@ -632,6 +632,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def environment_variables_enabled(
+        self
+    ):
+
+        return True
+
     def response_schema_enabled(
         self
     ):

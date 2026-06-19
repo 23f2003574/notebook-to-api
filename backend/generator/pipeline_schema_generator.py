@@ -235,6 +235,9 @@ from .scaling_recommendation import (
 from .resource_sizing import (
     ResourceSizingEngine
 )
+from .environment_variable import (
+    EnvironmentVariableEngine
+)
 from .response_schema import (
     ResponseSchemaEngine
 )
@@ -581,6 +584,10 @@ class PipelineSchemaGenerator:
 
         self.resource_sizing_engine = (
             ResourceSizingEngine()
+        )
+
+        self.environment_variable_engine = (
+            EnvironmentVariableEngine()
         )
 
         self.response_schema_engine = (
@@ -2663,6 +2670,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .resource_sizing_engine
+            .generate()
+        )
+
+    def generate_environment_variables(
+        self
+    ):
+
+        return (
+            self
+            .environment_variable_engine
             .generate()
         )
 

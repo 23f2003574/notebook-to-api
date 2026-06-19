@@ -1333,6 +1333,19 @@ class SDKReleaseGenerator:
                 sizing.concurrency_limit
         }
 
+    def environment_variable_manifest(
+        self,
+        variables
+    ):
+
+        return {
+
+            "variable_count":
+                len(
+                    variables
+                )
+        }
+
     def response_schema_manifest(
         self,
         schema
