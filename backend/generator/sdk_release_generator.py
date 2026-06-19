@@ -1293,6 +1293,26 @@ class SDKReleaseGenerator:
                 recommendation.confidence
         }
 
+    def scaling_recommendation_manifest(
+        self,
+        recommendation
+    ):
+
+        return {
+
+            "strategy":
+                recommendation.strategy,
+
+            "min_instances":
+                recommendation.min_instances,
+
+            "max_instances":
+                recommendation.max_instances,
+
+            "auto_scaling":
+                recommendation.auto_scaling
+        }
+
     def response_schema_manifest(
         self,
         schema

@@ -312,6 +312,10 @@ from .container_recommendation import (
     ContainerRecommendation,
     ContainerRecommendationEngine
 )
+from .scaling_recommendation import (
+    ScalingRecommendation,
+    ScalingRecommendationEngine
+)
 from .response_schema import (
     ResponseField,
     ResponseSchema,

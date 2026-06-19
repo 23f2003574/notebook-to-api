@@ -620,6 +620,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def scaling_recommendation_enabled(
+        self
+    ):
+
+        return True
+
     def response_schema_enabled(
         self
     ):

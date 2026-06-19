@@ -229,6 +229,9 @@ from .runtime_requirement import (
 from .container_recommendation import (
     ContainerRecommendationEngine
 )
+from .scaling_recommendation import (
+    ScalingRecommendationEngine
+)
 from .response_schema import (
     ResponseSchemaEngine
 )
@@ -567,6 +570,10 @@ class PipelineSchemaGenerator:
 
         self.container_recommendation_engine = (
             ContainerRecommendationEngine()
+        )
+
+        self.scaling_recommendation_engine = (
+            ScalingRecommendationEngine()
         )
 
         self.response_schema_engine = (
@@ -2629,6 +2636,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .container_recommendation_engine
+            .generate()
+        )
+
+    def generate_scaling_recommendation(
+        self
+    ):
+
+        return (
+            self
+            .scaling_recommendation_engine
             .generate()
         )
 
