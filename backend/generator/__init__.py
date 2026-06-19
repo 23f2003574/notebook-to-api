@@ -316,6 +316,10 @@ from .scaling_recommendation import (
     ScalingRecommendation,
     ScalingRecommendationEngine
 )
+from .resource_sizing import (
+    ResourceSizing,
+    ResourceSizingEngine
+)
 from .response_schema import (
     ResponseField,
     ResponseSchema,

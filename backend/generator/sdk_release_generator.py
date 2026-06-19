@@ -1313,6 +1313,26 @@ class SDKReleaseGenerator:
                 recommendation.auto_scaling
         }
 
+    def resource_sizing_manifest(
+        self,
+        sizing
+    ):
+
+        return {
+
+            "cpu_limit":
+                sizing.cpu_limit,
+
+            "memory_limit":
+                sizing.memory_limit,
+
+            "storage_limit":
+                sizing.storage_limit,
+
+            "concurrency_limit":
+                sizing.concurrency_limit
+        }
+
     def response_schema_manifest(
         self,
         schema

@@ -626,6 +626,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def resource_sizing_enabled(
+        self
+    ):
+
+        return True
+
     def response_schema_enabled(
         self
     ):

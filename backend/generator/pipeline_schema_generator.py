@@ -232,6 +232,9 @@ from .container_recommendation import (
 from .scaling_recommendation import (
     ScalingRecommendationEngine
 )
+from .resource_sizing import (
+    ResourceSizingEngine
+)
 from .response_schema import (
     ResponseSchemaEngine
 )
@@ -574,6 +577,10 @@ class PipelineSchemaGenerator:
 
         self.scaling_recommendation_engine = (
             ScalingRecommendationEngine()
+        )
+
+        self.resource_sizing_engine = (
+            ResourceSizingEngine()
         )
 
         self.response_schema_engine = (
@@ -2646,6 +2653,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .scaling_recommendation_engine
+            .generate()
+        )
+
+    def generate_resource_sizing(
+        self
+    ):
+
+        return (
+            self
+            .resource_sizing_engine
             .generate()
         )
 
