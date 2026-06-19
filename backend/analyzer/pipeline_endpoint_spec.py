@@ -638,6 +638,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def deployment_validation_enabled(
+        self
+    ):
+
+        return True
+
     def response_schema_enabled(
         self
     ):

@@ -1346,6 +1346,25 @@ class SDKReleaseGenerator:
                 )
         }
 
+    def deployment_validation_manifest(
+        self,
+        validation
+    ):
+
+        return {
+
+            "validation_passed":
+                validation.validation_passed,
+
+            "checks_performed":
+                validation.checks_performed,
+
+            "warning_count":
+                len(
+                    validation.warnings
+                )
+        }
+
     def response_schema_manifest(
         self,
         schema

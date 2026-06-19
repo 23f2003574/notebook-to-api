@@ -238,6 +238,9 @@ from .resource_sizing import (
 from .environment_variable import (
     EnvironmentVariableEngine
 )
+from .deployment_validation import (
+    DeploymentValidationEngine
+)
 from .response_schema import (
     ResponseSchemaEngine
 )
@@ -588,6 +591,10 @@ class PipelineSchemaGenerator:
 
         self.environment_variable_engine = (
             EnvironmentVariableEngine()
+        )
+
+        self.deployment_validation_engine = (
+            DeploymentValidationEngine()
         )
 
         self.response_schema_engine = (
@@ -2680,6 +2687,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .environment_variable_engine
+            .generate()
+        )
+
+    def generate_deployment_validation(
+        self
+    ):
+
+        return (
+            self
+            .deployment_validation_engine
             .generate()
         )
 
