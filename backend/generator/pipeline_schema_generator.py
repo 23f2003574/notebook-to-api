@@ -286,6 +286,9 @@ from .sdk_changelog import (
 from .sdk_platform_control_center import (
     SDKPlatformControlCenterGenerator
 )
+from .health_check import (
+    HealthCheckEngine
+)
 
 
 
@@ -670,6 +673,10 @@ class PipelineSchemaGenerator:
 
         self.sdk_platform_control_center = (
             SDKPlatformControlCenterGenerator()
+        )
+
+        self.health_check_engine = (
+            HealthCheckEngine()
         )
 
 
@@ -2954,5 +2961,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .sdk_platform_control_center
+            .generate()
+        )
+
+    def generate_health_check(
+        self
+    ):
+
+        return (
+            self
+            .health_check_engine
             .generate()
         )

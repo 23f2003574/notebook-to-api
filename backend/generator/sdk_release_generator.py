@@ -1709,3 +1709,20 @@ class SDKReleaseGenerator:
             "changelog_enabled":
                 control_center.changelog_enabled
         }
+
+    def health_check_manifest(
+        self,
+        health_check
+    ):
+
+        return {
+
+            "endpoint":
+                health_check.endpoint,
+
+            "method":
+                health_check.method,
+
+            "success_status":
+                health_check.success_status
+        }

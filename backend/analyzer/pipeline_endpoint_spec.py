@@ -745,3 +745,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def health_check_enabled(
+        self
+    ):
+
+        return True
