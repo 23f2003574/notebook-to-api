@@ -1833,3 +1833,23 @@ class SDKReleaseGenerator:
             "severity":
                 incident.severity
         }
+
+    def slo_recommendation_manifest(
+        self,
+        slo
+    ):
+
+        return {
+
+            "availability_target":
+                slo.availability_target,
+
+            "latency_target_ms":
+                slo.latency_target_ms,
+
+            "error_budget_percent":
+                slo.error_budget_percent,
+
+            "reliability_tier":
+                slo.reliability_tier
+        }

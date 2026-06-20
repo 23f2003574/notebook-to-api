@@ -793,3 +793,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def slo_recommendation_enabled(
+        self
+    ):
+
+        return True

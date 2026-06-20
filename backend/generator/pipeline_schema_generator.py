@@ -310,6 +310,9 @@ from .service_dependency_map import (
 from .incident_analysis import (
     IncidentAnalysisEngine
 )
+from .slo_recommendation import (
+    SLORecommendationEngine
+)
 
 
 
@@ -726,6 +729,10 @@ class PipelineSchemaGenerator:
 
         self.incident_analysis_engine = (
             IncidentAnalysisEngine()
+        )
+
+        self.slo_recommendation_engine = (
+            SLORecommendationEngine()
         )
 
 
@@ -3090,5 +3097,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .incident_analysis_engine
+            .generate()
+        )
+
+    def generate_slo_recommendation(
+        self
+    ):
+
+        return (
+            self
+            .slo_recommendation_engine
             .generate()
         )

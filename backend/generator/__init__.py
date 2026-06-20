@@ -418,3 +418,7 @@ from .incident_analysis import (
     IncidentAnalysis,
     IncidentAnalysisEngine
 )
+from .slo_recommendation import (
+    SLORecommendation,
+    SLORecommendationEngine
+)
