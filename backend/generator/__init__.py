@@ -405,3 +405,7 @@ from .monitoring_dashboard import (
     MonitoringDashboard,
     MonitoringDashboardEngine
 )
+from .distributed_tracing import (
+    DistributedTracing,
+    DistributedTracingEngine
+)

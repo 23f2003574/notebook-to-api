@@ -301,6 +301,9 @@ from .alert_policy import (
 from .monitoring_dashboard import (
     MonitoringDashboardEngine
 )
+from .distributed_tracing import (
+    DistributedTracingEngine
+)
 
 
 
@@ -705,6 +708,10 @@ class PipelineSchemaGenerator:
 
         self.monitoring_dashboard_engine = (
             MonitoringDashboardEngine()
+        )
+
+        self.distributed_tracing_engine = (
+            DistributedTracingEngine()
         )
 
 
@@ -3039,5 +3046,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .monitoring_dashboard_engine
+            .generate()
+        )
+
+    def generate_distributed_tracing(
+        self
+    ):
+
+        return (
+            self
+            .distributed_tracing_engine
             .generate()
         )

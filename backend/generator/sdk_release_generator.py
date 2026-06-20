@@ -1785,3 +1785,23 @@ class SDKReleaseGenerator:
             "widget_count":
                 dashboard.widget_count
         }
+
+    def distributed_tracing_manifest(
+        self,
+        tracing
+    ):
+
+        return {
+
+            "tracing_enabled":
+                tracing.tracing_enabled,
+
+            "trace_provider":
+                tracing.trace_provider,
+
+            "span_collection_enabled":
+                tracing.span_collection_enabled,
+
+            "dependency_tracking_enabled":
+                tracing.dependency_tracking_enabled
+        }

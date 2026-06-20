@@ -775,3 +775,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def distributed_tracing_enabled(
+        self
+    ):
+
+        return True
