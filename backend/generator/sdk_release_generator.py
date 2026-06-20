@@ -1739,3 +1739,22 @@ class SDKReleaseGenerator:
                     metrics
                 )
         }
+
+    def logging_strategy_manifest(
+        self,
+        strategy
+    ):
+
+        return {
+
+            "log_level":
+                strategy.log_level,
+
+            "structured_logging":
+                strategy.structured_logging,
+
+            "category_count":
+                len(
+                    strategy.log_categories
+                )
+        }

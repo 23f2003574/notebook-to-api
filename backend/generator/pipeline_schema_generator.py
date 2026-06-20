@@ -292,6 +292,9 @@ from .health_check import (
 from .metrics_definition import (
     MetricsDefinitionEngine
 )
+from .logging_strategy import (
+    LoggingStrategyEngine
+)
 
 
 
@@ -684,6 +687,10 @@ class PipelineSchemaGenerator:
 
         self.metrics_definition_engine = (
             MetricsDefinitionEngine()
+        )
+
+        self.logging_strategy_engine = (
+            LoggingStrategyEngine()
         )
 
 
@@ -2988,5 +2995,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .metrics_definition_engine
+            .generate()
+        )
+
+    def generate_logging_strategy(
+        self
+    ):
+
+        return (
+            self
+            .logging_strategy_engine
             .generate()
         )

@@ -757,3 +757,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def logging_strategy_enabled(
+        self
+    ):
+
+        return True
