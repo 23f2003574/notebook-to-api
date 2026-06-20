@@ -435,3 +435,7 @@ from .automated_remediation import (
     AutomatedRemediation,
     AutomatedRemediationEngine
 )
+from .observability_automation import (
+    ObservabilityAutomation,
+    ObservabilityAutomationEngine
+)

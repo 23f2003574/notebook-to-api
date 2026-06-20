@@ -322,6 +322,9 @@ from .observability_intelligence_control_center import (
 from .automated_remediation import (
     AutomatedRemediationEngine
 )
+from .observability_automation import (
+    ObservabilityAutomationEngine
+)
 
 
 
@@ -754,6 +757,10 @@ class PipelineSchemaGenerator:
 
         self.automated_remediation_engine = (
             AutomatedRemediationEngine()
+        )
+
+        self.observability_automation_engine = (
+            ObservabilityAutomationEngine()
         )
 
 
@@ -3158,5 +3165,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .automated_remediation_engine
+            .generate()
+        )
+
+    def generate_observability_automation(
+        self
+    ):
+
+        return (
+            self
+            .observability_automation_engine
             .generate()
         )
