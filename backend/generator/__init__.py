@@ -430,3 +430,8 @@ from .observability_intelligence_control_center import (
     ObservabilityIntelligenceControlCenter,
     ObservabilityIntelligenceControlCenterGenerator
 )
+from .automated_remediation import (
+    RemediationAction,
+    AutomatedRemediation,
+    AutomatedRemediationEngine
+)

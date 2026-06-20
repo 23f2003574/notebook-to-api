@@ -1905,3 +1905,17 @@ class SDKReleaseGenerator:
             "observability_report_enabled":
                 control_center.observability_report_enabled
         }
+
+    def automated_remediation_manifest(
+        self,
+        remediation
+    ):
+
+        return {
+
+            "incident_type":
+                remediation.incident_type,
+
+            "action_count":
+                remediation.action_count
+        }

@@ -811,3 +811,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def automated_remediation_enabled(
+        self
+    ):
+
+        return True
