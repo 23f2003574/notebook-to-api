@@ -289,6 +289,9 @@ from .sdk_platform_control_center import (
 from .health_check import (
     HealthCheckEngine
 )
+from .metrics_definition import (
+    MetricsDefinitionEngine
+)
 
 
 
@@ -677,6 +680,10 @@ class PipelineSchemaGenerator:
 
         self.health_check_engine = (
             HealthCheckEngine()
+        )
+
+        self.metrics_definition_engine = (
+            MetricsDefinitionEngine()
         )
 
 
@@ -2971,5 +2978,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .health_check_engine
+            .generate()
+        )
+
+    def generate_metrics_definitions(
+        self
+    ):
+
+        return (
+            self
+            .metrics_definition_engine
             .generate()
         )

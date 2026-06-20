@@ -1726,3 +1726,16 @@ class SDKReleaseGenerator:
             "success_status":
                 health_check.success_status
         }
+
+    def metrics_manifest(
+        self,
+        metrics
+    ):
+
+        return {
+
+            "metric_count":
+                len(
+                    metrics
+                )
+        }

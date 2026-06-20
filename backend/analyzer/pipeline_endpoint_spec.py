@@ -751,3 +751,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def metrics_enabled(
+        self
+    ):
+
+        return True

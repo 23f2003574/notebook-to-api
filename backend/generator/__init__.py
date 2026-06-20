@@ -389,3 +389,7 @@ from .health_check import (
     HealthCheck,
     HealthCheckEngine
 )
+from .metrics_definition import (
+    MetricDefinition,
+    MetricsDefinitionEngine
+)
