@@ -304,6 +304,9 @@ from .monitoring_dashboard import (
 from .distributed_tracing import (
     DistributedTracingEngine
 )
+from .service_dependency_map import (
+    ServiceDependencyMapEngine
+)
 
 
 
@@ -712,6 +715,10 @@ class PipelineSchemaGenerator:
 
         self.distributed_tracing_engine = (
             DistributedTracingEngine()
+        )
+
+        self.service_dependency_map_engine = (
+            ServiceDependencyMapEngine()
         )
 
 
@@ -3056,5 +3063,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .distributed_tracing_engine
+            .generate()
+        )
+
+    def generate_service_dependency_map(
+        self
+    ):
+
+        return (
+            self
+            .service_dependency_map_engine
             .generate()
         )

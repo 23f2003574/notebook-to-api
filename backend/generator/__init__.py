@@ -409,3 +409,8 @@ from .distributed_tracing import (
     DistributedTracing,
     DistributedTracingEngine
 )
+from .service_dependency_map import (
+    ServiceDependency,
+    ServiceDependencyMap,
+    ServiceDependencyMapEngine
+)

@@ -781,3 +781,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def service_dependency_map_enabled(
+        self
+    ):
+
+        return True

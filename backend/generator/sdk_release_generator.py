@@ -1805,3 +1805,14 @@ class SDKReleaseGenerator:
             "dependency_tracking_enabled":
                 tracing.dependency_tracking_enabled
         }
+
+    def service_dependency_manifest(
+        self,
+        dependency_map
+    ):
+
+        return {
+
+            "dependency_count":
+                dependency_map.dependency_count
+        }
