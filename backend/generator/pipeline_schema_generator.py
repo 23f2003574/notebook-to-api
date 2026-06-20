@@ -298,6 +298,9 @@ from .logging_strategy import (
 from .alert_policy import (
     AlertPolicyEngine
 )
+from .monitoring_dashboard import (
+    MonitoringDashboardEngine
+)
 
 
 
@@ -698,6 +701,10 @@ class PipelineSchemaGenerator:
 
         self.alert_policy_engine = (
             AlertPolicyEngine()
+        )
+
+        self.monitoring_dashboard_engine = (
+            MonitoringDashboardEngine()
         )
 
 
@@ -3022,5 +3029,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .alert_policy_engine
+            .generate()
+        )
+
+    def generate_monitoring_dashboard(
+        self
+    ):
+
+        return (
+            self
+            .monitoring_dashboard_engine
             .generate()
         )

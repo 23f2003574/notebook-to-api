@@ -401,3 +401,7 @@ from .alert_policy import (
     AlertPolicy,
     AlertPolicyEngine
 )
+from .monitoring_dashboard import (
+    MonitoringDashboard,
+    MonitoringDashboardEngine
+)

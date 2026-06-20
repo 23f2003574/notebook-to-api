@@ -1771,3 +1771,17 @@ class SDKReleaseGenerator:
                     policies
                 )
         }
+
+    def monitoring_dashboard_manifest(
+        self,
+        dashboard
+    ):
+
+        return {
+
+            "title":
+                dashboard.title,
+
+            "widget_count":
+                dashboard.widget_count
+        }

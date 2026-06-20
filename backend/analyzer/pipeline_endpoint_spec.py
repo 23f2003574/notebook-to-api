@@ -769,3 +769,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def monitoring_dashboard_enabled(
+        self
+    ):
+
+        return True
