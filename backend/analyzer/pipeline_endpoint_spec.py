@@ -787,3 +787,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def incident_analysis_enabled(
+        self
+    ):
+
+        return True

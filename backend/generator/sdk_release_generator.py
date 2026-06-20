@@ -1816,3 +1816,20 @@ class SDKReleaseGenerator:
             "dependency_count":
                 dependency_map.dependency_count
         }
+
+    def incident_analysis_manifest(
+        self,
+        incident
+    ):
+
+        return {
+
+            "incident_type":
+                incident.incident_type,
+
+            "affected_component":
+                incident.affected_component,
+
+            "severity":
+                incident.severity
+        }

@@ -414,3 +414,7 @@ from .service_dependency_map import (
     ServiceDependencyMap,
     ServiceDependencyMapEngine
 )
+from .incident_analysis import (
+    IncidentAnalysis,
+    IncidentAnalysisEngine
+)

@@ -307,6 +307,9 @@ from .distributed_tracing import (
 from .service_dependency_map import (
     ServiceDependencyMapEngine
 )
+from .incident_analysis import (
+    IncidentAnalysisEngine
+)
 
 
 
@@ -719,6 +722,10 @@ class PipelineSchemaGenerator:
 
         self.service_dependency_map_engine = (
             ServiceDependencyMapEngine()
+        )
+
+        self.incident_analysis_engine = (
+            IncidentAnalysisEngine()
         )
 
 
@@ -3073,5 +3080,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .service_dependency_map_engine
+            .generate()
+        )
+
+    def generate_incident_analysis(
+        self
+    ):
+
+        return (
+            self
+            .incident_analysis_engine
             .generate()
         )
