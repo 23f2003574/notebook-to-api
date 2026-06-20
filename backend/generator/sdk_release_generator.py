@@ -1867,3 +1867,41 @@ class SDKReleaseGenerator:
             "section_count":
                 report.section_count
         }
+
+    def observability_intelligence_manifest(
+        self,
+        control_center
+    ):
+
+        return {
+
+            "health_checks_enabled":
+                control_center.health_checks_enabled,
+
+            "metrics_enabled":
+                control_center.metrics_enabled,
+
+            "logging_enabled":
+                control_center.logging_enabled,
+
+            "alerting_enabled":
+                control_center.alerting_enabled,
+
+            "dashboards_enabled":
+                control_center.dashboards_enabled,
+
+            "tracing_enabled":
+                control_center.tracing_enabled,
+
+            "dependencies_enabled":
+                control_center.dependencies_enabled,
+
+            "incident_analysis_enabled":
+                control_center.incident_analysis_enabled,
+
+            "slo_enabled":
+                control_center.slo_enabled,
+
+            "observability_report_enabled":
+                control_center.observability_report_enabled
+        }

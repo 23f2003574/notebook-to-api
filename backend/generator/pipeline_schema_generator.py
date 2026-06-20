@@ -316,6 +316,9 @@ from .slo_recommendation import (
 from .observability_report import (
     ObservabilityReportGenerator
 )
+from .observability_intelligence_control_center import (
+    ObservabilityIntelligenceControlCenterGenerator
+)
 
 
 
@@ -740,6 +743,10 @@ class PipelineSchemaGenerator:
 
         self.observability_report_generator = (
             ObservabilityReportGenerator()
+        )
+
+        self.observability_intelligence_control_center = (
+            ObservabilityIntelligenceControlCenterGenerator()
         )
 
 
@@ -3124,5 +3131,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .observability_report_generator
+            .generate()
+        )
+
+    def generate_observability_intelligence_control_center(
+        self
+    ):
+
+        return (
+            self
+            .observability_intelligence_control_center
             .generate()
         )

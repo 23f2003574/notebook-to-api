@@ -805,3 +805,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def observability_intelligence_control_center_enabled(
+        self
+    ):
+
+        return True

@@ -426,3 +426,7 @@ from .observability_report import (
     ObservabilityReport,
     ObservabilityReportGenerator
 )
+from .observability_intelligence_control_center import (
+    ObservabilityIntelligenceControlCenter,
+    ObservabilityIntelligenceControlCenterGenerator
+)
