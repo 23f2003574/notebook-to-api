@@ -1853,3 +1853,17 @@ class SDKReleaseGenerator:
             "reliability_tier":
                 slo.reliability_tier
         }
+
+    def observability_report_manifest(
+        self,
+        report
+    ):
+
+        return {
+
+            "title":
+                report.title,
+
+            "section_count":
+                report.section_count
+        }

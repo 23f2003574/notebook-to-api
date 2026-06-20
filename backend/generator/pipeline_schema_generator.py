@@ -313,6 +313,9 @@ from .incident_analysis import (
 from .slo_recommendation import (
     SLORecommendationEngine
 )
+from .observability_report import (
+    ObservabilityReportGenerator
+)
 
 
 
@@ -733,6 +736,10 @@ class PipelineSchemaGenerator:
 
         self.slo_recommendation_engine = (
             SLORecommendationEngine()
+        )
+
+        self.observability_report_generator = (
+            ObservabilityReportGenerator()
         )
 
 
@@ -3107,5 +3114,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .slo_recommendation_engine
+            .generate()
+        )
+
+    def generate_observability_report(
+        self
+    ):
+
+        return (
+            self
+            .observability_report_generator
             .generate()
         )

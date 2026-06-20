@@ -799,3 +799,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def observability_report_enabled(
+        self
+    ):
+
+        return True

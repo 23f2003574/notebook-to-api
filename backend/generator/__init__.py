@@ -422,3 +422,7 @@ from .slo_recommendation import (
     SLORecommendation,
     SLORecommendationEngine
 )
+from .observability_report import (
+    ObservabilityReport,
+    ObservabilityReportGenerator
+)
