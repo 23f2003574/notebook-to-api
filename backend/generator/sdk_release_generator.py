@@ -1758,3 +1758,16 @@ class SDKReleaseGenerator:
                     strategy.log_categories
                 )
         }
+
+    def alert_policy_manifest(
+        self,
+        policies
+    ):
+
+        return {
+
+            "policy_count":
+                len(
+                    policies
+                )
+        }

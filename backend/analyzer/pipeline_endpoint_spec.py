@@ -763,3 +763,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def alert_policies_enabled(
+        self
+    ):
+
+        return True

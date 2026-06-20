@@ -295,6 +295,9 @@ from .metrics_definition import (
 from .logging_strategy import (
     LoggingStrategyEngine
 )
+from .alert_policy import (
+    AlertPolicyEngine
+)
 
 
 
@@ -691,6 +694,10 @@ class PipelineSchemaGenerator:
 
         self.logging_strategy_engine = (
             LoggingStrategyEngine()
+        )
+
+        self.alert_policy_engine = (
+            AlertPolicyEngine()
         )
 
 
@@ -3005,5 +3012,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .logging_strategy_engine
+            .generate()
+        )
+
+    def generate_alert_policies(
+        self
+    ):
+
+        return (
+            self
+            .alert_policy_engine
             .generate()
         )
