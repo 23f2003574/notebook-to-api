@@ -477,3 +477,7 @@ from .security_report import (
     SecurityReport,
     SecurityReportGenerator
 )
+from .security_intelligence_control_center import (
+    SecurityIntelligenceControlCenter,
+    SecurityIntelligenceControlCenterGenerator
+)

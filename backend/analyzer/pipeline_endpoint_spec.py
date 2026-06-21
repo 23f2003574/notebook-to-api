@@ -877,3 +877,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def security_intelligence_control_center_enabled(
+        self
+    ):
+
+        return True

@@ -2091,3 +2091,38 @@ class SDKReleaseGenerator:
             "section_count":
                 report.section_count
         }
+
+    def security_intelligence_manifest(
+        self,
+        control_center
+    ):
+
+        return {
+
+            "authentication_enabled":
+                control_center.authentication_enabled,
+
+            "authorization_enabled":
+                control_center.authorization_enabled,
+
+            "api_security_enabled":
+                control_center.api_security_enabled,
+
+            "secret_management_enabled":
+                control_center.secret_management_enabled,
+
+            "vulnerability_assessment_enabled":
+                control_center.vulnerability_assessment_enabled,
+
+            "threat_modeling_enabled":
+                control_center.threat_modeling_enabled,
+
+            "security_compliance_enabled":
+                control_center.security_compliance_enabled,
+
+            "security_audit_enabled":
+                control_center.security_audit_enabled,
+
+            "security_report_enabled":
+                control_center.security_report_enabled
+        }
