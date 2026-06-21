@@ -469,3 +469,7 @@ from .security_compliance import (
     SecurityCompliance,
     SecurityComplianceEngine
 )
+from .security_audit import (
+    SecurityAudit,
+    SecurityAuditEngine
+)

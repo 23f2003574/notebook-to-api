@@ -2058,3 +2058,22 @@ class SDKReleaseGenerator:
             "total_controls":
                 compliance.total_controls
         }
+
+    def security_audit_manifest(
+        self,
+        audit
+    ):
+
+        return {
+
+            "audit_score":
+                audit.audit_score,
+
+            "finding_count":
+                len(
+                    audit.findings
+                ),
+
+            "recommendation_count":
+                audit.recommendation_count
+        }
