@@ -340,6 +340,9 @@ from .secret_management import (
 from .vulnerability_assessment import (
     VulnerabilityAssessmentEngine
 )
+from .threat_modeling import (
+    ThreatModelingEngine
+)
 
 
 
@@ -798,6 +801,10 @@ class PipelineSchemaGenerator:
             VulnerabilityAssessmentEngine()
         )
 
+        self.threat_modeling_engine = (
+            ThreatModelingEngine()
+        )
+
 
 
 
@@ -852,6 +859,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .vulnerability_assessment_engine
+            .generate()
+        )
+
+    def generate_threat_model(
+        self
+    ):
+
+        return (
+            self
+            .threat_modeling_engine
             .generate()
         )
 

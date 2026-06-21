@@ -853,3 +853,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def threat_modeling_enabled(
+        self
+    ):
+
+        return True

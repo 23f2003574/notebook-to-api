@@ -459,3 +459,8 @@ from .vulnerability_assessment import (
     VulnerabilityAssessment,
     VulnerabilityAssessmentEngine
 )
+from .threat_modeling import (
+    ThreatScenario,
+    ThreatModel,
+    ThreatModelingEngine
+)

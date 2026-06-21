@@ -2033,3 +2033,14 @@ class SDKReleaseGenerator:
             "critical_findings":
                 assessment.critical_findings
         }
+
+    def threat_model_manifest(
+        self,
+        threat_model
+    ):
+
+        return {
+
+            "scenario_count":
+                threat_model.scenario_count
+        }
