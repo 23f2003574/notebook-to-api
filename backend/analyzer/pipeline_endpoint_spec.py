@@ -823,3 +823,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def authentication_enabled(
+        self
+    ):
+
+        return True

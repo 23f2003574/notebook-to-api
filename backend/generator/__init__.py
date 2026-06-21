@@ -439,3 +439,7 @@ from .observability_automation import (
     ObservabilityAutomation,
     ObservabilityAutomationEngine
 )
+from .authentication_recommendation import (
+    AuthenticationRecommendation,
+    AuthenticationRecommendationEngine
+)

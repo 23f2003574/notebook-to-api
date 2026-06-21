@@ -325,6 +325,9 @@ from .automated_remediation import (
 from .observability_automation import (
     ObservabilityAutomationEngine
 )
+from .authentication_recommendation import (
+    AuthenticationRecommendationEngine
+)
 
 
 
@@ -763,11 +766,26 @@ class PipelineSchemaGenerator:
             ObservabilityAutomationEngine()
         )
 
+        self.authentication_recommendation_engine = (
+            AuthenticationRecommendationEngine()
+        )
 
 
 
 
 
+
+
+
+    def generate_authentication_recommendation(
+        self
+    ):
+
+        return (
+            self
+            .authentication_recommendation_engine
+            .generate()
+        )
 
     def infer_field_type(
         self,

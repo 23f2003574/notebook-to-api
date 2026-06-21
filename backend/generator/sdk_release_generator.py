@@ -1940,3 +1940,20 @@ class SDKReleaseGenerator:
                     automation.actions
                 )
         }
+
+    def authentication_manifest(
+        self,
+        recommendation
+    ):
+
+        return {
+
+            "strategy":
+                recommendation.strategy,
+
+            "token_based":
+                recommendation.token_based,
+
+            "confidence":
+                recommendation.confidence
+        }
