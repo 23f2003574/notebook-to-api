@@ -889,3 +889,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def security_remediation_enabled(
+        self
+    ):
+
+        return True

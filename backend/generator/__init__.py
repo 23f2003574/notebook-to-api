@@ -485,3 +485,7 @@ from .security_automation import (
     SecurityAutomation,
     SecurityAutomationEngine
 )
+from .security_remediation import (
+    SecurityRemediation,
+    SecurityRemediationEngine
+)
