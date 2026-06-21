@@ -489,3 +489,7 @@ from .security_remediation import (
     SecurityRemediation,
     SecurityRemediationEngine
 )
+from .security_governance import (
+    SecurityGovernance,
+    SecurityGovernanceEngine
+)

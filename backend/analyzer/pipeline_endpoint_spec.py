@@ -895,3 +895,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def security_governance_enabled(
+        self
+    ):
+
+        return True

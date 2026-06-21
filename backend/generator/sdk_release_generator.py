@@ -2166,3 +2166,23 @@ class SDKReleaseGenerator:
             "priority":
                 remediation.priority
         }
+
+    def security_governance_manifest(
+        self,
+        governance
+    ):
+
+        return {
+
+            "security_owner":
+                governance.security_owner,
+
+            "review_frequency":
+                governance.review_frequency,
+
+            "compliance_review_required":
+                governance.compliance_review_required,
+
+            "incident_review_required":
+                governance.incident_review_required
+        }

@@ -361,6 +361,9 @@ from .security_automation import (
 from .security_remediation import (
     SecurityRemediationEngine
 )
+from .security_governance import (
+    SecurityGovernanceEngine
+)
 
 
 
@@ -847,6 +850,10 @@ class PipelineSchemaGenerator:
             SecurityRemediationEngine()
         )
 
+        self.security_governance_engine = (
+            SecurityGovernanceEngine()
+        )
+
 
 
 
@@ -971,6 +978,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .security_remediation_engine
+            .generate()
+        )
+
+    def generate_security_governance(
+        self
+    ):
+
+        return (
+            self
+            .security_governance_engine
             .generate()
         )
 
