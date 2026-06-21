@@ -331,6 +331,9 @@ from .authentication_recommendation import (
 from .authorization_policy import (
     AuthorizationPolicyEngine
 )
+from .api_security_policy import (
+    APISecurityPolicyEngine
+)
 
 
 
@@ -777,6 +780,10 @@ class PipelineSchemaGenerator:
             AuthorizationPolicyEngine()
         )
 
+        self.api_security_policy_engine = (
+            APISecurityPolicyEngine()
+        )
+
 
 
 
@@ -801,6 +808,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .authorization_policy_engine
+            .generate()
+        )
+
+    def generate_api_security_policy(
+        self
+    ):
+
+        return (
+            self
+            .api_security_policy_engine
             .generate()
         )
 

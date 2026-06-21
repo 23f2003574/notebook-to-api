@@ -1976,3 +1976,23 @@ class SDKReleaseGenerator:
             "default_role":
                 policy.default_role
         }
+
+    def api_security_policy_manifest(
+        self,
+        policy
+    ):
+
+        return {
+
+            "https_required":
+                policy.https_required,
+
+            "rate_limiting_enabled":
+                policy.rate_limiting_enabled,
+
+            "cors_enabled":
+                policy.cors_enabled,
+
+            "security_headers_enabled":
+                policy.security_headers_enabled
+        }

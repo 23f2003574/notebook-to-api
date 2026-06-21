@@ -835,3 +835,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def api_security_policy_enabled(
+        self
+    ):
+
+        return True
