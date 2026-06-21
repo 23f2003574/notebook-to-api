@@ -1957,3 +1957,22 @@ class SDKReleaseGenerator:
             "confidence":
                 recommendation.confidence
         }
+
+    def authorization_policy_manifest(
+        self,
+        policy
+    ):
+
+        return {
+
+            "model":
+                policy.model,
+
+            "role_count":
+                len(
+                    policy.roles
+                ),
+
+            "default_role":
+                policy.default_role
+        }

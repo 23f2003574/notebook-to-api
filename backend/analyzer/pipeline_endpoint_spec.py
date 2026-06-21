@@ -829,3 +829,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def authorization_policy_enabled(
+        self
+    ):
+
+        return True

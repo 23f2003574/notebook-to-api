@@ -443,3 +443,7 @@ from .authentication_recommendation import (
     AuthenticationRecommendation,
     AuthenticationRecommendationEngine
 )
+from .authorization_policy import (
+    AuthorizationPolicy,
+    AuthorizationPolicyEngine
+)

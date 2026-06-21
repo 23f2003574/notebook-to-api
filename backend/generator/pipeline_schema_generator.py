@@ -328,6 +328,9 @@ from .observability_automation import (
 from .authentication_recommendation import (
     AuthenticationRecommendationEngine
 )
+from .authorization_policy import (
+    AuthorizationPolicyEngine
+)
 
 
 
@@ -770,6 +773,10 @@ class PipelineSchemaGenerator:
             AuthenticationRecommendationEngine()
         )
 
+        self.authorization_policy_engine = (
+            AuthorizationPolicyEngine()
+        )
+
 
 
 
@@ -784,6 +791,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .authentication_recommendation_engine
+            .generate()
+        )
+
+    def generate_authorization_policy(
+        self
+    ):
+
+        return (
+            self
+            .authorization_policy_engine
             .generate()
         )
 
