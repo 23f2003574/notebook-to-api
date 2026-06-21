@@ -859,3 +859,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def security_compliance_enabled(
+        self
+    ):
+
+        return True

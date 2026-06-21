@@ -2044,3 +2044,17 @@ class SDKReleaseGenerator:
             "scenario_count":
                 threat_model.scenario_count
         }
+
+    def security_compliance_manifest(
+        self,
+        compliance
+    ):
+
+        return {
+
+            "compliant_controls":
+                compliance.compliant_controls,
+
+            "total_controls":
+                compliance.total_controls
+        }

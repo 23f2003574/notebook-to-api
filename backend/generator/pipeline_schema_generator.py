@@ -343,6 +343,9 @@ from .vulnerability_assessment import (
 from .threat_modeling import (
     ThreatModelingEngine
 )
+from .security_compliance import (
+    SecurityComplianceEngine
+)
 
 
 
@@ -805,6 +808,10 @@ class PipelineSchemaGenerator:
             ThreatModelingEngine()
         )
 
+        self.security_compliance_engine = (
+            SecurityComplianceEngine()
+        )
+
 
 
 
@@ -869,6 +876,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .threat_modeling_engine
+            .generate()
+        )
+
+    def generate_security_compliance(
+        self
+    ):
+
+        return (
+            self
+            .security_compliance_engine
             .generate()
         )
 

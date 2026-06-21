@@ -464,3 +464,8 @@ from .threat_modeling import (
     ThreatModel,
     ThreatModelingEngine
 )
+from .security_compliance import (
+    ComplianceControl,
+    SecurityCompliance,
+    SecurityComplianceEngine
+)
