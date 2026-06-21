@@ -1996,3 +1996,23 @@ class SDKReleaseGenerator:
             "security_headers_enabled":
                 policy.security_headers_enabled
         }
+
+    def secret_management_manifest(
+        self,
+        secret_management
+    ):
+
+        return {
+
+            "secret_store":
+                secret_management.secret_store,
+
+            "rotation_enabled":
+                secret_management.rotation_enabled,
+
+            "encryption_required":
+                secret_management.encryption_required,
+
+            "environment_variable_usage":
+                secret_management.environment_variable_usage
+        }

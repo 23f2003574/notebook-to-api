@@ -451,3 +451,7 @@ from .api_security_policy import (
     APISecurityPolicy,
     APISecurityPolicyEngine
 )
+from .secret_management import (
+    SecretManagement,
+    SecretManagementEngine
+)

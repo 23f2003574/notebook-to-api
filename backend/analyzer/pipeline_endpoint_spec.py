@@ -841,3 +841,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def secret_management_enabled(
+        self
+    ):
+
+        return True

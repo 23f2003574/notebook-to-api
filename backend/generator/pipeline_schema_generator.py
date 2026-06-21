@@ -334,6 +334,9 @@ from .authorization_policy import (
 from .api_security_policy import (
     APISecurityPolicyEngine
 )
+from .secret_management import (
+    SecretManagementEngine
+)
 
 
 
@@ -784,6 +787,10 @@ class PipelineSchemaGenerator:
             APISecurityPolicyEngine()
         )
 
+        self.secret_management_engine = (
+            SecretManagementEngine()
+        )
+
 
 
 
@@ -818,6 +825,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .api_security_policy_engine
+            .generate()
+        )
+
+    def generate_secret_management(
+        self
+    ):
+
+        return (
+            self
+            .secret_management_engine
             .generate()
         )
 
