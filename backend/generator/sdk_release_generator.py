@@ -2077,3 +2077,17 @@ class SDKReleaseGenerator:
             "recommendation_count":
                 audit.recommendation_count
         }
+
+    def security_report_manifest(
+        self,
+        report
+    ):
+
+        return {
+
+            "title":
+                report.title,
+
+            "section_count":
+                report.section_count
+        }

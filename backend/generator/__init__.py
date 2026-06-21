@@ -473,3 +473,7 @@ from .security_audit import (
     SecurityAudit,
     SecurityAuditEngine
 )
+from .security_report import (
+    SecurityReport,
+    SecurityReportGenerator
+)

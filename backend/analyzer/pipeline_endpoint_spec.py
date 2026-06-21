@@ -871,3 +871,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def security_report_enabled(
+        self
+    ):
+
+        return True

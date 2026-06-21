@@ -349,6 +349,9 @@ from .security_compliance import (
 from .security_audit import (
     SecurityAuditEngine
 )
+from .security_report import (
+    SecurityReportGenerator
+)
 
 
 
@@ -819,6 +822,10 @@ class PipelineSchemaGenerator:
             SecurityAuditEngine()
         )
 
+        self.security_report_generator = (
+            SecurityReportGenerator()
+        )
+
 
 
 
@@ -903,6 +910,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .security_audit_engine
+            .generate()
+        )
+
+    def generate_security_report(
+        self
+    ):
+
+        return (
+            self
+            .security_report_generator
             .generate()
         )
 
