@@ -2126,3 +2126,24 @@ class SDKReleaseGenerator:
             "security_report_enabled":
                 control_center.security_report_enabled
         }
+
+    def security_automation_manifest(
+        self,
+        automation
+    ):
+
+        return {
+
+            "workflow_name":
+                automation.workflow_name,
+
+            "trigger_count":
+                len(
+                    automation.triggers
+                ),
+
+            "action_count":
+                len(
+                    automation.actions
+                )
+        }

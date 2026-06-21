@@ -883,3 +883,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def security_automation_enabled(
+        self
+    ):
+
+        return True

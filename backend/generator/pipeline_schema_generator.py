@@ -355,6 +355,9 @@ from .security_report import (
 from .security_intelligence_control_center import (
     SecurityIntelligenceControlCenterGenerator
 )
+from .security_automation import (
+    SecurityAutomationEngine
+)
 
 
 
@@ -833,6 +836,10 @@ class PipelineSchemaGenerator:
             SecurityIntelligenceControlCenterGenerator()
         )
 
+        self.security_automation_engine = (
+            SecurityAutomationEngine()
+        )
+
 
 
 
@@ -937,6 +944,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .security_intelligence_control_center
+            .generate()
+        )
+
+    def generate_security_automation(
+        self
+    ):
+
+        return (
+            self
+            .security_automation_engine
             .generate()
         )
 

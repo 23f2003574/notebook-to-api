@@ -481,3 +481,7 @@ from .security_intelligence_control_center import (
     SecurityIntelligenceControlCenter,
     SecurityIntelligenceControlCenterGenerator
 )
+from .security_automation import (
+    SecurityAutomation,
+    SecurityAutomationEngine
+)
