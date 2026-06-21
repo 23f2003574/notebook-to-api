@@ -847,3 +847,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def vulnerability_assessment_enabled(
+        self
+    ):
+
+        return True

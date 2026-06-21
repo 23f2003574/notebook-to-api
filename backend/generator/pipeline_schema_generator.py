@@ -337,6 +337,9 @@ from .api_security_policy import (
 from .secret_management import (
     SecretManagementEngine
 )
+from .vulnerability_assessment import (
+    VulnerabilityAssessmentEngine
+)
 
 
 
@@ -791,6 +794,10 @@ class PipelineSchemaGenerator:
             SecretManagementEngine()
         )
 
+        self.vulnerability_assessment_engine = (
+            VulnerabilityAssessmentEngine()
+        )
+
 
 
 
@@ -835,6 +842,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .secret_management_engine
+            .generate()
+        )
+
+    def generate_vulnerability_assessment(
+        self
+    ):
+
+        return (
+            self
+            .vulnerability_assessment_engine
             .generate()
         )
 

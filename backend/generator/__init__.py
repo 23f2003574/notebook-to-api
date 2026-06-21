@@ -455,3 +455,7 @@ from .secret_management import (
     SecretManagement,
     SecretManagementEngine
 )
+from .vulnerability_assessment import (
+    VulnerabilityAssessment,
+    VulnerabilityAssessmentEngine
+)

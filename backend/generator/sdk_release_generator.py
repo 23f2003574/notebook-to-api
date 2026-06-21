@@ -2016,3 +2016,20 @@ class SDKReleaseGenerator:
             "environment_variable_usage":
                 secret_management.environment_variable_usage
         }
+
+    def vulnerability_assessment_manifest(
+        self,
+        assessment
+    ):
+
+        return {
+
+            "risk_level":
+                assessment.risk_level,
+
+            "vulnerability_count":
+                assessment.vulnerability_count,
+
+            "critical_findings":
+                assessment.critical_findings
+        }
