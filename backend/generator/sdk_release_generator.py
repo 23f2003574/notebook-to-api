@@ -2326,3 +2326,17 @@ class SDKReleaseGenerator:
             "quality_grade":
                 score.quality_grade
         }
+
+    def testing_report_manifest(
+        self,
+        report
+    ):
+
+        return {
+
+            "title":
+                report.title,
+
+            "section_count":
+                report.section_count
+        }

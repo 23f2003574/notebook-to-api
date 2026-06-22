@@ -525,3 +525,7 @@ from .test_quality_score import (
     TestQualityScore,
     TestQualityScoreEngine
 )
+from .testing_report import (
+    TestingReport,
+    TestingReportGenerator
+)

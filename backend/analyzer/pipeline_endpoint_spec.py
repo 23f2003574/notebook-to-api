@@ -949,3 +949,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def testing_report_enabled(
+        self
+    ):
+
+        return True

@@ -388,6 +388,9 @@ from .performance_benchmark import (
 from .test_quality_score import (
     TestQualityScoreEngine
 )
+from .testing_report import (
+    TestingReportGenerator
+)
 
 
 
@@ -910,6 +913,10 @@ class PipelineSchemaGenerator:
             TestQualityScoreEngine()
         )
 
+        self.testing_report_generator = (
+            TestingReportGenerator()
+        )
+
 
 
 
@@ -1124,6 +1131,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .test_quality_score_engine
+            .generate()
+        )
+
+    def generate_testing_report(
+        self
+    ):
+
+        return (
+            self
+            .testing_report_generator
             .generate()
         )
 
