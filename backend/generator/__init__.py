@@ -541,3 +541,7 @@ from .release_readiness import (
     ReleaseReadiness,
     ReleaseReadinessEngine
 )
+from .autonomous_testing import (
+    AutonomousTesting,
+    AutonomousTestingEngine
+)

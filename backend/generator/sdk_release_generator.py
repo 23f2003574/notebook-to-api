@@ -2416,3 +2416,23 @@ class SDKReleaseGenerator:
             "total_quality_gates":
                 readiness.total_quality_gates
         }
+
+    def autonomous_testing_manifest(
+        self,
+        testing
+    ):
+
+        return {
+
+            "adaptive_test_selection":
+                testing.adaptive_test_selection,
+
+            "flaky_test_detection":
+                testing.flaky_test_detection,
+
+            "test_suite_optimization":
+                testing.test_suite_optimization,
+
+            "quality_feedback_loop":
+                testing.quality_feedback_loop
+        }

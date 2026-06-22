@@ -973,3 +973,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def autonomous_testing_enabled(
+        self
+    ):
+
+        return True
