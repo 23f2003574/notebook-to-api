@@ -901,3 +901,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def test_strategy_enabled(
+        self
+    ):
+
+        return True

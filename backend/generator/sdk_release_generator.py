@@ -2186,3 +2186,23 @@ class SDKReleaseGenerator:
             "incident_review_required":
                 governance.incident_review_required
         }
+
+    def test_strategy_manifest(
+        self,
+        strategy
+    ):
+
+        return {
+
+            "strategy":
+                strategy.strategy,
+
+            "unit_testing":
+                strategy.unit_testing,
+
+            "integration_testing":
+                strategy.integration_testing,
+
+            "end_to_end_testing":
+                strategy.end_to_end_testing
+        }
