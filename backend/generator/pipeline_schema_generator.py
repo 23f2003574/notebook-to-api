@@ -379,6 +379,9 @@ from .load_testing import (
 from .test_coverage import (
     TestCoverageEngine
 )
+from .regression_testing import (
+    RegressionTestingEngine
+)
 
 
 
@@ -889,6 +892,10 @@ class PipelineSchemaGenerator:
             TestCoverageEngine()
         )
 
+        self.regression_testing_engine = (
+            RegressionTestingEngine()
+        )
+
 
 
 
@@ -1073,6 +1080,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .test_coverage_engine
+            .generate()
+        )
+
+    def generate_regression_test_suite(
+        self
+    ):
+
+        return (
+            self
+            .regression_testing_engine
             .generate()
         )
 

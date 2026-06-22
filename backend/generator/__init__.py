@@ -513,3 +513,7 @@ from .test_coverage import (
     TestCoverage,
     TestCoverageEngine
 )
+from .regression_testing import (
+    RegressionTestSuite,
+    RegressionTestingEngine
+)

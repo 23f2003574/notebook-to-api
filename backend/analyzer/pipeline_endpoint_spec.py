@@ -931,3 +931,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def regression_testing_enabled(
+        self
+    ):
+
+        return True

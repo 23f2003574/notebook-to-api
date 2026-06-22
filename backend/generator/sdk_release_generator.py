@@ -2272,3 +2272,23 @@ class SDKReleaseGenerator:
             "uncovered_endpoints":
                 coverage.uncovered_endpoints
         }
+
+    def regression_test_manifest(
+        self,
+        suite
+    ):
+
+        return {
+
+            "suite_name":
+                suite.suite_name,
+
+            "test_count":
+                suite.test_count,
+
+            "compatibility_validation":
+                suite.compatibility_validation,
+
+            "release_blocking":
+                suite.release_blocking
+        }
