@@ -533,3 +533,7 @@ from .testing_intelligence_control_center import (
     TestingIntelligenceControlCenter,
     TestingIntelligenceControlCenterGenerator
 )
+from .test_automation import (
+    TestAutomation,
+    TestAutomationEngine
+)

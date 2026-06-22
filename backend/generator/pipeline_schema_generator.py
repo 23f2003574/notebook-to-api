@@ -394,6 +394,9 @@ from .testing_report import (
 from .testing_intelligence_control_center import (
     TestingIntelligenceControlCenterGenerator
 )
+from .test_automation import (
+    TestAutomationEngine
+)
 
 
 
@@ -924,6 +927,10 @@ class PipelineSchemaGenerator:
             TestingIntelligenceControlCenterGenerator()
         )
 
+        self.test_automation_engine = (
+            TestAutomationEngine()
+        )
+
 
 
 
@@ -1158,6 +1165,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .testing_intelligence_control_center
+            .generate()
+        )
+
+    def generate_test_automation(
+        self
+    ):
+
+        return (
+            self
+            .test_automation_engine
             .generate()
         )
 
