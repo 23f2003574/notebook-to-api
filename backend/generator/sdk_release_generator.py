@@ -2206,3 +2206,16 @@ class SDKReleaseGenerator:
             "end_to_end_testing":
                 strategy.end_to_end_testing
         }
+
+    def test_case_manifest(
+        self,
+        test_cases
+    ):
+
+        return {
+
+            "test_case_count":
+                len(
+                    test_cases
+                )
+        }

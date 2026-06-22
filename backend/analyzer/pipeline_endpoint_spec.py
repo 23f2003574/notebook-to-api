@@ -907,3 +907,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def test_cases_enabled(
+        self
+    ):
+
+        return True

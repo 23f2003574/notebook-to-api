@@ -367,6 +367,9 @@ from .security_governance import (
 from .test_strategy import (
     TestStrategyEngine
 )
+from .test_case import (
+    TestCaseEngine
+)
 
 
 
@@ -861,6 +864,10 @@ class PipelineSchemaGenerator:
             TestStrategyEngine()
         )
 
+        self.test_case_engine = (
+            TestCaseEngine()
+        )
+
 
 
 
@@ -1005,6 +1012,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .test_strategy_engine
+            .generate()
+        )
+
+    def generate_test_cases(
+        self
+    ):
+
+        return (
+            self
+            .test_case_engine
             .generate()
         )
 
