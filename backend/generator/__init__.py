@@ -521,3 +521,7 @@ from .performance_benchmark import (
     PerformanceBenchmark,
     PerformanceBenchmarkEngine
 )
+from .test_quality_score import (
+    TestQualityScore,
+    TestQualityScoreEngine
+)

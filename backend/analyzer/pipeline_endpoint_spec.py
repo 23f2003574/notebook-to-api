@@ -943,3 +943,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def test_quality_score_enabled(
+        self
+    ):
+
+        return True

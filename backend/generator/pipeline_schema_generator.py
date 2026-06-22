@@ -385,6 +385,9 @@ from .regression_testing import (
 from .performance_benchmark import (
     PerformanceBenchmarkEngine
 )
+from .test_quality_score import (
+    TestQualityScoreEngine
+)
 
 
 
@@ -903,6 +906,10 @@ class PipelineSchemaGenerator:
             PerformanceBenchmarkEngine()
         )
 
+        self.test_quality_score_engine = (
+            TestQualityScoreEngine()
+        )
+
 
 
 
@@ -1107,6 +1114,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .performance_benchmark_engine
+            .generate()
+        )
+
+    def generate_test_quality_score(
+        self
+    ):
+
+        return (
+            self
+            .test_quality_score_engine
             .generate()
         )
 

@@ -2312,3 +2312,17 @@ class SDKReleaseGenerator:
             "benchmark_grade":
                 benchmark.benchmark_grade
         }
+
+    def test_quality_score_manifest(
+        self,
+        score
+    ):
+
+        return {
+
+            "overall_score":
+                score.overall_score,
+
+            "quality_grade":
+                score.quality_grade
+        }
