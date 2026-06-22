@@ -529,3 +529,7 @@ from .testing_report import (
     TestingReport,
     TestingReportGenerator
 )
+from .testing_intelligence_control_center import (
+    TestingIntelligenceControlCenter,
+    TestingIntelligenceControlCenterGenerator
+)

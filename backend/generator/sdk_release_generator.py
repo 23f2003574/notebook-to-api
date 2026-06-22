@@ -2340,3 +2340,38 @@ class SDKReleaseGenerator:
             "section_count":
                 report.section_count
         }
+
+    def testing_intelligence_manifest(
+        self,
+        control_center
+    ):
+
+        return {
+
+            "test_strategy_enabled":
+                control_center.test_strategy_enabled,
+
+            "test_cases_enabled":
+                control_center.test_cases_enabled,
+
+            "integration_tests_enabled":
+                control_center.integration_tests_enabled,
+
+            "load_testing_enabled":
+                control_center.load_testing_enabled,
+
+            "test_coverage_enabled":
+                control_center.test_coverage_enabled,
+
+            "regression_testing_enabled":
+                control_center.regression_testing_enabled,
+
+            "performance_benchmark_enabled":
+                control_center.performance_benchmark_enabled,
+
+            "test_quality_score_enabled":
+                control_center.test_quality_score_enabled,
+
+            "testing_report_enabled":
+                control_center.testing_report_enabled
+        }

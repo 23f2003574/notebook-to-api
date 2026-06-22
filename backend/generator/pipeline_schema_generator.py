@@ -391,6 +391,9 @@ from .test_quality_score import (
 from .testing_report import (
     TestingReportGenerator
 )
+from .testing_intelligence_control_center import (
+    TestingIntelligenceControlCenterGenerator
+)
 
 
 
@@ -917,6 +920,10 @@ class PipelineSchemaGenerator:
             TestingReportGenerator()
         )
 
+        self.testing_intelligence_control_center = (
+            TestingIntelligenceControlCenterGenerator()
+        )
+
 
 
 
@@ -1141,6 +1148,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .testing_report_generator
+            .generate()
+        )
+
+    def generate_testing_intelligence_control_center(
+        self
+    ):
+
+        return (
+            self
+            .testing_intelligence_control_center
             .generate()
         )
 

@@ -955,3 +955,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def testing_intelligence_control_center_enabled(
+        self
+    ):
+
+        return True
