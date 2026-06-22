@@ -382,6 +382,9 @@ from .test_coverage import (
 from .regression_testing import (
     RegressionTestingEngine
 )
+from .performance_benchmark import (
+    PerformanceBenchmarkEngine
+)
 
 
 
@@ -896,6 +899,10 @@ class PipelineSchemaGenerator:
             RegressionTestingEngine()
         )
 
+        self.performance_benchmark_engine = (
+            PerformanceBenchmarkEngine()
+        )
+
 
 
 
@@ -1090,6 +1097,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .regression_testing_engine
+            .generate()
+        )
+
+    def generate_performance_benchmark(
+        self
+    ):
+
+        return (
+            self
+            .performance_benchmark_engine
             .generate()
         )
 

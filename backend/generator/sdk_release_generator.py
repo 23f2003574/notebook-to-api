@@ -2292,3 +2292,23 @@ class SDKReleaseGenerator:
             "release_blocking":
                 suite.release_blocking
         }
+
+    def performance_benchmark_manifest(
+        self,
+        benchmark
+    ):
+
+        return {
+
+            "target_latency_ms":
+                benchmark.target_latency_ms,
+
+            "target_throughput_rps":
+                benchmark.target_throughput_rps,
+
+            "max_error_rate_percent":
+                benchmark.max_error_rate_percent,
+
+            "benchmark_grade":
+                benchmark.benchmark_grade
+        }

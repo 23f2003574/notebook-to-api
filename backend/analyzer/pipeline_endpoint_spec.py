@@ -937,3 +937,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def performance_benchmark_enabled(
+        self
+    ):
+
+        return True

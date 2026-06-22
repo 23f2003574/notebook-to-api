@@ -517,3 +517,7 @@ from .regression_testing import (
     RegressionTestSuite,
     RegressionTestingEngine
 )
+from .performance_benchmark import (
+    PerformanceBenchmark,
+    PerformanceBenchmarkEngine
+)
