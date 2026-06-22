@@ -925,3 +925,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def test_coverage_enabled(
+        self
+    ):
+
+        return True

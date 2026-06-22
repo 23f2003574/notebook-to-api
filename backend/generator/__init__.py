@@ -509,3 +509,7 @@ from .load_testing import (
     LoadTestPlan,
     LoadTestingEngine
 )
+from .test_coverage import (
+    TestCoverage,
+    TestCoverageEngine
+)

@@ -376,6 +376,9 @@ from .integration_test import (
 from .load_testing import (
     LoadTestingEngine
 )
+from .test_coverage import (
+    TestCoverageEngine
+)
 
 
 
@@ -882,6 +885,10 @@ class PipelineSchemaGenerator:
             LoadTestingEngine()
         )
 
+        self.test_coverage_engine = (
+            TestCoverageEngine()
+        )
+
 
 
 
@@ -1056,6 +1063,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .load_testing_engine
+            .generate()
+        )
+
+    def generate_test_coverage(
+        self
+    ):
+
+        return (
+            self
+            .test_coverage_engine
             .generate()
         )
 

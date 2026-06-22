@@ -2252,3 +2252,23 @@ class SDKReleaseGenerator:
             "target_latency_ms":
                 plan.target_latency_ms
         }
+
+    def test_coverage_manifest(
+        self,
+        coverage
+    ):
+
+        return {
+
+            "endpoint_coverage_percent":
+                coverage.endpoint_coverage_percent,
+
+            "test_case_count":
+                coverage.test_case_count,
+
+            "covered_endpoints":
+                coverage.covered_endpoints,
+
+            "uncovered_endpoints":
+                coverage.uncovered_endpoints
+        }
