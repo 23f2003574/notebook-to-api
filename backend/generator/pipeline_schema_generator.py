@@ -370,6 +370,9 @@ from .test_strategy import (
 from .test_case import (
     TestCaseEngine
 )
+from .integration_test import (
+    IntegrationTestEngine
+)
 
 
 
@@ -868,6 +871,10 @@ class PipelineSchemaGenerator:
             TestCaseEngine()
         )
 
+        self.integration_test_engine = (
+            IntegrationTestEngine()
+        )
+
 
 
 
@@ -1022,6 +1029,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .test_case_engine
+            .generate()
+        )
+
+    def generate_integration_tests(
+        self
+    ):
+
+        return (
+            self
+            .integration_test_engine
             .generate()
         )
 

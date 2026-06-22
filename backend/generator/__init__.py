@@ -501,3 +501,7 @@ from .test_case import (
     TestCase,
     TestCaseEngine
 )
+from .integration_test import (
+    IntegrationTest,
+    IntegrationTestEngine
+)

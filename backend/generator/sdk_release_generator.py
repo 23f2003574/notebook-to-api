@@ -2219,3 +2219,16 @@ class SDKReleaseGenerator:
                     test_cases
                 )
         }
+
+    def integration_test_manifest(
+        self,
+        tests
+    ):
+
+        return {
+
+            "integration_test_count":
+                len(
+                    tests
+                )
+        }

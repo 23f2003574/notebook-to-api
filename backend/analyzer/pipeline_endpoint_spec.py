@@ -913,3 +913,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def integration_tests_enabled(
+        self
+    ):
+
+        return True
