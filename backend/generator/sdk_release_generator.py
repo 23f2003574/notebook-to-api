@@ -2396,3 +2396,23 @@ class SDKReleaseGenerator:
                     automation.actions
                 )
         }
+
+    def release_readiness_manifest(
+        self,
+        readiness
+    ):
+
+        return {
+
+            "readiness_score":
+                readiness.readiness_score,
+
+            "production_ready":
+                readiness.production_ready,
+
+            "passed_quality_gates":
+                readiness.passed_quality_gates,
+
+            "total_quality_gates":
+                readiness.total_quality_gates
+        }

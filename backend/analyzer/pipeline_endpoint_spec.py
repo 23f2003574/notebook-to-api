@@ -967,3 +967,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def release_readiness_enabled(
+        self
+    ):
+
+        return True

@@ -397,6 +397,9 @@ from .testing_intelligence_control_center import (
 from .test_automation import (
     TestAutomationEngine
 )
+from .release_readiness import (
+    ReleaseReadinessEngine
+)
 
 
 
@@ -931,6 +934,10 @@ class PipelineSchemaGenerator:
             TestAutomationEngine()
         )
 
+        self.release_readiness_engine = (
+            ReleaseReadinessEngine()
+        )
+
 
 
 
@@ -1175,6 +1182,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .test_automation_engine
+            .generate()
+        )
+
+    def generate_release_readiness(
+        self
+    ):
+
+        return (
+            self
+            .release_readiness_engine
             .generate()
         )
 
