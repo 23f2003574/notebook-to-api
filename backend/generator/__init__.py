@@ -505,3 +505,7 @@ from .integration_test import (
     IntegrationTest,
     IntegrationTestEngine
 )
+from .load_testing import (
+    LoadTestPlan,
+    LoadTestingEngine
+)

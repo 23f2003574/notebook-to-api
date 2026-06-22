@@ -2232,3 +2232,23 @@ class SDKReleaseGenerator:
                     tests
                 )
         }
+
+    def load_test_manifest(
+        self,
+        plan
+    ):
+
+        return {
+
+            "concurrent_users":
+                plan.concurrent_users,
+
+            "requests_per_second":
+                plan.requests_per_second,
+
+            "duration_seconds":
+                plan.duration_seconds,
+
+            "target_latency_ms":
+                plan.target_latency_ms
+        }

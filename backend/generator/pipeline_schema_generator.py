@@ -373,6 +373,9 @@ from .test_case import (
 from .integration_test import (
     IntegrationTestEngine
 )
+from .load_testing import (
+    LoadTestingEngine
+)
 
 
 
@@ -875,6 +878,10 @@ class PipelineSchemaGenerator:
             IntegrationTestEngine()
         )
 
+        self.load_testing_engine = (
+            LoadTestingEngine()
+        )
+
 
 
 
@@ -1039,6 +1046,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .integration_test_engine
+            .generate()
+        )
+
+    def generate_load_test_plan(
+        self
+    ):
+
+        return (
+            self
+            .load_testing_engine
             .generate()
         )
 

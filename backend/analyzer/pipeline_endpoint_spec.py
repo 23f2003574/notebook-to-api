@@ -919,3 +919,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def load_testing_enabled(
+        self
+    ):
+
+        return True
