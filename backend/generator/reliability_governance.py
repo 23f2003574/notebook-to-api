@@ -4,88 +4,32 @@ from dataclasses import dataclass
 @dataclass
 class ReliabilityGovernance:
 
-    compliant: bool
+    reliability_owner: str
 
-    policy_status: str
+    review_frequency: str
 
-    required_actions: list[str]
+    slo_review_required: bool
 
-    decision: str
+    incident_review_required: bool
 
 
 class ReliabilityGovernanceEngine:
 
-    def evaluate(
-        self,
-        scorecard
+    def generate(
+        self
     ):
 
-        required_actions = []
+        return ReliabilityGovernance(
 
-        if (
-            scorecard.grade
-            in ["D"]
-        ):
+            reliability_owner=
+                "platform_team",
 
-            required_actions.extend(
-                [
-                    "Immediate reliability review",
-                    "Block production deployment"
-                ]
-            )
+            review_frequency=
+                "monthly",
 
-            return (
-                ReliabilityGovernance(
+            slo_review_required=
+                True,
 
-                    compliant=False,
-
-                    policy_status=
-                        "violation",
-
-                    required_actions=
-                        required_actions,
-
-                    decision=
-                        "blocked"
-                )
-            )
-
-        if (
-            scorecard.grade
-            == "C"
-        ):
-
-            required_actions.append(
-                "Reliability improvement plan"
-            )
-
-            return (
-                ReliabilityGovernance(
-
-                    compliant=False,
-
-                    policy_status=
-                        "warning",
-
-                    required_actions=
-                        required_actions,
-
-                    decision=
-                        "review-required"
-                )
-            )
-
-        return (
-            ReliabilityGovernance(
-
-                compliant=True,
-
-                policy_status=
-                    "compliant",
-
-                required_actions=[],
-
-                decision=
-                    "approved"
-            )
+            incident_review_required=
+                True
         )

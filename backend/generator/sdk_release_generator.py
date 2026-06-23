@@ -884,6 +884,26 @@ class SDKReleaseGenerator:
                 remediation.priority
         }
 
+    def reliability_governance_manifest(
+        self,
+        governance
+    ):
+
+        return {
+
+            "reliability_owner":
+                governance.reliability_owner,
+
+            "review_frequency":
+                governance.review_frequency,
+
+            "slo_review_required":
+                governance.slo_review_required,
+
+            "incident_review_required":
+                governance.incident_review_required
+        }
+
     def trend_manifest(
         self,
         trend

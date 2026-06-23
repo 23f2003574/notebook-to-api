@@ -433,6 +433,9 @@ from .reliability_automation import (
 from .reliability_remediation import (
     ReliabilityRemediationEngine
 )
+from .reliability_governance import (
+    ReliabilityGovernanceEngine
+)
 
 
 
@@ -1019,6 +1022,9 @@ class PipelineSchemaGenerator:
             ReliabilityRemediationEngine()
         )
 
+        self.reliability_governance_engine = (
+            ReliabilityGovernanceEngine()
+        )
 
 
 
@@ -1026,6 +1032,17 @@ class PipelineSchemaGenerator:
 
 
 
+
+
+    def generate_reliability_governance(
+        self
+    ):
+
+        return (
+            self
+            .reliability_governance_engine
+            .generate()
+        )
 
     def generate_reliability_remediation(
         self

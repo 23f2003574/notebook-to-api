@@ -586,3 +586,7 @@ from .reliability_remediation import (
     ReliabilityRemediation,
     ReliabilityRemediationEngine
 )
+from .reliability_governance import (
+    ReliabilityGovernance,
+    ReliabilityGovernanceEngine
+)
