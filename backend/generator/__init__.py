@@ -193,6 +193,7 @@ from .reliability_forecast import (
 )
 from .reliability_scorecard import (
     ReliabilityScorecard,
+    ReliabilityScorecardEngine,
     ReliabilityScorecardGenerator
 )
 from .reliability_governance import (
@@ -564,4 +565,8 @@ from .reliability_forecasting import (
 from .reliability_risk_analysis import (
     ReliabilityRisk,
     ReliabilityRiskAnalysisEngine
+)
+from .reliability_scorecard import (
+    ReliabilityScorecard,
+    ReliabilityScorecardEngine
 )

@@ -778,6 +778,26 @@ class SDKReleaseGenerator:
                 )
         }
 
+    def reliability_scorecard_manifest(
+        self,
+        scorecard
+    ):
+
+        return {
+
+            "overall_score":
+                scorecard.overall_score,
+
+            "reliability_grade":
+                scorecard.reliability_grade,
+
+            "availability_percent":
+                scorecard.availability_percent,
+
+            "risk_level":
+                scorecard.risk_level
+        }
+
     def trend_manifest(
         self,
         trend
