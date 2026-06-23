@@ -582,3 +582,7 @@ from .reliability_automation import (
     ReliabilityAutomation,
     ReliabilityAutomationEngine
 )
+from .reliability_remediation import (
+    ReliabilityRemediation,
+    ReliabilityRemediationEngine
+)
