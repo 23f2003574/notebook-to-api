@@ -553,3 +553,7 @@ from .failure_pattern_detection import (
     FailurePattern,
     FailurePatternDetectionEngine
 )
+from .availability_modeling import (
+    AvailabilityModel,
+    AvailabilityModelingEngine
+)

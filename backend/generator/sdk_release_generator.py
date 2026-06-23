@@ -712,6 +712,26 @@ class SDKReleaseGenerator:
                 )
         }
 
+    def availability_model_manifest(
+        self,
+        model
+    ):
+
+        return {
+
+            "availability_target":
+                model.availability_target,
+
+            "estimated_downtime_minutes_per_month":
+                model.estimated_downtime_minutes_per_month,
+
+            "uptime_tier":
+                model.uptime_tier,
+
+            "sla_compliant":
+                model.sla_compliant
+        }
+
     def trend_manifest(
         self,
         trend
