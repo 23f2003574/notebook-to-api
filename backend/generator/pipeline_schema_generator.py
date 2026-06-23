@@ -415,6 +415,9 @@ from .availability_modeling import (
 from .reliability_forecasting import (
     ReliabilityForecastingEngine
 )
+from .reliability_risk_analysis import (
+    ReliabilityRiskAnalysisEngine
+)
 
 
 
@@ -977,6 +980,9 @@ class PipelineSchemaGenerator:
             ReliabilityRecommendationEngine()
         )
 
+        self.reliability_risk_analysis_engine = (
+            ReliabilityRiskAnalysisEngine()
+        )
 
 
 
@@ -984,6 +990,17 @@ class PipelineSchemaGenerator:
 
 
 
+
+
+    def generate_reliability_risks(
+        self
+    ):
+
+        return (
+            self
+            .reliability_risk_analysis_engine
+            .generate()
+        )
 
     def generate_reliability_assessment_recommendations(
         self

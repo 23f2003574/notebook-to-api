@@ -561,3 +561,7 @@ from .reliability_forecasting import (
     ReliabilityForecast,
     ReliabilityForecastingEngine
 )
+from .reliability_risk_analysis import (
+    ReliabilityRisk,
+    ReliabilityRiskAnalysisEngine
+)

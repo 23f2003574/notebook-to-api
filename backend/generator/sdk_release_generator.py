@@ -765,6 +765,19 @@ class SDKReleaseGenerator:
                 )
         }
 
+    def reliability_risk_manifest(
+        self,
+        risks
+    ):
+
+        return {
+
+            "risk_count":
+                len(
+                    risks
+                )
+        }
+
     def trend_manifest(
         self,
         trend
