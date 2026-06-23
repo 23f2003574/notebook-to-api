@@ -798,6 +798,20 @@ class SDKReleaseGenerator:
                 scorecard.risk_level
         }
 
+    def reliability_report_manifest(
+        self,
+        report
+    ):
+
+        return {
+
+            "title":
+                report.title,
+
+            "section_count":
+                report.section_count
+        }
+
     def trend_manifest(
         self,
         trend

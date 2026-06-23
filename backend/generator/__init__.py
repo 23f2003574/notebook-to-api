@@ -570,3 +570,7 @@ from .reliability_scorecard import (
     ReliabilityScorecard,
     ReliabilityScorecardEngine
 )
+from .reliability_report import (
+    ReliabilityReport,
+    ReliabilityReportGenerator
+)

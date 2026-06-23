@@ -417,6 +417,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def reliability_report_enabled(
+        self
+    ):
+
+        return True
+
     def package_directory(
         self
     ):

@@ -421,6 +421,9 @@ from .reliability_risk_analysis import (
 from .reliability_scorecard import (
     ReliabilityScorecardEngine
 )
+from .reliability_report import (
+    ReliabilityReportGenerator
+)
 
 
 
@@ -991,6 +994,9 @@ class PipelineSchemaGenerator:
             ReliabilityScorecardEngine()
         )
 
+        self.reliability_report_generator = (
+            ReliabilityReportGenerator()
+        )
 
 
 
@@ -998,6 +1004,17 @@ class PipelineSchemaGenerator:
 
 
 
+
+
+    def generate_reliability_report(
+        self
+    ):
+
+        return (
+            self
+            .reliability_report_generator
+            .generate()
+        )
 
     def generate_reliability_scorecard(
         self
