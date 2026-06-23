@@ -574,3 +574,7 @@ from .reliability_report import (
     ReliabilityReport,
     ReliabilityReportGenerator
 )
+from .reliability_intelligence_control_center import (
+    ReliabilityIntelligenceControlCenter,
+    ReliabilityIntelligenceControlCenterGenerator
+)

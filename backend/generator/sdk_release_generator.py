@@ -812,6 +812,38 @@ class SDKReleaseGenerator:
                 report.section_count
         }
 
+    def reliability_intelligence_manifest(
+        self,
+        control_center
+    ):
+
+        return {
+
+            "reliability_assessment_enabled":
+                control_center.reliability_assessment_enabled,
+
+            "failure_patterns_enabled":
+                control_center.failure_patterns_enabled,
+
+            "availability_modeling_enabled":
+                control_center.availability_modeling_enabled,
+
+            "reliability_forecasting_enabled":
+                control_center.reliability_forecasting_enabled,
+
+            "reliability_recommendations_enabled":
+                control_center.reliability_recommendations_enabled,
+
+            "reliability_risk_analysis_enabled":
+                control_center.reliability_risk_analysis_enabled,
+
+            "reliability_scorecard_enabled":
+                control_center.reliability_scorecard_enabled,
+
+            "reliability_report_enabled":
+                control_center.reliability_report_enabled
+        }
+
     def trend_manifest(
         self,
         trend
