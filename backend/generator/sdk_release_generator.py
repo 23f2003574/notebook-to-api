@@ -658,6 +658,26 @@ class SDKReleaseGenerator:
             ]
         }
 
+    def reliability_assessment_manifest(
+        self,
+        assessment
+    ):
+
+        return {
+
+            "reliability_score":
+                assessment.reliability_score,
+
+            "availability_percent":
+                assessment.availability_percent,
+
+            "reliability_grade":
+                assessment.reliability_grade,
+
+            "production_ready":
+                assessment.production_ready
+        }
+
     def failure_pattern_manifest(
         self,
         patterns

@@ -403,6 +403,9 @@ from .release_readiness import (
 from .autonomous_testing import (
     AutonomousTestingEngine
 )
+from .reliability_assessment import (
+    ReliabilityAssessmentEngine
+)
 
 
 
@@ -945,12 +948,27 @@ class PipelineSchemaGenerator:
             AutonomousTestingEngine()
         )
 
+        self.reliability_assessment_engine = (
+            ReliabilityAssessmentEngine()
+        )
 
 
 
 
 
 
+
+
+
+    def generate_reliability_assessment(
+        self
+    ):
+
+        return (
+            self
+            .reliability_assessment_engine
+            .generate()
+        )
 
     def generate_authentication_recommendation(
         self

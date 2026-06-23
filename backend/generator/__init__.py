@@ -545,3 +545,7 @@ from .autonomous_testing import (
     AutonomousTesting,
     AutonomousTestingEngine
 )
+from .reliability_assessment import (
+    ReliabilityAssessment,
+    ReliabilityAssessmentEngine
+)
