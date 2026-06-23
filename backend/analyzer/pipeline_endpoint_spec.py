@@ -447,6 +447,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def autonomous_reliability_enabled(
+        self
+    ):
+
+        return True
+
     def package_directory(
         self
     ):

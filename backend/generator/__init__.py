@@ -590,3 +590,7 @@ from .reliability_governance import (
     ReliabilityGovernance,
     ReliabilityGovernanceEngine
 )
+from .autonomous_reliability import (
+    AutonomousReliability,
+    AutonomousReliabilityEngine
+)

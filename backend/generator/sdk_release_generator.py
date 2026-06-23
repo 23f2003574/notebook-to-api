@@ -904,6 +904,26 @@ class SDKReleaseGenerator:
                 governance.incident_review_required
         }
 
+    def autonomous_reliability_manifest(
+        self,
+        reliability
+    ):
+
+        return {
+
+            "self_healing_enabled":
+                reliability.self_healing_enabled,
+
+            "adaptive_scaling_enabled":
+                reliability.adaptive_scaling_enabled,
+
+            "incident_learning_enabled":
+                reliability.incident_learning_enabled,
+
+            "reliability_optimization_enabled":
+                reliability.reliability_optimization_enabled
+        }
+
     def trend_manifest(
         self,
         trend
