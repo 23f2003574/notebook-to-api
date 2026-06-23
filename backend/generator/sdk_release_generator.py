@@ -752,6 +752,19 @@ class SDKReleaseGenerator:
                 forecast.trend
         }
 
+    def reliability_recommendation_manifest(
+        self,
+        recommendations
+    ):
+
+        return {
+
+            "recommendation_count":
+                len(
+                    recommendations
+                )
+        }
+
     def trend_manifest(
         self,
         trend

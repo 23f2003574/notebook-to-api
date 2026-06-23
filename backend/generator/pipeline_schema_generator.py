@@ -973,6 +973,9 @@ class PipelineSchemaGenerator:
             ReliabilityForecastingEngine()
         )
 
+        self.reliability_recommendation_engine = (
+            ReliabilityRecommendationEngine()
+        )
 
 
 
@@ -980,6 +983,17 @@ class PipelineSchemaGenerator:
 
 
 
+
+
+    def generate_reliability_assessment_recommendations(
+        self
+    ):
+
+        return (
+            self
+            .reliability_recommendation_engine
+            .generate()
+        )
 
     def generate_reliability_forecast(
         self

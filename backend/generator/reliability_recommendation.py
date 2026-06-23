@@ -4,57 +4,54 @@ from dataclasses import dataclass
 @dataclass
 class ReliabilityRecommendation:
 
-    priority: str
-
     recommendation: str
 
-    rationale: str
+    impact: str
+
+    priority: str
 
 
 class ReliabilityRecommendationEngine:
 
     def generate(
-        self,
-        analysis
+        self
     ):
 
-        recommendations = []
+        return [
 
-        for action in (
-            analysis.prevention_actions
-        ):
+            ReliabilityRecommendation(
 
-            recommendations.append(
+                recommendation=
+                    "add_request_retries",
 
-                ReliabilityRecommendation(
+                impact=
+                    "high",
 
-                    priority="high",
+                priority=
+                    "high"
+            ),
 
-                    recommendation=
-                        action,
+            ReliabilityRecommendation(
 
-                    rationale=
-                        (
-                            "Derived from "
-                            "post-incident analysis"
-                        )
-                )
+                recommendation=
+                    "increase_health_checks",
+
+                impact=
+                    "medium",
+
+                priority=
+                    "medium"
+            ),
+
+            ReliabilityRecommendation(
+
+                recommendation=
+                    "add_failover_strategy",
+
+                impact=
+                    "high",
+
+                priority=
+                    "high"
             )
-
-        if not recommendations:
-
-            recommendations.append(
-
-                ReliabilityRecommendation(
-
-                    priority="low",
-
-                    recommendation=
-                        "Maintain current deployment process",
-
-                    rationale=
-                        "No significant issues detected"
-                )
-            )
-
-        return recommendations
+        ]
