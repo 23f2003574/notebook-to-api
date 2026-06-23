@@ -549,3 +549,7 @@ from .reliability_assessment import (
     ReliabilityAssessment,
     ReliabilityAssessmentEngine
 )
+from .failure_pattern_detection import (
+    FailurePattern,
+    FailurePatternDetectionEngine
+)

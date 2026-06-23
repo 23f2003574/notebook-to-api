@@ -699,6 +699,19 @@ class SDKReleaseGenerator:
             ]
         }
 
+    def failure_pattern_detection_manifest(
+        self,
+        patterns
+    ):
+
+        return {
+
+            "pattern_count":
+                len(
+                    patterns
+                )
+        }
+
     def trend_manifest(
         self,
         trend

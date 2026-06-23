@@ -406,6 +406,9 @@ from .autonomous_testing import (
 from .reliability_assessment import (
     ReliabilityAssessmentEngine
 )
+from .failure_pattern_detection import (
+    FailurePatternDetectionEngine
+)
 
 
 
@@ -952,6 +955,9 @@ class PipelineSchemaGenerator:
             ReliabilityAssessmentEngine()
         )
 
+        self.failure_pattern_detection_engine = (
+            FailurePatternDetectionEngine()
+        )
 
 
 
@@ -959,6 +965,17 @@ class PipelineSchemaGenerator:
 
 
 
+
+
+    def generate_failure_patterns(
+        self
+    ):
+
+        return (
+            self
+            .failure_pattern_detection_engine
+            .generate()
+        )
 
     def generate_reliability_assessment(
         self
