@@ -412,6 +412,9 @@ from .failure_pattern_detection import (
 from .availability_modeling import (
     AvailabilityModelingEngine
 )
+from .reliability_forecasting import (
+    ReliabilityForecastingEngine
+)
 
 
 
@@ -966,6 +969,9 @@ class PipelineSchemaGenerator:
             AvailabilityModelingEngine()
         )
 
+        self.reliability_forecasting_engine = (
+            ReliabilityForecastingEngine()
+        )
 
 
 
@@ -973,6 +979,17 @@ class PipelineSchemaGenerator:
 
 
 
+
+
+    def generate_reliability_forecast(
+        self
+    ):
+
+        return (
+            self
+            .reliability_forecasting_engine
+            .generate()
+        )
 
     def generate_availability_model(
         self

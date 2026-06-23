@@ -732,6 +732,26 @@ class SDKReleaseGenerator:
                 model.sla_compliant
         }
 
+    def reliability_forecast_manifest(
+        self,
+        forecast
+    ):
+
+        return {
+
+            "forecast_period_days":
+                forecast.forecast_period_days,
+
+            "projected_reliability_score":
+                forecast.projected_reliability_score,
+
+            "projected_availability_percent":
+                forecast.projected_availability_percent,
+
+            "trend":
+                forecast.trend
+        }
+
     def trend_manifest(
         self,
         trend

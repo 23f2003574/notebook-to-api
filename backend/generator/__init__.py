@@ -557,3 +557,7 @@ from .availability_modeling import (
     AvailabilityModel,
     AvailabilityModelingEngine
 )
+from .reliability_forecasting import (
+    ReliabilityForecast,
+    ReliabilityForecastingEngine
+)
