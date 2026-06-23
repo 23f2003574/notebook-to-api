@@ -427,6 +427,9 @@ from .reliability_report import (
 from .reliability_intelligence_control_center import (
     ReliabilityIntelligenceControlCenterGenerator
 )
+from .reliability_automation import (
+    ReliabilityAutomationEngine
+)
 
 
 
@@ -1005,6 +1008,9 @@ class PipelineSchemaGenerator:
             ReliabilityIntelligenceControlCenterGenerator()
         )
 
+        self.reliability_automation_engine = (
+            ReliabilityAutomationEngine()
+        )
 
 
 
@@ -1012,6 +1018,17 @@ class PipelineSchemaGenerator:
 
 
 
+
+
+    def generate_reliability_automation(
+        self
+    ):
+
+        return (
+            self
+            .reliability_automation_engine
+            .generate()
+        )
 
     def generate_reliability_intelligence_control_center(
         self

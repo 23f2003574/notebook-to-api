@@ -578,3 +578,7 @@ from .reliability_intelligence_control_center import (
     ReliabilityIntelligenceControlCenter,
     ReliabilityIntelligenceControlCenterGenerator
 )
+from .reliability_automation import (
+    ReliabilityAutomation,
+    ReliabilityAutomationEngine
+)
