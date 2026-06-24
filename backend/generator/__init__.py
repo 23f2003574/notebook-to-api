@@ -610,3 +610,7 @@ from .resource_efficiency import (
     ResourceEfficiency,
     ResourceEfficiencyEngine
 )
+from .cost_allocation import (
+    CostAllocation,
+    CostAllocationEngine
+)

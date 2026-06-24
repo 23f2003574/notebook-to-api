@@ -1075,3 +1075,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def cost_allocation_enabled(
+        self
+    ):
+
+        return True

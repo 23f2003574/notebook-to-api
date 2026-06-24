@@ -2764,3 +2764,26 @@ class SDKReleaseGenerator:
             "efficiency_score":
                 efficiency.efficiency_score
         }
+
+    def cost_allocation_manifest(
+        self,
+        allocations
+    ):
+
+        return {
+
+            "allocation_count":
+                len(
+                    allocations
+                ),
+
+            "total_monthly_cost_usd":
+                sum(
+
+                    allocation
+                    .monthly_cost_usd
+
+                    for allocation
+                    in allocations
+                )
+        }
