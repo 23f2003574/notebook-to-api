@@ -469,6 +469,9 @@ from .cost_report import (
 from .cost_intelligence_control_center import (
     CostIntelligenceControlCenterGenerator
 )
+from .cost_automation import (
+    CostAutomationEngine
+)
 
 
 
@@ -1103,6 +1106,10 @@ class PipelineSchemaGenerator:
             CostIntelligenceControlCenterGenerator()
         )
 
+        self.cost_automation_engine = (
+            CostAutomationEngine()
+        )
+
 
 
 
@@ -1208,6 +1215,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .cost_intelligence_control_center
+            .generate()
+        )
+
+    def generate_cost_automation(
+        self
+    ):
+
+        return (
+            self
+            .cost_automation_engine
             .generate()
         )
 

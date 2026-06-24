@@ -1111,3 +1111,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def cost_automation_enabled(
+        self
+    ):
+
+        return True

@@ -2892,3 +2892,24 @@ class SDKReleaseGenerator:
             "cost_report_enabled":
                 control_center.cost_report_enabled
         }
+
+    def cost_automation_manifest(
+        self,
+        automation
+    ):
+
+        return {
+
+            "workflow_name":
+                automation.workflow_name,
+
+            "trigger_count":
+                len(
+                    automation.triggers
+                ),
+
+            "action_count":
+                len(
+                    automation.actions
+                )
+        }

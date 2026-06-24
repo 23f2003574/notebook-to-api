@@ -634,3 +634,7 @@ from .cost_intelligence_control_center import (
     CostIntelligenceControlCenter,
     CostIntelligenceControlCenterGenerator
 )
+from .cost_automation import (
+    CostAutomation,
+    CostAutomationEngine
+)
