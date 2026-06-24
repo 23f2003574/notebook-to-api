@@ -2807,3 +2807,16 @@ class SDKReleaseGenerator:
             "within_budget":
                 budget.within_budget
         }
+
+    def cost_risk_manifest(
+        self,
+        risks
+    ):
+
+        return {
+
+            "risk_count":
+                len(
+                    risks
+                )
+        }

@@ -1087,3 +1087,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def cost_risk_analysis_enabled(
+        self
+    ):
+
+        return True

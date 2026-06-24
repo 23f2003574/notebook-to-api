@@ -618,3 +618,7 @@ from .budget_planning import (
     BudgetPlan,
     BudgetPlanningEngine
 )
+from .cost_risk_analysis import (
+    CostRisk,
+    CostRiskAnalysisEngine
+)

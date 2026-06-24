@@ -457,6 +457,9 @@ from .cost_allocation import (
 from .budget_planning import (
     BudgetPlanningEngine
 )
+from .cost_risk_analysis import (
+    CostRiskAnalysisEngine
+)
 
 
 
@@ -1075,6 +1078,10 @@ class PipelineSchemaGenerator:
             BudgetPlanningEngine()
         )
 
+        self.cost_risk_analysis_engine = (
+            CostRiskAnalysisEngine()
+        )
+
 
 
 
@@ -1140,6 +1147,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .budget_planning_engine
+            .generate()
+        )
+
+    def generate_cost_risks(
+        self
+    ):
+
+        return (
+            self
+            .cost_risk_analysis_engine
             .generate()
         )
 
