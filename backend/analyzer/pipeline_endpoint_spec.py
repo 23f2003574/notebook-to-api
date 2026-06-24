@@ -1105,3 +1105,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def cost_intelligence_control_center_enabled(
+        self
+    ):
+
+        return True

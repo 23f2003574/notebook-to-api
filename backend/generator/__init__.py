@@ -630,3 +630,7 @@ from .cost_report import (
     CostReport,
     CostReportGenerator
 )
+from .cost_intelligence_control_center import (
+    CostIntelligenceControlCenter,
+    CostIntelligenceControlCenterGenerator
+)

@@ -466,6 +466,9 @@ from .cost_scorecard import (
 from .cost_report import (
     CostReportGenerator
 )
+from .cost_intelligence_control_center import (
+    CostIntelligenceControlCenterGenerator
+)
 
 
 
@@ -1096,6 +1099,10 @@ class PipelineSchemaGenerator:
             CostReportGenerator()
         )
 
+        self.cost_intelligence_control_center = (
+            CostIntelligenceControlCenterGenerator()
+        )
+
 
 
 
@@ -1191,6 +1198,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .cost_report_generator
+            .generate()
+        )
+
+    def generate_cost_intelligence_control_center(
+        self
+    ):
+
+        return (
+            self
+            .cost_intelligence_control_center
             .generate()
         )
 

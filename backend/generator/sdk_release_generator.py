@@ -2857,3 +2857,38 @@ class SDKReleaseGenerator:
             "section_count":
                 report.section_count
         }
+
+    def cost_intelligence_manifest(
+        self,
+        control_center
+    ):
+
+        return {
+
+            "cost_assessment_enabled":
+                control_center.cost_assessment_enabled,
+
+            "cost_forecasting_enabled":
+                control_center.cost_forecasting_enabled,
+
+            "cost_optimization_enabled":
+                control_center.cost_optimization_enabled,
+
+            "resource_efficiency_enabled":
+                control_center.resource_efficiency_enabled,
+
+            "cost_allocation_enabled":
+                control_center.cost_allocation_enabled,
+
+            "budget_planning_enabled":
+                control_center.budget_planning_enabled,
+
+            "cost_risk_analysis_enabled":
+                control_center.cost_risk_analysis_enabled,
+
+            "cost_scorecard_enabled":
+                control_center.cost_scorecard_enabled,
+
+            "cost_report_enabled":
+                control_center.cost_report_enabled
+        }
