@@ -442,6 +442,9 @@ from .autonomous_reliability import (
 from .cost_assessment import (
     CostAssessmentEngine
 )
+from .cost_forecasting import (
+    CostForecastingEngine
+)
 
 
 
@@ -1040,6 +1043,10 @@ class PipelineSchemaGenerator:
             CostAssessmentEngine()
         )
 
+        self.cost_forecasting_engine = (
+            CostForecastingEngine()
+        )
+
 
 
 
@@ -1055,6 +1062,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .cost_assessment_engine
+            .generate()
+        )
+
+    def generate_cost_forecast(
+        self
+    ):
+
+        return (
+            self
+            .cost_forecasting_engine
             .generate()
         )
 

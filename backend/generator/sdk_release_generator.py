@@ -2701,3 +2701,23 @@ class SDKReleaseGenerator:
             "budget_friendly":
                 assessment.budget_friendly
         }
+
+    def cost_forecast_manifest(
+        self,
+        forecast
+    ):
+
+        return {
+
+            "forecast_period_months":
+                forecast.forecast_period_months,
+
+            "projected_monthly_cost_usd":
+                forecast.projected_monthly_cost_usd,
+
+            "projected_annual_cost_usd":
+                forecast.projected_annual_cost_usd,
+
+            "trend":
+                forecast.trend
+        }

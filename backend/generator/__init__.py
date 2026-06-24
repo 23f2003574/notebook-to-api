@@ -598,3 +598,7 @@ from .cost_assessment import (
     CostAssessment,
     CostAssessmentEngine
 )
+from .cost_forecasting import (
+    CostForecast,
+    CostForecastingEngine
+)

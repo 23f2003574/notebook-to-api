@@ -1057,3 +1057,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def cost_forecasting_enabled(
+        self
+    ):
+
+        return True
