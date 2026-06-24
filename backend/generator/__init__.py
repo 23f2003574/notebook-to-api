@@ -638,3 +638,7 @@ from .cost_automation import (
     CostAutomation,
     CostAutomationEngine
 )
+from .cost_remediation import (
+    CostRemediation,
+    CostRemediationEngine
+)

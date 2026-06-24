@@ -1117,3 +1117,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def cost_remediation_enabled(
+        self
+    ):
+
+        return True

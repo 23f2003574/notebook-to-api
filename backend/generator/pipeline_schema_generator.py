@@ -472,6 +472,9 @@ from .cost_intelligence_control_center import (
 from .cost_automation import (
     CostAutomationEngine
 )
+from .cost_remediation import (
+    CostRemediationEngine
+)
 
 
 
@@ -1110,6 +1113,10 @@ class PipelineSchemaGenerator:
             CostAutomationEngine()
         )
 
+        self.cost_remediation_engine = (
+            CostRemediationEngine()
+        )
+
 
 
 
@@ -1225,6 +1232,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .cost_automation_engine
+            .generate()
+        )
+
+    def generate_cost_remediation(
+        self
+    ):
+
+        return (
+            self
+            .cost_remediation_engine
             .generate()
         )
 
