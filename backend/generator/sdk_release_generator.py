@@ -2820,3 +2820,26 @@ class SDKReleaseGenerator:
                     risks
                 )
         }
+
+    def cost_scorecard_manifest(
+        self,
+        scorecard
+    ):
+
+        return {
+
+            "overall_score":
+                scorecard.overall_score,
+
+            "cost_grade":
+                scorecard.cost_grade,
+
+            "monthly_cost_usd":
+                scorecard.monthly_cost_usd,
+
+            "budget_utilization_percent":
+                scorecard.budget_utilization_percent,
+
+            "risk_level":
+                scorecard.risk_level
+        }

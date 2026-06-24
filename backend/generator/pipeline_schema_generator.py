@@ -460,6 +460,9 @@ from .budget_planning import (
 from .cost_risk_analysis import (
     CostRiskAnalysisEngine
 )
+from .cost_scorecard import (
+    CostScorecardEngine
+)
 
 
 
@@ -1082,6 +1085,10 @@ class PipelineSchemaGenerator:
             CostRiskAnalysisEngine()
         )
 
+        self.cost_scorecard_engine = (
+            CostScorecardEngine()
+        )
+
 
 
 
@@ -1157,6 +1164,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .cost_risk_analysis_engine
+            .generate()
+        )
+
+    def generate_cost_scorecard(
+        self
+    ):
+
+        return (
+            self
+            .cost_scorecard_engine
             .generate()
         )
 

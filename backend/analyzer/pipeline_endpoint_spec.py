@@ -1093,3 +1093,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def cost_scorecard_enabled(
+        self
+    ):
+
+        return True

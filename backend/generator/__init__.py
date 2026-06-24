@@ -622,3 +622,7 @@ from .cost_risk_analysis import (
     CostRisk,
     CostRiskAnalysisEngine
 )
+from .cost_scorecard import (
+    CostScorecard,
+    CostScorecardEngine
+)
