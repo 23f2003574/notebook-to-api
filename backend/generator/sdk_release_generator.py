@@ -2681,3 +2681,23 @@ class SDKReleaseGenerator:
             "quality_feedback_loop":
                 testing.quality_feedback_loop
         }
+
+    def cost_assessment_manifest(
+        self,
+        assessment
+    ):
+
+        return {
+
+            "monthly_cost_usd":
+                assessment.monthly_cost_usd,
+
+            "annual_cost_usd":
+                assessment.annual_cost_usd,
+
+            "cost_grade":
+                assessment.cost_grade,
+
+            "budget_friendly":
+                assessment.budget_friendly
+        }

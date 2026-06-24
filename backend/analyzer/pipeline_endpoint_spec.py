@@ -1051,3 +1051,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def cost_assessment_enabled(
+        self
+    ):
+
+        return True

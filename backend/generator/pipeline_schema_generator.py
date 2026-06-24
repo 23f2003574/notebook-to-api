@@ -439,6 +439,9 @@ from .reliability_governance import (
 from .autonomous_reliability import (
     AutonomousReliabilityEngine
 )
+from .cost_assessment import (
+    CostAssessmentEngine
+)
 
 
 
@@ -1033,6 +1036,9 @@ class PipelineSchemaGenerator:
             AutonomousReliabilityEngine()
         )
 
+        self.cost_assessment_engine = (
+            CostAssessmentEngine()
+        )
 
 
 
@@ -1040,6 +1046,17 @@ class PipelineSchemaGenerator:
 
 
 
+
+
+    def generate_cost_assessment(
+        self
+    ):
+
+        return (
+            self
+            .cost_assessment_engine
+            .generate()
+        )
 
     def generate_autonomous_reliability(
         self

@@ -594,3 +594,7 @@ from .autonomous_reliability import (
     AutonomousReliability,
     AutonomousReliabilityEngine
 )
+from .cost_assessment import (
+    CostAssessment,
+    CostAssessmentEngine
+)
