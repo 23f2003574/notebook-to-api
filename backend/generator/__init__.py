@@ -606,3 +606,7 @@ from .cost_optimization import (
     CostOptimization,
     CostOptimizationEngine
 )
+from .resource_efficiency import (
+    ResourceEfficiency,
+    ResourceEfficiencyEngine
+)

@@ -2744,3 +2744,23 @@ class SDKReleaseGenerator:
                     in optimizations
                 )
         }
+
+    def resource_efficiency_manifest(
+        self,
+        efficiency
+    ):
+
+        return {
+
+            "cpu_utilization_percent":
+                efficiency.cpu_utilization_percent,
+
+            "memory_utilization_percent":
+                efficiency.memory_utilization_percent,
+
+            "storage_utilization_percent":
+                efficiency.storage_utilization_percent,
+
+            "efficiency_score":
+                efficiency.efficiency_score
+        }

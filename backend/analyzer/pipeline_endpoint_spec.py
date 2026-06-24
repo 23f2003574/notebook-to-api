@@ -1069,3 +1069,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def resource_efficiency_enabled(
+        self
+    ):
+
+        return True
