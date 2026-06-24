@@ -642,3 +642,7 @@ from .cost_remediation import (
     CostRemediation,
     CostRemediationEngine
 )
+from .cost_governance import (
+    CostGovernance,
+    CostGovernanceEngine
+)

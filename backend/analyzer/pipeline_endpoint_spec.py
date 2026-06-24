@@ -1123,3 +1123,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def cost_governance_enabled(
+        self
+    ):
+
+        return True

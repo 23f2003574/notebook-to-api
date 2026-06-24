@@ -2932,3 +2932,23 @@ class SDKReleaseGenerator:
             "priority":
                 remediation.priority
         }
+
+    def cost_governance_manifest(
+        self,
+        governance
+    ):
+
+        return {
+
+            "budget_owner":
+                governance.budget_owner,
+
+            "review_frequency":
+                governance.review_frequency,
+
+            "budget_approval_required":
+                governance.budget_approval_required,
+
+            "cost_review_required":
+                governance.cost_review_required
+        }
