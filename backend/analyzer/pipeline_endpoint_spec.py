@@ -1063,3 +1063,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def cost_optimization_enabled(
+        self
+    ):
+
+        return True

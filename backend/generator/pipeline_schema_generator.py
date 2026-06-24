@@ -445,6 +445,9 @@ from .cost_assessment import (
 from .cost_forecasting import (
     CostForecastingEngine
 )
+from .cost_optimization import (
+    CostOptimizationEngine
+)
 
 
 
@@ -1047,6 +1050,10 @@ class PipelineSchemaGenerator:
             CostForecastingEngine()
         )
 
+        self.cost_optimization_engine = (
+            CostOptimizationEngine()
+        )
+
 
 
 
@@ -1072,6 +1079,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .cost_forecasting_engine
+            .generate()
+        )
+
+    def generate_cost_optimizations(
+        self
+    ):
+
+        return (
+            self
+            .cost_optimization_engine
             .generate()
         )
 

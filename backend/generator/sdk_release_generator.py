@@ -2721,3 +2721,26 @@ class SDKReleaseGenerator:
             "trend":
                 forecast.trend
         }
+
+    def cost_optimization_manifest(
+        self,
+        optimizations
+    ):
+
+        return {
+
+            "optimization_count":
+                len(
+                    optimizations
+                ),
+
+            "estimated_monthly_savings_usd":
+                sum(
+
+                    optimization
+                    .estimated_monthly_savings_usd
+
+                    for optimization
+                    in optimizations
+                )
+        }

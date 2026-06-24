@@ -602,3 +602,7 @@ from .cost_forecasting import (
     CostForecast,
     CostForecastingEngine
 )
+from .cost_optimization import (
+    CostOptimization,
+    CostOptimizationEngine
+)
