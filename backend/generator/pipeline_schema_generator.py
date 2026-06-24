@@ -463,6 +463,9 @@ from .cost_risk_analysis import (
 from .cost_scorecard import (
     CostScorecardEngine
 )
+from .cost_report import (
+    CostReportGenerator
+)
 
 
 
@@ -1089,6 +1092,10 @@ class PipelineSchemaGenerator:
             CostScorecardEngine()
         )
 
+        self.cost_report_generator = (
+            CostReportGenerator()
+        )
+
 
 
 
@@ -1174,6 +1181,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .cost_scorecard_engine
+            .generate()
+        )
+
+    def generate_cost_report(
+        self
+    ):
+
+        return (
+            self
+            .cost_report_generator
             .generate()
         )
 

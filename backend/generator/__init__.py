@@ -626,3 +626,7 @@ from .cost_scorecard import (
     CostScorecard,
     CostScorecardEngine
 )
+from .cost_report import (
+    CostReport,
+    CostReportGenerator
+)

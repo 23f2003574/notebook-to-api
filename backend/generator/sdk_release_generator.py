@@ -2843,3 +2843,17 @@ class SDKReleaseGenerator:
             "risk_level":
                 scorecard.risk_level
         }
+
+    def cost_report_manifest(
+        self,
+        report
+    ):
+
+        return {
+
+            "title":
+                report.title,
+
+            "section_count":
+                report.section_count
+        }

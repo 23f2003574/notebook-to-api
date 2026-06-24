@@ -1099,3 +1099,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def cost_report_enabled(
+        self
+    ):
+
+        return True
