@@ -1081,3 +1081,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def budget_planning_enabled(
+        self
+    ):
+
+        return True

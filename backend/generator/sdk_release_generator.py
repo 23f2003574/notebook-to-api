@@ -2787,3 +2787,23 @@ class SDKReleaseGenerator:
                     in allocations
                 )
         }
+
+    def budget_plan_manifest(
+        self,
+        budget
+    ):
+
+        return {
+
+            "monthly_budget_usd":
+                budget.monthly_budget_usd,
+
+            "annual_budget_usd":
+                budget.annual_budget_usd,
+
+            "budget_utilization_percent":
+                budget.budget_utilization_percent,
+
+            "within_budget":
+                budget.within_budget
+        }

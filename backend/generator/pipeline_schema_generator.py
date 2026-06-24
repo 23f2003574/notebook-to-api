@@ -454,6 +454,9 @@ from .resource_efficiency import (
 from .cost_allocation import (
     CostAllocationEngine
 )
+from .budget_planning import (
+    BudgetPlanningEngine
+)
 
 
 
@@ -1068,6 +1071,10 @@ class PipelineSchemaGenerator:
             CostAllocationEngine()
         )
 
+        self.budget_planning_engine = (
+            BudgetPlanningEngine()
+        )
+
 
 
 
@@ -1123,6 +1130,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .cost_allocation_engine
+            .generate()
+        )
+
+    def generate_budget_plan(
+        self
+    ):
+
+        return (
+            self
+            .budget_planning_engine
             .generate()
         )
 
