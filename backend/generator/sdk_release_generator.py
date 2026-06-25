@@ -897,6 +897,24 @@ class SDKReleaseGenerator:
                 remediation.priority
         }
 
+    def governance_governance_manifest(
+        self,
+        governance
+    ):
+        return {
+            "governance_owner":
+                governance.governance_owner,
+
+            "review_frequency":
+                governance.review_frequency,
+
+            "policy_review_required":
+                governance.policy_review_required,
+
+            "audit_review_required":
+                governance.audit_review_required
+        }
+
     def reliability_report_manifest(
         self,
         report

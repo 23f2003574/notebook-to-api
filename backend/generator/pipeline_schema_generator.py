@@ -512,6 +512,9 @@ from .governance_automation import (
 from .governance_remediation import (
     GovernanceRemediationEngine
 )
+from .governance_governance import (
+    GovernanceGovernanceEngine
+)
 
 
 
@@ -1196,6 +1199,9 @@ class PipelineSchemaGenerator:
         self.governance_remediation_engine = (
             GovernanceRemediationEngine()
         )
+        self.governance_governance_engine = (
+            GovernanceGovernanceEngine()
+        )
 
 
 
@@ -1437,6 +1443,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .governance_remediation_engine
+            .generate()
+        )
+
+    def generate_governance_governance(
+        self
+    ):
+        return (
+            self
+            .governance_governance_engine
             .generate()
         )
 
