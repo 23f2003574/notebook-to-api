@@ -500,6 +500,10 @@ from .governance_scorecard import (
     GovernanceScorecardEngine
 )
 
+from .governance_report import (
+    GovernanceReportGenerator
+)
+
 
 
 
@@ -1171,6 +1175,9 @@ class PipelineSchemaGenerator:
         self.governance_scorecard_engine = (
             GovernanceScorecardEngine()
         )
+        self.governance_report_generator = (
+            GovernanceReportGenerator()
+        )
 
 
 
@@ -1376,6 +1383,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .governance_scorecard_engine
+            .generate()
+        )
+
+    def generate_governance_report(
+        self
+    ):
+        return (
+            self
+            .governance_report_generator
             .generate()
         )
 

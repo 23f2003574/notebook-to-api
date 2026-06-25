@@ -674,3 +674,7 @@ from .governance_scorecard import (
     GovernanceScorecard,
     GovernanceScorecardEngine
 )
+from .governance_report import (
+    GovernanceReport,
+    GovernanceReportGenerator
+)
