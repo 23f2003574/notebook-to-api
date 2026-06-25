@@ -496,6 +496,9 @@ from .audit_readiness import (
 from .governance_recommendation import (
     GovernanceRecommendationEngine
 )
+from .governance_scorecard import (
+    GovernanceScorecardEngine
+)
 
 
 
@@ -1165,6 +1168,9 @@ class PipelineSchemaGenerator:
         self.governance_recommendation_engine = (
             GovernanceRecommendationEngine()
         )
+        self.governance_scorecard_engine = (
+            GovernanceScorecardEngine()
+        )
 
 
 
@@ -1361,6 +1367,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .governance_recommendation_engine
+            .generate()
+        )
+
+    def generate_governance_scorecard(
+        self
+    ):
+        return (
+            self
+            .governance_scorecard_engine
             .generate()
         )
 

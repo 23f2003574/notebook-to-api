@@ -670,3 +670,7 @@ from .governance_recommendation import (
     GovernanceRecommendation,
     GovernanceRecommendationEngine
 )
+from .governance_scorecard import (
+    GovernanceScorecard,
+    GovernanceScorecardEngine
+)

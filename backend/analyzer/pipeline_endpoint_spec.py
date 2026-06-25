@@ -1165,3 +1165,8 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def governance_scorecard_enabled(
+        self
+    ):
+        return True
