@@ -1147,3 +1147,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def governance_risk_analysis_enabled(
+        self
+    ):
+
+        return True

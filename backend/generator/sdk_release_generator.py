@@ -2998,3 +2998,16 @@ class SDKReleaseGenerator:
                     controls
                 )
         }
+
+    def governance_risk_manifest(
+        self,
+        risks
+    ):
+
+        return {
+
+            "risk_count":
+                len(
+                    risks
+                )
+        }

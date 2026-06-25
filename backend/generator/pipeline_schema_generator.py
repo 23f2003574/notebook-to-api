@@ -487,6 +487,9 @@ from .compliance_intelligence import (
 from .policy_enforcement import (
     PolicyEnforcementEngine
 )
+from .governance_risk_analysis import (
+    GovernanceRiskAnalysisEngine
+)
 
 
 
@@ -1145,6 +1148,10 @@ class PipelineSchemaGenerator:
             PolicyEnforcementEngine()
         )
 
+        self.governance_risk_analysis_engine = (
+            GovernanceRiskAnalysisEngine()
+        )
+
 
 
 
@@ -1310,6 +1317,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .policy_enforcement_engine
+            .generate()
+        )
+
+    def generate_governance_risks(
+        self
+    ):
+
+        return (
+            self
+            .governance_risk_analysis_engine
             .generate()
         )
 

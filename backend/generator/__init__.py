@@ -658,3 +658,7 @@ from .policy_enforcement import (
     PolicyControl,
     PolicyEnforcementEngine
 )
+from .governance_risk_analysis import (
+    GovernanceRisk,
+    GovernanceRiskAnalysisEngine
+)

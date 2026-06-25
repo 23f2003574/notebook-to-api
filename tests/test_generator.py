@@ -488,3 +488,40 @@ def test_policy_enforcement_engine():
         parallelism_score=1.0,
     )
     assert spec.policy_enforcement_enabled() is True
+
+
+def test_governance_risk_analysis_engine():
+    from backend.generator import GovernanceRisk, GovernanceRiskAnalysisEngine
+    from backend.generator.pipeline_schema_generator import PipelineSchemaGenerator
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+
+    # 1. Verify GovernanceRiskAnalysisEngine
+    engine = GovernanceRiskAnalysisEngine()
+    risks = engine.generate()
+    assert len(risks) == 3
+    assert all(isinstance(r, GovernanceRisk) for r in risks)
+    assert risks[0].risk_name == "incomplete_audit_logging"
+    assert risks[0].probability == "medium"
+    assert risks[0].impact == "high"
+
+    # 2. Verify PipelineSchemaGenerator
+    schema_gen = PipelineSchemaGenerator()
+    assert isinstance(schema_gen.governance_risk_analysis_engine, GovernanceRiskAnalysisEngine)
+    gen_risks = schema_gen.generate_governance_risks()
+    assert len(gen_risks) == 3
+
+    # 3. Verify SDKReleaseGenerator
+    release_gen = SDKReleaseGenerator()
+    manifest = release_gen.governance_risk_manifest(risks)
+    assert manifest["risk_count"] == 3
+
+    # 4. Verify PipelineEndpointSpec
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.governance_risk_analysis_enabled() is True
