@@ -694,3 +694,7 @@ from .governance_governance import (
     GovernanceGovernance,
     GovernanceGovernanceEngine,
 )
+from .autonomous_governance import (
+    AutonomousGovernance,
+    AutonomousGovernanceEngine,
+)

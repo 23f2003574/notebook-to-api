@@ -1191,6 +1191,11 @@ class PipelineEndpointSpec:
     ):
         return True
 
+    def autonomous_governance_enabled(
+        self
+    ):
+        return True
+
     def governance_scorecard_enabled(
         self
     ):

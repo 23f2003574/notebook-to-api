@@ -915,6 +915,24 @@ class SDKReleaseGenerator:
                 governance.audit_review_required
         }
 
+    def autonomous_governance_manifest(
+        self,
+        governance
+    ):
+        return {
+            "adaptive_compliance_enabled":
+                governance.adaptive_compliance_enabled,
+
+            "self_healing_controls_enabled":
+                governance.self_healing_controls_enabled,
+
+            "policy_learning_enabled":
+                governance.policy_learning_enabled,
+
+            "governance_optimization_enabled":
+                governance.governance_optimization_enabled,
+        }
+
     def reliability_report_manifest(
         self,
         report
