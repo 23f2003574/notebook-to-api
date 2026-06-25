@@ -650,3 +650,7 @@ from .governance_assessment import (
     GovernanceAssessment,
     GovernanceAssessmentEngine
 )
+from .compliance_intelligence import (
+    ComplianceFramework,
+    ComplianceIntelligenceEngine
+)

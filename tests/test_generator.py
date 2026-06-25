@@ -414,3 +414,40 @@ def test_governance_assessment_engine():
         parallelism_score=1.0,
     )
     assert spec.governance_assessment_enabled() is True
+
+
+def test_compliance_intelligence_engine():
+    from backend.generator import ComplianceFramework, ComplianceIntelligenceEngine
+    from backend.generator.pipeline_schema_generator import PipelineSchemaGenerator
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+
+    # 1. Verify ComplianceIntelligenceEngine
+    engine = ComplianceIntelligenceEngine()
+    frameworks = engine.generate()
+    assert len(frameworks) == 3
+    assert all(isinstance(f, ComplianceFramework) for f in frameworks)
+    assert frameworks[0].framework_name == "SOC2"
+    assert frameworks[0].compliance_status == "partial"
+    assert frameworks[0].coverage_percent == 82.0
+
+    # 2. Verify PipelineSchemaGenerator
+    schema_gen = PipelineSchemaGenerator()
+    assert isinstance(schema_gen.compliance_intelligence_engine, ComplianceIntelligenceEngine)
+    gen_frameworks = schema_gen.generate_compliance_frameworks()
+    assert len(gen_frameworks) == 3
+
+    # 3. Verify SDKReleaseGenerator
+    release_gen = SDKReleaseGenerator()
+    manifest = release_gen.compliance_framework_manifest(frameworks)
+    assert manifest["framework_count"] == 3
+
+    # 4. Verify PipelineEndpointSpec
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.compliance_intelligence_enabled() is True

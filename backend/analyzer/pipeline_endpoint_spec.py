@@ -1135,3 +1135,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def compliance_intelligence_enabled(
+        self
+    ):
+
+        return True

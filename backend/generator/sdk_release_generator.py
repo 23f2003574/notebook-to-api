@@ -2972,3 +2972,16 @@ class SDKReleaseGenerator:
             "governance_grade":
                 assessment.governance_grade
         }
+
+    def compliance_framework_manifest(
+        self,
+        frameworks
+    ):
+
+        return {
+
+            "framework_count":
+                len(
+                    frameworks
+                )
+        }

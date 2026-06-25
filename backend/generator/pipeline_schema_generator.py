@@ -481,6 +481,9 @@ from .cost_governance import (
 from .governance_assessment import (
     GovernanceAssessmentEngine
 )
+from .compliance_intelligence import (
+    ComplianceIntelligenceEngine
+)
 
 
 
@@ -1131,6 +1134,10 @@ class PipelineSchemaGenerator:
             GovernanceAssessmentEngine()
         )
 
+        self.compliance_intelligence_engine = (
+            ComplianceIntelligenceEngine()
+        )
+
 
 
 
@@ -1276,6 +1283,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .governance_assessment_engine
+            .generate()
+        )
+
+    def generate_compliance_frameworks(
+        self
+    ):
+
+        return (
+            self
+            .compliance_intelligence_engine
             .generate()
         )
 
