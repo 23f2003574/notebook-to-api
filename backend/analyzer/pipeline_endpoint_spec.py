@@ -1153,3 +1153,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def audit_readiness_enabled(
+        self
+    ):
+
+        return True

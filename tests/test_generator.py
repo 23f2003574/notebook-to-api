@@ -525,3 +525,43 @@ def test_governance_risk_analysis_engine():
         parallelism_score=1.0,
     )
     assert spec.governance_risk_analysis_enabled() is True
+
+
+def test_audit_readiness_engine():
+    from backend.generator import AuditReadiness, AuditReadinessEngine
+    from backend.generator.pipeline_schema_generator import PipelineSchemaGenerator
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+
+    # 1. Verify AuditReadinessEngine
+    engine = AuditReadinessEngine()
+    readiness = engine.generate()
+    assert isinstance(readiness, AuditReadiness)
+    assert readiness.readiness_score == 92.0
+    assert readiness.audit_ready is True
+    assert readiness.control_coverage_percent == 95.0
+    assert readiness.open_findings_count == 2
+
+    # 2. Verify PipelineSchemaGenerator
+    schema_gen = PipelineSchemaGenerator()
+    assert isinstance(schema_gen.audit_readiness_engine, AuditReadinessEngine)
+    gen_readiness = schema_gen.generate_audit_readiness()
+    assert gen_readiness.readiness_score == 92.0
+
+    # 3. Verify SDKReleaseGenerator
+    release_gen = SDKReleaseGenerator()
+    manifest = release_gen.audit_readiness_manifest(readiness)
+    assert manifest["readiness_score"] == 92.0
+    assert manifest["audit_ready"] is True
+    assert manifest["control_coverage_percent"] == 95.0
+    assert manifest["open_findings_count"] == 2
+
+    # 4. Verify PipelineEndpointSpec
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.audit_readiness_enabled() is True

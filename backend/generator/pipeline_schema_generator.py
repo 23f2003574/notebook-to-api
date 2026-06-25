@@ -490,6 +490,9 @@ from .policy_enforcement import (
 from .governance_risk_analysis import (
     GovernanceRiskAnalysisEngine
 )
+from .audit_readiness import (
+    AuditReadinessEngine
+)
 
 
 
@@ -1152,6 +1155,10 @@ class PipelineSchemaGenerator:
             GovernanceRiskAnalysisEngine()
         )
 
+        self.audit_readiness_engine = (
+            AuditReadinessEngine()
+        )
+
 
 
 
@@ -1327,6 +1334,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .governance_risk_analysis_engine
+            .generate()
+        )
+
+    def generate_audit_readiness(
+        self
+    ):
+
+        return (
+            self
+            .audit_readiness_engine
             .generate()
         )
 

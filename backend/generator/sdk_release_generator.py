@@ -3011,3 +3011,23 @@ class SDKReleaseGenerator:
                     risks
                 )
         }
+
+    def audit_readiness_manifest(
+        self,
+        readiness
+    ):
+
+        return {
+
+            "readiness_score":
+                readiness.readiness_score,
+
+            "audit_ready":
+                readiness.audit_ready,
+
+            "control_coverage_percent":
+                readiness.control_coverage_percent,
+
+            "open_findings_count":
+                readiness.open_findings_count
+        }

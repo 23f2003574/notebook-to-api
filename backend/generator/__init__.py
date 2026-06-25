@@ -662,3 +662,7 @@ from .governance_risk_analysis import (
     GovernanceRisk,
     GovernanceRiskAnalysisEngine
 )
+from .audit_readiness import (
+    AuditReadiness,
+    AuditReadinessEngine
+)
