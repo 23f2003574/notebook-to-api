@@ -682,3 +682,7 @@ from .governance_intelligence_control_center import (
     GovernanceIntelligenceControlCenter,
     GovernanceIntelligenceControlCenterGenerator,
 )
+from .governance_automation import (
+    GovernanceAutomation,
+    GovernanceAutomationEngine,
+)

@@ -861,6 +861,25 @@ class SDKReleaseGenerator:
                 control_center.governance_report_enabled,
         }
 
+    def governance_automation_manifest(
+        self,
+        automation
+    ):
+        return {
+            "workflow_name":
+                automation.workflow_name,
+
+            "trigger_count":
+                len(
+                    automation.triggers
+                ),
+
+            "action_count":
+                len(
+                    automation.actions
+                )
+        }
+
     def reliability_report_manifest(
         self,
         report
