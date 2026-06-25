@@ -1129,3 +1129,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def governance_assessment_enabled(
+        self
+    ):
+
+        return True

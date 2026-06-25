@@ -2952,3 +2952,23 @@ class SDKReleaseGenerator:
             "cost_review_required":
                 governance.cost_review_required
         }
+
+    def governance_assessment_manifest(
+        self,
+        assessment
+    ):
+
+        return {
+
+            "governance_score":
+                assessment.governance_score,
+
+            "compliance_score":
+                assessment.compliance_score,
+
+            "audit_readiness_score":
+                assessment.audit_readiness_score,
+
+            "governance_grade":
+                assessment.governance_grade
+        }

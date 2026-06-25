@@ -646,3 +646,7 @@ from .cost_governance import (
     CostGovernance,
     CostGovernanceEngine
 )
+from .governance_assessment import (
+    GovernanceAssessment,
+    GovernanceAssessmentEngine
+)

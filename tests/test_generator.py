@@ -374,3 +374,43 @@ def test_python_sdk_generation():
     # python and typescript bundles accessible on the release object
     assert ml_bundle.python_bundle["package"].has_client() is True
     assert "sdk" in ml_bundle.typescript_bundle
+
+
+def test_governance_assessment_engine():
+    from backend.generator import GovernanceAssessment, GovernanceAssessmentEngine
+    from backend.generator.pipeline_schema_generator import PipelineSchemaGenerator
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+
+    # 1. Verify GovernanceAssessmentEngine
+    engine = GovernanceAssessmentEngine()
+    assessment = engine.generate()
+    assert isinstance(assessment, GovernanceAssessment)
+    assert assessment.governance_score == 91.0
+    assert assessment.compliance_score == 89.0
+    assert assessment.audit_readiness_score == 93.0
+    assert assessment.governance_grade == "A"
+
+    # 2. Verify PipelineSchemaGenerator
+    schema_gen = PipelineSchemaGenerator()
+    assert isinstance(schema_gen.governance_assessment_engine, GovernanceAssessmentEngine)
+    gen_assessment = schema_gen.generate_governance_assessment()
+    assert gen_assessment.governance_score == 91.0
+
+    # 3. Verify SDKReleaseGenerator
+    release_gen = SDKReleaseGenerator()
+    manifest = release_gen.governance_assessment_manifest(assessment)
+    assert manifest["governance_score"] == 91.0
+    assert manifest["compliance_score"] == 89.0
+    assert manifest["audit_readiness_score"] == 93.0
+    assert manifest["governance_grade"] == "A"
+
+    # 4. Verify PipelineEndpointSpec
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.governance_assessment_enabled() is True
