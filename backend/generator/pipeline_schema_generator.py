@@ -503,6 +503,9 @@ from .governance_scorecard import (
 from .governance_report import (
     GovernanceReportGenerator
 )
+from .governance_intelligence_control_center import (
+    GovernanceIntelligenceControlCenterGenerator
+)
 
 
 
@@ -1178,6 +1181,9 @@ class PipelineSchemaGenerator:
         self.governance_report_generator = (
             GovernanceReportGenerator()
         )
+        self.governance_intelligence_control_center = (
+            GovernanceIntelligenceControlCenterGenerator()
+        )
 
 
 
@@ -1392,6 +1398,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .governance_report_generator
+            .generate()
+        )
+
+    def generate_governance_intelligence_control_center(
+        self
+    ):
+        return (
+            self
+            .governance_intelligence_control_center
             .generate()
         )
 

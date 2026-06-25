@@ -831,6 +831,36 @@ class SDKReleaseGenerator:
                 report.section_count
         }
 
+    def governance_intelligence_manifest(
+        self,
+        control_center
+    ):
+        return {
+            "governance_assessment_enabled":
+                control_center.governance_assessment_enabled,
+
+            "compliance_intelligence_enabled":
+                control_center.compliance_intelligence_enabled,
+
+            "policy_enforcement_enabled":
+                control_center.policy_enforcement_enabled,
+
+            "governance_risk_analysis_enabled":
+                control_center.governance_risk_analysis_enabled,
+
+            "audit_readiness_enabled":
+                control_center.audit_readiness_enabled,
+
+            "governance_recommendations_enabled":
+                control_center.governance_recommendations_enabled,
+
+            "governance_scorecard_enabled":
+                control_center.governance_scorecard_enabled,
+
+            "governance_report_enabled":
+                control_center.governance_report_enabled,
+        }
+
     def reliability_report_manifest(
         self,
         report

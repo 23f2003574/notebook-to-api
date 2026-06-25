@@ -1171,6 +1171,11 @@ class PipelineEndpointSpec:
     ):
         return True
 
+    def governance_intelligence_control_center_enabled(
+        self
+    ):
+        return True
+
     def governance_scorecard_enabled(
         self
     ):

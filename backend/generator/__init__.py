@@ -678,3 +678,7 @@ from .governance_report import (
     GovernanceReport,
     GovernanceReportGenerator
 )
+from .governance_intelligence_control_center import (
+    GovernanceIntelligenceControlCenter,
+    GovernanceIntelligenceControlCenterGenerator,
+)
