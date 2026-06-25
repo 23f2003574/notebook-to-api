@@ -1181,6 +1181,11 @@ class PipelineEndpointSpec:
     ):
         return True
 
+    def governance_remediation_enabled(
+        self
+    ):
+        return True
+
     def governance_scorecard_enabled(
         self
     ):

@@ -686,3 +686,7 @@ from .governance_automation import (
     GovernanceAutomation,
     GovernanceAutomationEngine,
 )
+from .governance_remediation import (
+    GovernanceRemediation,
+    GovernanceRemediationEngine,
+)

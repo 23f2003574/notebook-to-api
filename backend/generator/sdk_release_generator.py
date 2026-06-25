@@ -880,6 +880,23 @@ class SDKReleaseGenerator:
                 )
         }
 
+    def governance_remediation_manifest(
+        self,
+        remediation
+    ):
+        return {
+            "issue_type":
+                remediation.issue_type,
+
+            "action_count":
+                len(
+                    remediation.remediation_actions
+                ),
+
+            "priority":
+                remediation.priority
+        }
+
     def reliability_report_manifest(
         self,
         report
