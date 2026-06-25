@@ -1141,3 +1141,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def policy_enforcement_enabled(
+        self
+    ):
+
+        return True

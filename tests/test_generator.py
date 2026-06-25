@@ -451,3 +451,40 @@ def test_compliance_intelligence_engine():
         parallelism_score=1.0,
     )
     assert spec.compliance_intelligence_enabled() is True
+
+
+def test_policy_enforcement_engine():
+    from backend.generator import PolicyControl, PolicyEnforcementEngine
+    from backend.generator.pipeline_schema_generator import PipelineSchemaGenerator
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+
+    # 1. Verify PolicyEnforcementEngine
+    engine = PolicyEnforcementEngine()
+    controls = engine.generate()
+    assert len(controls) == 3
+    assert all(isinstance(c, PolicyControl) for c in controls)
+    assert controls[0].policy_name == "authentication_required"
+    assert controls[0].enforcement_status == "enforced"
+    assert controls[0].severity == "critical"
+
+    # 2. Verify PipelineSchemaGenerator
+    schema_gen = PipelineSchemaGenerator()
+    assert isinstance(schema_gen.policy_enforcement_engine, PolicyEnforcementEngine)
+    gen_controls = schema_gen.generate_policy_controls()
+    assert len(gen_controls) == 3
+
+    # 3. Verify SDKReleaseGenerator
+    release_gen = SDKReleaseGenerator()
+    manifest = release_gen.policy_control_manifest(controls)
+    assert manifest["control_count"] == 3
+
+    # 4. Verify PipelineEndpointSpec
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.policy_enforcement_enabled() is True

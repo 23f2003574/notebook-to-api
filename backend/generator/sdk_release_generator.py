@@ -2985,3 +2985,16 @@ class SDKReleaseGenerator:
                     frameworks
                 )
         }
+
+    def policy_control_manifest(
+        self,
+        controls
+    ):
+
+        return {
+
+            "control_count":
+                len(
+                    controls
+                )
+        }

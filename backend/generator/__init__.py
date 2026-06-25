@@ -654,3 +654,7 @@ from .compliance_intelligence import (
     ComplianceFramework,
     ComplianceIntelligenceEngine
 )
+from .policy_enforcement import (
+    PolicyControl,
+    PolicyEnforcementEngine
+)
