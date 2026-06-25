@@ -565,3 +565,40 @@ def test_audit_readiness_engine():
         parallelism_score=1.0,
     )
     assert spec.audit_readiness_enabled() is True
+
+
+def test_governance_recommendation_engine():
+    from backend.generator import GovernanceRecommendation, GovernanceRecommendationEngine
+    from backend.generator.pipeline_schema_generator import PipelineSchemaGenerator
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+
+    # 1. Verify GovernanceRecommendationEngine
+    engine = GovernanceRecommendationEngine()
+    recommendations = engine.generate()
+    assert len(recommendations) == 3
+    assert all(isinstance(r, GovernanceRecommendation) for r in recommendations)
+    assert recommendations[0].recommendation == "enable_comprehensive_audit_logging"
+    assert recommendations[0].priority == "high"
+    assert recommendations[0].impact == "high"
+
+    # 2. Verify PipelineSchemaGenerator
+    schema_gen = PipelineSchemaGenerator()
+    assert isinstance(schema_gen.governance_recommendation_engine, GovernanceRecommendationEngine)
+    gen_recs = schema_gen.generate_governance_recommendations()
+    assert len(gen_recs) == 3
+
+    # 3. Verify SDKReleaseGenerator
+    release_gen = SDKReleaseGenerator()
+    manifest = release_gen.governance_recommendation_manifest(recommendations)
+    assert manifest["recommendation_count"] == 3
+
+    # 4. Verify PipelineEndpointSpec
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.governance_recommendations_enabled() is True

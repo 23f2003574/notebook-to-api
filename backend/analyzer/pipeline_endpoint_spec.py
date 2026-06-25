@@ -1159,3 +1159,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def governance_recommendations_enabled(
+        self
+    ):
+
+        return True

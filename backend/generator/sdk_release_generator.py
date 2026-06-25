@@ -3031,3 +3031,16 @@ class SDKReleaseGenerator:
             "open_findings_count":
                 readiness.open_findings_count
         }
+
+    def governance_recommendation_manifest(
+        self,
+        recommendations
+    ):
+
+        return {
+
+            "recommendation_count":
+                len(
+                    recommendations
+                )
+        }

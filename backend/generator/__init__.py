@@ -666,3 +666,7 @@ from .audit_readiness import (
     AuditReadiness,
     AuditReadinessEngine
 )
+from .governance_recommendation import (
+    GovernanceRecommendation,
+    GovernanceRecommendationEngine
+)
