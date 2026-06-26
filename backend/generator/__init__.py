@@ -361,6 +361,10 @@ from .performance_governance import (
     PerformanceGovernance,
     PerformanceGovernanceEngine
 )
+from .autonomous_performance import (
+    AutonomousPerformance,
+    AutonomousPerformanceEngine
+)
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator

@@ -237,6 +237,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def autonomous_performance_enabled(
+        self
+    ):
+
+        return True
+
     def recommendation_enabled(
         self
     ):

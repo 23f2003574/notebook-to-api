@@ -336,6 +336,39 @@ def test_performance_governance_generation():
     assert manifest["benchmark_review_required"] is True
 
 
+def test_autonomous_performance_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator, AutonomousPerformanceEngine
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    performance = AutonomousPerformanceEngine().generate()
+
+    assert performance.self_tuning_enabled is True
+    assert performance.adaptive_scaling_enabled is True
+    assert performance.performance_learning_enabled is True
+    assert performance.continuous_optimization_enabled is True
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.autonomous_performance_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_performance = generator.generate_autonomous_performance()
+    assert generated_performance.self_tuning_enabled is True
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.autonomous_performance_manifest(performance)
+    assert manifest["self_tuning_enabled"] is True
+    assert manifest["adaptive_scaling_enabled"] is True
+    assert manifest["performance_learning_enabled"] is True
+    assert manifest["continuous_optimization_enabled"] is True
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec

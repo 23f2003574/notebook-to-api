@@ -928,6 +928,24 @@ class SDKReleaseGenerator:
                 governance.benchmark_review_required
         }
 
+    def autonomous_performance_manifest(
+        self,
+        performance
+    ):
+        return {
+            "self_tuning_enabled":
+                performance.self_tuning_enabled,
+
+            "adaptive_scaling_enabled":
+                performance.adaptive_scaling_enabled,
+
+            "performance_learning_enabled":
+                performance.performance_learning_enabled,
+
+            "continuous_optimization_enabled":
+                performance.continuous_optimization_enabled
+        }
+
     def governance_intelligence_manifest(
         self,
         control_center
