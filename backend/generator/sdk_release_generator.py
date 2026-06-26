@@ -910,6 +910,24 @@ class SDKReleaseGenerator:
                 remediation.priority
         }
 
+    def performance_governance_manifest(
+        self,
+        governance
+    ):
+        return {
+            "performance_owner":
+                governance.performance_owner,
+
+            "review_frequency":
+                governance.review_frequency,
+
+            "sla_review_required":
+                governance.sla_review_required,
+
+            "benchmark_review_required":
+                governance.benchmark_review_required
+        }
+
     def governance_intelligence_manifest(
         self,
         control_center

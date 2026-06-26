@@ -303,6 +303,39 @@ def test_performance_remediation_generation():
     assert manifest["priority"] == "high"
 
 
+def test_performance_governance_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator, PerformanceGovernanceEngine
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    governance = PerformanceGovernanceEngine().generate()
+
+    assert governance.performance_owner == "platform_team"
+    assert governance.review_frequency == "monthly"
+    assert governance.sla_review_required is True
+    assert governance.benchmark_review_required is True
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.performance_governance_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_governance = generator.generate_performance_governance()
+    assert generated_governance.performance_owner == "platform_team"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.performance_governance_manifest(governance)
+    assert manifest["performance_owner"] == "platform_team"
+    assert manifest["review_frequency"] == "monthly"
+    assert manifest["sla_review_required"] is True
+    assert manifest["benchmark_review_required"] is True
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec

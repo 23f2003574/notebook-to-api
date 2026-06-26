@@ -357,6 +357,10 @@ from .performance_remediation import (
     PerformanceRemediation,
     PerformanceRemediationEngine
 )
+from .performance_governance import (
+    PerformanceGovernance,
+    PerformanceGovernanceEngine
+)
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator
