@@ -844,6 +844,36 @@ class SDKReleaseGenerator:
                 report.section_count
         }
 
+    def performance_intelligence_manifest(
+        self,
+        control_center
+    ):
+        return {
+            "performance_assessment_enabled":
+                control_center.performance_assessment_enabled,
+
+            "bottleneck_detection_enabled":
+                control_center.bottleneck_detection_enabled,
+
+            "scalability_analysis_enabled":
+                control_center.scalability_analysis_enabled,
+
+            "capacity_planning_enabled":
+                control_center.capacity_planning_enabled,
+
+            "performance_optimization_enabled":
+                control_center.performance_optimization_enabled,
+
+            "performance_recommendations_enabled":
+                control_center.performance_recommendations_enabled,
+
+            "performance_scorecard_enabled":
+                control_center.performance_scorecard_enabled,
+
+            "performance_report_enabled":
+                control_center.performance_report_enabled,
+        }
+
     def governance_intelligence_manifest(
         self,
         control_center

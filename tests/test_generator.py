@@ -193,6 +193,41 @@ def test_performance_report_generation():
     assert manifest["section_count"] == 7
 
 
+def test_performance_intelligence_control_center_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator, PerformanceIntelligenceControlCenterGenerator
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    control_center = PerformanceIntelligenceControlCenterGenerator().generate()
+
+    assert control_center.performance_assessment_enabled is True
+    assert control_center.bottleneck_detection_enabled is True
+    assert control_center.scalability_analysis_enabled is True
+    assert control_center.capacity_planning_enabled is True
+    assert control_center.performance_optimization_enabled is True
+    assert control_center.performance_recommendations_enabled is True
+    assert control_center.performance_scorecard_enabled is True
+    assert control_center.performance_report_enabled is True
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.performance_intelligence_control_center_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_control_center = generator.generate_performance_intelligence_control_center()
+    assert generated_control_center.performance_report_enabled is True
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.performance_intelligence_manifest(control_center)
+    assert manifest["performance_assessment_enabled"] is True
+    assert manifest["performance_report_enabled"] is True
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec

@@ -345,6 +345,10 @@ from .performance_report import (
     PerformanceReport,
     PerformanceReportGenerator
 )
+from .performance_intelligence_control_center import (
+    PerformanceIntelligenceControlCenter,
+    PerformanceIntelligenceControlCenterGenerator
+)
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator

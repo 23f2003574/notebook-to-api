@@ -542,7 +542,9 @@ from .performance_scorecard import (
 from .performance_report import (
     PerformanceReportGenerator
 )
-
+from .performance_intelligence_control_center import (
+    PerformanceIntelligenceControlCenterGenerator
+)
 
 
 
@@ -1255,7 +1257,9 @@ class PipelineSchemaGenerator:
         self.performance_report_generator = (
             PerformanceReportGenerator()
         )
-
+        self.performance_intelligence_control_center = (
+            PerformanceIntelligenceControlCenterGenerator()
+        )
 
 
 
@@ -4391,5 +4395,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .performance_report_generator
+            .generate()
+        )
+
+    def generate_performance_intelligence_control_center(
+        self
+    ):
+
+        return (
+            self
+            .performance_intelligence_control_center
             .generate()
         )
