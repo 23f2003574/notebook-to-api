@@ -548,6 +548,9 @@ from .performance_intelligence_control_center import (
 from .performance_automation import (
     PerformanceAutomationEngine
 )
+from .performance_remediation import (
+    PerformanceRemediationEngine
+)
 
 
 
@@ -1264,6 +1267,9 @@ class PipelineSchemaGenerator:
         )
         self.performance_automation_engine = (
             PerformanceAutomationEngine()
+        )
+        self.performance_remediation_engine = (
+            PerformanceRemediationEngine()
         )
 
 
@@ -4419,5 +4425,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .performance_automation_engine
+            .generate()
+        )
+
+    def generate_performance_remediation(
+        self
+    ):
+
+        return (
+            self
+            .performance_remediation_engine
             .generate()
         )

@@ -267,6 +267,42 @@ def test_performance_automation_generation():
     assert manifest["action_count"] == 3
 
 
+def test_performance_remediation_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator, PerformanceRemediationEngine
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    remediation = PerformanceRemediationEngine().generate()
+
+    assert remediation.issue_type == "high_latency"
+    assert remediation.priority == "high"
+    assert remediation.remediation_actions == [
+        "optimize_database_queries",
+        "increase_cache_hit_rate",
+        "scale_application_instances",
+        "enable_connection_pooling",
+    ]
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.performance_remediation_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_remediation = generator.generate_performance_remediation()
+    assert generated_remediation.issue_type == "high_latency"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.performance_remediation_manifest(remediation)
+    assert manifest["issue_type"] == "high_latency"
+    assert manifest["action_count"] == 4
+    assert manifest["priority"] == "high"
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
