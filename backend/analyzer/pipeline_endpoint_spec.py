@@ -1218,3 +1218,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def capacity_planning_enabled(
+        self
+    ):
+
+        return True

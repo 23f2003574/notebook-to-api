@@ -710,3 +710,7 @@ from .scalability_analysis import (
     ScalabilityAssessment,
     ScalabilityAnalysisEngine
 )
+from .capacity_planning import (
+    CapacityPlan,
+    CapacityPlanningEngine
+)

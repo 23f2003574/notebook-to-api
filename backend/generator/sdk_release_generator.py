@@ -3232,3 +3232,23 @@ class SDKReleaseGenerator:
             "scalability_grade":
                 assessment.scalability_grade
         }
+
+    def capacity_plan_manifest(
+        self,
+        capacity
+    ):
+
+        return {
+
+            "expected_peak_rps":
+                capacity.expected_peak_rps,
+
+            "recommended_instances":
+                capacity.recommended_instances,
+
+            "cpu_utilization_target":
+                capacity.cpu_utilization_target,
+
+            "scaling_strategy":
+                capacity.scaling_strategy
+        }

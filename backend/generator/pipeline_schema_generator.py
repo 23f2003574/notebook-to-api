@@ -527,6 +527,9 @@ from .bottleneck_detection import (
 from .scalability_analysis import (
     ScalabilityAnalysisEngine
 )
+from .capacity_planning import (
+    CapacityPlanningEngine
+)
 
 
 
@@ -1225,6 +1228,9 @@ class PipelineSchemaGenerator:
         )
         self.scalability_analysis_engine = (
             ScalabilityAnalysisEngine()
+        )
+        self.capacity_planning_engine = (
+            CapacityPlanningEngine()
         )
 
 
@@ -4314,5 +4320,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .scalability_analysis_engine
+            .generate()
+        )
+
+    def generate_capacity_plan(
+        self
+    ):
+
+        return (
+            self
+            .capacity_planning_engine
             .generate()
         )
