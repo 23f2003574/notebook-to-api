@@ -341,6 +341,10 @@ from .deployment_report import (
     DeploymentReport,
     DeploymentReportGenerator
 )
+from .performance_report import (
+    PerformanceReport,
+    PerformanceReportGenerator
+)
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator

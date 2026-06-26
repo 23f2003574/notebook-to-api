@@ -539,7 +539,9 @@ from .performance_recommendation import (
 from .performance_scorecard import (
     PerformanceScorecardEngine
 )
-
+from .performance_report import (
+    PerformanceReportGenerator
+)
 
 
 
@@ -1250,8 +1252,9 @@ class PipelineSchemaGenerator:
         self.performance_scorecard_engine = (
             PerformanceScorecardEngine()
         )
-
-
+        self.performance_report_generator = (
+            PerformanceReportGenerator()
+        )
 
 
 
@@ -4378,5 +4381,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .performance_scorecard_engine
+            .generate()
+        )
+
+    def generate_performance_report(
+        self
+    ):
+
+        return (
+            self
+            .performance_report_generator
             .generate()
         )

@@ -155,6 +155,44 @@ def test_pipeline_model_generator():
     assert "export interface RunPipelineRequest {" in sdk_project.files["src/run_pipeline_sdk.ts"]
 
 
+def test_performance_report_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator, PerformanceReportGenerator
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    report = PerformanceReportGenerator().generate()
+
+    assert report.title == "Performance Report"
+    assert report.section_count == 7
+    assert report.sections == [
+        "Performance Assessment",
+        "Bottleneck Detection",
+        "Scalability Analysis",
+        "Capacity Planning",
+        "Performance Optimization",
+        "Performance Recommendations",
+        "Performance Scorecard",
+    ]
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.performance_report_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_report = generator.generate_performance_report()
+    assert generated_report.title == "Performance Report"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.performance_report_manifest(report)
+    assert manifest["title"] == "Performance Report"
+    assert manifest["section_count"] == 7
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
