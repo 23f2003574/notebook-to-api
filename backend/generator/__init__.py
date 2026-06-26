@@ -706,3 +706,7 @@ from .bottleneck_detection import (
     PerformanceBottleneck,
     BottleneckDetectionEngine
 )
+from .scalability_analysis import (
+    ScalabilityAssessment,
+    ScalabilityAnalysisEngine
+)

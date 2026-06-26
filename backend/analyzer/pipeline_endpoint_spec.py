@@ -1212,3 +1212,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def scalability_analysis_enabled(
+        self
+    ):
+
+        return True

@@ -3212,3 +3212,23 @@ class SDKReleaseGenerator:
                     bottlenecks
                 )
         }
+
+    def scalability_assessment_manifest(
+        self,
+        assessment
+    ):
+
+        return {
+
+            "maximum_supported_rps":
+                assessment.maximum_supported_rps,
+
+            "horizontal_scaling_ready":
+                assessment.horizontal_scaling_ready,
+
+            "scalability_score":
+                assessment.scalability_score,
+
+            "scalability_grade":
+                assessment.scalability_grade
+        }

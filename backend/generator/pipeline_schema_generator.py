@@ -524,6 +524,9 @@ from .performance_assessment import (
 from .bottleneck_detection import (
     BottleneckDetectionEngine
 )
+from .scalability_analysis import (
+    ScalabilityAnalysisEngine
+)
 
 
 
@@ -1219,6 +1222,9 @@ class PipelineSchemaGenerator:
         )
         self.bottleneck_detection_engine = (
             BottleneckDetectionEngine()
+        )
+        self.scalability_analysis_engine = (
+            ScalabilityAnalysisEngine()
         )
 
 
@@ -4298,5 +4304,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .bottleneck_detection_engine
+            .generate()
+        )
+
+    def generate_scalability_assessment(
+        self
+    ):
+
+        return (
+            self
+            .scalability_analysis_engine
             .generate()
         )
