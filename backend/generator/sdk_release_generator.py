@@ -3252,3 +3252,26 @@ class SDKReleaseGenerator:
             "scaling_strategy":
                 capacity.scaling_strategy
         }
+
+    def performance_optimization_manifest(
+        self,
+        optimizations
+    ):
+
+        return {
+
+            "optimization_count":
+                len(
+                    optimizations
+                ),
+
+            "estimated_latency_reduction_ms":
+                max(
+
+                    optimization
+                    .expected_latency_reduction_ms
+
+                    for optimization
+                    in optimizations
+                )
+        }

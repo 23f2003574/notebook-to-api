@@ -714,3 +714,7 @@ from .capacity_planning import (
     CapacityPlan,
     CapacityPlanningEngine
 )
+from .performance_optimization import (
+    PerformanceOptimization,
+    PerformanceOptimizationEngine
+)

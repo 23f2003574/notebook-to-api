@@ -1224,3 +1224,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def performance_optimization_enabled(
+        self
+    ):
+
+        return True

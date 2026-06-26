@@ -530,6 +530,9 @@ from .scalability_analysis import (
 from .capacity_planning import (
     CapacityPlanningEngine
 )
+from .performance_optimization import (
+    PerformanceOptimizationEngine
+)
 
 
 
@@ -1231,6 +1234,9 @@ class PipelineSchemaGenerator:
         )
         self.capacity_planning_engine = (
             CapacityPlanningEngine()
+        )
+        self.performance_optimization_engine = (
+            PerformanceOptimizationEngine()
         )
 
 
@@ -4330,5 +4336,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .capacity_planning_engine
+            .generate()
+        )
+
+    def generate_performance_optimizations(
+        self
+    ):
+
+        return (
+            self
+            .performance_optimization_engine
             .generate()
         )
