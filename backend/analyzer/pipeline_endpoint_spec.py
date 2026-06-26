@@ -219,6 +219,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def performance_automation_enabled(
+        self
+    ):
+
+        return True
+
     def recommendation_enabled(
         self
     ):

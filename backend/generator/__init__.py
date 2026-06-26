@@ -349,6 +349,10 @@ from .performance_intelligence_control_center import (
     PerformanceIntelligenceControlCenter,
     PerformanceIntelligenceControlCenterGenerator
 )
+from .performance_automation import (
+    PerformanceAutomation,
+    PerformanceAutomationEngine
+)
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator

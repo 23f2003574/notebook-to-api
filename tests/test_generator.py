@@ -228,6 +228,45 @@ def test_performance_intelligence_control_center_generation():
     assert manifest["performance_report_enabled"] is True
 
 
+def test_performance_automation_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator, PerformanceAutomationEngine
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    automation = PerformanceAutomationEngine().generate()
+
+    assert automation.workflow_name == "performance_monitoring"
+    assert automation.triggers == [
+        "latency_threshold_exceeded",
+        "throughput_drop_detected",
+        "bottleneck_identified",
+    ]
+    assert automation.actions == [
+        "generate_performance_report",
+        "notify_platform_team",
+        "create_optimization_ticket",
+    ]
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.performance_automation_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_automation = generator.generate_performance_automation()
+    assert generated_automation.workflow_name == "performance_monitoring"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.performance_automation_manifest(automation)
+    assert manifest["workflow_name"] == "performance_monitoring"
+    assert manifest["trigger_count"] == 3
+    assert manifest["action_count"] == 3
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec

@@ -545,7 +545,9 @@ from .performance_report import (
 from .performance_intelligence_control_center import (
     PerformanceIntelligenceControlCenterGenerator
 )
-
+from .performance_automation import (
+    PerformanceAutomationEngine
+)
 
 
 
@@ -1260,7 +1262,9 @@ class PipelineSchemaGenerator:
         self.performance_intelligence_control_center = (
             PerformanceIntelligenceControlCenterGenerator()
         )
-
+        self.performance_automation_engine = (
+            PerformanceAutomationEngine()
+        )
 
 
 
@@ -4405,5 +4409,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .performance_intelligence_control_center
+            .generate()
+        )
+
+    def generate_performance_automation(
+        self
+    ):
+
+        return (
+            self
+            .performance_automation_engine
             .generate()
         )
