@@ -698,3 +698,7 @@ from .autonomous_governance import (
     AutonomousGovernance,
     AutonomousGovernanceEngine,
 )
+from .performance_assessment import (
+    PerformanceAssessment,
+    PerformanceAssessmentEngine
+)

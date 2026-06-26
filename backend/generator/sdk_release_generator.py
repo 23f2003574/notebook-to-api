@@ -3179,3 +3179,23 @@ class SDKReleaseGenerator:
                     recommendations
                 )
         }
+
+    def performance_assessment_manifest(
+        self,
+        assessment
+    ):
+
+        return {
+
+            "average_latency_ms":
+                assessment.average_latency_ms,
+
+            "throughput_rps":
+                assessment.throughput_rps,
+
+            "performance_score":
+                assessment.performance_score,
+
+            "performance_grade":
+                assessment.performance_grade
+        }

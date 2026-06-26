@@ -518,6 +518,9 @@ from .governance_governance import (
 from .autonomous_governance import (
     AutonomousGovernanceEngine
 )
+from .performance_assessment import (
+    PerformanceAssessmentEngine
+)
 
 
 
@@ -1207,6 +1210,9 @@ class PipelineSchemaGenerator:
         )
         self.autonomous_governance_engine = (
             AutonomousGovernanceEngine()
+        )
+        self.performance_assessment_engine = (
+            PerformanceAssessmentEngine()
         )
 
 
@@ -4266,5 +4272,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .observability_automation_engine
+            .generate()
+        )
+
+    def generate_performance_assessment(
+        self
+    ):
+
+        return (
+            self
+            .performance_assessment_engine
             .generate()
         )

@@ -1200,3 +1200,9 @@ class PipelineEndpointSpec:
         self
     ):
         return True
+
+    def performance_assessment_enabled(
+        self
+    ):
+
+        return True
