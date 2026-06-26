@@ -3199,3 +3199,16 @@ class SDKReleaseGenerator:
             "performance_grade":
                 assessment.performance_grade
         }
+
+    def bottleneck_manifest(
+        self,
+        bottlenecks
+    ):
+
+        return {
+
+            "bottleneck_count":
+                len(
+                    bottlenecks
+                )
+        }

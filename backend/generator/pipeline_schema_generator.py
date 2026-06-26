@@ -521,6 +521,9 @@ from .autonomous_governance import (
 from .performance_assessment import (
     PerformanceAssessmentEngine
 )
+from .bottleneck_detection import (
+    BottleneckDetectionEngine
+)
 
 
 
@@ -1213,6 +1216,9 @@ class PipelineSchemaGenerator:
         )
         self.performance_assessment_engine = (
             PerformanceAssessmentEngine()
+        )
+        self.bottleneck_detection_engine = (
+            BottleneckDetectionEngine()
         )
 
 
@@ -4282,5 +4288,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .performance_assessment_engine
+            .generate()
+        )
+
+    def generate_bottleneck_analysis(
+        self
+    ):
+
+        return (
+            self
+            .bottleneck_detection_engine
             .generate()
         )

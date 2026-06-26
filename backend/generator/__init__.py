@@ -702,3 +702,7 @@ from .performance_assessment import (
     PerformanceAssessment,
     PerformanceAssessmentEngine
 )
+from .bottleneck_detection import (
+    PerformanceBottleneck,
+    BottleneckDetectionEngine
+)

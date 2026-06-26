@@ -1206,3 +1206,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def bottleneck_detection_enabled(
+        self
+    ):
+
+        return True
