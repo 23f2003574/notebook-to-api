@@ -3288,3 +3288,26 @@ class SDKReleaseGenerator:
                     recommendations
                 )
         }
+
+    def performance_scorecard_manifest(
+        self,
+        scorecard
+    ):
+
+        return {
+
+            "overall_score":
+                scorecard.overall_score,
+
+            "performance_grade":
+                scorecard.performance_grade,
+
+            "average_latency_ms":
+                scorecard.average_latency_ms,
+
+            "throughput_rps":
+                scorecard.throughput_rps,
+
+            "scalability_score":
+                scorecard.scalability_score
+        }

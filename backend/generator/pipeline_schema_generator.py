@@ -536,6 +536,9 @@ from .performance_optimization import (
 from .performance_recommendation import (
     PerformanceRecommendationEngine
 )
+from .performance_scorecard import (
+    PerformanceScorecardEngine
+)
 
 
 
@@ -1243,6 +1246,9 @@ class PipelineSchemaGenerator:
         )
         self.performance_recommendation_engine = (
             PerformanceRecommendationEngine()
+        )
+        self.performance_scorecard_engine = (
+            PerformanceScorecardEngine()
         )
 
 
@@ -4362,5 +4368,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .performance_recommendation_engine
+            .generate()
+        )
+
+    def generate_performance_scorecard(
+        self
+    ):
+
+        return (
+            self
+            .performance_scorecard_engine
             .generate()
         )

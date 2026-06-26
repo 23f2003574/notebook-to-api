@@ -722,3 +722,7 @@ from .performance_recommendation import (
     PerformanceRecommendation,
     PerformanceRecommendationEngine
 )
+from .performance_scorecard import (
+    PerformanceScorecard,
+    PerformanceScorecardEngine
+)

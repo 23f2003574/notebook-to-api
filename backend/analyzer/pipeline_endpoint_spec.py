@@ -1236,3 +1236,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def performance_scorecard_enabled(
+        self
+    ):
+
+        return True
