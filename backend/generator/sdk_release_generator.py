@@ -3275,3 +3275,16 @@ class SDKReleaseGenerator:
                     in optimizations
                 )
         }
+
+    def performance_recommendation_manifest(
+        self,
+        recommendations
+    ):
+
+        return {
+
+            "recommendation_count":
+                len(
+                    recommendations
+                )
+        }

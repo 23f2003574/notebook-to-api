@@ -533,6 +533,9 @@ from .capacity_planning import (
 from .performance_optimization import (
     PerformanceOptimizationEngine
 )
+from .performance_recommendation import (
+    PerformanceRecommendationEngine
+)
 
 
 
@@ -1237,6 +1240,9 @@ class PipelineSchemaGenerator:
         )
         self.performance_optimization_engine = (
             PerformanceOptimizationEngine()
+        )
+        self.performance_recommendation_engine = (
+            PerformanceRecommendationEngine()
         )
 
 
@@ -4346,5 +4352,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .performance_optimization_engine
+            .generate()
+        )
+
+    def generate_performance_recommendations(
+        self
+    ):
+
+        return (
+            self
+            .performance_recommendation_engine
             .generate()
         )

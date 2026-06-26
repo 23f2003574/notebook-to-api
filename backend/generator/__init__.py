@@ -718,3 +718,7 @@ from .performance_optimization import (
     PerformanceOptimization,
     PerformanceOptimizationEngine
 )
+from .performance_recommendation import (
+    PerformanceRecommendation,
+    PerformanceRecommendationEngine
+)
