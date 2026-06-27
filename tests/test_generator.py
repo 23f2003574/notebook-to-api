@@ -468,6 +468,39 @@ def test_rag_intelligence_generation():
     assert manifest["chunking_strategy"] == "semantic_chunking"
 
 
+def test_ai_agent_architecture_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator, AIAgentArchitectureEngine
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    architecture = AIAgentArchitectureEngine().generate()
+
+    assert architecture.architecture_type == "multi_agent"
+    assert architecture.orchestration_strategy == "planner_executor"
+    assert architecture.tool_invocation_pattern == "function_calling"
+    assert architecture.memory_strategy == "hybrid_memory"
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.ai_agent_architecture_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_architecture = generator.generate_ai_agent_architecture()
+    assert generated_architecture.architecture_type == "multi_agent"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.ai_agent_architecture_manifest(architecture)
+    assert manifest["architecture_type"] == "multi_agent"
+    assert manifest["orchestration_strategy"] == "planner_executor"
+    assert manifest["tool_invocation_pattern"] == "function_calling"
+    assert manifest["memory_strategy"] == "hybrid_memory"
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec

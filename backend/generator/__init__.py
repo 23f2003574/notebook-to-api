@@ -377,6 +377,10 @@ from .rag_intelligence import (
     RAGIntelligence,
     RAGIntelligenceEngine
 )
+from .ai_agent_architecture import (
+    AIAgentArchitecture,
+    AIAgentArchitectureEngine
+)
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator

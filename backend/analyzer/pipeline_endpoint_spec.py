@@ -261,6 +261,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def ai_agent_architecture_enabled(
+        self
+    ):
+
+        return True
+
     def recommendation_enabled(
         self
     ):

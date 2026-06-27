@@ -566,6 +566,9 @@ from .llm_integration import (
 from .rag_intelligence import (
     RAGIntelligenceEngine
 )
+from .ai_agent_architecture import (
+    AIAgentArchitectureEngine
+)
 
 
 
@@ -1300,6 +1303,9 @@ class PipelineSchemaGenerator:
         )
         self.rag_intelligence_engine = (
             RAGIntelligenceEngine()
+        )
+        self.ai_agent_architecture_engine = (
+            AIAgentArchitectureEngine()
         )
 
 
@@ -4515,5 +4521,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .rag_intelligence_engine
+            .generate()
+        )
+
+    def generate_ai_agent_architecture(
+        self
+    ):
+
+        return (
+            self
+            .ai_agent_architecture_engine
             .generate()
         )

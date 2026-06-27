@@ -1006,6 +1006,26 @@ class SDKReleaseGenerator:
                 rag.chunking_strategy
         }
 
+    def ai_agent_architecture_manifest(
+        self,
+        architecture
+    ):
+
+        return {
+
+            "architecture_type":
+                architecture.architecture_type,
+
+            "orchestration_strategy":
+                architecture.orchestration_strategy,
+
+            "tool_invocation_pattern":
+                architecture.tool_invocation_pattern,
+
+            "memory_strategy":
+                architecture.memory_strategy
+        }
+
     def governance_intelligence_manifest(
         self,
         control_center
