@@ -761,6 +761,39 @@ def test_ai_remediation_generation():
     assert manifest["priority"] == "high"
 
 
+def test_ai_governance_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator, AIGovernanceEngine
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    governance = AIGovernanceEngine().generate()
+
+    assert governance.ai_owner == "ai_platform_team"
+    assert governance.model_review_frequency == "monthly"
+    assert governance.responsible_ai_review_required is True
+    assert governance.model_versioning_required is True
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.ai_governance_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_governance = generator.generate_ai_governance()
+    assert generated_governance.ai_owner == "ai_platform_team"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.ai_governance_manifest(governance)
+    assert manifest["ai_owner"] == "ai_platform_team"
+    assert manifest["model_review_frequency"] == "monthly"
+    assert manifest["responsible_ai_review_required"] is True
+    assert manifest["model_versioning_required"] is True
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec

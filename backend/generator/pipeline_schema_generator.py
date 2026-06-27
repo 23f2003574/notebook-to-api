@@ -590,6 +590,9 @@ from .ai_automation import (
 from .ai_remediation import (
     AIRemediationEngine
 )
+from .ai_governance import (
+    AIGovernanceEngine
+)
 
 
 
@@ -1348,6 +1351,9 @@ class PipelineSchemaGenerator:
         )
         self.ai_remediation_engine = (
             AIRemediationEngine()
+        )
+        self.ai_governance_engine = (
+            AIGovernanceEngine()
         )
 
 
@@ -4643,5 +4649,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .ai_remediation_engine
+            .generate()
+        )
+
+    def generate_ai_governance(
+        self
+    ):
+
+        return (
+            self
+            .ai_governance_engine
             .generate()
         )

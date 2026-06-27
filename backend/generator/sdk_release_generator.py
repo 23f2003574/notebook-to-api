@@ -1170,6 +1170,26 @@ class SDKReleaseGenerator:
                 remediation.priority
         }
 
+    def ai_governance_manifest(
+        self,
+        governance
+    ):
+
+        return {
+
+            "ai_owner":
+                governance.ai_owner,
+
+            "model_review_frequency":
+                governance.model_review_frequency,
+
+            "responsible_ai_review_required":
+                governance.responsible_ai_review_required,
+
+            "model_versioning_required":
+                governance.model_versioning_required
+        }
+
     def governance_intelligence_manifest(
         self,
         control_center

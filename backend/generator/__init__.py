@@ -409,6 +409,10 @@ from .ai_remediation import (
     AIRemediation,
     AIRemediationEngine
 )
+from .ai_governance import (
+    AIGovernance,
+    AIGovernanceEngine
+)
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator
