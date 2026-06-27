@@ -1048,6 +1048,19 @@ class SDKReleaseGenerator:
                 workflow.parallel_execution
         }
 
+    def ai_recommendation_manifest(
+        self,
+        recommendations
+    ):
+
+        return {
+
+            "recommendation_count":
+                len(
+                    recommendations
+                )
+        }
+
     def governance_intelligence_manifest(
         self,
         control_center

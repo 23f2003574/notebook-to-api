@@ -572,6 +572,9 @@ from .ai_agent_architecture import (
 from .ai_workflow import (
     AIWorkflowEngine
 )
+from .ai_recommendation import (
+    AIRecommendationEngine
+)
 
 
 
@@ -1312,6 +1315,9 @@ class PipelineSchemaGenerator:
         )
         self.ai_workflow_engine = (
             AIWorkflowEngine()
+        )
+        self.ai_recommendation_engine = (
+            AIRecommendationEngine()
         )
 
 
@@ -4547,5 +4553,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .ai_workflow_engine
+            .generate()
+        )
+
+    def generate_ai_recommendations(
+        self
+    ):
+
+        return (
+            self
+            .ai_recommendation_engine
             .generate()
         )

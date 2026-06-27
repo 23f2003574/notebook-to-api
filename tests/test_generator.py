@@ -540,6 +540,39 @@ def test_ai_workflow_generation():
     assert manifest["parallel_execution"] is True
 
 
+def test_ai_recommendation_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator, AIRecommendationEngine
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    recommendations = AIRecommendationEngine().generate()
+
+    assert len(recommendations) == 3
+    assert recommendations[0].recommendation == "introduce_long_term_memory"
+    assert recommendations[0].category == "agent_memory"
+    assert recommendations[0].priority == "high"
+    assert recommendations[1].recommendation == "enable_semantic_routing"
+    assert recommendations[2].recommendation == "implement_multi_agent_coordination"
+    assert recommendations[2].priority == "medium"
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.ai_recommendations_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_recommendations = generator.generate_ai_recommendations()
+    assert len(generated_recommendations) == 3
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.ai_recommendation_manifest(recommendations)
+    assert manifest["recommendation_count"] == 3
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec

@@ -385,6 +385,10 @@ from .ai_workflow import (
     AIWorkflow,
     AIWorkflowEngine
 )
+from .ai_recommendation import (
+    AIRecommendation,
+    AIRecommendationEngine
+)
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator
