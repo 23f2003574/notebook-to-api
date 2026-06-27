@@ -381,6 +381,10 @@ from .ai_agent_architecture import (
     AIAgentArchitecture,
     AIAgentArchitectureEngine
 )
+from .ai_workflow import (
+    AIWorkflow,
+    AIWorkflowEngine
+)
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator

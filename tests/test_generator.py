@@ -501,6 +501,45 @@ def test_ai_agent_architecture_generation():
     assert manifest["memory_strategy"] == "hybrid_memory"
 
 
+def test_ai_workflow_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator, AIWorkflowEngine
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    workflow = AIWorkflowEngine().generate()
+
+    assert workflow.workflow_name == "agentic_request_processing"
+    assert workflow.stages == [
+        "request_analysis",
+        "retrieval",
+        "reasoning",
+        "tool_execution",
+        "response_generation",
+    ]
+    assert workflow.execution_strategy == "planner_executor"
+    assert workflow.parallel_execution is True
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.ai_workflow_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_workflow = generator.generate_ai_workflow()
+    assert generated_workflow.workflow_name == "agentic_request_processing"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.ai_workflow_manifest(workflow)
+    assert manifest["workflow_name"] == "agentic_request_processing"
+    assert manifest["stage_count"] == 5
+    assert manifest["execution_strategy"] == "planner_executor"
+    assert manifest["parallel_execution"] is True
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec

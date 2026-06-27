@@ -569,6 +569,9 @@ from .rag_intelligence import (
 from .ai_agent_architecture import (
     AIAgentArchitectureEngine
 )
+from .ai_workflow import (
+    AIWorkflowEngine
+)
 
 
 
@@ -1306,6 +1309,9 @@ class PipelineSchemaGenerator:
         )
         self.ai_agent_architecture_engine = (
             AIAgentArchitectureEngine()
+        )
+        self.ai_workflow_engine = (
+            AIWorkflowEngine()
         )
 
 
@@ -4531,5 +4537,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .ai_agent_architecture_engine
+            .generate()
+        )
+
+    def generate_ai_workflow(
+        self
+    ):
+
+        return (
+            self
+            .ai_workflow_engine
             .generate()
         )

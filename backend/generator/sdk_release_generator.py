@@ -1026,6 +1026,28 @@ class SDKReleaseGenerator:
                 architecture.memory_strategy
         }
 
+    def ai_workflow_manifest(
+        self,
+        workflow
+    ):
+
+        return {
+
+            "workflow_name":
+                workflow.workflow_name,
+
+            "stage_count":
+                len(
+                    workflow.stages
+                ),
+
+            "execution_strategy":
+                workflow.execution_strategy,
+
+            "parallel_execution":
+                workflow.parallel_execution
+        }
+
     def governance_intelligence_manifest(
         self,
         control_center
