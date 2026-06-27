@@ -389,6 +389,10 @@ from .ai_recommendation import (
     AIRecommendation,
     AIRecommendationEngine
 )
+from .ai_scorecard import (
+    AIScorecard,
+    AIScorecardEngine
+)
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator

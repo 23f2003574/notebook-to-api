@@ -575,6 +575,9 @@ from .ai_workflow import (
 from .ai_recommendation import (
     AIRecommendationEngine
 )
+from .ai_scorecard import (
+    AIScorecardEngine
+)
 
 
 
@@ -1318,6 +1321,9 @@ class PipelineSchemaGenerator:
         )
         self.ai_recommendation_engine = (
             AIRecommendationEngine()
+        )
+        self.ai_scorecard_engine = (
+            AIScorecardEngine()
         )
 
 
@@ -4563,5 +4569,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .ai_recommendation_engine
+            .generate()
+        )
+
+    def generate_ai_scorecard(
+        self
+    ):
+
+        return (
+            self
+            .ai_scorecard_engine
             .generate()
         )

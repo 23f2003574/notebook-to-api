@@ -1061,6 +1061,29 @@ class SDKReleaseGenerator:
                 )
         }
 
+    def ai_scorecard_manifest(
+        self,
+        scorecard
+    ):
+
+        return {
+
+            "overall_score":
+                scorecard.overall_score,
+
+            "ai_grade":
+                scorecard.ai_grade,
+
+            "ai_readiness_score":
+                scorecard.ai_readiness_score,
+
+            "llm_compatibility_score":
+                scorecard.llm_compatibility_score,
+
+            "agent_readiness_score":
+                scorecard.agent_readiness_score
+        }
+
     def governance_intelligence_manifest(
         self,
         control_center

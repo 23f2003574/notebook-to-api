@@ -573,6 +573,42 @@ def test_ai_recommendation_generation():
     assert manifest["recommendation_count"] == 3
 
 
+def test_ai_scorecard_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator, AIScorecardEngine
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    scorecard = AIScorecardEngine().generate()
+
+    assert scorecard.overall_score == 93.0
+    assert scorecard.ai_grade == "A"
+    assert scorecard.ai_readiness_score == 94.0
+    assert scorecard.llm_compatibility_score == 92.0
+    assert scorecard.agent_readiness_score == 90.0
+    assert scorecard.recommendation_count == 3
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.ai_scorecard_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_scorecard = generator.generate_ai_scorecard()
+    assert generated_scorecard.overall_score == 93.0
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.ai_scorecard_manifest(scorecard)
+    assert manifest["overall_score"] == 93.0
+    assert manifest["ai_grade"] == "A"
+    assert manifest["ai_readiness_score"] == 94.0
+    assert manifest["llm_compatibility_score"] == 92.0
+    assert manifest["agent_readiness_score"] == 90.0
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
