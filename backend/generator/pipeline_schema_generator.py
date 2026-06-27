@@ -581,6 +581,9 @@ from .ai_scorecard import (
 from .ai_report import (
     AIReportGenerator
 )
+from .ai_intelligence_control_center import (
+    AIIntelligenceControlCenterGenerator
+)
 
 
 
@@ -1330,6 +1333,9 @@ class PipelineSchemaGenerator:
         )
         self.ai_report_generator = (
             AIReportGenerator()
+        )
+        self.ai_intelligence_control_center = (
+            AIIntelligenceControlCenterGenerator()
         )
 
 
@@ -4595,5 +4601,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .ai_report_generator
+            .generate()
+        )
+
+    def generate_ai_intelligence_control_center(
+        self
+    ):
+
+        return (
+            self
+            .ai_intelligence_control_center
             .generate()
         )

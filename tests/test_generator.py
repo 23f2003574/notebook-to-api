@@ -641,6 +641,50 @@ def test_ai_report_generation():
     assert manifest["section_count"] == 7
 
 
+def test_ai_intelligence_control_center_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import (
+        PipelineSchemaGenerator,
+        AIIntelligenceControlCenterGenerator,
+    )
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    control_center = AIIntelligenceControlCenterGenerator().generate()
+
+    assert control_center.ai_readiness_enabled is True
+    assert control_center.llm_integration_enabled is True
+    assert control_center.rag_intelligence_enabled is True
+    assert control_center.ai_agent_architecture_enabled is True
+    assert control_center.ai_workflow_enabled is True
+    assert control_center.ai_recommendations_enabled is True
+    assert control_center.ai_scorecard_enabled is True
+    assert control_center.ai_report_enabled is True
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.ai_intelligence_control_center_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated = generator.generate_ai_intelligence_control_center()
+    assert generated.ai_readiness_enabled is True
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.ai_intelligence_manifest(control_center)
+    assert manifest["ai_readiness_enabled"] is True
+    assert manifest["llm_integration_enabled"] is True
+    assert manifest["rag_intelligence_enabled"] is True
+    assert manifest["ai_agent_architecture_enabled"] is True
+    assert manifest["ai_workflow_enabled"] is True
+    assert manifest["ai_recommendations_enabled"] is True
+    assert manifest["ai_scorecard_enabled"] is True
+    assert manifest["ai_report_enabled"] is True
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec

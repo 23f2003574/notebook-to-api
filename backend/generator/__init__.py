@@ -397,6 +397,10 @@ from .ai_report import (
     AIReport,
     AIReportGenerator
 )
+from .ai_intelligence_control_center import (
+    AIIntelligenceControlCenter,
+    AIIntelligenceControlCenterGenerator
+)
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator

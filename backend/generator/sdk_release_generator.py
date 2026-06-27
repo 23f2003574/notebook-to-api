@@ -1098,6 +1098,38 @@ class SDKReleaseGenerator:
                 report.section_count
         }
 
+    def ai_intelligence_manifest(
+        self,
+        control_center
+    ):
+
+        return {
+
+            "ai_readiness_enabled":
+                control_center.ai_readiness_enabled,
+
+            "llm_integration_enabled":
+                control_center.llm_integration_enabled,
+
+            "rag_intelligence_enabled":
+                control_center.rag_intelligence_enabled,
+
+            "ai_agent_architecture_enabled":
+                control_center.ai_agent_architecture_enabled,
+
+            "ai_workflow_enabled":
+                control_center.ai_workflow_enabled,
+
+            "ai_recommendations_enabled":
+                control_center.ai_recommendations_enabled,
+
+            "ai_scorecard_enabled":
+                control_center.ai_scorecard_enabled,
+
+            "ai_report_enabled":
+                control_center.ai_report_enabled
+        }
+
     def governance_intelligence_manifest(
         self,
         control_center
