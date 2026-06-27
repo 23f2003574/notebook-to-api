@@ -587,6 +587,9 @@ from .ai_intelligence_control_center import (
 from .ai_automation import (
     AIAutomationEngine
 )
+from .ai_remediation import (
+    AIRemediationEngine
+)
 
 
 
@@ -1342,6 +1345,9 @@ class PipelineSchemaGenerator:
         )
         self.ai_automation_engine = (
             AIAutomationEngine()
+        )
+        self.ai_remediation_engine = (
+            AIRemediationEngine()
         )
 
 
@@ -4627,5 +4633,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .ai_automation_engine
+            .generate()
+        )
+
+    def generate_ai_remediation(
+        self
+    ):
+
+        return (
+            self
+            .ai_remediation_engine
             .generate()
         )

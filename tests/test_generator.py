@@ -725,6 +725,42 @@ def test_ai_automation_generation():
     assert manifest["action_count"] == 4
 
 
+def test_ai_remediation_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator, AIRemediationEngine
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    remediation = AIRemediationEngine().generate()
+
+    assert remediation.issue_type == "llm_failure"
+    assert remediation.remediation_actions == [
+        "switch_to_backup_model",
+        "retry_with_reduced_context",
+        "fallback_to_cached_response",
+        "notify_ai_operations",
+    ]
+    assert remediation.priority == "high"
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.ai_remediation_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_remediation = generator.generate_ai_remediation()
+    assert generated_remediation.issue_type == "llm_failure"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.ai_remediation_manifest(remediation)
+    assert manifest["issue_type"] == "llm_failure"
+    assert manifest["action_count"] == 4
+    assert manifest["priority"] == "high"
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec

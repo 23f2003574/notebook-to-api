@@ -303,6 +303,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def ai_remediation_enabled(
+        self
+    ):
+
+        return True
+
     def recommendation_enabled(
         self
     ):
