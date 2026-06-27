@@ -369,6 +369,39 @@ def test_autonomous_performance_generation():
     assert manifest["continuous_optimization_enabled"] is True
 
 
+def test_ai_readiness_assessment_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator, AIReadinessAssessmentEngine
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    assessment = AIReadinessAssessmentEngine().generate()
+
+    assert assessment.ai_readiness_score == 94.0
+    assert assessment.llm_compatibility_score == 92.0
+    assert assessment.agent_readiness_score == 90.0
+    assert assessment.ai_readiness_grade == "A"
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.ai_readiness_assessment_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_assessment = generator.generate_ai_readiness_assessment()
+    assert generated_assessment.ai_readiness_score == 94.0
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.ai_readiness_assessment_manifest(assessment)
+    assert manifest["ai_readiness_score"] == 94.0
+    assert manifest["llm_compatibility_score"] == 92.0
+    assert manifest["agent_readiness_score"] == 90.0
+    assert manifest["ai_readiness_grade"] == "A"
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec

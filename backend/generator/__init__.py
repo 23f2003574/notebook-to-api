@@ -365,6 +365,10 @@ from .autonomous_performance import (
     AutonomousPerformance,
     AutonomousPerformanceEngine
 )
+from .ai_readiness_assessment import (
+    AIReadinessAssessment,
+    AIReadinessAssessmentEngine
+)
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator

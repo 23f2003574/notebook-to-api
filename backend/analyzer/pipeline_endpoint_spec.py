@@ -243,6 +243,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def ai_readiness_assessment_enabled(
+        self
+    ):
+
+        return True
+
     def recommendation_enabled(
         self
     ):

@@ -557,6 +557,9 @@ from .performance_governance import (
 from .autonomous_performance import (
     AutonomousPerformanceEngine
 )
+from .ai_readiness_assessment import (
+    AIReadinessAssessmentEngine
+)
 
 
 
@@ -1282,6 +1285,9 @@ class PipelineSchemaGenerator:
         )
         self.autonomous_performance_engine = (
             AutonomousPerformanceEngine()
+        )
+        self.ai_readiness_assessment_engine = (
+            AIReadinessAssessmentEngine()
         )
 
 
@@ -4467,5 +4473,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .autonomous_performance_engine
+            .generate()
+        )
+
+    def generate_ai_readiness_assessment(
+        self
+    ):
+
+        return (
+            self
+            .ai_readiness_assessment_engine
             .generate()
         )

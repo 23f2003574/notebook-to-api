@@ -946,6 +946,26 @@ class SDKReleaseGenerator:
                 performance.continuous_optimization_enabled
         }
 
+    def ai_readiness_assessment_manifest(
+        self,
+        assessment
+    ):
+
+        return {
+
+            "ai_readiness_score":
+                assessment.ai_readiness_score,
+
+            "llm_compatibility_score":
+                assessment.llm_compatibility_score,
+
+            "agent_readiness_score":
+                assessment.agent_readiness_score,
+
+            "ai_readiness_grade":
+                assessment.ai_readiness_grade
+        }
+
     def governance_intelligence_manifest(
         self,
         control_center
