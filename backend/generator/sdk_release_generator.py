@@ -986,6 +986,26 @@ class SDKReleaseGenerator:
                 integration.prompt_strategy
         }
 
+    def rag_intelligence_manifest(
+        self,
+        rag
+    ):
+
+        return {
+
+            "retrieval_strategy":
+                rag.retrieval_strategy,
+
+            "embedding_model":
+                rag.embedding_model,
+
+            "vector_database":
+                rag.vector_database,
+
+            "chunking_strategy":
+                rag.chunking_strategy
+        }
+
     def governance_intelligence_manifest(
         self,
         control_center

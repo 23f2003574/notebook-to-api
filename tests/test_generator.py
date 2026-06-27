@@ -435,6 +435,39 @@ def test_llm_integration_generation():
     assert manifest["prompt_strategy"] == "structured_system_prompt"
 
 
+def test_rag_intelligence_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator, RAGIntelligenceEngine
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    rag = RAGIntelligenceEngine().generate()
+
+    assert rag.retrieval_strategy == "hybrid_search"
+    assert rag.embedding_model == "text-embedding-3-large"
+    assert rag.vector_database == "Qdrant"
+    assert rag.chunking_strategy == "semantic_chunking"
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.rag_intelligence_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_rag = generator.generate_rag_intelligence()
+    assert generated_rag.retrieval_strategy == "hybrid_search"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.rag_intelligence_manifest(rag)
+    assert manifest["retrieval_strategy"] == "hybrid_search"
+    assert manifest["embedding_model"] == "text-embedding-3-large"
+    assert manifest["vector_database"] == "Qdrant"
+    assert manifest["chunking_strategy"] == "semantic_chunking"
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec

@@ -373,6 +373,10 @@ from .llm_integration import (
     LLMIntegration,
     LLMIntegrationEngine
 )
+from .rag_intelligence import (
+    RAGIntelligence,
+    RAGIntelligenceEngine
+)
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator

@@ -563,6 +563,9 @@ from .ai_readiness_assessment import (
 from .llm_integration import (
     LLMIntegrationEngine
 )
+from .rag_intelligence import (
+    RAGIntelligenceEngine
+)
 
 
 
@@ -1294,6 +1297,9 @@ class PipelineSchemaGenerator:
         )
         self.llm_integration_engine = (
             LLMIntegrationEngine()
+        )
+        self.rag_intelligence_engine = (
+            RAGIntelligenceEngine()
         )
 
 
@@ -4499,5 +4505,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .llm_integration_engine
+            .generate()
+        )
+
+    def generate_rag_intelligence(
+        self
+    ):
+
+        return (
+            self
+            .rag_intelligence_engine
             .generate()
         )

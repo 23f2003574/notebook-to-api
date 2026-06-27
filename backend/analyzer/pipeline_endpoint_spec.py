@@ -255,6 +255,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def rag_intelligence_enabled(
+        self
+    ):
+
+        return True
+
     def recommendation_enabled(
         self
     ):
