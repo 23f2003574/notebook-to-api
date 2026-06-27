@@ -966,6 +966,26 @@ class SDKReleaseGenerator:
                 assessment.ai_readiness_grade
         }
 
+    def llm_integration_manifest(
+        self,
+        integration
+    ):
+
+        return {
+
+            "provider":
+                integration.provider,
+
+            "interaction_pattern":
+                integration.interaction_pattern,
+
+            "recommended_model":
+                integration.recommended_model,
+
+            "prompt_strategy":
+                integration.prompt_strategy
+        }
+
     def governance_intelligence_manifest(
         self,
         control_center

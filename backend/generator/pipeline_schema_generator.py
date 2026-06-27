@@ -560,6 +560,9 @@ from .autonomous_performance import (
 from .ai_readiness_assessment import (
     AIReadinessAssessmentEngine
 )
+from .llm_integration import (
+    LLMIntegrationEngine
+)
 
 
 
@@ -1288,6 +1291,9 @@ class PipelineSchemaGenerator:
         )
         self.ai_readiness_assessment_engine = (
             AIReadinessAssessmentEngine()
+        )
+        self.llm_integration_engine = (
+            LLMIntegrationEngine()
         )
 
 
@@ -4483,5 +4489,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .ai_readiness_assessment_engine
+            .generate()
+        )
+
+    def generate_llm_integration(
+        self
+    ):
+
+        return (
+            self
+            .llm_integration_engine
             .generate()
         )

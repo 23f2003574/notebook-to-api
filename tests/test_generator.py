@@ -402,6 +402,39 @@ def test_ai_readiness_assessment_generation():
     assert manifest["ai_readiness_grade"] == "A"
 
 
+def test_llm_integration_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator, LLMIntegrationEngine
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    integration = LLMIntegrationEngine().generate()
+
+    assert integration.provider == "OpenAI"
+    assert integration.interaction_pattern == "tool_calling"
+    assert integration.recommended_model == "gpt-5.5"
+    assert integration.prompt_strategy == "structured_system_prompt"
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.llm_integration_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_integration = generator.generate_llm_integration()
+    assert generated_integration.provider == "OpenAI"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.llm_integration_manifest(integration)
+    assert manifest["provider"] == "OpenAI"
+    assert manifest["interaction_pattern"] == "tool_calling"
+    assert manifest["recommended_model"] == "gpt-5.5"
+    assert manifest["prompt_strategy"] == "structured_system_prompt"
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec

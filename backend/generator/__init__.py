@@ -369,6 +369,10 @@ from .ai_readiness_assessment import (
     AIReadinessAssessment,
     AIReadinessAssessmentEngine
 )
+from .llm_integration import (
+    LLMIntegration,
+    LLMIntegrationEngine
+)
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator

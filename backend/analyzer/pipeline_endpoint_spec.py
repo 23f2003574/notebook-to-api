@@ -249,6 +249,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def llm_integration_enabled(
+        self
+    ):
+
+        return True
+
     def recommendation_enabled(
         self
     ):
