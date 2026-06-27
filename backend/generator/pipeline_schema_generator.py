@@ -584,6 +584,9 @@ from .ai_report import (
 from .ai_intelligence_control_center import (
     AIIntelligenceControlCenterGenerator
 )
+from .ai_automation import (
+    AIAutomationEngine
+)
 
 
 
@@ -1336,6 +1339,9 @@ class PipelineSchemaGenerator:
         )
         self.ai_intelligence_control_center = (
             AIIntelligenceControlCenterGenerator()
+        )
+        self.ai_automation_engine = (
+            AIAutomationEngine()
         )
 
 
@@ -4611,5 +4617,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .ai_intelligence_control_center
+            .generate()
+        )
+
+    def generate_ai_automation(
+        self
+    ):
+
+        return (
+            self
+            .ai_automation_engine
             .generate()
         )

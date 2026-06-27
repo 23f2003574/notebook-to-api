@@ -401,6 +401,10 @@ from .ai_intelligence_control_center import (
     AIIntelligenceControlCenter,
     AIIntelligenceControlCenterGenerator
 )
+from .ai_automation import (
+    AIAutomation,
+    AIAutomationEngine
+)
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator

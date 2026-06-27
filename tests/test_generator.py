@@ -685,6 +685,46 @@ def test_ai_intelligence_control_center_generation():
     assert manifest["ai_report_enabled"] is True
 
 
+def test_ai_automation_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator, AIAutomationEngine
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    automation = AIAutomationEngine().generate()
+
+    assert automation.workflow_name == "agentic_ai_pipeline"
+    assert automation.triggers == [
+        "new_user_request",
+        "knowledge_base_updated",
+        "scheduled_reasoning_cycle",
+    ]
+    assert automation.actions == [
+        "retrieve_context",
+        "invoke_llm",
+        "execute_tools",
+        "generate_response",
+    ]
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.ai_automation_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_automation = generator.generate_ai_automation()
+    assert generated_automation.workflow_name == "agentic_ai_pipeline"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.ai_automation_manifest(automation)
+    assert manifest["workflow_name"] == "agentic_ai_pipeline"
+    assert manifest["trigger_count"] == 3
+    assert manifest["action_count"] == 4
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec

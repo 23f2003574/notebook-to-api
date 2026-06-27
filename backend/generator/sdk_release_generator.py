@@ -1130,6 +1130,27 @@ class SDKReleaseGenerator:
                 control_center.ai_report_enabled
         }
 
+    def ai_automation_manifest(
+        self,
+        automation
+    ):
+
+        return {
+
+            "workflow_name":
+                automation.workflow_name,
+
+            "trigger_count":
+                len(
+                    automation.triggers
+                ),
+
+            "action_count":
+                len(
+                    automation.actions
+                )
+        }
+
     def governance_intelligence_manifest(
         self,
         control_center
