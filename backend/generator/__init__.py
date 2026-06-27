@@ -393,6 +393,10 @@ from .ai_scorecard import (
     AIScorecard,
     AIScorecardEngine
 )
+from .ai_report import (
+    AIReport,
+    AIReportGenerator
+)
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator

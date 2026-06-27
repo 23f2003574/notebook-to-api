@@ -609,6 +609,38 @@ def test_ai_scorecard_generation():
     assert manifest["agent_readiness_score"] == 90.0
 
 
+def test_ai_report_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator, AIReportGenerator
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    report = AIReportGenerator().generate()
+
+    assert report.title == "AI Report"
+    assert report.section_count == 7
+    assert len(report.sections) == 7
+    assert report.sections[0] == "AI Readiness Assessment"
+    assert report.sections[-1] == "AI Scorecard"
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.ai_report_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_report = generator.generate_ai_report()
+    assert generated_report.title == "AI Report"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.ai_report_manifest(report)
+    assert manifest["title"] == "AI Report"
+    assert manifest["section_count"] == 7
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec

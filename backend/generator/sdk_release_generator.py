@@ -1084,6 +1084,20 @@ class SDKReleaseGenerator:
                 scorecard.agent_readiness_score
         }
 
+    def ai_report_manifest(
+        self,
+        report
+    ):
+
+        return {
+
+            "title":
+                report.title,
+
+            "section_count":
+                report.section_count
+        }
+
     def governance_intelligence_manifest(
         self,
         control_center
