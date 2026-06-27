@@ -413,6 +413,10 @@ from .ai_governance import (
     AIGovernance,
     AIGovernanceEngine
 )
+from .autonomous_ai import (
+    AutonomousAI,
+    AutonomousAIEngine
+)
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator

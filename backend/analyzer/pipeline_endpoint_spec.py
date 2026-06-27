@@ -315,6 +315,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def autonomous_ai_enabled(
+        self
+    ):
+
+        return True
+
     def recommendation_enabled(
         self
     ):

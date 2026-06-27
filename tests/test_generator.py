@@ -794,6 +794,39 @@ def test_ai_governance_generation():
     assert manifest["model_versioning_required"] is True
 
 
+def test_autonomous_ai_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import PipelineSchemaGenerator, AutonomousAIEngine
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    ai = AutonomousAIEngine().generate()
+
+    assert ai.self_learning_enabled is True
+    assert ai.adaptive_orchestration_enabled is True
+    assert ai.autonomous_reasoning_enabled is True
+    assert ai.continuous_improvement_enabled is True
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.autonomous_ai_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_ai = generator.generate_autonomous_ai()
+    assert generated_ai.self_learning_enabled is True
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.autonomous_ai_manifest(ai)
+    assert manifest["self_learning_enabled"] is True
+    assert manifest["adaptive_orchestration_enabled"] is True
+    assert manifest["autonomous_reasoning_enabled"] is True
+    assert manifest["continuous_improvement_enabled"] is True
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec

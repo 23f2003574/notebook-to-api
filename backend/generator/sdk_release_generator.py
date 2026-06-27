@@ -1190,6 +1190,26 @@ class SDKReleaseGenerator:
                 governance.model_versioning_required
         }
 
+    def autonomous_ai_manifest(
+        self,
+        ai
+    ):
+
+        return {
+
+            "self_learning_enabled":
+                ai.self_learning_enabled,
+
+            "adaptive_orchestration_enabled":
+                ai.adaptive_orchestration_enabled,
+
+            "autonomous_reasoning_enabled":
+                ai.autonomous_reasoning_enabled,
+
+            "continuous_improvement_enabled":
+                ai.continuous_improvement_enabled
+        }
+
     def governance_intelligence_manifest(
         self,
         control_center
