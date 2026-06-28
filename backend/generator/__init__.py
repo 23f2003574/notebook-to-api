@@ -94,6 +94,10 @@ from .enterprise_report import (
     EnterpriseReport,
     EnterpriseReportGenerator
 )
+from .enterprise_intelligence_control_center import (
+    EnterpriseIntelligenceControlCenter,
+    EnterpriseIntelligenceControlCenterGenerator
+)
 from .sdk_release_generator import (
     SDKReleaseMetadata,
     SDKReleaseGenerator

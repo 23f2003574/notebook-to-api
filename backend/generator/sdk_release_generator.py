@@ -268,6 +268,38 @@ class SDKReleaseGenerator:
                 report.section_count
         }
 
+    def enterprise_intelligence_manifest(
+        self,
+        control_center
+    ):
+
+        return {
+
+            "enterprise_readiness_enabled":
+                control_center.enterprise_readiness_enabled,
+
+            "business_capability_mapping_enabled":
+                control_center.business_capability_mapping_enabled,
+
+            "enterprise_architecture_enabled":
+                control_center.enterprise_architecture_enabled,
+
+            "digital_transformation_enabled":
+                control_center.digital_transformation_enabled,
+
+            "enterprise_integration_enabled":
+                control_center.enterprise_integration_enabled,
+
+            "enterprise_recommendations_enabled":
+                control_center.enterprise_recommendations_enabled,
+
+            "enterprise_scorecard_enabled":
+                control_center.enterprise_scorecard_enabled,
+
+            "enterprise_report_enabled":
+                control_center.enterprise_report_enabled
+        }
+
     def validation_manifest(
         self,
         validation_results

@@ -79,6 +79,9 @@ from .enterprise_scorecard import (
 from .enterprise_report import (
     EnterpriseReportGenerator
 )
+from .enterprise_intelligence_control_center import (
+    EnterpriseIntelligenceControlCenterGenerator
+)
 from .sdk_release_generator import (
     SDKReleaseGenerator
 )
@@ -1408,6 +1411,9 @@ class PipelineSchemaGenerator:
         )
         self.enterprise_report_generator = (
             EnterpriseReportGenerator()
+        )
+        self.enterprise_intelligence_control_center = (
+            EnterpriseIntelligenceControlCenterGenerator()
         )
 
 
@@ -4803,5 +4809,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .enterprise_report_generator
+            .generate()
+        )
+
+    def generate_enterprise_intelligence_control_center(
+        self
+    ):
+
+        return (
+            self
+            .enterprise_intelligence_control_center
             .generate()
         )
