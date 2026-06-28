@@ -360,6 +360,26 @@ class SDKReleaseGenerator:
                 governance.transformation_review_required
         }
 
+    def autonomous_enterprise_manifest(
+        self,
+        enterprise
+    ):
+
+        return {
+
+            "adaptive_architecture_enabled":
+                enterprise.adaptive_architecture_enabled,
+
+            "self_optimizing_operations_enabled":
+                enterprise.self_optimizing_operations_enabled,
+
+            "enterprise_learning_enabled":
+                enterprise.enterprise_learning_enabled,
+
+            "continuous_transformation_enabled":
+                enterprise.continuous_transformation_enabled
+        }
+
     def validation_manifest(
         self,
         validation_results

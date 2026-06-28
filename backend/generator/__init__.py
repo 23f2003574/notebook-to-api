@@ -110,6 +110,10 @@ from .enterprise_governance import (
     EnterpriseGovernance,
     EnterpriseGovernanceEngine
 )
+from .autonomous_enterprise import (
+    AutonomousEnterprise,
+    AutonomousEnterpriseEngine
+)
 from .sdk_release_generator import (
     SDKReleaseMetadata,
     SDKReleaseGenerator

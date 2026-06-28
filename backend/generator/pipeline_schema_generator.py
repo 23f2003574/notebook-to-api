@@ -91,6 +91,9 @@ from .enterprise_remediation import (
 from .enterprise_governance import (
     EnterpriseGovernanceEngine
 )
+from .autonomous_enterprise import (
+    AutonomousEnterpriseEngine
+)
 from .sdk_release_generator import (
     SDKReleaseGenerator
 )
@@ -4867,6 +4870,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .enterprise_governance_engine
+            .generate()
+        )
+
+    def generate_autonomous_enterprise(
+        self
+    ):
+
+        return (
+            self
+            .autonomous_enterprise_engine
             .generate()
         )
 
