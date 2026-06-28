@@ -98,6 +98,10 @@ from .enterprise_intelligence_control_center import (
     EnterpriseIntelligenceControlCenter,
     EnterpriseIntelligenceControlCenterGenerator
 )
+from .enterprise_automation import (
+    EnterpriseAutomation,
+    EnterpriseAutomationEngine
+)
 from .sdk_release_generator import (
     SDKReleaseMetadata,
     SDKReleaseGenerator

@@ -300,6 +300,27 @@ class SDKReleaseGenerator:
                 control_center.enterprise_report_enabled
         }
 
+    def enterprise_automation_manifest(
+        self,
+        automation
+    ):
+
+        return {
+
+            "workflow_name":
+                automation.workflow_name,
+
+            "trigger_count":
+                len(
+                    automation.triggers
+                ),
+
+            "action_count":
+                len(
+                    automation.actions
+                )
+        }
+
     def validation_manifest(
         self,
         validation_results

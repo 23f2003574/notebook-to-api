@@ -369,6 +369,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def enterprise_automation_enabled(
+        self
+    ):
+
+        return True
+
     def business_capability_mapping_enabled(
         self
     ):

@@ -82,6 +82,9 @@ from .enterprise_report import (
 from .enterprise_intelligence_control_center import (
     EnterpriseIntelligenceControlCenterGenerator
 )
+from .enterprise_automation import (
+    EnterpriseAutomationEngine
+)
 from .sdk_release_generator import (
     SDKReleaseGenerator
 )
@@ -1414,6 +1417,9 @@ class PipelineSchemaGenerator:
         )
         self.enterprise_intelligence_control_center = (
             EnterpriseIntelligenceControlCenterGenerator()
+        )
+        self.enterprise_automation_engine = (
+            EnterpriseAutomationEngine()
         )
 
 
@@ -4809,6 +4815,26 @@ class PipelineSchemaGenerator:
         return (
             self
             .enterprise_report_generator
+            .generate()
+        )
+
+    def generate_enterprise_intelligence_control_center(
+        self
+    ):
+
+        return (
+            self
+            .enterprise_intelligence_control_center
+            .generate()
+        )
+
+    def generate_enterprise_automation(
+        self
+    ):
+
+        return (
+            self
+            .enterprise_automation_engine
             .generate()
         )
 
