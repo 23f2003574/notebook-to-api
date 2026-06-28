@@ -102,6 +102,10 @@ from .enterprise_automation import (
     EnterpriseAutomation,
     EnterpriseAutomationEngine
 )
+from .enterprise_remediation import (
+    EnterpriseRemediation,
+    EnterpriseRemediationEngine
+)
 from .sdk_release_generator import (
     SDKReleaseMetadata,
     SDKReleaseGenerator

@@ -321,6 +321,25 @@ class SDKReleaseGenerator:
                 )
         }
 
+    def enterprise_remediation_manifest(
+        self,
+        remediation
+    ):
+
+        return {
+
+            "issue_type":
+                remediation.issue_type,
+
+            "action_count":
+                len(
+                    remediation.remediation_actions
+                ),
+
+            "priority":
+                remediation.priority
+        }
+
     def validation_manifest(
         self,
         validation_results
