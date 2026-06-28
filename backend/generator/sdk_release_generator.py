@@ -231,6 +231,29 @@ class SDKReleaseGenerator:
                 )
         }
 
+    def enterprise_scorecard_manifest(
+        self,
+        scorecard
+    ):
+
+        return {
+
+            "overall_score":
+                scorecard.overall_score,
+
+            "enterprise_grade":
+                scorecard.enterprise_grade,
+
+            "enterprise_readiness_score":
+                scorecard.enterprise_readiness_score,
+
+            "business_readiness_score":
+                scorecard.business_readiness_score,
+
+            "organizational_maturity_score":
+                scorecard.organizational_maturity_score
+        }
+
     def validation_manifest(
         self,
         validation_results

@@ -86,6 +86,10 @@ from .enterprise_recommendation import (
     EnterpriseRecommendation,
     EnterpriseRecommendationEngine
 )
+from .enterprise_scorecard import (
+    EnterpriseScorecard,
+    EnterpriseScorecardEngine
+)
 from .sdk_release_generator import (
     SDKReleaseMetadata,
     SDKReleaseGenerator

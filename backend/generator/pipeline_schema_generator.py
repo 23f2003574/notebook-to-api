@@ -73,6 +73,9 @@ from .enterprise_integration import (
 from .enterprise_recommendation import (
     EnterpriseRecommendationEngine
 )
+from .enterprise_scorecard import (
+    EnterpriseScorecardEngine
+)
 from .sdk_release_generator import (
     SDKReleaseGenerator
 )
@@ -1396,6 +1399,9 @@ class PipelineSchemaGenerator:
         )
         self.enterprise_recommendation_engine = (
             EnterpriseRecommendationEngine()
+        )
+        self.enterprise_scorecard_engine = (
+            EnterpriseScorecardEngine()
         )
 
 
@@ -4771,5 +4777,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .enterprise_recommendation_engine
+            .generate()
+        )
+
+    def generate_enterprise_scorecard(
+        self
+    ):
+
+        return (
+            self
+            .enterprise_scorecard_engine
             .generate()
         )
