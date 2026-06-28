@@ -381,6 +381,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def enterprise_governance_enabled(
+        self
+    ):
+
+        return True
+
     def business_capability_mapping_enabled(
         self
     ):

@@ -88,6 +88,9 @@ from .enterprise_automation import (
 from .enterprise_remediation import (
     EnterpriseRemediationEngine
 )
+from .enterprise_governance import (
+    EnterpriseGovernanceEngine
+)
 from .sdk_release_generator import (
     SDKReleaseGenerator
 )
@@ -1426,6 +1429,9 @@ class PipelineSchemaGenerator:
         )
         self.enterprise_remediation_engine = (
             EnterpriseRemediationEngine()
+        )
+        self.enterprise_governance_engine = (
+            EnterpriseGovernanceEngine()
         )
 
 
@@ -4851,6 +4857,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .enterprise_remediation_engine
+            .generate()
+        )
+
+    def generate_enterprise_governance(
+        self
+    ):
+
+        return (
+            self
+            .enterprise_governance_engine
             .generate()
         )
 

@@ -340,6 +340,26 @@ class SDKReleaseGenerator:
                 remediation.priority
         }
 
+    def enterprise_governance_manifest(
+        self,
+        governance
+    ):
+
+        return {
+
+            "governance_owner":
+                governance.governance_owner,
+
+            "architecture_review_frequency":
+                governance.architecture_review_frequency,
+
+            "architecture_board_required":
+                governance.architecture_board_required,
+
+            "transformation_review_required":
+                governance.transformation_review_required
+        }
+
     def validation_manifest(
         self,
         validation_results

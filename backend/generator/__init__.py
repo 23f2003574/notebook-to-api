@@ -106,6 +106,10 @@ from .enterprise_remediation import (
     EnterpriseRemediation,
     EnterpriseRemediationEngine
 )
+from .enterprise_governance import (
+    EnterpriseGovernance,
+    EnterpriseGovernanceEngine
+)
 from .sdk_release_generator import (
     SDKReleaseMetadata,
     SDKReleaseGenerator
