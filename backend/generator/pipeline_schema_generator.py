@@ -64,6 +64,9 @@ from .business_capability_mapping import (
 from .enterprise_architecture import (
     EnterpriseArchitectureEngine
 )
+from .digital_transformation import (
+    DigitalTransformationEngine
+)
 from .sdk_release_generator import (
     SDKReleaseGenerator
 )
@@ -1378,6 +1381,9 @@ class PipelineSchemaGenerator:
         )
         self.enterprise_architecture_engine = (
             EnterpriseArchitectureEngine()
+        )
+        self.digital_transformation_engine = (
+            DigitalTransformationEngine()
         )
 
 
@@ -4713,5 +4719,25 @@ class PipelineSchemaGenerator:
         return (
             self
             .business_capability_mapping_engine
+            .generate()
+        )
+
+    def generate_enterprise_architecture(
+        self
+    ):
+
+        return (
+            self
+            .enterprise_architecture_engine
+            .generate()
+        )
+
+    def generate_digital_transformation(
+        self
+    ):
+
+        return (
+            self
+            .digital_transformation_engine
             .generate()
         )

@@ -74,6 +74,10 @@ from .enterprise_architecture import (
     EnterpriseArchitecture,
     EnterpriseArchitectureEngine
 )
+from .digital_transformation import (
+    DigitalTransformation,
+    DigitalTransformationEngine
+)
 from .sdk_release_generator import (
     SDKReleaseMetadata,
     SDKReleaseGenerator

@@ -333,6 +333,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def digital_transformation_enabled(
+        self
+    ):
+
+        return True
+
     def business_capability_mapping_enabled(
         self
     ):

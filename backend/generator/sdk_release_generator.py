@@ -178,6 +178,26 @@ class SDKReleaseGenerator:
                 architecture.deployment_domain
         }
 
+    def digital_transformation_manifest(
+        self,
+        transformation
+    ):
+
+        return {
+
+            "transformation_strategy":
+                transformation.transformation_strategy,
+
+            "modernization_approach":
+                transformation.modernization_approach,
+
+            "migration_strategy":
+                transformation.migration_strategy,
+
+            "transformation_priority":
+                transformation.transformation_priority
+        }
+
     def validation_manifest(
         self,
         validation_results
