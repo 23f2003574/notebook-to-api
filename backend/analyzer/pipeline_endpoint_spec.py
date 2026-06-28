@@ -327,6 +327,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def business_capability_mapping_enabled(
+        self
+    ):
+
+        return True
+
     def recommendation_enabled(
         self
     ):

@@ -58,6 +58,9 @@ from .python_docs_generator import (
 from .python_packaging_generator import (
     PythonPackagingGenerator
 )
+from .business_capability_mapping import (
+    BusinessCapabilityMappingEngine
+)
 from .sdk_release_generator import (
     SDKReleaseGenerator
 )
@@ -1366,6 +1369,12 @@ class PipelineSchemaGenerator:
         )
         self.enterprise_readiness_assessment_engine = (
             EnterpriseReadinessAssessmentEngine()
+        )
+        self.business_capability_mapping_engine = (
+            BusinessCapabilityMappingEngine()
+        )
+        self.business_capability_mapping_engine = (
+            BusinessCapabilityMappingEngine()
         )
 
 
@@ -4691,5 +4700,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .enterprise_readiness_assessment_engine
+            .generate()
+        )
+
+    def generate_business_capabilities(
+        self
+    ):
+
+        return (
+            self
+            .business_capability_mapping_engine
             .generate()
         )

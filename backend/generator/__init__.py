@@ -66,6 +66,10 @@ from .python_docs_generator import (
 from .python_packaging_generator import (
     PythonPackagingGenerator
 )
+from .business_capability_mapping import (
+    BusinessCapability,
+    BusinessCapabilityMappingEngine
+)
 from .sdk_release_generator import (
     SDKReleaseMetadata,
     SDKReleaseGenerator

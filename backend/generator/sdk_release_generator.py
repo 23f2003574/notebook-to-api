@@ -145,6 +145,19 @@ class SDKReleaseGenerator:
                 ) > 1
         }
 
+    def business_capability_manifest(
+        self,
+        capabilities
+    ):
+
+        return {
+
+            "capability_count":
+                len(
+                    capabilities
+                )
+        }
+
     def validation_manifest(
         self,
         validation_results
