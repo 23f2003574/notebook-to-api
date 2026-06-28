@@ -61,6 +61,9 @@ from .python_packaging_generator import (
 from .business_capability_mapping import (
     BusinessCapabilityMappingEngine
 )
+from .enterprise_architecture import (
+    EnterpriseArchitectureEngine
+)
 from .sdk_release_generator import (
     SDKReleaseGenerator
 )
@@ -1373,8 +1376,8 @@ class PipelineSchemaGenerator:
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
-        self.business_capability_mapping_engine = (
-            BusinessCapabilityMappingEngine()
+        self.enterprise_architecture_engine = (
+            EnterpriseArchitectureEngine()
         )
 
 

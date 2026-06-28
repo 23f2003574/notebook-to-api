@@ -158,6 +158,26 @@ class SDKReleaseGenerator:
                 )
         }
 
+    def enterprise_architecture_manifest(
+        self,
+        architecture
+    ):
+
+        return {
+
+            "architecture_style":
+                architecture.architecture_style,
+
+            "integration_pattern":
+                architecture.integration_pattern,
+
+            "bounded_context":
+                architecture.bounded_context,
+
+            "deployment_domain":
+                architecture.deployment_domain
+        }
+
     def validation_manifest(
         self,
         validation_results

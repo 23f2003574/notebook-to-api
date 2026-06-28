@@ -70,6 +70,10 @@ from .business_capability_mapping import (
     BusinessCapability,
     BusinessCapabilityMappingEngine
 )
+from .enterprise_architecture import (
+    EnterpriseArchitecture,
+    EnterpriseArchitectureEngine
+)
 from .sdk_release_generator import (
     SDKReleaseMetadata,
     SDKReleaseGenerator
