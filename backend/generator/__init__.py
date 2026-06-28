@@ -417,6 +417,10 @@ from .autonomous_ai import (
     AutonomousAI,
     AutonomousAIEngine
 )
+from .enterprise_readiness_assessment import (
+    EnterpriseReadinessAssessment,
+    EnterpriseReadinessAssessmentEngine
+)
 from .deployment_intelligence_control_center import (
     DeploymentIntelligenceControlCenter,
     DeploymentIntelligenceControlCenterGenerator

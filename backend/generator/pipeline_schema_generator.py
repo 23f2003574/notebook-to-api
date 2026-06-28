@@ -596,6 +596,9 @@ from .ai_governance import (
 from .autonomous_ai import (
     AutonomousAIEngine
 )
+from .enterprise_readiness_assessment import (
+    EnterpriseReadinessAssessmentEngine
+)
 
 
 
@@ -1360,6 +1363,9 @@ class PipelineSchemaGenerator:
         )
         self.autonomous_ai_engine = (
             AutonomousAIEngine()
+        )
+        self.enterprise_readiness_assessment_engine = (
+            EnterpriseReadinessAssessmentEngine()
         )
 
 
@@ -4675,5 +4681,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .autonomous_ai_engine
+            .generate()
+        )
+
+    def generate_enterprise_readiness_assessment(
+        self
+    ):
+
+        return (
+            self
+            .enterprise_readiness_assessment_engine
             .generate()
         )

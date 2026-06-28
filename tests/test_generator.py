@@ -827,6 +827,42 @@ def test_autonomous_ai_generation():
     assert manifest["continuous_improvement_enabled"] is True
 
 
+def test_enterprise_readiness_assessment_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import (
+        PipelineSchemaGenerator,
+        EnterpriseReadinessAssessmentEngine,
+    )
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    assessment = EnterpriseReadinessAssessmentEngine().generate()
+
+    assert assessment.enterprise_readiness_score == 95.0
+    assert assessment.business_readiness_score == 93.0
+    assert assessment.organizational_maturity_score == 91.0
+    assert assessment.enterprise_grade == "A"
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.enterprise_readiness_assessment_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_assessment = generator.generate_enterprise_readiness_assessment()
+    assert generated_assessment.enterprise_readiness_score == 95.0
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.enterprise_readiness_assessment_manifest(assessment)
+    assert manifest["enterprise_readiness_score"] == 95.0
+    assert manifest["business_readiness_score"] == 93.0
+    assert manifest["organizational_maturity_score"] == 91.0
+    assert manifest["enterprise_grade"] == "A"
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec

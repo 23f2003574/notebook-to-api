@@ -321,6 +321,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def enterprise_readiness_assessment_enabled(
+        self
+    ):
+
+        return True
+
     def recommendation_enabled(
         self
     ):

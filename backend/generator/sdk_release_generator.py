@@ -1210,6 +1210,26 @@ class SDKReleaseGenerator:
                 ai.continuous_improvement_enabled
         }
 
+    def enterprise_readiness_assessment_manifest(
+        self,
+        assessment
+    ):
+
+        return {
+
+            "enterprise_readiness_score":
+                assessment.enterprise_readiness_score,
+
+            "business_readiness_score":
+                assessment.business_readiness_score,
+
+            "organizational_maturity_score":
+                assessment.organizational_maturity_score,
+
+            "enterprise_grade":
+                assessment.enterprise_grade
+        }
+
     def governance_intelligence_manifest(
         self,
         control_center
