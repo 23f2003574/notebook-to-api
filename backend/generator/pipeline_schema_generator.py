@@ -67,6 +67,9 @@ from .enterprise_architecture import (
 from .digital_transformation import (
     DigitalTransformationEngine
 )
+from .enterprise_integration import (
+    EnterpriseIntegrationIntelligenceEngine
+)
 from .sdk_release_generator import (
     SDKReleaseGenerator
 )
@@ -1384,6 +1387,9 @@ class PipelineSchemaGenerator:
         )
         self.digital_transformation_engine = (
             DigitalTransformationEngine()
+        )
+        self.enterprise_integration_engine = (
+            EnterpriseIntegrationIntelligenceEngine()
         )
 
 
@@ -4739,5 +4745,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .digital_transformation_engine
+            .generate()
+        )
+
+    def generate_enterprise_integration(
+        self
+    ):
+
+        return (
+            self
+            .enterprise_integration_engine
             .generate()
         )

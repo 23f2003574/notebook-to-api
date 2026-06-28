@@ -78,6 +78,10 @@ from .digital_transformation import (
     DigitalTransformation,
     DigitalTransformationEngine
 )
+from .enterprise_integration import (
+    EnterpriseIntegration,
+    EnterpriseIntegrationIntelligenceEngine
+)
 from .sdk_release_generator import (
     SDKReleaseMetadata,
     SDKReleaseGenerator

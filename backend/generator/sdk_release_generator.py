@@ -198,6 +198,26 @@ class SDKReleaseGenerator:
                 transformation.transformation_priority
         }
 
+    def enterprise_integration_manifest(
+        self,
+        integration
+    ):
+
+        return {
+
+            "integration_pattern":
+                integration.integration_pattern,
+
+            "messaging_strategy":
+                integration.messaging_strategy,
+
+            "api_gateway_required":
+                integration.api_gateway_required,
+
+            "event_streaming_enabled":
+                integration.event_streaming_enabled
+        }
+
     def validation_manifest(
         self,
         validation_results
