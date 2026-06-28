@@ -218,6 +218,19 @@ class SDKReleaseGenerator:
                 integration.event_streaming_enabled
         }
 
+    def enterprise_recommendation_manifest(
+        self,
+        recommendations
+    ):
+
+        return {
+
+            "recommendation_count":
+                len(
+                    recommendations
+                )
+        }
+
     def validation_manifest(
         self,
         validation_results

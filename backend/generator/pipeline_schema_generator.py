@@ -70,6 +70,9 @@ from .digital_transformation import (
 from .enterprise_integration import (
     EnterpriseIntegrationIntelligenceEngine
 )
+from .enterprise_recommendation import (
+    EnterpriseRecommendationEngine
+)
 from .sdk_release_generator import (
     SDKReleaseGenerator
 )
@@ -1390,6 +1393,9 @@ class PipelineSchemaGenerator:
         )
         self.enterprise_integration_engine = (
             EnterpriseIntegrationIntelligenceEngine()
+        )
+        self.enterprise_recommendation_engine = (
+            EnterpriseRecommendationEngine()
         )
 
 
@@ -4755,5 +4761,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .enterprise_integration_engine
+            .generate()
+        )
+
+    def generate_enterprise_recommendations(
+        self
+    ):
+
+        return (
+            self
+            .enterprise_recommendation_engine
             .generate()
         )

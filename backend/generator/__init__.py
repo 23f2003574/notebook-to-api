@@ -82,6 +82,10 @@ from .enterprise_integration import (
     EnterpriseIntegration,
     EnterpriseIntegrationIntelligenceEngine
 )
+from .enterprise_recommendation import (
+    EnterpriseRecommendation,
+    EnterpriseRecommendationEngine
+)
 from .sdk_release_generator import (
     SDKReleaseMetadata,
     SDKReleaseGenerator
