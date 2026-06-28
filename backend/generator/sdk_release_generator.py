@@ -254,6 +254,20 @@ class SDKReleaseGenerator:
                 scorecard.organizational_maturity_score
         }
 
+    def enterprise_report_manifest(
+        self,
+        report
+    ):
+
+        return {
+
+            "title":
+                report.title,
+
+            "section_count":
+                report.section_count
+        }
+
     def validation_manifest(
         self,
         validation_results

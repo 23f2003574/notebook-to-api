@@ -90,6 +90,10 @@ from .enterprise_scorecard import (
     EnterpriseScorecard,
     EnterpriseScorecardEngine
 )
+from .enterprise_report import (
+    EnterpriseReport,
+    EnterpriseReportGenerator
+)
 from .sdk_release_generator import (
     SDKReleaseMetadata,
     SDKReleaseGenerator
