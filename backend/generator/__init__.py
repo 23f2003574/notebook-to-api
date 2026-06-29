@@ -325,6 +325,10 @@ from .developer_experience import (
     DeveloperExperience,
     DeveloperExperienceIntelligenceEngine
 )
+from .internal_developer_platform import (
+    InternalDeveloperPlatform,
+    InternalDeveloperPlatformEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator

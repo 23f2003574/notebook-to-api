@@ -333,6 +333,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def internal_developer_platform_enabled(
+        self
+    ):
+
+        return True
+
     def enterprise_architecture_enabled(
         self
     ):

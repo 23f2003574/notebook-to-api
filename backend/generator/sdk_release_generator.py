@@ -1241,6 +1241,26 @@ class SDKReleaseGenerator:
                 developer_experience.golden_path_available
         }
 
+    def internal_developer_platform_manifest(
+        self,
+        platform
+    ):
+
+        return {
+
+            "platform_type":
+                platform.platform_type,
+
+            "developer_portal":
+                platform.developer_portal,
+
+            "self_service_model":
+                platform.self_service_model,
+
+            "software_catalog_enabled":
+                platform.software_catalog_enabled
+        }
+
     def llm_integration_manifest(
         self,
         integration

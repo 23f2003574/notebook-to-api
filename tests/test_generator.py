@@ -899,42 +899,6 @@ def test_platform_readiness_assessment_generation():
     assert manifest["platform_grade"] == "A"
 
 
-def test_platform_readiness_assessment_generation():
-    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
-    from backend.generator import (
-        PipelineSchemaGenerator,
-        PlatformReadinessAssessmentEngine,
-    )
-    from backend.generator.sdk_release_generator import SDKReleaseGenerator
-
-    assessment = PlatformReadinessAssessmentEngine().generate()
-
-    assert assessment.platform_readiness_score == 95.0
-    assert assessment.developer_experience_score == 93.0
-    assert assessment.platform_maturity_score == 92.0
-    assert assessment.platform_grade == "A"
-
-    spec = PipelineEndpointSpec(
-        endpoint_name="run_pipeline",
-        input_fields=["source"],
-        output_fields=["result"],
-        execution_stages=1,
-        parallelism_score=1.0,
-    )
-    assert spec.platform_readiness_assessment_enabled() is True
-
-    generator = PipelineSchemaGenerator()
-    generated_assessment = generator.generate_platform_readiness_assessment()
-    assert generated_assessment.platform_readiness_score == 95.0
-
-    release_generator = SDKReleaseGenerator()
-    manifest = release_generator.platform_readiness_assessment_manifest(assessment)
-    assert manifest["platform_readiness_score"] == 95.0
-    assert manifest["developer_experience_score"] == 93.0
-    assert manifest["platform_maturity_score"] == 92.0
-    assert manifest["platform_grade"] == "A"
-
-
 def test_developer_experience_intelligence_generation():
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
     from backend.generator import (
@@ -971,6 +935,42 @@ def test_developer_experience_intelligence_generation():
     assert manifest["self_service_score"] == 94.0
     assert manifest["documentation_quality"] == "high"
     assert manifest["golden_path_available"] is True
+
+
+def test_internal_developer_platform_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import (
+        PipelineSchemaGenerator,
+        InternalDeveloperPlatformEngine,
+    )
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    platform = InternalDeveloperPlatformEngine().generate()
+
+    assert platform.platform_type == "internal_developer_platform"
+    assert platform.developer_portal == "Backstage"
+    assert platform.self_service_model == "golden_paths"
+    assert platform.software_catalog_enabled is True
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.internal_developer_platform_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_platform = generator.generate_internal_developer_platform()
+    assert generated_platform.platform_type == "internal_developer_platform"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.internal_developer_platform_manifest(platform)
+    assert manifest["platform_type"] == "internal_developer_platform"
+    assert manifest["developer_portal"] == "Backstage"
+    assert manifest["self_service_model"] == "golden_paths"
+    assert manifest["software_catalog_enabled"] is True
 
 
 def test_pipeline_contract_validator():
