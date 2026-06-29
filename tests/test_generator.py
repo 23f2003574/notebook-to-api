@@ -1090,6 +1090,49 @@ def test_platform_report_generation():
     assert manifest["section_count"] == 7
 
 
+def test_platform_automation_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import (
+        PipelineSchemaGenerator,
+        PlatformAutomationEngine,
+    )
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    automation = PlatformAutomationEngine().generate()
+
+    assert automation.workflow_name == "platform_self_service"
+    assert automation.triggers == [
+        "developer_request",
+        "repository_created",
+        "service_registered"
+    ]
+    assert automation.actions == [
+        "provision_infrastructure",
+        "configure_ci_cd",
+        "register_service",
+        "notify_platform_team"
+    ]
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.platform_automation_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_automation = generator.generate_platform_automation()
+    assert generated_automation.workflow_name == "platform_self_service"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.platform_automation_manifest(automation)
+    assert manifest["workflow_name"] == "platform_self_service"
+    assert manifest["trigger_count"] == 3
+    assert manifest["action_count"] == 4
+
+
 def test_platform_engineering_architecture_generation():
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
     from backend.generator import (

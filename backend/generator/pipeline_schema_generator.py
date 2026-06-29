@@ -259,6 +259,9 @@ from .platform_report import (
 from .platform_intelligence_control_center import (
     PlatformIntelligenceControlCenterGenerator
 )
+from .platform_automation import (
+    PlatformAutomationEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1456,6 +1459,9 @@ class PipelineSchemaGenerator:
         )
         self.platform_intelligence_control_center = (
             PlatformIntelligenceControlCenterGenerator()
+        )
+        self.platform_automation_engine = (
+            PlatformAutomationEngine()
         )
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
@@ -4904,6 +4910,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .platform_intelligence_control_center
+            .generate()
+        )
+
+    def generate_platform_automation(
+        self
+    ):
+
+        return (
+            self
+            .platform_automation_engine
             .generate()
         )
 

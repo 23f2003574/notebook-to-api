@@ -375,6 +375,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def platform_automation_enabled(
+        self
+    ):
+
+        return True
+
     def enterprise_architecture_enabled(
         self
     ):

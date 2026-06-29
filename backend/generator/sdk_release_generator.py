@@ -1385,6 +1385,27 @@ class SDKReleaseGenerator:
                 control_center.platform_report_enabled
         }
 
+    def platform_automation_manifest(
+        self,
+        automation
+    ):
+
+        return {
+
+            "workflow_name":
+                automation.workflow_name,
+
+            "trigger_count":
+                len(
+                    automation.triggers
+                ),
+
+            "action_count":
+                len(
+                    automation.actions
+                )
+        }
+
     def llm_integration_manifest(
         self,
         integration
