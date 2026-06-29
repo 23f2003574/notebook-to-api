@@ -361,6 +361,10 @@ from .platform_remediation import (
     PlatformRemediation,
     PlatformRemediationEngine
 )
+from .platform_governance import (
+    PlatformGovernance,
+    PlatformGovernanceEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator

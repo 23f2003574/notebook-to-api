@@ -1425,6 +1425,26 @@ class SDKReleaseGenerator:
                 remediation.priority
         }
 
+    def platform_governance_manifest(
+        self,
+        governance
+    ):
+
+        return {
+
+            "platform_owner":
+                governance.platform_owner,
+
+            "governance_review_frequency":
+                governance.governance_review_frequency,
+
+            "platform_standards_required":
+                governance.platform_standards_required,
+
+            "developer_experience_review_required":
+                governance.developer_experience_review_required
+        }
+
     def llm_integration_manifest(
         self,
         integration

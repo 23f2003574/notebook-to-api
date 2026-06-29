@@ -1172,6 +1172,42 @@ def test_platform_remediation_generation():
     assert manifest["priority"] == "high"
 
 
+def test_platform_governance_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import (
+        PipelineSchemaGenerator,
+        PlatformGovernanceEngine,
+    )
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    governance = PlatformGovernanceEngine().generate()
+
+    assert governance.platform_owner == "platform_engineering_team"
+    assert governance.governance_review_frequency == "monthly"
+    assert governance.platform_standards_required is True
+    assert governance.developer_experience_review_required is True
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.platform_governance_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_governance = generator.generate_platform_governance()
+    assert generated_governance.platform_owner == "platform_engineering_team"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.platform_governance_manifest(governance)
+    assert manifest["platform_owner"] == "platform_engineering_team"
+    assert manifest["governance_review_frequency"] == "monthly"
+    assert manifest["platform_standards_required"] is True
+    assert manifest["developer_experience_review_required"] is True
+
+
 def test_platform_engineering_architecture_generation():
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
     from backend.generator import (
