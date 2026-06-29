@@ -250,6 +250,9 @@ from .platform_operations import (
 from .platform_recommendation import (
     PlatformRecommendationEngine
 )
+from .platform_scorecard import (
+    PlatformScorecardEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1438,6 +1441,9 @@ class PipelineSchemaGenerator:
         )
         self.platform_recommendation_engine = (
             PlatformRecommendationEngine()
+        )
+        self.platform_scorecard_engine = (
+            PlatformScorecardEngine()
         )
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
@@ -4856,6 +4862,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .platform_recommendation_engine
+            .generate()
+        )
+
+    def generate_platform_scorecard(
+        self
+    ):
+
+        return (
+            self
+            .platform_scorecard_engine
             .generate()
         )
 

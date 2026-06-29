@@ -1316,6 +1316,29 @@ class SDKReleaseGenerator:
                 )
         }
 
+    def platform_scorecard_manifest(
+        self,
+        scorecard
+    ):
+
+        return {
+
+            "overall_score":
+                scorecard.overall_score,
+
+            "platform_grade":
+                scorecard.platform_grade,
+
+            "platform_readiness_score":
+                scorecard.platform_readiness_score,
+
+            "developer_experience_score":
+                scorecard.developer_experience_score,
+
+            "platform_maturity_score":
+                scorecard.platform_maturity_score
+        }
+
     def llm_integration_manifest(
         self,
         integration

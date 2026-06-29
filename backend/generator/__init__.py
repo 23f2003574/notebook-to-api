@@ -341,6 +341,10 @@ from .platform_recommendation import (
     PlatformRecommendation,
     PlatformRecommendationEngine
 )
+from .platform_scorecard import (
+    PlatformScorecard,
+    PlatformScorecardEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator
