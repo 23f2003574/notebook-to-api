@@ -1261,6 +1261,28 @@ class SDKReleaseGenerator:
                 platform.software_catalog_enabled
         }
 
+    def platform_engineering_architecture_manifest(
+        self,
+        architecture
+    ):
+
+        return {
+
+            "architecture_style":
+                architecture.architecture_style,
+
+            "platform_service_count":
+                len(
+                    architecture.platform_services
+                ),
+
+            "service_catalog_enabled":
+                architecture.service_catalog_enabled,
+
+            "platform_api_model":
+                architecture.platform_api_model
+        }
+
     def llm_integration_manifest(
         self,
         integration

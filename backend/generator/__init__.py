@@ -329,6 +329,10 @@ from .internal_developer_platform import (
     InternalDeveloperPlatform,
     InternalDeveloperPlatformEngine
 )
+from .platform_engineering_architecture import (
+    PlatformEngineeringArchitecture,
+    PlatformEngineeringArchitectureEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator

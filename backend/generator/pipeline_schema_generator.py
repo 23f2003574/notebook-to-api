@@ -241,6 +241,9 @@ from .developer_experience import (
 from .internal_developer_platform import (
     InternalDeveloperPlatformEngine
 )
+from .platform_engineering_architecture import (
+    PlatformEngineeringArchitectureEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1420,6 +1423,9 @@ class PipelineSchemaGenerator:
         )
         self.internal_developer_platform_engine = (
             InternalDeveloperPlatformEngine()
+        )
+        self.platform_engineering_architecture_engine = (
+            PlatformEngineeringArchitectureEngine()
         )
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
@@ -4808,6 +4814,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .internal_developer_platform_engine
+            .generate()
+        )
+
+    def generate_platform_engineering_architecture(
+        self
+    ):
+
+        return (
+            self
+            .platform_engineering_architecture_engine
             .generate()
         )
 

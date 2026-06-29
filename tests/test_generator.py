@@ -973,6 +973,48 @@ def test_internal_developer_platform_generation():
     assert manifest["software_catalog_enabled"] is True
 
 
+def test_platform_engineering_architecture_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import (
+        PipelineSchemaGenerator,
+        PlatformEngineeringArchitectureEngine,
+    )
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    architecture = PlatformEngineeringArchitectureEngine().generate()
+
+    assert architecture.architecture_style == "platform_as_a_product"
+    assert architecture.platform_services == [
+        "developer_portal",
+        "software_catalog",
+        "ci_cd_platform",
+        "observability_platform",
+        "secrets_management"
+    ]
+    assert architecture.service_catalog_enabled is True
+    assert architecture.platform_api_model == "self_service"
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.platform_engineering_architecture_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_architecture = generator.generate_platform_engineering_architecture()
+    assert generated_architecture.architecture_style == "platform_as_a_product"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.platform_engineering_architecture_manifest(architecture)
+    assert manifest["architecture_style"] == "platform_as_a_product"
+    assert manifest["platform_service_count"] == 5
+    assert manifest["service_catalog_enabled"] is True
+    assert manifest["platform_api_model"] == "self_service"
+
+
 def test_pipeline_contract_validator():
     import pytest
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
