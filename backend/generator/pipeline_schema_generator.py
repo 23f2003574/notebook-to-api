@@ -262,6 +262,9 @@ from .platform_intelligence_control_center import (
 from .platform_automation import (
     PlatformAutomationEngine
 )
+from .platform_remediation import (
+    PlatformRemediationEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1462,6 +1465,9 @@ class PipelineSchemaGenerator:
         )
         self.platform_automation_engine = (
             PlatformAutomationEngine()
+        )
+        self.platform_remediation_engine = (
+            PlatformRemediationEngine()
         )
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
@@ -4920,6 +4926,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .platform_automation_engine
+            .generate()
+        )
+
+    def generate_platform_remediation(
+        self
+    ):
+
+        return (
+            self
+            .platform_remediation_engine
             .generate()
         )
 

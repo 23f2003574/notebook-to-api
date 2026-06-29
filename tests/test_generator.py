@@ -1133,6 +1133,45 @@ def test_platform_automation_generation():
     assert manifest["action_count"] == 4
 
 
+def test_platform_remediation_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import (
+        PipelineSchemaGenerator,
+        PlatformRemediationEngine,
+    )
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    remediation = PlatformRemediationEngine().generate()
+
+    assert remediation.issue_type == "developer_portal_unavailable"
+    assert remediation.remediation_actions == [
+        "restart_platform_services",
+        "rebuild_service_catalog",
+        "revalidate_platform_integrations",
+        "notify_platform_operations"
+    ]
+    assert remediation.priority == "high"
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.platform_remediation_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_remediation = generator.generate_platform_remediation()
+    assert generated_remediation.issue_type == "developer_portal_unavailable"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.platform_remediation_manifest(remediation)
+    assert manifest["issue_type"] == "developer_portal_unavailable"
+    assert manifest["action_count"] == 4
+    assert manifest["priority"] == "high"
+
+
 def test_platform_engineering_architecture_generation():
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
     from backend.generator import (

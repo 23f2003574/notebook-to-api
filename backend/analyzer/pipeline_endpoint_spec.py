@@ -381,6 +381,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def platform_remediation_enabled(
+        self
+    ):
+
+        return True
+
     def enterprise_architecture_enabled(
         self
     ):

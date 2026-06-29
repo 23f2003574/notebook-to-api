@@ -357,6 +357,10 @@ from .platform_automation import (
     PlatformAutomation,
     PlatformAutomationEngine
 )
+from .platform_remediation import (
+    PlatformRemediation,
+    PlatformRemediationEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator
