@@ -1353,6 +1353,38 @@ class SDKReleaseGenerator:
                 report.section_count
         }
 
+    def platform_intelligence_manifest(
+        self,
+        control_center
+    ):
+
+        return {
+
+            "platform_readiness_enabled":
+                control_center.platform_readiness_enabled,
+
+            "developer_experience_enabled":
+                control_center.developer_experience_enabled,
+
+            "internal_developer_platform_enabled":
+                control_center.internal_developer_platform_enabled,
+
+            "platform_engineering_architecture_enabled":
+                control_center.platform_engineering_architecture_enabled,
+
+            "platform_operations_enabled":
+                control_center.platform_operations_enabled,
+
+            "platform_recommendations_enabled":
+                control_center.platform_recommendations_enabled,
+
+            "platform_scorecard_enabled":
+                control_center.platform_scorecard_enabled,
+
+            "platform_report_enabled":
+                control_center.platform_report_enabled
+        }
+
     def llm_integration_manifest(
         self,
         integration

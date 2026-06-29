@@ -256,6 +256,9 @@ from .platform_scorecard import (
 from .platform_report import (
     PlatformReportGenerator
 )
+from .platform_intelligence_control_center import (
+    PlatformIntelligenceControlCenterGenerator
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1450,6 +1453,9 @@ class PipelineSchemaGenerator:
         )
         self.platform_report_generator = (
             PlatformReportGenerator()
+        )
+        self.platform_intelligence_control_center = (
+            PlatformIntelligenceControlCenterGenerator()
         )
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
@@ -4888,6 +4894,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .platform_report_generator
+            .generate()
+        )
+
+    def generate_platform_intelligence_control_center(
+        self
+    ):
+
+        return (
+            self
+            .platform_intelligence_control_center
             .generate()
         )
 

@@ -349,6 +349,10 @@ from .platform_report import (
     PlatformReport,
     PlatformReportGenerator
 )
+from .platform_intelligence_control_center import (
+    PlatformIntelligenceControlCenter,
+    PlatformIntelligenceControlCenterGenerator
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator
