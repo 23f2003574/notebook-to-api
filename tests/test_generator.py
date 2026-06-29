@@ -1009,6 +1009,45 @@ def test_platform_operations_generation():
     assert manifest["incident_management"] == "sre_driven"
 
 
+def test_platform_recommendation_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import (
+        PipelineSchemaGenerator,
+        PlatformRecommendationEngine,
+    )
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    recommendations = PlatformRecommendationEngine().generate()
+
+    assert len(recommendations) == 3
+    assert recommendations[0].recommendation == "expand_golden_path_templates"
+    assert recommendations[0].category == "developer_experience"
+    assert recommendations[0].priority == "high"
+    assert recommendations[1].recommendation == "enable_self_service_provisioning"
+    assert recommendations[1].category == "platform_operations"
+    assert recommendations[1].priority == "high"
+    assert recommendations[2].recommendation == "introduce_platform_scorecards"
+    assert recommendations[2].category == "governance"
+    assert recommendations[2].priority == "medium"
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.platform_recommendations_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_recommendations = generator.generate_platform_recommendations()
+    assert generated_recommendations[0].recommendation == "expand_golden_path_templates"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.platform_recommendation_manifest(recommendations)
+    assert manifest["recommendation_count"] == 3
+
+
 def test_platform_engineering_architecture_generation():
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
     from backend.generator import (

@@ -247,6 +247,9 @@ from .platform_engineering_architecture import (
 from .platform_operations import (
     PlatformOperationsIntelligenceEngine
 )
+from .platform_recommendation import (
+    PlatformRecommendationEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1432,6 +1435,9 @@ class PipelineSchemaGenerator:
         )
         self.platform_operations_engine = (
             PlatformOperationsIntelligenceEngine()
+        )
+        self.platform_recommendation_engine = (
+            PlatformRecommendationEngine()
         )
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
@@ -4840,6 +4846,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .platform_operations_engine
+            .generate()
+        )
+
+    def generate_platform_recommendations(
+        self
+    ):
+
+        return (
+            self
+            .platform_recommendation_engine
             .generate()
         )
 

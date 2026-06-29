@@ -1303,6 +1303,19 @@ class SDKReleaseGenerator:
                 operations.incident_management
         }
 
+    def platform_recommendation_manifest(
+        self,
+        recommendations
+    ):
+
+        return {
+
+            "recommendation_count":
+                len(
+                    recommendations
+                )
+        }
+
     def llm_integration_manifest(
         self,
         integration

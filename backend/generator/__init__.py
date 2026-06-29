@@ -337,6 +337,10 @@ from .platform_operations import (
     PlatformOperations,
     PlatformOperationsIntelligenceEngine
 )
+from .platform_recommendation import (
+    PlatformRecommendation,
+    PlatformRecommendationEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator

@@ -351,6 +351,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def platform_recommendations_enabled(
+        self
+    ):
+
+        return True
+
     def enterprise_architecture_enabled(
         self
     ):
