@@ -1339,6 +1339,20 @@ class SDKReleaseGenerator:
                 scorecard.platform_maturity_score
         }
 
+    def platform_report_manifest(
+        self,
+        report
+    ):
+
+        return {
+
+            "title":
+                report.title,
+
+            "section_count":
+                report.section_count
+        }
+
     def llm_integration_manifest(
         self,
         integration

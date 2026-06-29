@@ -345,6 +345,10 @@ from .platform_scorecard import (
     PlatformScorecard,
     PlatformScorecardEngine
 )
+from .platform_report import (
+    PlatformReport,
+    PlatformReportGenerator
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator

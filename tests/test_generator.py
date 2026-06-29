@@ -1048,6 +1048,48 @@ def test_platform_recommendation_generation():
     assert manifest["recommendation_count"] == 3
 
 
+def test_platform_report_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import (
+        PipelineSchemaGenerator,
+        PlatformReportGenerator,
+    )
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    report = PlatformReportGenerator().generate()
+
+    assert report.title == "Platform Report"
+    assert report.sections == [
+        "Platform Readiness Assessment",
+        "Developer Experience",
+        "Internal Developer Platform",
+        "Platform Engineering Architecture",
+        "Platform Operations",
+        "Platform Recommendations",
+        "Platform Scorecard"
+    ]
+    assert report.section_count == 7
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.platform_report_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_report = generator.generate_platform_report()
+    assert generated_report.title == "Platform Report"
+    assert generated_report.section_count == 7
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.platform_report_manifest(report)
+    assert manifest["title"] == "Platform Report"
+    assert manifest["section_count"] == 7
+
+
 def test_platform_engineering_architecture_generation():
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
     from backend.generator import (
