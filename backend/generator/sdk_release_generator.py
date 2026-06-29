@@ -1445,6 +1445,26 @@ class SDKReleaseGenerator:
                 governance.developer_experience_review_required
         }
 
+    def autonomous_platform_manifest(
+        self,
+        platform
+    ):
+
+        return {
+
+            "adaptive_platform_enabled":
+                platform.adaptive_platform_enabled,
+
+            "self_service_optimization_enabled":
+                platform.self_service_optimization_enabled,
+
+            "developer_experience_learning_enabled":
+                platform.developer_experience_learning_enabled,
+
+            "continuous_platform_improvement_enabled":
+                platform.continuous_platform_improvement_enabled
+        }
+
     def llm_integration_manifest(
         self,
         integration

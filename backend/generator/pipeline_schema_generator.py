@@ -268,6 +268,9 @@ from .platform_remediation import (
 from .platform_governance import (
     PlatformGovernanceEngine
 )
+from .autonomous_platform import (
+    AutonomousPlatformEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1474,6 +1477,9 @@ class PipelineSchemaGenerator:
         )
         self.platform_governance_engine = (
             PlatformGovernanceEngine()
+        )
+        self.autonomous_platform_engine = (
+            AutonomousPlatformEngine()
         )
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
@@ -4952,6 +4958,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .platform_governance_engine
+            .generate()
+        )
+
+    def generate_autonomous_platform(
+        self
+    ):
+
+        return (
+            self
+            .autonomous_platform_engine
             .generate()
         )
 

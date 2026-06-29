@@ -1208,6 +1208,42 @@ def test_platform_governance_generation():
     assert manifest["developer_experience_review_required"] is True
 
 
+def test_autonomous_platform_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import (
+        PipelineSchemaGenerator,
+        AutonomousPlatformEngine,
+    )
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    platform = AutonomousPlatformEngine().generate()
+
+    assert platform.adaptive_platform_enabled is True
+    assert platform.self_service_optimization_enabled is True
+    assert platform.developer_experience_learning_enabled is True
+    assert platform.continuous_platform_improvement_enabled is True
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.autonomous_platform_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_platform = generator.generate_autonomous_platform()
+    assert generated_platform.adaptive_platform_enabled is True
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.autonomous_platform_manifest(platform)
+    assert manifest["adaptive_platform_enabled"] is True
+    assert manifest["self_service_optimization_enabled"] is True
+    assert manifest["developer_experience_learning_enabled"] is True
+    assert manifest["continuous_platform_improvement_enabled"] is True
+
+
 def test_platform_engineering_architecture_generation():
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
     from backend.generator import (

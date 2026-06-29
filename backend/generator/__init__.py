@@ -365,6 +365,10 @@ from .platform_governance import (
     PlatformGovernance,
     PlatformGovernanceEngine
 )
+from .autonomous_platform import (
+    AutonomousPlatform,
+    AutonomousPlatformEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator
