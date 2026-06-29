@@ -235,6 +235,9 @@ from .api_changelog import (
 from .developer_portal import (
     DeveloperPortalGenerator
 )
+from .developer_experience import (
+    DeveloperExperienceIntelligenceEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1408,6 +1411,9 @@ class PipelineSchemaGenerator:
         )
         self.platform_readiness_assessment_engine = (
             PlatformReadinessAssessmentEngine()
+        )
+        self.developer_experience_engine = (
+            DeveloperExperienceIntelligenceEngine()
         )
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
@@ -4776,6 +4782,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .platform_readiness_assessment_engine
+            .generate()
+        )
+
+    def generate_developer_experience(
+        self
+    ):
+
+        return (
+            self
+            .developer_experience_engine
             .generate()
         )
 

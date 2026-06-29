@@ -1221,6 +1221,26 @@ class SDKReleaseGenerator:
                 assessment.platform_grade
         }
 
+    def developer_experience_intelligence_manifest(
+        self,
+        developer_experience
+    ):
+
+        return {
+
+            "onboarding_experience":
+                developer_experience.onboarding_experience,
+
+            "self_service_score":
+                developer_experience.self_service_score,
+
+            "documentation_quality":
+                developer_experience.documentation_quality,
+
+            "golden_path_available":
+                developer_experience.golden_path_available
+        }
+
     def llm_integration_manifest(
         self,
         integration
