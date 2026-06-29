@@ -1201,6 +1201,26 @@ class SDKReleaseGenerator:
                 assessment.ai_readiness_grade
         }
 
+    def platform_readiness_assessment_manifest(
+        self,
+        assessment
+    ):
+
+        return {
+
+            "platform_readiness_score":
+                assessment.platform_readiness_score,
+
+            "developer_experience_score":
+                assessment.developer_experience_score,
+
+            "platform_maturity_score":
+                assessment.platform_maturity_score,
+
+            "platform_grade":
+                assessment.platform_grade
+        }
+
     def llm_integration_manifest(
         self,
         integration

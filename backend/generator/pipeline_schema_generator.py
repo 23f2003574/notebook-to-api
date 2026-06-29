@@ -94,6 +94,9 @@ from .enterprise_governance import (
 from .autonomous_enterprise import (
     AutonomousEnterpriseEngine
 )
+from .platform_readiness_assessment import (
+    PlatformReadinessAssessmentEngine
+)
 from .sdk_release_generator import (
     SDKReleaseGenerator
 )
@@ -1402,6 +1405,9 @@ class PipelineSchemaGenerator:
         )
         self.enterprise_readiness_assessment_engine = (
             EnterpriseReadinessAssessmentEngine()
+        )
+        self.platform_readiness_assessment_engine = (
+            PlatformReadinessAssessmentEngine()
         )
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
@@ -4760,6 +4766,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .enterprise_readiness_assessment_engine
+            .generate()
+        )
+
+    def generate_platform_readiness_assessment(
+        self
+    ):
+
+        return (
+            self
+            .platform_readiness_assessment_engine
             .generate()
         )
 

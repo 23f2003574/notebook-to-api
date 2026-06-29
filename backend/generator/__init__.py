@@ -114,6 +114,10 @@ from .autonomous_enterprise import (
     AutonomousEnterprise,
     AutonomousEnterpriseEngine
 )
+from .platform_readiness_assessment import (
+    PlatformReadinessAssessment,
+    PlatformReadinessAssessmentEngine
+)
 from .sdk_release_generator import (
     SDKReleaseMetadata,
     SDKReleaseGenerator
