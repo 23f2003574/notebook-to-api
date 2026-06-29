@@ -1283,6 +1283,26 @@ class SDKReleaseGenerator:
                 architecture.platform_api_model
         }
 
+    def platform_operations_manifest(
+        self,
+        operations
+    ):
+
+        return {
+
+            "operating_model":
+                operations.operating_model,
+
+            "service_ownership":
+                operations.service_ownership,
+
+            "operational_health":
+                operations.operational_health,
+
+            "incident_management":
+                operations.incident_management
+        }
+
     def llm_integration_manifest(
         self,
         integration

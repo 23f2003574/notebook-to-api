@@ -333,6 +333,10 @@ from .platform_engineering_architecture import (
     PlatformEngineeringArchitecture,
     PlatformEngineeringArchitectureEngine
 )
+from .platform_operations import (
+    PlatformOperations,
+    PlatformOperationsIntelligenceEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator

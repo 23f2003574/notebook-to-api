@@ -973,6 +973,42 @@ def test_internal_developer_platform_generation():
     assert manifest["software_catalog_enabled"] is True
 
 
+def test_platform_operations_generation():
+    from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
+    from backend.generator import (
+        PipelineSchemaGenerator,
+        PlatformOperationsIntelligenceEngine,
+    )
+    from backend.generator.sdk_release_generator import SDKReleaseGenerator
+
+    operations = PlatformOperationsIntelligenceEngine().generate()
+
+    assert operations.operating_model == "platform_as_a_product"
+    assert operations.service_ownership == "platform_team"
+    assert operations.operational_health == "healthy"
+    assert operations.incident_management == "sre_driven"
+
+    spec = PipelineEndpointSpec(
+        endpoint_name="run_pipeline",
+        input_fields=["source"],
+        output_fields=["result"],
+        execution_stages=1,
+        parallelism_score=1.0,
+    )
+    assert spec.platform_operations_enabled() is True
+
+    generator = PipelineSchemaGenerator()
+    generated_operations = generator.generate_platform_operations()
+    assert generated_operations.operating_model == "platform_as_a_product"
+
+    release_generator = SDKReleaseGenerator()
+    manifest = release_generator.platform_operations_manifest(operations)
+    assert manifest["operating_model"] == "platform_as_a_product"
+    assert manifest["service_ownership"] == "platform_team"
+    assert manifest["operational_health"] == "healthy"
+    assert manifest["incident_management"] == "sre_driven"
+
+
 def test_platform_engineering_architecture_generation():
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
     from backend.generator import (
