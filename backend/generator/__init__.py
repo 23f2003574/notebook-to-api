@@ -373,6 +373,10 @@ from .api_lifecycle_assessment import (
     APILifecycleAssessment,
     APILifecycleAssessmentEngine
 )
+from .api_version_evolution import (
+    APIVersionEvolution,
+    APIVersionEvolutionEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator

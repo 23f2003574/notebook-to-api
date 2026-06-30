@@ -1221,6 +1221,25 @@ class SDKReleaseGenerator:
                 assessment.platform_grade
         }
 
+    def api_version_evolution_manifest(
+        self,
+        evolution
+    ):
+
+        return {
+            "current_version":
+                evolution.current_version,
+
+            "next_version":
+                evolution.next_version,
+
+            "versioning_strategy":
+                evolution.versioning_strategy,
+
+            "breaking_change_policy":
+                evolution.breaking_change_policy
+        }
+
     def api_lifecycle_assessment_manifest(
         self,
         assessment
