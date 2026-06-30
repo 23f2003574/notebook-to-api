@@ -399,6 +399,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def api_lifecycle_remediation_enabled(
+        self
+    ):
+
+        return True
+
     def internal_developer_platform_enabled(
         self
     ):

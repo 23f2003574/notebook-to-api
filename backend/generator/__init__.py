@@ -413,6 +413,10 @@ from .api_lifecycle_automation import (
     APILifecycleAutomation,
     APILifecycleAutomationEngine
 )
+from .api_lifecycle_remediation import (
+    APILifecycleRemediation,
+    APILifecycleRemediationEngine
+)
 from .notebook_summary import (
     NotebookSummary,
     NotebookSummaryGenerator
