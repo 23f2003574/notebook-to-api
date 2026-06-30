@@ -421,6 +421,10 @@ from .api_lifecycle_governance import (
     APILifecycleGovernance,
     APILifecycleGovernanceEngine
 )
+from .autonomous_api_lifecycle import (
+    AutonomousAPILifecycle,
+    AutonomousAPILifecycleEngine
+)
 from .notebook_summary import (
     NotebookSummary,
     NotebookSummaryGenerator

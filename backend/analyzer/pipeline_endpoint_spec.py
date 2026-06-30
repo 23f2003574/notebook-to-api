@@ -411,6 +411,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def autonomous_api_lifecycle_enabled(
+        self
+    ):
+
+        return True
+
     def internal_developer_platform_enabled(
         self
     ):

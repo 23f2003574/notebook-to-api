@@ -1445,6 +1445,26 @@ class SDKReleaseGenerator:
                 governance.deprecation_policy_required
         }
 
+    def autonomous_api_lifecycle_manifest(
+        self,
+        lifecycle
+    ):
+
+        return {
+
+            "adaptive_versioning_enabled":
+                lifecycle.adaptive_versioning_enabled,
+
+            "autonomous_release_planning_enabled":
+                lifecycle.autonomous_release_planning_enabled,
+
+            "continuous_lifecycle_learning_enabled":
+                lifecycle.continuous_lifecycle_learning_enabled,
+
+            "self_optimizing_portfolio_enabled":
+                lifecycle.self_optimizing_portfolio_enabled
+        }
+
     def api_lifecycle_report_manifest(
         self,
         report
