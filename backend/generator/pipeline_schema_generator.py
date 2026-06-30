@@ -304,6 +304,9 @@ from .api_lifecycle_automation import (
 from .api_lifecycle_remediation import (
     APILifecycleRemediationEngine
 )
+from .api_lifecycle_governance import (
+    APILifecycleGovernanceEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1551,6 +1554,10 @@ class PipelineSchemaGenerator:
             APILifecycleRemediationEngine()
         )
 
+        self.api_lifecycle_governance_engine = (
+            APILifecycleGovernanceEngine()
+        )
+
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
@@ -1866,6 +1873,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .api_lifecycle_remediation_engine
+            .generate()
+        )
+
+    def generate_api_lifecycle_governance(
+        self
+    ):
+
+        return (
+            self
+            .api_lifecycle_governance_engine
             .generate()
         )
 

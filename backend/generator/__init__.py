@@ -417,6 +417,10 @@ from .api_lifecycle_remediation import (
     APILifecycleRemediation,
     APILifecycleRemediationEngine
 )
+from .api_lifecycle_governance import (
+    APILifecycleGovernance,
+    APILifecycleGovernanceEngine
+)
 from .notebook_summary import (
     NotebookSummary,
     NotebookSummaryGenerator

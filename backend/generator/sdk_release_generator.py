@@ -1425,6 +1425,26 @@ class SDKReleaseGenerator:
                 remediation.priority
         }
 
+    def api_lifecycle_governance_manifest(
+        self,
+        governance
+    ):
+
+        return {
+
+            "api_owner":
+                governance.api_owner,
+
+            "lifecycle_review_frequency":
+                governance.lifecycle_review_frequency,
+
+            "semantic_versioning_required":
+                governance.semantic_versioning_required,
+
+            "deprecation_policy_required":
+                governance.deprecation_policy_required
+        }
+
     def api_lifecycle_report_manifest(
         self,
         report
