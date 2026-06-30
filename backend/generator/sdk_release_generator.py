@@ -1297,6 +1297,18 @@ class SDKReleaseGenerator:
                 portfolio.strategic_importance
         }
 
+    def api_lifecycle_recommendation_manifest(
+        self,
+        recommendations
+    ):
+
+        return {
+            "recommendation_count":
+                len(
+                    recommendations
+                )
+        }
+
     def api_lifecycle_assessment_manifest(
         self,
         assessment

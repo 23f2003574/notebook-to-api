@@ -389,6 +389,10 @@ from .api_portfolio_intelligence import (
     APIPortfolio,
     APIPortfolioIntelligenceEngine
 )
+from .api_lifecycle_recommendation import (
+    APILifecycleRecommendation,
+    APILifecycleRecommendationEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator

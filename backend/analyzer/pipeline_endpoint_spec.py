@@ -363,6 +363,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def api_lifecycle_recommendations_enabled(
+        self
+    ):
+
+        return True
+
     def internal_developer_platform_enabled(
         self
     ):

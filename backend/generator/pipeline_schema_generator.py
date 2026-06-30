@@ -286,6 +286,9 @@ from .api_release_planning import (
 from .api_portfolio_intelligence import (
     APIPortfolioIntelligenceEngine
 )
+from .api_lifecycle_recommendation import (
+    APILifecycleRecommendationEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1511,6 +1514,9 @@ class PipelineSchemaGenerator:
         self.api_portfolio_intelligence_engine = (
             APIPortfolioIntelligenceEngine()
         )
+        self.api_lifecycle_recommendation_engine = (
+            APILifecycleRecommendationEngine()
+        )
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
@@ -1766,6 +1772,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .api_portfolio_intelligence_engine
+            .generate()
+        )
+
+    def generate_api_lifecycle_recommendations(
+        self
+    ):
+
+        return (
+            self
+            .api_lifecycle_recommendation_engine
             .generate()
         )
 
