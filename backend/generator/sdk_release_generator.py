@@ -1278,6 +1278,25 @@ class SDKReleaseGenerator:
                 plan.rollout_strategy
         }
 
+    def api_portfolio_manifest(
+        self,
+        portfolio
+    ):
+
+        return {
+            "business_domain":
+                portfolio.business_domain,
+
+            "portfolio_tier":
+                portfolio.portfolio_tier,
+
+            "api_classification":
+                portfolio.api_classification,
+
+            "strategic_importance":
+                portfolio.strategic_importance
+        }
+
     def api_lifecycle_assessment_manifest(
         self,
         assessment

@@ -283,6 +283,9 @@ from .api_deprecation_planning import (
 from .api_release_planning import (
     APIReleasePlanningEngine
 )
+from .api_portfolio_intelligence import (
+    APIPortfolioIntelligenceEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1505,6 +1508,9 @@ class PipelineSchemaGenerator:
         self.api_release_planning_engine = (
             APIReleasePlanningEngine()
         )
+        self.api_portfolio_intelligence_engine = (
+            APIPortfolioIntelligenceEngine()
+        )
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
@@ -1750,6 +1756,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .api_release_planning_engine
+            .generate()
+        )
+
+    def generate_api_portfolio_intelligence(
+        self
+    ):
+
+        return (
+            self
+            .api_portfolio_intelligence_engine
             .generate()
         )
 

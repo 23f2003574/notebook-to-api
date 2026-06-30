@@ -385,6 +385,10 @@ from .api_release_planning import (
     APIReleasePlan,
     APIReleasePlanningEngine
 )
+from .api_portfolio_intelligence import (
+    APIPortfolio,
+    APIPortfolioIntelligenceEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator
