@@ -1328,6 +1328,28 @@ class SDKReleaseGenerator:
                 assessment.lifecycle_grade
         }
 
+    def api_lifecycle_scorecard_manifest(
+        self,
+        scorecard
+    ):
+
+        return {
+            "overall_score":
+                scorecard.overall_score,
+
+            "lifecycle_grade":
+                scorecard.lifecycle_grade,
+
+            "lifecycle_score":
+                scorecard.lifecycle_score,
+
+            "versioning_score":
+                scorecard.versioning_score,
+
+            "maintainability_score":
+                scorecard.maintainability_score
+        }
+
     def developer_experience_intelligence_manifest(
         self,
         developer_experience

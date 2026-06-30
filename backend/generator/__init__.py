@@ -393,6 +393,10 @@ from .api_lifecycle_recommendation import (
     APILifecycleRecommendation,
     APILifecycleRecommendationEngine
 )
+from .api_lifecycle_scorecard import (
+    APILifecycleScorecard,
+    APILifecycleScorecardEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator
