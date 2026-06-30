@@ -271,6 +271,9 @@ from .platform_governance import (
 from .autonomous_platform import (
     AutonomousPlatformEngine
 )
+from .api_lifecycle_assessment import (
+    APILifecycleAssessmentEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1481,6 +1484,9 @@ class PipelineSchemaGenerator:
         self.autonomous_platform_engine = (
             AutonomousPlatformEngine()
         )
+        self.api_lifecycle_assessment_engine = (
+            APILifecycleAssessmentEngine()
+        )
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
@@ -1686,6 +1692,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .governance_risk_analysis_engine
+            .generate()
+        )
+
+    def generate_api_lifecycle_assessment(
+        self
+    ):
+
+        return (
+            self
+            .api_lifecycle_assessment_engine
             .generate()
         )
 

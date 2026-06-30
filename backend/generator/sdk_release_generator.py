@@ -1221,6 +1221,25 @@ class SDKReleaseGenerator:
                 assessment.platform_grade
         }
 
+    def api_lifecycle_assessment_manifest(
+        self,
+        assessment
+    ):
+
+        return {
+            "lifecycle_score":
+                assessment.lifecycle_score,
+
+            "versioning_score":
+                assessment.versioning_score,
+
+            "maintainability_score":
+                assessment.maintainability_score,
+
+            "lifecycle_grade":
+                assessment.lifecycle_grade
+        }
+
     def developer_experience_intelligence_manifest(
         self,
         developer_experience
