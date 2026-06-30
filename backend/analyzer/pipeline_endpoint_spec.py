@@ -345,6 +345,12 @@ class PipelineEndpointSpec:
 
         return True
 
+    def api_deprecation_planning_enabled(
+        self
+    ):
+
+        return True
+
     def internal_developer_platform_enabled(
         self
     ):

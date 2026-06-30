@@ -1240,6 +1240,25 @@ class SDKReleaseGenerator:
                 evolution.breaking_change_policy
         }
 
+    def api_deprecation_plan_manifest(
+        self,
+        plan
+    ):
+
+        return {
+            "deprecated_version":
+                plan.deprecated_version,
+
+            "replacement_version":
+                plan.replacement_version,
+
+            "sunset_period_days":
+                plan.sunset_period_days,
+
+            "migration_strategy":
+                plan.migration_strategy
+        }
+
     def api_lifecycle_assessment_manifest(
         self,
         assessment

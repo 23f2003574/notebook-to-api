@@ -277,6 +277,9 @@ from .api_lifecycle_assessment import (
 from .api_version_evolution import (
     APIVersionEvolutionEngine
 )
+from .api_deprecation_planning import (
+    APIDeprecationPlanningEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1493,6 +1496,9 @@ class PipelineSchemaGenerator:
         self.api_version_evolution_engine = (
             APIVersionEvolutionEngine()
         )
+        self.api_deprecation_planning_engine = (
+            APIDeprecationPlanningEngine()
+        )
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
@@ -1718,6 +1724,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .api_version_evolution_engine
+            .generate()
+        )
+
+    def generate_api_deprecation_plan(
+        self
+    ):
+
+        return (
+            self
+            .api_deprecation_planning_engine
             .generate()
         )
 

@@ -377,6 +377,10 @@ from .api_version_evolution import (
     APIVersionEvolution,
     APIVersionEvolutionEngine
 )
+from .api_deprecation_planning import (
+    APIDeprecationPlan,
+    APIDeprecationPlanningEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator
