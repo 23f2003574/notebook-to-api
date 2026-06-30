@@ -292,6 +292,9 @@ from .api_lifecycle_recommendation import (
 from .api_lifecycle_scorecard import (
     APILifecycleScorecardEngine
 )
+from .api_lifecycle_report import (
+    APILifecycleReportGenerator
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1523,6 +1526,9 @@ class PipelineSchemaGenerator:
         self.api_lifecycle_scorecard_engine = (
             APILifecycleScorecardEngine()
         )
+        self.api_lifecycle_report_generator = (
+            APILifecycleReportGenerator()
+        )
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
@@ -1798,6 +1804,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .api_lifecycle_scorecard_engine
+            .generate()
+        )
+
+    def generate_api_lifecycle_report(
+        self
+    ):
+
+        return (
+            self
+            .api_lifecycle_report_generator
             .generate()
         )
 

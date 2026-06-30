@@ -397,6 +397,10 @@ from .api_lifecycle_scorecard import (
     APILifecycleScorecard,
     APILifecycleScorecardEngine
 )
+from .api_lifecycle_report import (
+    APILifecycleReport,
+    APILifecycleReportGenerator
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator

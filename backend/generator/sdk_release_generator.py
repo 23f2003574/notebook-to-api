@@ -1350,6 +1350,19 @@ class SDKReleaseGenerator:
                 scorecard.maintainability_score
         }
 
+    def api_lifecycle_report_manifest(
+        self,
+        report
+    ):
+
+        return {
+            "title":
+                report.title,
+
+            "section_count":
+                report.section_count
+        }
+
     def developer_experience_intelligence_manifest(
         self,
         developer_experience
