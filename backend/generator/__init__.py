@@ -381,6 +381,10 @@ from .api_deprecation_planning import (
     APIDeprecationPlan,
     APIDeprecationPlanningEngine
 )
+from .api_release_planning import (
+    APIReleasePlan,
+    APIReleasePlanningEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator

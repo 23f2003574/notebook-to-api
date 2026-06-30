@@ -1259,6 +1259,25 @@ class SDKReleaseGenerator:
                 plan.migration_strategy
         }
 
+    def api_release_plan_manifest(
+        self,
+        plan
+    ):
+
+        return {
+            "current_release":
+                plan.current_release,
+
+            "next_release":
+                plan.next_release,
+
+            "release_cadence":
+                plan.release_cadence,
+
+            "rollout_strategy":
+                plan.rollout_strategy
+        }
+
     def api_lifecycle_assessment_manifest(
         self,
         assessment
