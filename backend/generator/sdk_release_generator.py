@@ -260,7 +260,10 @@ class SDKReleaseGenerator:
                 control_center.lifecycle_scorecard_enabled,
 
             "lifecycle_report_enabled":
-                control_center.lifecycle_report_enabled
+                control_center.lifecycle_report_enabled,
+
+            "lifecycle_automation_enabled":
+                control_center.lifecycle_automation_enabled
         }
 
     def enterprise_scorecard_manifest(
@@ -1380,6 +1383,27 @@ class SDKReleaseGenerator:
 
             "maintainability_score":
                 scorecard.maintainability_score
+        }
+
+    def api_lifecycle_automation_manifest(
+        self,
+        automation
+    ):
+
+        return {
+
+            "workflow_name":
+                automation.workflow_name,
+
+            "trigger_count":
+                len(
+                    automation.triggers
+                ),
+
+            "action_count":
+                len(
+                    automation.actions
+                )
         }
 
     def api_lifecycle_report_manifest(

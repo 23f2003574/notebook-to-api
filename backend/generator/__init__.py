@@ -409,6 +409,10 @@ from .api_lifecycle_control_center import (
     APILifecycleIntelligenceControlCenter,
     APILifecycleIntelligenceControlCenterGenerator
 )
+from .api_lifecycle_automation import (
+    APILifecycleAutomation,
+    APILifecycleAutomationEngine
+)
 from .notebook_summary import (
     NotebookSummary,
     NotebookSummaryGenerator

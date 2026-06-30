@@ -387,6 +387,18 @@ class PipelineEndpointSpec:
 
         return True
 
+    def api_lifecycle_automation_enabled(
+        self
+    ):
+
+        return True
+
+    def api_lifecycle_automation_enabled(
+        self
+    ):
+
+        return True
+
     def internal_developer_platform_enabled(
         self
     ):
