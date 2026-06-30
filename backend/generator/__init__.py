@@ -405,6 +405,10 @@ from .developer_experience_control_center import (
     DeveloperExperienceControlCenter,
     DeveloperExperienceControlCenterGenerator
 )
+from .api_lifecycle_control_center import (
+    APILifecycleIntelligenceControlCenter,
+    APILifecycleIntelligenceControlCenterGenerator
+)
 from .notebook_summary import (
     NotebookSummary,
     NotebookSummaryGenerator

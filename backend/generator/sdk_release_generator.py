@@ -231,6 +231,38 @@ class SDKReleaseGenerator:
                 )
         }
 
+    def api_lifecycle_intelligence_manifest(
+        self,
+        control_center
+    ):
+
+        return {
+
+            "lifecycle_assessment_enabled":
+                control_center.lifecycle_assessment_enabled,
+
+            "version_evolution_enabled":
+                control_center.version_evolution_enabled,
+
+            "deprecation_planning_enabled":
+                control_center.deprecation_planning_enabled,
+
+            "release_planning_enabled":
+                control_center.release_planning_enabled,
+
+            "portfolio_intelligence_enabled":
+                control_center.portfolio_intelligence_enabled,
+
+            "lifecycle_recommendations_enabled":
+                control_center.lifecycle_recommendations_enabled,
+
+            "lifecycle_scorecard_enabled":
+                control_center.lifecycle_scorecard_enabled,
+
+            "lifecycle_report_enabled":
+                control_center.lifecycle_report_enabled
+        }
+
     def enterprise_scorecard_manifest(
         self,
         scorecard
