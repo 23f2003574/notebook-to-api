@@ -4546,3 +4546,23 @@ class SDKReleaseGenerator:
             "compliance_required":
                 governance.compliance_required
         }
+
+    def data_platform_readiness_manifest(
+        self,
+        readiness
+    ):
+
+        return {
+
+            "platform_readiness_score":
+                readiness.platform_readiness_score,
+
+            "analytics_readiness_score":
+                readiness.analytics_readiness_score,
+
+            "governance_maturity_score":
+                readiness.governance_maturity_score,
+
+            "platform_grade":
+                readiness.platform_grade
+        }

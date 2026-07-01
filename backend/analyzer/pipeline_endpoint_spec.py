@@ -1614,3 +1614,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def data_platform_readiness_enabled(
+        self
+    ):
+
+        return True

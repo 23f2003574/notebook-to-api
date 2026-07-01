@@ -17,6 +17,10 @@ from .data_governance import (
     DataGovernance,
     DataGovernanceIntelligenceEngine
 )
+from .data_platform_readiness import (
+    DataPlatformReadiness,
+    DataPlatformReadinessEngine
+)
 from .pipeline_model_generator import (
     PipelineModelGenerator
 )
