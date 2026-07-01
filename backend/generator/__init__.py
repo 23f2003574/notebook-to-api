@@ -25,6 +25,10 @@ from .data_intelligence_recommendation import (
     DataIntelligenceRecommendation,
     DataIntelligenceRecommendationEngine
 )
+from .data_intelligence_scorecard import (
+    DataIntelligenceScorecard,
+    DataIntelligenceScorecardEngine
+)
 from .pipeline_model_generator import (
     PipelineModelGenerator
 )

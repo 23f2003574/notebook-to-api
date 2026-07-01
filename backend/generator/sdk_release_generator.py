@@ -4579,3 +4579,26 @@ class SDKReleaseGenerator:
                     recommendations
                 )
         }
+
+    def data_intelligence_scorecard_manifest(
+        self,
+        scorecard
+    ):
+
+        return {
+
+            "overall_score":
+                scorecard.overall_score,
+
+            "quality_grade":
+                scorecard.quality_grade,
+
+            "data_quality_score":
+                scorecard.data_quality_score,
+
+            "platform_readiness_score":
+                scorecard.platform_readiness_score,
+
+            "governance_maturity_score":
+                scorecard.governance_maturity_score
+        }

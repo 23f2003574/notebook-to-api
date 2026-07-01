@@ -1626,3 +1626,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def data_intelligence_scorecard_enabled(
+        self
+    ):
+
+        return True
