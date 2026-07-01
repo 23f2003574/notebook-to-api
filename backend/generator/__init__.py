@@ -37,6 +37,10 @@ from .data_intelligence_control_center import (
     DataIntelligenceControlCenter,
     DataIntelligenceControlCenterGenerator
 )
+from .data_intelligence_automation import (
+    DataIntelligenceAutomation,
+    DataIntelligenceAutomationEngine
+)
 from .pipeline_model_generator import (
     PipelineModelGenerator
 )

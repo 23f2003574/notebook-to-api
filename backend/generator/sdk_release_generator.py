@@ -4648,3 +4648,24 @@ class SDKReleaseGenerator:
             "data_report_enabled":
                 control_center.data_report_enabled
         }
+
+    def data_intelligence_automation_manifest(
+        self,
+        automation
+    ):
+
+        return {
+
+            "workflow_name":
+                automation.workflow_name,
+
+            "trigger_count":
+                len(
+                    automation.triggers
+                ),
+
+            "action_count":
+                len(
+                    automation.actions
+                )
+        }
