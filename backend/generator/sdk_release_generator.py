@@ -4506,3 +4506,23 @@ class SDKReleaseGenerator:
             "lineage_verified":
                 lineage.lineage_verified
         }
+
+    def data_catalog_manifest(
+        self,
+        catalog
+    ):
+
+        return {
+
+            "dataset_name":
+                catalog.dataset_name,
+
+            "business_domain":
+                catalog.business_domain,
+
+            "asset_type":
+                catalog.asset_type,
+
+            "certified":
+                catalog.certified
+        }

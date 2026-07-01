@@ -1602,3 +1602,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def data_catalog_enabled(
+        self
+    ):
+
+        return True

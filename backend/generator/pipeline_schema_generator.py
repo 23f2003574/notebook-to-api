@@ -316,6 +316,9 @@ from .data_quality_assessment import (
 from .data_lineage import (
     DataLineageIntelligenceEngine
 )
+from .data_catalog import (
+    DataCatalogIntelligenceEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1579,6 +1582,10 @@ class PipelineSchemaGenerator:
             DataLineageIntelligenceEngine()
         )
 
+        self.data_catalog_engine = (
+            DataCatalogIntelligenceEngine()
+        )
+
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
@@ -1934,6 +1941,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .data_lineage_engine
+            .generate()
+        )
+
+    def generate_data_catalog(
+        self
+    ):
+
+        return (
+            self
+            .data_catalog_engine
             .generate()
         )
 

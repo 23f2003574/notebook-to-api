@@ -9,6 +9,10 @@ from .data_lineage import (
     DataLineage,
     DataLineageIntelligenceEngine
 )
+from .data_catalog import (
+    DataCatalog,
+    DataCatalogIntelligenceEngine
+)
 from .pipeline_model_generator import (
     PipelineModelGenerator
 )
