@@ -4708,3 +4708,23 @@ class SDKReleaseGenerator:
             "lineage_validation_required":
                 governance.lineage_validation_required
         }
+
+    def autonomous_data_intelligence_manifest(
+        self,
+        intelligence
+    ):
+
+        return {
+
+            "adaptive_data_quality_enabled":
+                intelligence.adaptive_data_quality_enabled,
+
+            "autonomous_governance_enabled":
+                intelligence.autonomous_governance_enabled,
+
+            "continuous_metadata_learning_enabled":
+                intelligence.continuous_metadata_learning_enabled,
+
+            "self_optimizing_data_platform_enabled":
+                intelligence.self_optimizing_data_platform_enabled
+        }

@@ -49,6 +49,10 @@ from .data_intelligence_governance import (
     DataIntelligenceGovernance,
     DataIntelligenceGovernanceEngine
 )
+from .autonomous_data_intelligence import (
+    AutonomousDataIntelligence,
+    AutonomousDataIntelligenceEngine
+)
 from .pipeline_model_generator import (
     PipelineModelGenerator
 )
