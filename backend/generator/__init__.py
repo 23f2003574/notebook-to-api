@@ -13,6 +13,10 @@ from .data_catalog import (
     DataCatalog,
     DataCatalogIntelligenceEngine
 )
+from .data_governance import (
+    DataGovernance,
+    DataGovernanceIntelligenceEngine
+)
 from .pipeline_model_generator import (
     PipelineModelGenerator
 )

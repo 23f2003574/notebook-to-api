@@ -319,6 +319,9 @@ from .data_lineage import (
 from .data_catalog import (
     DataCatalogIntelligenceEngine
 )
+from .data_governance import (
+    DataGovernanceIntelligenceEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1586,6 +1589,10 @@ class PipelineSchemaGenerator:
             DataCatalogIntelligenceEngine()
         )
 
+        self.data_governance_engine = (
+            DataGovernanceIntelligenceEngine()
+        )
+
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
@@ -1951,6 +1958,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .data_catalog_engine
+            .generate()
+        )
+
+    def generate_data_governance(
+        self
+    ):
+
+        return (
+            self
+            .data_governance_engine
             .generate()
         )
 

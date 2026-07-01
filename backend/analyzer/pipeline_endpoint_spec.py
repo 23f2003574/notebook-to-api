@@ -1608,3 +1608,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def data_governance_enabled(
+        self
+    ):
+
+        return True

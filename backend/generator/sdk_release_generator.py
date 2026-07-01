@@ -4526,3 +4526,23 @@ class SDKReleaseGenerator:
             "certified":
                 catalog.certified
         }
+
+    def data_governance_manifest(
+        self,
+        governance
+    ):
+
+        return {
+
+            "data_owner":
+                governance.data_owner,
+
+            "stewardship_model":
+                governance.stewardship_model,
+
+            "governance_policy":
+                governance.governance_policy,
+
+            "compliance_required":
+                governance.compliance_required
+        }
