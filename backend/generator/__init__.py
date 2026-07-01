@@ -29,6 +29,10 @@ from .data_intelligence_scorecard import (
     DataIntelligenceScorecard,
     DataIntelligenceScorecardEngine
 )
+from .data_intelligence_report import (
+    DataIntelligenceReport,
+    DataIntelligenceReportGenerator
+)
 from .pipeline_model_generator import (
     PipelineModelGenerator
 )

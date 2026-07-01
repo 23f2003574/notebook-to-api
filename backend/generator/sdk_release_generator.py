@@ -4602,3 +4602,17 @@ class SDKReleaseGenerator:
             "governance_maturity_score":
                 scorecard.governance_maturity_score
         }
+
+    def data_intelligence_report_manifest(
+        self,
+        report
+    ):
+
+        return {
+
+            "title":
+                report.title,
+
+            "section_count":
+                report.section_count
+        }

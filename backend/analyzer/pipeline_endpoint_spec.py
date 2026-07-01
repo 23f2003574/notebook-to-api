@@ -1632,3 +1632,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def data_intelligence_report_enabled(
+        self
+    ):
+
+        return True
