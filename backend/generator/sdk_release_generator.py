@@ -4566,3 +4566,16 @@ class SDKReleaseGenerator:
             "platform_grade":
                 readiness.platform_grade
         }
+
+    def data_intelligence_recommendation_manifest(
+        self,
+        recommendations
+    ):
+
+        return {
+
+            "recommendation_count":
+                len(
+                    recommendations
+                )
+        }

@@ -325,6 +325,9 @@ from .data_governance import (
 from .data_platform_readiness import (
     DataPlatformReadinessEngine
 )
+from .data_intelligence_recommendation import (
+    DataIntelligenceRecommendationEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1600,6 +1603,10 @@ class PipelineSchemaGenerator:
             DataPlatformReadinessEngine()
         )
 
+        self.data_intelligence_recommendation_engine = (
+            DataIntelligenceRecommendationEngine()
+        )
+
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
@@ -1985,6 +1992,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .data_platform_readiness_engine
+            .generate()
+        )
+
+    def generate_data_intelligence_recommendations(
+        self
+    ):
+
+        return (
+            self
+            .data_intelligence_recommendation_engine
             .generate()
         )
 

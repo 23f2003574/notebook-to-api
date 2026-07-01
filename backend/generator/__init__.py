@@ -21,6 +21,10 @@ from .data_platform_readiness import (
     DataPlatformReadiness,
     DataPlatformReadinessEngine
 )
+from .data_intelligence_recommendation import (
+    DataIntelligenceRecommendation,
+    DataIntelligenceRecommendationEngine
+)
 from .pipeline_model_generator import (
     PipelineModelGenerator
 )

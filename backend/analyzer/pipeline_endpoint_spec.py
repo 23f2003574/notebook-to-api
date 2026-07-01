@@ -1620,3 +1620,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def data_intelligence_recommendations_enabled(
+        self
+    ):
+
+        return True
