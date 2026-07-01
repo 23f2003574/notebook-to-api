@@ -1638,3 +1638,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def data_intelligence_control_center_enabled(
+        self
+    ):
+
+        return True

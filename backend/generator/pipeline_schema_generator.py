@@ -334,6 +334,9 @@ from .data_intelligence_scorecard import (
 from .data_intelligence_report import (
     DataIntelligenceReportGenerator
 )
+from .data_intelligence_control_center import (
+    DataIntelligenceControlCenterGenerator
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1621,6 +1624,10 @@ class PipelineSchemaGenerator:
             DataIntelligenceReportGenerator()
         )
 
+        self.data_intelligence_control_center = (
+            DataIntelligenceControlCenterGenerator()
+        )
+
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
@@ -2036,6 +2043,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .data_intelligence_report_generator
+            .generate()
+        )
+
+    def generate_data_intelligence_control_center(
+        self
+    ):
+
+        return (
+            self
+            .data_intelligence_control_center
             .generate()
         )
 

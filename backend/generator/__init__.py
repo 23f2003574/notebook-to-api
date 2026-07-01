@@ -33,6 +33,10 @@ from .data_intelligence_report import (
     DataIntelligenceReport,
     DataIntelligenceReportGenerator
 )
+from .data_intelligence_control_center import (
+    DataIntelligenceControlCenter,
+    DataIntelligenceControlCenterGenerator
+)
 from .pipeline_model_generator import (
     PipelineModelGenerator
 )

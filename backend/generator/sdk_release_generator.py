@@ -4616,3 +4616,35 @@ class SDKReleaseGenerator:
             "section_count":
                 report.section_count
         }
+
+    def data_intelligence_manifest(
+        self,
+        control_center
+    ):
+
+        return {
+
+            "data_quality_enabled":
+                control_center.data_quality_enabled,
+
+            "data_lineage_enabled":
+                control_center.data_lineage_enabled,
+
+            "data_catalog_enabled":
+                control_center.data_catalog_enabled,
+
+            "data_governance_enabled":
+                control_center.data_governance_enabled,
+
+            "data_platform_readiness_enabled":
+                control_center.data_platform_readiness_enabled,
+
+            "data_recommendations_enabled":
+                control_center.data_recommendations_enabled,
+
+            "data_scorecard_enabled":
+                control_center.data_scorecard_enabled,
+
+            "data_report_enabled":
+                control_center.data_report_enabled
+        }
