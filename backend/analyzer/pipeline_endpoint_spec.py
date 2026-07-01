@@ -1650,3 +1650,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def data_intelligence_remediation_enabled(
+        self
+    ):
+
+        return True

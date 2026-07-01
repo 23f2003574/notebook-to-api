@@ -4669,3 +4669,22 @@ class SDKReleaseGenerator:
                     automation.actions
                 )
         }
+
+    def data_intelligence_remediation_manifest(
+        self,
+        remediation
+    ):
+
+        return {
+
+            "issue_type":
+                remediation.issue_type,
+
+            "action_count":
+                len(
+                    remediation.remediation_actions
+                ),
+
+            "priority":
+                remediation.priority
+        }

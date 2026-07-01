@@ -41,6 +41,10 @@ from .data_intelligence_automation import (
     DataIntelligenceAutomation,
     DataIntelligenceAutomationEngine
 )
+from .data_intelligence_remediation import (
+    DataIntelligenceRemediation,
+    DataIntelligenceRemediationEngine
+)
 from .pipeline_model_generator import (
     PipelineModelGenerator
 )

@@ -340,6 +340,9 @@ from .data_intelligence_control_center import (
 from .data_intelligence_automation import (
     DataIntelligenceAutomationEngine
 )
+from .data_intelligence_remediation import (
+    DataIntelligenceRemediationEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1635,6 +1638,10 @@ class PipelineSchemaGenerator:
             DataIntelligenceAutomationEngine()
         )
 
+        self.data_intelligence_remediation_engine = (
+            DataIntelligenceRemediationEngine()
+        )
+
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
@@ -2070,6 +2077,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .data_intelligence_automation_engine
+            .generate()
+        )
+
+    def generate_data_intelligence_remediation(
+        self
+    ):
+
+        return (
+            self
+            .data_intelligence_remediation_engine
             .generate()
         )
 
