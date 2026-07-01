@@ -313,6 +313,9 @@ from .autonomous_api_lifecycle import (
 from .data_quality_assessment import (
     DataQualityAssessmentEngine
 )
+from .data_lineage import (
+    DataLineageIntelligenceEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1572,6 +1575,10 @@ class PipelineSchemaGenerator:
             DataQualityAssessmentEngine()
         )
 
+        self.data_lineage_engine = (
+            DataLineageIntelligenceEngine()
+        )
+
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
@@ -1917,6 +1924,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .data_quality_assessment_engine
+            .generate()
+        )
+
+    def generate_data_lineage(
+        self
+    ):
+
+        return (
+            self
+            .data_lineage_engine
             .generate()
         )
 

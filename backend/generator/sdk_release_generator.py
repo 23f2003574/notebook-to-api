@@ -4486,3 +4486,23 @@ class SDKReleaseGenerator:
             "quality_grade":
                 assessment.quality_grade
         }
+
+    def data_lineage_manifest(
+        self,
+        lineage
+    ):
+
+        return {
+
+            "source_dataset":
+                lineage.source_dataset,
+
+            "transformation_stage":
+                lineage.transformation_stage,
+
+            "destination_asset":
+                lineage.destination_asset,
+
+            "lineage_verified":
+                lineage.lineage_verified
+        }

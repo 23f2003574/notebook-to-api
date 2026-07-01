@@ -5,6 +5,10 @@ from .data_quality_assessment import (
     DataQualityAssessment,
     DataQualityAssessmentEngine
 )
+from .data_lineage import (
+    DataLineage,
+    DataLineageIntelligenceEngine
+)
 from .pipeline_model_generator import (
     PipelineModelGenerator
 )

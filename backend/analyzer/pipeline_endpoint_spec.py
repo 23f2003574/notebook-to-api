@@ -1596,3 +1596,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def data_lineage_enabled(
+        self
+    ):
+
+        return True
