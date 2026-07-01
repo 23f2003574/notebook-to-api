@@ -4688,3 +4688,23 @@ class SDKReleaseGenerator:
             "priority":
                 remediation.priority
         }
+
+    def data_intelligence_governance_manifest(
+        self,
+        governance
+    ):
+
+        return {
+
+            "governance_owner":
+                governance.governance_owner,
+
+            "review_frequency":
+                governance.review_frequency,
+
+            "data_quality_policy_required":
+                governance.data_quality_policy_required,
+
+            "lineage_validation_required":
+                governance.lineage_validation_required
+        }

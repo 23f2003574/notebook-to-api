@@ -45,6 +45,10 @@ from .data_intelligence_remediation import (
     DataIntelligenceRemediation,
     DataIntelligenceRemediationEngine
 )
+from .data_intelligence_governance import (
+    DataIntelligenceGovernance,
+    DataIntelligenceGovernanceEngine
+)
 from .pipeline_model_generator import (
     PipelineModelGenerator
 )
