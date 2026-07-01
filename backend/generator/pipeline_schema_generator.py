@@ -310,6 +310,9 @@ from .api_lifecycle_governance import (
 from .autonomous_api_lifecycle import (
     AutonomousAPILifecycleEngine
 )
+from .data_quality_assessment import (
+    DataQualityAssessmentEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1565,6 +1568,10 @@ class PipelineSchemaGenerator:
             AutonomousAPILifecycleEngine()
         )
 
+        self.data_quality_assessment_engine = (
+            DataQualityAssessmentEngine()
+        )
+
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
@@ -1900,6 +1907,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .autonomous_api_lifecycle_engine
+            .generate()
+        )
+
+    def generate_data_quality_assessment(
+        self
+    ):
+
+        return (
+            self
+            .data_quality_assessment_engine
             .generate()
         )
 

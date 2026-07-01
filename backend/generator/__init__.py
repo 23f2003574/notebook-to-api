@@ -1,6 +1,10 @@
 from .pipeline_route_generator import (
     PipelineRouteGenerator
 )
+from .data_quality_assessment import (
+    DataQualityAssessment,
+    DataQualityAssessmentEngine
+)
 from .pipeline_model_generator import (
     PipelineModelGenerator
 )

@@ -4466,3 +4466,23 @@ class SDKReleaseGenerator:
             "scalability_score":
                 scorecard.scalability_score
         }
+
+    def data_quality_assessment_manifest(
+        self,
+        assessment
+    ):
+
+        return {
+
+            "data_quality_score":
+                assessment.data_quality_score,
+
+            "completeness_score":
+                assessment.completeness_score,
+
+            "consistency_score":
+                assessment.consistency_score,
+
+            "quality_grade":
+                assessment.quality_grade
+        }

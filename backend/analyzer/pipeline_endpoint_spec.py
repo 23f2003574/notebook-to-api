@@ -1590,3 +1590,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def data_quality_assessment_enabled(
+        self
+    ):
+
+        return True
