@@ -1054,3 +1054,7 @@ from .ai_agent_remediation import (
     AIAgentRemediation,
     AIAgentRemediationEngine
 )
+from .ai_agent_governance import (
+    AIAgentGovernance,
+    AIAgentGovernanceEngine
+)

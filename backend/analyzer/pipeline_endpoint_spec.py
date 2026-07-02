@@ -1734,3 +1734,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def ai_agent_governance_enabled(
+        self
+    ):
+
+        return True

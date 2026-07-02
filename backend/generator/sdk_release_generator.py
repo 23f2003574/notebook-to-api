@@ -4954,3 +4954,23 @@ class SDKReleaseGenerator:
             "priority":
                 remediation.priority
         }
+
+    def ai_agent_governance_manifest(
+        self,
+        governance
+    ):
+
+        return {
+
+            "governance_owner":
+                governance.governance_owner,
+
+            "review_frequency":
+                governance.review_frequency,
+
+            "human_approval_required":
+                governance.human_approval_required,
+
+            "audit_logging_required":
+                governance.audit_logging_required
+        }
