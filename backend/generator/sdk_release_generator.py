@@ -4882,3 +4882,35 @@ class SDKReleaseGenerator:
             "section_count":
                 report.section_count
         }
+
+    def ai_agent_intelligence_manifest(
+        self,
+        control_center
+    ):
+
+        return {
+
+            "agent_readiness_enabled":
+                control_center.agent_readiness_enabled,
+
+            "multi_agent_orchestration_enabled":
+                control_center.multi_agent_orchestration_enabled,
+
+            "memory_enabled":
+                control_center.memory_enabled,
+
+            "tool_calling_enabled":
+                control_center.tool_calling_enabled,
+
+            "planning_enabled":
+                control_center.planning_enabled,
+
+            "recommendations_enabled":
+                control_center.recommendations_enabled,
+
+            "scorecard_enabled":
+                control_center.scorecard_enabled,
+
+            "report_enabled":
+                control_center.report_enabled
+        }
