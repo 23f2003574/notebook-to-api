@@ -1038,3 +1038,7 @@ from .ai_agent_scorecard import (
     AIAgentScorecard,
     AIAgentScorecardEngine
 )
+from .ai_agent_intelligence_report import (
+    AIAgentIntelligenceReport,
+    AIAgentIntelligenceReportGenerator
+)

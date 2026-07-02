@@ -1710,3 +1710,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def ai_agent_intelligence_report_enabled(
+        self
+    ):
+
+        return True

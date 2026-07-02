@@ -4868,3 +4868,17 @@ class SDKReleaseGenerator:
             "tool_calling_score":
                 scorecard.tool_calling_score
         }
+
+    def ai_agent_intelligence_report_manifest(
+        self,
+        report
+    ):
+
+        return {
+
+            "title":
+                report.title,
+
+            "section_count":
+                report.section_count
+        }
