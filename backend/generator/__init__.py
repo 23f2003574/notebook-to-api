@@ -1046,3 +1046,7 @@ from .ai_agent_intelligence_control_center import (
     AIAgentIntelligenceControlCenter,
     AIAgentIntelligenceControlCenterGenerator
 )
+from .ai_agent_automation import (
+    AIAgentAutomation,
+    AIAgentAutomationEngine
+)

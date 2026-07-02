@@ -4914,3 +4914,24 @@ class SDKReleaseGenerator:
             "report_enabled":
                 control_center.report_enabled
         }
+
+    def ai_agent_automation_manifest(
+        self,
+        automation
+    ):
+
+        return {
+
+            "workflow_name":
+                automation.workflow_name,
+
+            "trigger_count":
+                len(
+                    automation.triggers
+                ),
+
+            "action_count":
+                len(
+                    automation.actions
+                )
+        }
