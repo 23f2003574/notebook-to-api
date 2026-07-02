@@ -1022,3 +1022,7 @@ from .ai_agent_memory import (
     AIAgentMemory,
     AIAgentMemoryIntelligenceEngine
 )
+from .ai_tool_calling import (
+    AIToolCalling,
+    AIToolCallingIntelligenceEngine
+)

@@ -358,6 +358,9 @@ from .multi_agent_orchestration import (
 from .ai_agent_memory import (
     AIAgentMemoryIntelligenceEngine
 )
+from .ai_tool_calling import (
+    AIToolCallingIntelligenceEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1677,6 +1680,10 @@ class PipelineSchemaGenerator:
             AIAgentMemoryIntelligenceEngine()
         )
 
+        self.ai_tool_calling_engine = (
+            AIToolCallingIntelligenceEngine()
+        )
+
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
@@ -2172,6 +2179,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .ai_agent_memory_engine
+            .generate()
+        )
+
+    def generate_ai_tool_calling(
+        self
+    ):
+
+        return (
+            self
+            .ai_tool_calling_engine
             .generate()
         )
 

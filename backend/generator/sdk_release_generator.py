@@ -4790,3 +4790,25 @@ class SDKReleaseGenerator:
             "retrieval_strategy":
                 memory.retrieval_strategy
         }
+
+    def ai_tool_calling_manifest(
+        self,
+        tool_calling
+    ):
+
+        return {
+
+            "tool_selection_strategy":
+                tool_calling.tool_selection_strategy,
+
+            "tool_count":
+                len(
+                    tool_calling.available_tools
+                ),
+
+            "dynamic_routing_enabled":
+                tool_calling.dynamic_routing_enabled,
+
+            "function_calling_mode":
+                tool_calling.function_calling_mode
+        }

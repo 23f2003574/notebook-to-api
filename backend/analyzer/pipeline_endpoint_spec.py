@@ -1686,3 +1686,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def ai_tool_calling_enabled(
+        self
+    ):
+
+        return True
