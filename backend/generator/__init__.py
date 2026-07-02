@@ -1018,3 +1018,7 @@ from .multi_agent_orchestration import (
     MultiAgentOrchestration,
     MultiAgentOrchestrationEngine
 )
+from .ai_agent_memory import (
+    AIAgentMemory,
+    AIAgentMemoryIntelligenceEngine
+)

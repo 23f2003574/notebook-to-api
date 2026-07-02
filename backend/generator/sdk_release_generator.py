@@ -4770,3 +4770,23 @@ class SDKReleaseGenerator:
             "collaboration_enabled":
                 orchestration.collaboration_enabled
         }
+
+    def ai_agent_memory_manifest(
+        self,
+        memory
+    ):
+
+        return {
+
+            "memory_strategy":
+                memory.memory_strategy,
+
+            "short_term_memory_enabled":
+                memory.short_term_memory_enabled,
+
+            "long_term_memory_enabled":
+                memory.long_term_memory_enabled,
+
+            "retrieval_strategy":
+                memory.retrieval_strategy
+        }

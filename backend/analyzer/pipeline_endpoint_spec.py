@@ -1680,3 +1680,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def ai_agent_memory_enabled(
+        self
+    ):
+
+        return True
