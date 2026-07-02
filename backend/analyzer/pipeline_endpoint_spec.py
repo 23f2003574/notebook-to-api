@@ -1668,3 +1668,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def ai_agent_readiness_enabled(
+        self
+    ):
+
+        return True

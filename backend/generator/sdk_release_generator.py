@@ -4728,3 +4728,23 @@ class SDKReleaseGenerator:
             "self_optimizing_data_platform_enabled":
                 intelligence.self_optimizing_data_platform_enabled
         }
+
+    def ai_agent_readiness_manifest(
+        self,
+        assessment
+    ):
+
+        return {
+
+            "agent_readiness_score":
+                assessment.agent_readiness_score,
+
+            "tool_calling_score":
+                assessment.tool_calling_score,
+
+            "autonomy_score":
+                assessment.autonomy_score,
+
+            "readiness_grade":
+                assessment.readiness_grade
+        }

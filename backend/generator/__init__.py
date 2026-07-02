@@ -1010,3 +1010,7 @@ from .performance_scorecard import (
     PerformanceScorecard,
     PerformanceScorecardEngine
 )
+from .ai_agent_readiness import (
+    AIAgentReadiness,
+    AIAgentReadinessAssessmentEngine
+)
