@@ -1674,3 +1674,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def multi_agent_orchestration_enabled(
+        self
+    ):
+
+        return True

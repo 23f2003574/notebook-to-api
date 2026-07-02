@@ -352,6 +352,9 @@ from .autonomous_data_intelligence import (
 from .ai_agent_readiness import (
     AIAgentReadinessAssessmentEngine
 )
+from .multi_agent_orchestration import (
+    MultiAgentOrchestrationEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1663,6 +1666,10 @@ class PipelineSchemaGenerator:
             AIAgentReadinessAssessmentEngine()
         )
 
+        self.multi_agent_orchestration_engine = (
+            MultiAgentOrchestrationEngine()
+        )
+
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
@@ -2138,6 +2145,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .ai_agent_readiness_engine
+            .generate()
+        )
+
+    def generate_multi_agent_orchestration(
+        self
+    ):
+
+        return (
+            self
+            .multi_agent_orchestration_engine
             .generate()
         )
 

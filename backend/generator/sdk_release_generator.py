@@ -4748,3 +4748,25 @@ class SDKReleaseGenerator:
             "readiness_grade":
                 assessment.readiness_grade
         }
+
+    def multi_agent_orchestration_manifest(
+        self,
+        orchestration
+    ):
+
+        return {
+
+            "orchestration_strategy":
+                orchestration.orchestration_strategy,
+
+            "coordinator_agent":
+                orchestration.coordinator_agent,
+
+            "worker_agent_count":
+                len(
+                    orchestration.worker_agents
+                ),
+
+            "collaboration_enabled":
+                orchestration.collaboration_enabled
+        }
