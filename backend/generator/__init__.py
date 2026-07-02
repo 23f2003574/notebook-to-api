@@ -1050,3 +1050,7 @@ from .ai_agent_automation import (
     AIAgentAutomation,
     AIAgentAutomationEngine
 )
+from .ai_agent_remediation import (
+    AIAgentRemediation,
+    AIAgentRemediationEngine
+)

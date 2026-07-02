@@ -4935,3 +4935,22 @@ class SDKReleaseGenerator:
                     automation.actions
                 )
         }
+
+    def ai_agent_remediation_manifest(
+        self,
+        remediation
+    ):
+
+        return {
+
+            "issue_type":
+                remediation.issue_type,
+
+            "action_count":
+                len(
+                    remediation.remediation_actions
+                ),
+
+            "priority":
+                remediation.priority
+        }

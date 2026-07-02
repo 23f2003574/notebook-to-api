@@ -1728,3 +1728,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def ai_agent_remediation_enabled(
+        self
+    ):
+
+        return True

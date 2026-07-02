@@ -379,6 +379,9 @@ from .ai_agent_intelligence_control_center import (
 from .ai_agent_automation import (
     AIAgentAutomationEngine
 )
+from .ai_agent_remediation import (
+    AIAgentRemediationEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1726,6 +1729,10 @@ class PipelineSchemaGenerator:
             AIAgentAutomationEngine()
         )
 
+        self.ai_agent_remediation_engine = (
+            AIAgentRemediationEngine()
+        )
+
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
@@ -2291,6 +2298,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .ai_agent_automation_engine
+            .generate()
+        )
+
+    def generate_ai_agent_remediation(
+        self
+    ):
+
+        return (
+            self
+            .ai_agent_remediation_engine
             .generate()
         )
 
