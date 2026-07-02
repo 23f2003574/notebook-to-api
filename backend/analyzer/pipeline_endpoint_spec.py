@@ -1692,3 +1692,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def ai_agent_planning_enabled(
+        self
+    ):
+
+        return True

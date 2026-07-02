@@ -4812,3 +4812,23 @@ class SDKReleaseGenerator:
             "function_calling_mode":
                 tool_calling.function_calling_mode
         }
+
+    def ai_agent_planning_manifest(
+        self,
+        planning
+    ):
+
+        return {
+
+            "planning_strategy":
+                planning.planning_strategy,
+
+            "reasoning_model":
+                planning.reasoning_model,
+
+            "task_decomposition_enabled":
+                planning.task_decomposition_enabled,
+
+            "adaptive_replanning_enabled":
+                planning.adaptive_replanning_enabled
+        }

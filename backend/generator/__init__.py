@@ -1026,3 +1026,7 @@ from .ai_tool_calling import (
     AIToolCalling,
     AIToolCallingIntelligenceEngine
 )
+from .ai_agent_planning import (
+    AIAgentPlanning,
+    AIAgentPlanningIntelligenceEngine
+)
