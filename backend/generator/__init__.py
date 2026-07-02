@@ -1034,3 +1034,7 @@ from .ai_agent_recommendation import (
     AIAgentRecommendation,
     AIAgentRecommendationEngine
 )
+from .ai_agent_scorecard import (
+    AIAgentScorecard,
+    AIAgentScorecardEngine
+)

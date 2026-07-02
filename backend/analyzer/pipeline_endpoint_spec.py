@@ -1704,3 +1704,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def ai_agent_scorecard_enabled(
+        self
+    ):
+
+        return True

@@ -4845,3 +4845,26 @@ class SDKReleaseGenerator:
                     recommendations
                 )
         }
+
+    def ai_agent_scorecard_manifest(
+        self,
+        scorecard
+    ):
+
+        return {
+
+            "overall_score":
+                scorecard.overall_score,
+
+            "readiness_grade":
+                scorecard.readiness_grade,
+
+            "agent_readiness_score":
+                scorecard.agent_readiness_score,
+
+            "autonomy_score":
+                scorecard.autonomy_score,
+
+            "tool_calling_score":
+                scorecard.tool_calling_score
+        }

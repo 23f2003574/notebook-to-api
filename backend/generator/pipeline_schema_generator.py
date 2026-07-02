@@ -367,6 +367,9 @@ from .ai_agent_planning import (
 from .ai_agent_recommendation import (
     AIAgentRecommendationEngine
 )
+from .ai_agent_scorecard import (
+    AIAgentScorecardEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1698,6 +1701,10 @@ class PipelineSchemaGenerator:
             AIAgentRecommendationEngine()
         )
 
+        self.ai_agent_scorecard_engine = (
+            AIAgentScorecardEngine()
+        )
+
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
@@ -2223,6 +2230,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .ai_agent_recommendation_engine
+            .generate()
+        )
+
+    def generate_ai_agent_scorecard(
+        self
+    ):
+
+        return (
+            self
+            .ai_agent_scorecard_engine
             .generate()
         )
 
