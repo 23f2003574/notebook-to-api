@@ -364,6 +364,9 @@ from .ai_tool_calling import (
 from .ai_agent_planning import (
     AIAgentPlanningIntelligenceEngine
 )
+from .ai_agent_recommendation import (
+    AIAgentRecommendationEngine
+)
 from .developer_experience_control_center import (
     DeveloperExperienceControlCenterGenerator
 )
@@ -1691,6 +1694,10 @@ class PipelineSchemaGenerator:
             AIAgentPlanningIntelligenceEngine()
         )
 
+        self.ai_agent_recommendation_engine = (
+            AIAgentRecommendationEngine()
+        )
+
         self.business_capability_mapping_engine = (
             BusinessCapabilityMappingEngine()
         )
@@ -2206,6 +2213,16 @@ class PipelineSchemaGenerator:
         return (
             self
             .ai_agent_planning_engine
+            .generate()
+        )
+
+    def generate_ai_agent_recommendations(
+        self
+    ):
+
+        return (
+            self
+            .ai_agent_recommendation_engine
             .generate()
         )
 

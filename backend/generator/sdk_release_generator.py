@@ -4832,3 +4832,16 @@ class SDKReleaseGenerator:
             "adaptive_replanning_enabled":
                 planning.adaptive_replanning_enabled
         }
+
+    def ai_agent_recommendation_manifest(
+        self,
+        recommendations
+    ):
+
+        return {
+
+            "recommendation_count":
+                len(
+                    recommendations
+                )
+        }

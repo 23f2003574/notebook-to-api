@@ -1030,3 +1030,7 @@ from .ai_agent_planning import (
     AIAgentPlanning,
     AIAgentPlanningIntelligenceEngine
 )
+from .ai_agent_recommendation import (
+    AIAgentRecommendation,
+    AIAgentRecommendationEngine
+)

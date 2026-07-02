@@ -1698,3 +1698,9 @@ class PipelineEndpointSpec:
     ):
 
         return True
+
+    def ai_agent_recommendations_enabled(
+        self
+    ):
+
+        return True
