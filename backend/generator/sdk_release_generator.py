@@ -4974,3 +4974,23 @@ class SDKReleaseGenerator:
             "audit_logging_required":
                 governance.audit_logging_required
         }
+
+    def autonomous_ai_agent_intelligence_manifest(
+        self,
+        intelligence
+    ):
+
+        return {
+
+            "adaptive_planning_enabled":
+                intelligence.adaptive_planning_enabled,
+
+            "autonomous_tool_learning_enabled":
+                intelligence.autonomous_tool_learning_enabled,
+
+            "continuous_memory_evolution_enabled":
+                intelligence.continuous_memory_evolution_enabled,
+
+            "self_optimizing_multi_agent_enabled":
+                intelligence.self_optimizing_multi_agent_enabled
+        }

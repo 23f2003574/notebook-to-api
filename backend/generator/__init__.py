@@ -1058,3 +1058,7 @@ from .ai_agent_governance import (
     AIAgentGovernance,
     AIAgentGovernanceEngine
 )
+from .autonomous_ai_agent_intelligence import (
+    AutonomousAIAgentIntelligence,
+    AutonomousAIAgentIntelligenceEngine
+)
