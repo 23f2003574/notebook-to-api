@@ -15,6 +15,9 @@ from backend.analyzer.type_inference_engine import (
 from backend.analyzer.control_flow_graph_engine import (
     ControlFlowGraphEngine
 )
+from backend.analyzer.data_flow_analysis_engine import (
+    DataFlowAnalysisEngine
+)
 from .pipeline_metadata import (
     PipelineMetadata,
     PipelineFieldMetadata
@@ -1807,6 +1810,10 @@ class PipelineSchemaGenerator:
 
         self.control_flow_graph_engine = (
             ControlFlowGraphEngine()
+        )
+
+        self.data_flow_analysis_engine = (
+            DataFlowAnalysisEngine()
         )
 
 
@@ -5836,5 +5843,22 @@ class PipelineSchemaGenerator:
             .control_flow_graph_engine
             .build(
                 ast
+            )
+        )
+
+    def analyze_data_flow(
+        self,
+        ast,
+        cfg,
+        symbols
+    ):
+
+        return (
+            self
+            .data_flow_analysis_engine
+            .analyze(
+                ast,
+                cfg,
+                symbols
             )
         )

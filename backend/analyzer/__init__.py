@@ -58,3 +58,9 @@ from .control_flow_graph_engine import (
     ControlFlowGraph,
     ControlFlowGraphEngine
 )
+
+from .data_flow_analysis_engine import (
+    VariableFlow,
+    DataFlowGraph,
+    DataFlowAnalysisEngine
+)
