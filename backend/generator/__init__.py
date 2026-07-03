@@ -1062,3 +1062,8 @@ from .autonomous_ai_agent_intelligence import (
     AutonomousAIAgentIntelligence,
     AutonomousAIAgentIntelligenceEngine
 )
+from .backend_code_generation_engine import (
+    GeneratedArtifact,
+    BackendGenerationResult,
+    BackendCodeGenerationEngine
+)
