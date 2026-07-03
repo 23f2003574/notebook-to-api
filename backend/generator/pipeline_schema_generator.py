@@ -6,6 +6,9 @@ from backend.analyzer.pipeline_endpoint_spec import (
 from backend.analyzer.semantic_ast_engine import (
     SemanticASTEngine
 )
+from backend.analyzer.symbol_resolution_engine import (
+    SymbolResolutionEngine
+)
 from .pipeline_metadata import (
     PipelineMetadata,
     PipelineFieldMetadata
@@ -1786,6 +1789,10 @@ class PipelineSchemaGenerator:
 
         self.semantic_ast_engine = (
             SemanticASTEngine()
+        )
+
+        self.symbol_resolution_engine = (
+            SymbolResolutionEngine()
         )
 
 
@@ -5774,5 +5781,18 @@ class PipelineSchemaGenerator:
             .semantic_ast_engine
             .build_ast(
                 source
+            )
+        )
+
+    def resolve_symbols(
+        self,
+        ast
+    ):
+
+        return (
+            self
+            .symbol_resolution_engine
+            .resolve(
+                ast
             )
         )

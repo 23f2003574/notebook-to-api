@@ -42,3 +42,8 @@ from .semantic_ast_engine import (
     ASTNode,
     SemanticASTEngine
 )
+
+from .symbol_resolution_engine import (
+    Symbol,
+    SymbolResolutionEngine
+)
