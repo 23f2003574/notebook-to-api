@@ -82,3 +82,9 @@ from .static_single_assignment_engine import (
     SSAProgram,
     StaticSingleAssignmentEngine
 )
+
+from .compiler_optimization_pipeline import (
+    OptimizationPass,
+    OptimizationPipeline,
+    CompilerOptimizationPipeline
+)

@@ -27,6 +27,9 @@ from backend.analyzer.program_dependence_graph_engine import (
 from backend.analyzer.static_single_assignment_engine import (
     StaticSingleAssignmentEngine
 )
+from backend.analyzer.compiler_optimization_pipeline import (
+    CompilerOptimizationPipeline
+)
 from .pipeline_metadata import (
     PipelineMetadata,
     PipelineFieldMetadata
@@ -1835,6 +1838,10 @@ class PipelineSchemaGenerator:
 
         self.static_single_assignment_engine = (
             StaticSingleAssignmentEngine()
+        )
+
+        self.compiler_optimization_pipeline = (
+            CompilerOptimizationPipeline()
         )
 
 
@@ -5926,5 +5933,18 @@ class PipelineSchemaGenerator:
             .build(
                 cfg,
                 symbols
+            )
+        )
+
+    def build_optimization_pipeline(
+        self,
+        ssa_program
+    ):
+
+        return (
+            self
+            .compiler_optimization_pipeline
+            .build(
+                ssa_program
             )
         )
