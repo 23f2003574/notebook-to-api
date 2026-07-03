@@ -88,3 +88,9 @@ from .compiler_optimization_pipeline import (
     OptimizationPipeline,
     CompilerOptimizationPipeline
 )
+
+from .semantic_code_transformation_engine import (
+    CodeTransformation,
+    TransformationPlan,
+    SemanticCodeTransformationEngine
+)

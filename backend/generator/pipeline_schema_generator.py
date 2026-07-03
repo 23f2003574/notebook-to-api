@@ -30,6 +30,9 @@ from backend.analyzer.static_single_assignment_engine import (
 from backend.analyzer.compiler_optimization_pipeline import (
     CompilerOptimizationPipeline
 )
+from backend.analyzer.semantic_code_transformation_engine import (
+    SemanticCodeTransformationEngine
+)
 from .pipeline_metadata import (
     PipelineMetadata,
     PipelineFieldMetadata
@@ -1842,6 +1845,10 @@ class PipelineSchemaGenerator:
 
         self.compiler_optimization_pipeline = (
             CompilerOptimizationPipeline()
+        )
+
+        self.semantic_code_transformation_engine = (
+            SemanticCodeTransformationEngine()
         )
 
 
@@ -5946,5 +5953,20 @@ class PipelineSchemaGenerator:
             .compiler_optimization_pipeline
             .build(
                 ssa_program
+            )
+        )
+
+    def generate_transformation_plan(
+        self,
+        ast,
+        optimization_pipeline
+    ):
+
+        return (
+            self
+            .semantic_code_transformation_engine
+            .generate(
+                ast,
+                optimization_pipeline
             )
         )
