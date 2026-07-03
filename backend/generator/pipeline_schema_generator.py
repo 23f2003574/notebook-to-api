@@ -9,6 +9,9 @@ from backend.analyzer.semantic_ast_engine import (
 from backend.analyzer.symbol_resolution_engine import (
     SymbolResolutionEngine
 )
+from backend.analyzer.type_inference_engine import (
+    TypeInferenceEngine
+)
 from .pipeline_metadata import (
     PipelineMetadata,
     PipelineFieldMetadata
@@ -1793,6 +1796,10 @@ class PipelineSchemaGenerator:
 
         self.symbol_resolution_engine = (
             SymbolResolutionEngine()
+        )
+
+        self.type_inference_engine = (
+            TypeInferenceEngine()
         )
 
 
@@ -5794,5 +5801,20 @@ class PipelineSchemaGenerator:
             .symbol_resolution_engine
             .resolve(
                 ast
+            )
+        )
+
+    def infer_types(
+        self,
+        ast,
+        symbols
+    ):
+
+        return (
+            self
+            .type_inference_engine
+            .infer(
+                ast,
+                symbols
             )
         )

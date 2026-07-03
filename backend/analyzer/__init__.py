@@ -47,3 +47,8 @@ from .symbol_resolution_engine import (
     Symbol,
     SymbolResolutionEngine
 )
+
+from .type_inference_engine import (
+    InferredType,
+    TypeInferenceEngine
+)
