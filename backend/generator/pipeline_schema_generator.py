@@ -33,6 +33,9 @@ from backend.analyzer.compiler_optimization_pipeline import (
 from backend.analyzer.semantic_code_transformation_engine import (
     SemanticCodeTransformationEngine
 )
+from backend.analyzer.intermediate_representation_engine import (
+    IntermediateRepresentationEngine
+)
 from .pipeline_metadata import (
     PipelineMetadata,
     PipelineFieldMetadata
@@ -1849,6 +1852,10 @@ class PipelineSchemaGenerator:
 
         self.semantic_code_transformation_engine = (
             SemanticCodeTransformationEngine()
+        )
+
+        self.intermediate_representation_engine = (
+            IntermediateRepresentationEngine()
         )
 
 
@@ -5968,5 +5975,18 @@ class PipelineSchemaGenerator:
             .generate(
                 ast,
                 optimization_pipeline
+            )
+        )
+
+    def generate_intermediate_representation(
+        self,
+        ssa_program
+    ):
+
+        return (
+            self
+            .intermediate_representation_engine
+            .generate(
+                ssa_program
             )
         )

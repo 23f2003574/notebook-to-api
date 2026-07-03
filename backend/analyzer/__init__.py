@@ -94,3 +94,9 @@ from .semantic_code_transformation_engine import (
     TransformationPlan,
     SemanticCodeTransformationEngine
 )
+
+from .intermediate_representation_engine import (
+    IRInstruction,
+    IntermediateRepresentation,
+    IntermediateRepresentationEngine
+)
