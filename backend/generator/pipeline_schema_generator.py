@@ -18,6 +18,9 @@ from backend.analyzer.control_flow_graph_engine import (
 from backend.analyzer.data_flow_analysis_engine import (
     DataFlowAnalysisEngine
 )
+from backend.analyzer.call_graph_engine import (
+    CallGraphAnalysisEngine
+)
 from .pipeline_metadata import (
     PipelineMetadata,
     PipelineFieldMetadata
@@ -1814,6 +1817,10 @@ class PipelineSchemaGenerator:
 
         self.data_flow_analysis_engine = (
             DataFlowAnalysisEngine()
+        )
+
+        self.call_graph_engine = (
+            CallGraphAnalysisEngine()
         )
 
 
@@ -5859,6 +5866,21 @@ class PipelineSchemaGenerator:
             .analyze(
                 ast,
                 cfg,
+                symbols
+            )
+        )
+
+    def build_call_graph(
+        self,
+        ast,
+        symbols
+    ):
+
+        return (
+            self
+            .call_graph_engine
+            .build(
+                ast,
                 symbols
             )
         )

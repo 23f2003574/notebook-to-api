@@ -64,3 +64,9 @@ from .data_flow_analysis_engine import (
     DataFlowGraph,
     DataFlowAnalysisEngine
 )
+
+from .call_graph_engine import (
+    FunctionNode,
+    CallGraph,
+    CallGraphAnalysisEngine
+)
