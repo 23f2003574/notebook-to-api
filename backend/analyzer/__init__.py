@@ -52,3 +52,9 @@ from .type_inference_engine import (
     InferredType,
     TypeInferenceEngine
 )
+
+from .control_flow_graph_engine import (
+    CFGNode,
+    ControlFlowGraph,
+    ControlFlowGraphEngine
+)

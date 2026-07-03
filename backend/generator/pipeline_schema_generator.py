@@ -12,6 +12,9 @@ from backend.analyzer.symbol_resolution_engine import (
 from backend.analyzer.type_inference_engine import (
     TypeInferenceEngine
 )
+from backend.analyzer.control_flow_graph_engine import (
+    ControlFlowGraphEngine
+)
 from .pipeline_metadata import (
     PipelineMetadata,
     PipelineFieldMetadata
@@ -1800,6 +1803,10 @@ class PipelineSchemaGenerator:
 
         self.type_inference_engine = (
             TypeInferenceEngine()
+        )
+
+        self.control_flow_graph_engine = (
+            ControlFlowGraphEngine()
         )
 
 
@@ -5816,5 +5823,18 @@ class PipelineSchemaGenerator:
             .infer(
                 ast,
                 symbols
+            )
+        )
+
+    def build_control_flow_graph(
+        self,
+        ast
+    ):
+
+        return (
+            self
+            .control_flow_graph_engine
+            .build(
+                ast
             )
         )
