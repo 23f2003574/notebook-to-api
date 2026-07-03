@@ -76,3 +76,9 @@ from .program_dependence_graph_engine import (
     ProgramDependenceGraph,
     ProgramDependenceGraphEngine
 )
+
+from .static_single_assignment_engine import (
+    SSAVariable,
+    SSAProgram,
+    StaticSingleAssignmentEngine
+)

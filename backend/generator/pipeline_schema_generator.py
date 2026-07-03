@@ -24,6 +24,9 @@ from backend.analyzer.call_graph_engine import (
 from backend.analyzer.program_dependence_graph_engine import (
     ProgramDependenceGraphEngine
 )
+from backend.analyzer.static_single_assignment_engine import (
+    StaticSingleAssignmentEngine
+)
 from .pipeline_metadata import (
     PipelineMetadata,
     PipelineFieldMetadata
@@ -1828,6 +1831,10 @@ class PipelineSchemaGenerator:
 
         self.program_dependence_graph_engine = (
             ProgramDependenceGraphEngine()
+        )
+
+        self.static_single_assignment_engine = (
+            StaticSingleAssignmentEngine()
         )
 
 
@@ -5904,5 +5911,20 @@ class PipelineSchemaGenerator:
             .build(
                 cfg,
                 data_flow
+            )
+        )
+
+    def build_ssa(
+        self,
+        cfg,
+        symbols
+    ):
+
+        return (
+            self
+            .static_single_assignment_engine
+            .build(
+                cfg,
+                symbols
             )
         )
