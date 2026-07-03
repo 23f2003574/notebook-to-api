@@ -70,3 +70,9 @@ from .call_graph_engine import (
     CallGraph,
     CallGraphAnalysisEngine
 )
+
+from .program_dependence_graph_engine import (
+    DependencyEdge,
+    ProgramDependenceGraph,
+    ProgramDependenceGraphEngine
+)

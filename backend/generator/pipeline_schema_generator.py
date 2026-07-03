@@ -21,6 +21,9 @@ from backend.analyzer.data_flow_analysis_engine import (
 from backend.analyzer.call_graph_engine import (
     CallGraphAnalysisEngine
 )
+from backend.analyzer.program_dependence_graph_engine import (
+    ProgramDependenceGraphEngine
+)
 from .pipeline_metadata import (
     PipelineMetadata,
     PipelineFieldMetadata
@@ -1821,6 +1824,10 @@ class PipelineSchemaGenerator:
 
         self.call_graph_engine = (
             CallGraphAnalysisEngine()
+        )
+
+        self.program_dependence_graph_engine = (
+            ProgramDependenceGraphEngine()
         )
 
 
@@ -5882,5 +5889,20 @@ class PipelineSchemaGenerator:
             .build(
                 ast,
                 symbols
+            )
+        )
+
+    def build_program_dependence_graph(
+        self,
+        cfg,
+        data_flow
+    ):
+
+        return (
+            self
+            .program_dependence_graph_engine
+            .build(
+                cfg,
+                data_flow
             )
         )
