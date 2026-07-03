@@ -3,6 +3,9 @@ from textwrap import dedent
 from backend.analyzer.pipeline_endpoint_spec import (
     PipelineEndpointSpec
 )
+from backend.analyzer.semantic_ast_engine import (
+    SemanticASTEngine
+)
 from .pipeline_metadata import (
     PipelineMetadata,
     PipelineFieldMetadata
@@ -1779,6 +1782,10 @@ class PipelineSchemaGenerator:
         )
         self.enterprise_governance_engine = (
             EnterpriseGovernanceEngine()
+        )
+
+        self.semantic_ast_engine = (
+            SemanticASTEngine()
         )
 
 
@@ -5755,4 +5762,17 @@ class PipelineSchemaGenerator:
             self
             .enterprise_intelligence_control_center
             .generate()
+        )
+
+    def build_semantic_ast(
+        self,
+        source: str
+    ):
+
+        return (
+            self
+            .semantic_ast_engine
+            .build_ast(
+                source
+            )
         )

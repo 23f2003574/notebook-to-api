@@ -37,3 +37,8 @@ from .notebook_understanding import (
     NotebookUnderstanding,
     NotebookUnderstandingEngine
 )
+
+from .semantic_ast_engine import (
+    ASTNode,
+    SemanticASTEngine
+)
