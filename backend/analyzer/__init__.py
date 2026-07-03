@@ -100,3 +100,9 @@ from .intermediate_representation_engine import (
     IntermediateRepresentation,
     IntermediateRepresentationEngine
 )
+
+from .incremental_compilation_engine import (
+    CompilationUnit,
+    IncrementalCompilationPlan,
+    IncrementalCompilationEngine
+)

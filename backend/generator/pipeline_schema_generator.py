@@ -36,6 +36,9 @@ from backend.analyzer.semantic_code_transformation_engine import (
 from backend.analyzer.intermediate_representation_engine import (
     IntermediateRepresentationEngine
 )
+from backend.analyzer.incremental_compilation_engine import (
+    IncrementalCompilationEngine
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -1863,6 +1866,10 @@ class PipelineSchemaGenerator:
 
         self.backend_code_generation_engine = (
             BackendCodeGenerationEngine()
+        )
+
+        self.incremental_compilation_engine = (
+            IncrementalCompilationEngine()
         )
 
 
@@ -6008,5 +6015,18 @@ class PipelineSchemaGenerator:
             .backend_code_generation_engine
             .generate(
                 ir
+            )
+        )
+
+    def plan_incremental_compilation(
+        self,
+        dependency_graph
+    ):
+
+        return (
+            self
+            .incremental_compilation_engine
+            .plan(
+                dependency_graph
             )
         )
