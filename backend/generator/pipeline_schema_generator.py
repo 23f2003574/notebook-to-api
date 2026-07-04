@@ -72,6 +72,9 @@ from backend.runtime import (
 from backend.runtime import (
     RuntimeResourceManager
 )
+from backend.runtime import (
+    RuntimeDistributedExecutionEngine
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -1947,6 +1950,10 @@ class PipelineSchemaGenerator:
 
         self.runtime_resource_manager = (
             RuntimeResourceManager()
+        )
+
+        self.runtime_distributed_execution_engine = (
+            RuntimeDistributedExecutionEngine()
         )
 
 
@@ -6238,4 +6245,14 @@ class PipelineSchemaGenerator:
             .allocate(
                 task_id
             )
+        )
+
+    def discover_runtime_cluster(
+        self
+    ):
+
+        return (
+            self
+            .runtime_distributed_execution_engine
+            .discover_cluster()
         )
