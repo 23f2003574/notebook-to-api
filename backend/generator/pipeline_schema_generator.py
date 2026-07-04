@@ -54,6 +54,9 @@ from backend.runtime import (
 from backend.runtime import (
     RuntimeStateManagementEngine
 )
+from backend.runtime import (
+    RuntimeEventBusEngine
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -1905,6 +1908,10 @@ class PipelineSchemaGenerator:
 
         self.runtime_state_management_engine = (
             RuntimeStateManagementEngine()
+        )
+
+        self.runtime_event_bus_engine = (
+            RuntimeEventBusEngine()
         )
 
 
@@ -6123,5 +6130,18 @@ class PipelineSchemaGenerator:
             .runtime_state_management_engine
             .initialize(
                 execution_id
+            )
+        )
+
+    def publish_runtime_event(
+        self,
+        event
+    ):
+
+        return (
+            self
+            .runtime_event_bus_engine
+            .publish(
+                event
             )
         )
