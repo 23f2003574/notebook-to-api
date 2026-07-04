@@ -48,6 +48,9 @@ from backend.runtime import (
 from backend.runtime import (
     RuntimeWorkerPoolEngine
 )
+from backend.runtime import (
+    RuntimeTaskExecutionEngine
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -1891,6 +1894,10 @@ class PipelineSchemaGenerator:
 
         self.runtime_worker_pool_engine = (
             RuntimeWorkerPoolEngine()
+        )
+
+        self.runtime_task_execution_engine = (
+            RuntimeTaskExecutionEngine()
         )
 
 
@@ -6082,4 +6089,19 @@ class PipelineSchemaGenerator:
             self
             .runtime_worker_pool_engine
             .create()
+        )
+
+    def execute_runtime_task(
+        self,
+        task,
+        worker
+    ):
+
+        return (
+            self
+            .runtime_task_execution_engine
+            .execute(
+                task,
+                worker
+            )
         )
