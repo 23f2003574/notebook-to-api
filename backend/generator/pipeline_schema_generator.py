@@ -69,6 +69,9 @@ from backend.runtime import (
 from backend.runtime import (
     RuntimeCheckpointEngine
 )
+from backend.runtime import (
+    RuntimeResourceManager
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -1940,6 +1943,10 @@ class PipelineSchemaGenerator:
 
         self.runtime_checkpoint_engine = (
             RuntimeCheckpointEngine()
+        )
+
+        self.runtime_resource_manager = (
+            RuntimeResourceManager()
         )
 
 
@@ -6217,5 +6224,18 @@ class PipelineSchemaGenerator:
                 execution_id,
                 task_id,
                 state_snapshot
+            )
+        )
+
+    def allocate_runtime_resources(
+        self,
+        task_id
+    ):
+
+        return (
+            self
+            .runtime_resource_manager
+            .allocate(
+                task_id
             )
         )

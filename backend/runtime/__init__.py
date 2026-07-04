@@ -89,3 +89,9 @@ from .runtime_checkpoint_engine import (
     RuntimeCheckpoint,
     RuntimeCheckpointEngine
 )
+
+from .runtime_resource_manager import (
+    RuntimeResources,
+    ResourceAllocation,
+    RuntimeResourceManager
+)
