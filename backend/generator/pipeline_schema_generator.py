@@ -75,6 +75,9 @@ from backend.runtime import (
 from backend.runtime import (
     RuntimeDistributedExecutionEngine
 )
+from backend.runtime import (
+    RuntimeOrchestrator
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -1954,6 +1957,10 @@ class PipelineSchemaGenerator:
 
         self.runtime_distributed_execution_engine = (
             RuntimeDistributedExecutionEngine()
+        )
+
+        self.runtime_orchestrator = (
+            RuntimeOrchestrator()
         )
 
 
@@ -6255,4 +6262,17 @@ class PipelineSchemaGenerator:
             self
             .runtime_distributed_execution_engine
             .discover_cluster()
+        )
+
+    def orchestrate_runtime_execution(
+        self,
+        execution_id: str
+    ):
+
+        return (
+            self
+            .runtime_orchestrator
+            .orchestrate(
+                execution_id
+            )
         )
