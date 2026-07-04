@@ -42,6 +42,9 @@ from backend.analyzer.incremental_compilation_engine import (
 from backend.runtime import (
     RuntimeExecutionEngine
 )
+from backend.runtime import (
+    RuntimeSchedulerEngine
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -1877,6 +1880,10 @@ class PipelineSchemaGenerator:
 
         self.runtime_execution_engine = (
             RuntimeExecutionEngine()
+        )
+
+        self.runtime_scheduler_engine = (
+            RuntimeSchedulerEngine()
         )
 
 
@@ -6045,4 +6052,17 @@ class PipelineSchemaGenerator:
             self
             .runtime_execution_engine
             .create_context()
+        )
+
+    def schedule_runtime(
+        self,
+        runtime_context
+    ):
+
+        return (
+            self
+            .runtime_scheduler_engine
+            .schedule(
+                runtime_context
+            )
         )
