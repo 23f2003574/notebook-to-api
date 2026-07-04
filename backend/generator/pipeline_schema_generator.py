@@ -51,6 +51,9 @@ from backend.runtime import (
 from backend.runtime import (
     RuntimeTaskExecutionEngine
 )
+from backend.runtime import (
+    RuntimeStateManagementEngine
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -1898,6 +1901,10 @@ class PipelineSchemaGenerator:
 
         self.runtime_task_execution_engine = (
             RuntimeTaskExecutionEngine()
+        )
+
+        self.runtime_state_management_engine = (
+            RuntimeStateManagementEngine()
         )
 
 
@@ -6103,5 +6110,18 @@ class PipelineSchemaGenerator:
             .execute(
                 task,
                 worker
+            )
+        )
+
+    def initialize_runtime_state(
+        self,
+        execution_id: str
+    ):
+
+        return (
+            self
+            .runtime_state_management_engine
+            .initialize(
+                execution_id
             )
         )
