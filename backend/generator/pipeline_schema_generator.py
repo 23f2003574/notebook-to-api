@@ -63,6 +63,9 @@ from backend.runtime import (
 from backend.runtime import (
     RuntimeServiceContainer
 )
+from backend.runtime import (
+    RuntimeMiddlewarePipeline
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -1926,6 +1929,10 @@ class PipelineSchemaGenerator:
 
         self.runtime_service_container = (
             RuntimeServiceContainer()
+        )
+
+        self.runtime_middleware_pipeline = (
+            RuntimeMiddlewarePipeline()
         )
 
 
@@ -6177,4 +6184,14 @@ class PipelineSchemaGenerator:
         return (
             self
             .runtime_service_container
+        )
+
+    def create_middleware_pipeline(
+        self
+    ):
+
+        return (
+            self
+            .runtime_middleware_pipeline
+            .create()
         )
