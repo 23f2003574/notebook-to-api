@@ -73,3 +73,8 @@ from .runtime_plugin_system import (
     PluginRegistry,
     RuntimePluginSystem
 )
+
+from .runtime_service_container import (
+    ServiceRegistration,
+    RuntimeServiceContainer
+)

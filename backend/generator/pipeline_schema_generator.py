@@ -60,6 +60,9 @@ from backend.runtime import (
 from backend.runtime import (
     RuntimePluginSystem
 )
+from backend.runtime import (
+    RuntimeServiceContainer
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -1919,6 +1922,10 @@ class PipelineSchemaGenerator:
 
         self.runtime_plugin_system = (
             RuntimePluginSystem()
+        )
+
+        self.runtime_service_container = (
+            RuntimeServiceContainer()
         )
 
 
@@ -6161,4 +6168,13 @@ class PipelineSchemaGenerator:
             self
             .runtime_plugin_system
             .create_registry()
+        )
+
+    def service_container(
+        self
+    ):
+
+        return (
+            self
+            .runtime_service_container
         )
