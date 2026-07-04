@@ -67,3 +67,9 @@ from .runtime_event_bus_engine import (
     RuntimeEvent,
     RuntimeEventBusEngine
 )
+
+from .runtime_plugin_system import (
+    RuntimePlugin,
+    PluginRegistry,
+    RuntimePluginSystem
+)

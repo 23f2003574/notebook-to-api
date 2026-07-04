@@ -57,6 +57,9 @@ from backend.runtime import (
 from backend.runtime import (
     RuntimeEventBusEngine
 )
+from backend.runtime import (
+    RuntimePluginSystem
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -1912,6 +1915,10 @@ class PipelineSchemaGenerator:
 
         self.runtime_event_bus_engine = (
             RuntimeEventBusEngine()
+        )
+
+        self.runtime_plugin_system = (
+            RuntimePluginSystem()
         )
 
 
@@ -6144,4 +6151,14 @@ class PipelineSchemaGenerator:
             .publish(
                 event
             )
+        )
+
+    def create_plugin_registry(
+        self
+    ):
+
+        return (
+            self
+            .runtime_plugin_system
+            .create_registry()
         )
