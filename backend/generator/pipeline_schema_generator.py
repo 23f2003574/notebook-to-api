@@ -39,6 +39,9 @@ from backend.analyzer.intermediate_representation_engine import (
 from backend.analyzer.incremental_compilation_engine import (
     IncrementalCompilationEngine
 )
+from backend.runtime import (
+    RuntimeExecutionEngine
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -1872,6 +1875,9 @@ class PipelineSchemaGenerator:
             IncrementalCompilationEngine()
         )
 
+        self.runtime_execution_engine = (
+            RuntimeExecutionEngine()
+        )
 
 
 
@@ -6029,4 +6035,14 @@ class PipelineSchemaGenerator:
             .plan(
                 dependency_graph
             )
+        )
+
+    def create_runtime_context(
+        self
+    ):
+
+        return (
+            self
+            .runtime_execution_engine
+            .create_context()
         )
