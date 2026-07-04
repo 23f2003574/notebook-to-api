@@ -45,6 +45,9 @@ from backend.runtime import (
 from backend.runtime import (
     RuntimeSchedulerEngine
 )
+from backend.runtime import (
+    RuntimeWorkerPoolEngine
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -1884,6 +1887,10 @@ class PipelineSchemaGenerator:
 
         self.runtime_scheduler_engine = (
             RuntimeSchedulerEngine()
+        )
+
+        self.runtime_worker_pool_engine = (
+            RuntimeWorkerPoolEngine()
         )
 
 
@@ -6065,4 +6072,14 @@ class PipelineSchemaGenerator:
             .schedule(
                 runtime_context
             )
+        )
+
+    def create_worker_pool(
+        self
+    ):
+
+        return (
+            self
+            .runtime_worker_pool_engine
+            .create()
         )

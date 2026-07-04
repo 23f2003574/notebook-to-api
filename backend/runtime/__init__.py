@@ -46,3 +46,9 @@ from .runtime_scheduler_engine import (
     RuntimeSchedule,
     RuntimeSchedulerEngine
 )
+
+from .runtime_worker_pool_engine import (
+    RuntimeWorker,
+    WorkerPool,
+    RuntimeWorkerPoolEngine
+)
