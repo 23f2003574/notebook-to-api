@@ -66,6 +66,9 @@ from backend.runtime import (
 from backend.runtime import (
     RuntimeMiddlewarePipeline
 )
+from backend.runtime import (
+    RuntimeCheckpointEngine
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -1933,6 +1936,10 @@ class PipelineSchemaGenerator:
 
         self.runtime_middleware_pipeline = (
             RuntimeMiddlewarePipeline()
+        )
+
+        self.runtime_checkpoint_engine = (
+            RuntimeCheckpointEngine()
         )
 
 
@@ -6194,4 +6201,21 @@ class PipelineSchemaGenerator:
             self
             .runtime_middleware_pipeline
             .create()
+        )
+
+    def create_runtime_checkpoint(
+        self,
+        execution_id,
+        task_id,
+        state_snapshot
+    ):
+
+        return (
+            self
+            .runtime_checkpoint_engine
+            .create(
+                execution_id,
+                task_id,
+                state_snapshot
+            )
         )
