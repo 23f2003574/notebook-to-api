@@ -36,3 +36,9 @@ from .workflow_registry_engine import (
     WorkflowRegistration,
     WorkflowRegistryEngine
 )
+
+from .workflow_lifecycle_management_engine import (
+    WorkflowLifecycle,
+    WorkflowLifecycleState,
+    WorkflowLifecycleManagementEngine
+)
