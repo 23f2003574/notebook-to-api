@@ -96,6 +96,9 @@ from backend.workflow import (
 from backend.workflow import (
     WorkflowVersioningEngine
 )
+from backend.workflow import (
+    WorkflowRegistryEngine
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -2003,6 +2006,10 @@ class PipelineSchemaGenerator:
 
         self.workflow_versioning_engine = (
             WorkflowVersioningEngine()
+        )
+
+        self.workflow_registry_engine = (
+            WorkflowRegistryEngine()
         )
 
 
@@ -6398,5 +6405,20 @@ class PipelineSchemaGenerator:
             .workflow_versioning_engine
             .create_version(
                 workflow_id
+            )
+        )
+
+    def register_workflow(
+        self,
+        workflow_id: str,
+        name: str
+    ):
+
+        return (
+            self
+            .workflow_registry_engine
+            .register(
+                workflow_id,
+                name
             )
         )

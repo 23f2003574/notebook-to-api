@@ -31,3 +31,8 @@ from .workflow_versioning_engine import (
     WorkflowVersion,
     WorkflowVersioningEngine
 )
+
+from .workflow_registry_engine import (
+    WorkflowRegistration,
+    WorkflowRegistryEngine
+)
