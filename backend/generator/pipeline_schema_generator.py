@@ -108,6 +108,9 @@ from backend.workflow import (
 from backend.workflow import (
     WorkflowValidationEngine
 )
+from backend.workflow import (
+    WorkflowCompiler
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -2031,6 +2034,10 @@ class PipelineSchemaGenerator:
 
         self.workflow_validation_engine = (
             WorkflowValidationEngine()
+        )
+
+        self.workflow_compiler = (
+            WorkflowCompiler()
         )
 
 
@@ -6480,5 +6487,20 @@ class PipelineSchemaGenerator:
             .workflow_validation_engine
             .validate(
                 workflow
+            )
+        )
+
+    def compile_workflow(
+        self,
+        workflow,
+        execution_plan
+    ):
+
+        return (
+            self
+            .workflow_compiler
+            .compile(
+                workflow,
+                execution_plan
             )
         )

@@ -53,3 +53,8 @@ from .workflow_validation_engine import (
     WorkflowValidationResult,
     WorkflowValidationEngine
 )
+
+from .workflow_compiler import (
+    CompiledWorkflow,
+    WorkflowCompiler
+)
