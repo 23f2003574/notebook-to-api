@@ -102,6 +102,9 @@ from backend.workflow import (
 from backend.workflow import (
     WorkflowLifecycleManagementEngine
 )
+from backend.workflow import (
+    WorkflowPolicyEngine
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -2017,6 +2020,10 @@ class PipelineSchemaGenerator:
 
         self.workflow_lifecycle_management_engine = (
             WorkflowLifecycleManagementEngine()
+        )
+
+        self.workflow_policy_engine = (
+            WorkflowPolicyEngine()
         )
 
 
@@ -6439,6 +6446,19 @@ class PipelineSchemaGenerator:
             self
             .workflow_lifecycle_management_engine
             .initialize(
+                workflow_id
+            )
+        )
+
+    def evaluate_workflow_policy(
+        self,
+        workflow_id: str
+    ):
+
+        return (
+            self
+            .workflow_policy_engine
+            .evaluate(
                 workflow_id
             )
         )

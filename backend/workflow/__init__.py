@@ -42,3 +42,8 @@ from .workflow_lifecycle_management_engine import (
     WorkflowLifecycleState,
     WorkflowLifecycleManagementEngine
 )
+
+from .workflow_policy_engine import (
+    WorkflowPolicy,
+    WorkflowPolicyEngine
+)
