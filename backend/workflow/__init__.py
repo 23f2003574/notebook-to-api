@@ -14,3 +14,9 @@ from .workflow_optimization_engine import (
     OptimizedWorkflow,
     WorkflowOptimizationEngine
 )
+
+from .workflow_execution_planner import (
+    ExecutionStage,
+    WorkflowExecutionPlan,
+    WorkflowExecutionPlanner
+)

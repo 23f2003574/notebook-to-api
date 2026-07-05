@@ -87,6 +87,9 @@ from backend.workflow import (
 from backend.workflow import (
     WorkflowOptimizationEngine
 )
+from backend.workflow import (
+    WorkflowExecutionPlanner
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -1982,6 +1985,10 @@ class PipelineSchemaGenerator:
 
         self.workflow_optimization_engine = (
             WorkflowOptimizationEngine()
+        )
+
+        self.workflow_execution_planner = (
+            WorkflowExecutionPlanner()
         )
 
 
@@ -6336,5 +6343,20 @@ class PipelineSchemaGenerator:
             .optimize(
                 workflow_graph,
                 dependency_analysis
+            )
+        )
+
+    def build_execution_plan(
+        self,
+        workflow,
+        optimized_workflow
+    ):
+
+        return (
+            self
+            .workflow_execution_planner
+            .build(
+                workflow,
+                optimized_workflow
             )
         )
