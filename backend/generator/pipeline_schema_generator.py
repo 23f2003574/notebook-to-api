@@ -93,6 +93,9 @@ from backend.workflow import (
 from backend.workflow import (
     WorkflowFailureRecoveryPlanner
 )
+from backend.workflow import (
+    WorkflowVersioningEngine
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -1996,6 +1999,10 @@ class PipelineSchemaGenerator:
 
         self.workflow_failure_recovery_planner = (
             WorkflowFailureRecoveryPlanner()
+        )
+
+        self.workflow_versioning_engine = (
+            WorkflowVersioningEngine()
         )
 
 
@@ -6378,5 +6385,18 @@ class PipelineSchemaGenerator:
             .workflow_failure_recovery_planner
             .build(
                 execution_plan
+            )
+        )
+
+    def create_workflow_version(
+        self,
+        workflow_id: str
+    ):
+
+        return (
+            self
+            .workflow_versioning_engine
+            .create_version(
+                workflow_id
             )
         )

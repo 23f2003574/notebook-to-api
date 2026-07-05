@@ -26,3 +26,8 @@ from .workflow_failure_recovery_planner import (
     WorkflowRecoveryPlan,
     WorkflowFailureRecoveryPlanner
 )
+
+from .workflow_versioning_engine import (
+    WorkflowVersion,
+    WorkflowVersioningEngine
+)
