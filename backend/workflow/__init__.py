@@ -58,3 +58,9 @@ from .workflow_compiler import (
     CompiledWorkflow,
     WorkflowCompiler
 )
+
+from .workflow_deployment_package_builder import (
+    WorkflowArtifact,
+    WorkflowDeploymentPackage,
+    WorkflowDeploymentPackageBuilder
+)
