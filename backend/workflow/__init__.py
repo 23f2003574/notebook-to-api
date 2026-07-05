@@ -64,3 +64,8 @@ from .workflow_deployment_package_builder import (
     WorkflowDeploymentPackage,
     WorkflowDeploymentPackageBuilder
 )
+
+from .workflow_deployment_manager import (
+    WorkflowDeployment,
+    WorkflowDeploymentManager
+)

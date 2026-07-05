@@ -114,6 +114,9 @@ from backend.workflow import (
 from backend.workflow import (
     WorkflowDeploymentPackageBuilder
 )
+from backend.workflow import (
+    WorkflowDeploymentManager
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -2045,6 +2048,10 @@ class PipelineSchemaGenerator:
 
         self.workflow_deployment_package_builder = (
             WorkflowDeploymentPackageBuilder()
+        )
+
+        self.workflow_deployment_manager = (
+            WorkflowDeploymentManager()
         )
 
 
@@ -6522,5 +6529,20 @@ class PipelineSchemaGenerator:
             .workflow_deployment_package_builder
             .build(
                 compiled_workflow
+            )
+        )
+
+    def deploy_workflow(
+        self,
+        deployment_package,
+        environment: str
+    ):
+
+        return (
+            self
+            .workflow_deployment_manager
+            .deploy(
+                deployment_package,
+                environment
             )
         )
