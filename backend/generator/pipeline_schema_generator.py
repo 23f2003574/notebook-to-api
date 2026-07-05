@@ -81,6 +81,9 @@ from backend.runtime import (
 from backend.workflow import (
     WorkflowGraphEngine
 )
+from backend.workflow import (
+    WorkflowDependencyAnalysisEngine
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -1968,6 +1971,10 @@ class PipelineSchemaGenerator:
 
         self.workflow_graph_engine = (
             WorkflowGraphEngine()
+        )
+
+        self.workflow_dependency_analysis_engine = (
+            WorkflowDependencyAnalysisEngine()
         )
 
 
@@ -6294,5 +6301,18 @@ class PipelineSchemaGenerator:
             .workflow_graph_engine
             .build(
                 ir
+            )
+        )
+
+    def analyze_workflow_dependencies(
+        self,
+        workflow_graph
+    ):
+
+        return (
+            self
+            .workflow_dependency_analysis_engine
+            .analyze(
+                workflow_graph
             )
         )
