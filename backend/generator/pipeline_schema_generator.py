@@ -78,6 +78,9 @@ from backend.runtime import (
 from backend.runtime import (
     RuntimeOrchestrator
 )
+from backend.workflow import (
+    WorkflowGraphEngine
+)
 from .backend_code_generation_engine import (
     BackendCodeGenerationEngine
 )
@@ -1961,6 +1964,10 @@ class PipelineSchemaGenerator:
 
         self.runtime_orchestrator = (
             RuntimeOrchestrator()
+        )
+
+        self.workflow_graph_engine = (
+            WorkflowGraphEngine()
         )
 
 
@@ -6274,5 +6281,18 @@ class PipelineSchemaGenerator:
             .runtime_orchestrator
             .orchestrate(
                 execution_id
+            )
+        )
+
+    def build_workflow_graph(
+        self,
+        ir
+    ):
+
+        return (
+            self
+            .workflow_graph_engine
+            .build(
+                ir
             )
         )
