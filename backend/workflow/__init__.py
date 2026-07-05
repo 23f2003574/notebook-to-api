@@ -20,3 +20,9 @@ from .workflow_execution_planner import (
     WorkflowExecutionPlan,
     WorkflowExecutionPlanner
 )
+
+from .workflow_failure_recovery_planner import (
+    RecoveryPolicy,
+    WorkflowRecoveryPlan,
+    WorkflowFailureRecoveryPlanner
+)
