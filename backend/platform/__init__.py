@@ -57,3 +57,8 @@ from .platform_extension_sdk import (
     PlatformExtension,
     PlatformExtensionSdk
 )
+
+from .platform_sdk_generator import (
+    GeneratedSdk,
+    PlatformSdkGenerator
+)
