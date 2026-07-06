@@ -14,3 +14,8 @@ from .platform_service_registry import (
     PlatformService,
     PlatformServiceRegistry
 )
+
+from .platform_capability_registry import (
+    PlatformCapability,
+    PlatformCapabilityRegistry
+)

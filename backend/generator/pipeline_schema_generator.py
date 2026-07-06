@@ -917,6 +917,9 @@ from backend.platform import (
 from backend.platform import (
     PlatformServiceRegistry
 )
+from backend.platform import (
+    PlatformCapabilityRegistry
+)
 
 
 
@@ -2073,6 +2076,10 @@ class PipelineSchemaGenerator:
 
         self.platform_service_registry = (
             PlatformServiceRegistry()
+        )
+
+        self.platform_capability_registry = (
+            PlatformCapabilityRegistry()
         )
 
 
@@ -6604,5 +6611,18 @@ class PipelineSchemaGenerator:
             .platform_service_registry
             .discover(
                 service_name
+            )
+        )
+
+    def discover_capability(
+        self,
+        capability: str
+    ):
+
+        return (
+            self
+            .platform_capability_registry
+            .lookup(
+                capability
             )
         )
