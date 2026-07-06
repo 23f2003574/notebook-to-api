@@ -914,6 +914,9 @@ from backend.platform import (
 from backend.platform import (
     PlatformCommandRouter
 )
+from backend.platform import (
+    PlatformServiceRegistry
+)
 
 
 
@@ -2066,6 +2069,10 @@ class PipelineSchemaGenerator:
 
         self.platform_command_router = (
             PlatformCommandRouter()
+        )
+
+        self.platform_service_registry = (
+            PlatformServiceRegistry()
         )
 
 
@@ -6584,5 +6591,18 @@ class PipelineSchemaGenerator:
             .platform_command_router
             .route(
                 command
+            )
+        )
+
+    def discover_platform_service(
+        self,
+        service_name: str
+    ):
+
+        return (
+            self
+            .platform_service_registry
+            .discover(
+                service_name
             )
         )

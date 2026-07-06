@@ -9,3 +9,8 @@ from .platform_command_router import (
     RouteResult,
     PlatformCommandRouter
 )
+
+from .platform_service_registry import (
+    PlatformService,
+    PlatformServiceRegistry
+)
