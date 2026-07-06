@@ -47,3 +47,8 @@ from .platform_observability_engine import (
     PlatformHealth,
     PlatformObservabilityEngine
 )
+
+from .platform_configuration_engine import (
+    PlatformConfiguration,
+    PlatformConfigurationEngine
+)

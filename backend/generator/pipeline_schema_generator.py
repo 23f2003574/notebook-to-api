@@ -935,6 +935,9 @@ from backend.platform import (
 from backend.platform import (
     PlatformObservabilityEngine
 )
+from backend.platform import (
+    PlatformConfigurationEngine
+)
 
 
 
@@ -2115,6 +2118,10 @@ class PipelineSchemaGenerator:
 
         self.platform_observability_engine = (
             PlatformObservabilityEngine()
+        )
+
+        self.platform_configuration_engine = (
+            PlatformConfigurationEngine()
         )
 
 
@@ -6729,4 +6736,14 @@ class PipelineSchemaGenerator:
             self
             .platform_observability_engine
             .collect()
+        )
+
+    def load_platform_configuration(
+        self
+    ):
+
+        return (
+            self
+            .platform_configuration_engine
+            .load()
         )
