@@ -920,6 +920,9 @@ from backend.platform import (
 from backend.platform import (
     PlatformCapabilityRegistry
 )
+from backend.platform import (
+    PlatformRequestPipeline
+)
 
 
 
@@ -2080,6 +2083,10 @@ class PipelineSchemaGenerator:
 
         self.platform_capability_registry = (
             PlatformCapabilityRegistry()
+        )
+
+        self.platform_request_pipeline = (
+            PlatformRequestPipeline()
         )
 
 
@@ -6625,4 +6632,14 @@ class PipelineSchemaGenerator:
             .lookup(
                 capability
             )
+        )
+
+    def create_platform_request_pipeline(
+        self
+    ):
+
+        return (
+            self
+            .platform_request_pipeline
+            .create()
         )

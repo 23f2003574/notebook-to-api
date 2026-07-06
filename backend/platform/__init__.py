@@ -19,3 +19,9 @@ from .platform_capability_registry import (
     PlatformCapability,
     PlatformCapabilityRegistry
 )
+
+from .platform_request_pipeline import (
+    RequestPipelineStage,
+    PlatformPipeline,
+    PlatformRequestPipeline
+)
