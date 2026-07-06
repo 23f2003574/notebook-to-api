@@ -908,6 +908,9 @@ from .autonomous_ai import (
 from .enterprise_readiness_assessment import (
     EnterpriseReadinessAssessmentEngine
 )
+from backend.platform import (
+    PlatformApiGateway
+)
 
 
 
@@ -2052,6 +2055,10 @@ class PipelineSchemaGenerator:
 
         self.workflow_deployment_manager = (
             WorkflowDeploymentManager()
+        )
+
+        self.platform_api_gateway = (
+            PlatformApiGateway()
         )
 
 
@@ -6544,5 +6551,18 @@ class PipelineSchemaGenerator:
             .deploy(
                 deployment_package,
                 environment
+            )
+        )
+
+    def handle_platform_request(
+        self,
+        request
+    ):
+
+        return (
+            self
+            .platform_api_gateway
+            .handle(
+                request
             )
         )
