@@ -36,3 +36,8 @@ from .platform_authorization_engine import (
     AuthorizationResult,
     PlatformAuthorizationEngine
 )
+
+from .platform_audit_engine import (
+    AuditRecord,
+    PlatformAuditEngine
+)

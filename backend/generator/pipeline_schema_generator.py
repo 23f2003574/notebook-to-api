@@ -929,6 +929,9 @@ from backend.platform import (
 from backend.platform import (
     PlatformAuthorizationEngine
 )
+from backend.platform import (
+    PlatformAuditEngine
+)
 
 
 
@@ -2101,6 +2104,10 @@ class PipelineSchemaGenerator:
 
         self.platform_authorization_engine = (
             PlatformAuthorizationEngine()
+        )
+
+        self.platform_audit_engine = (
+            PlatformAuditEngine()
         )
 
 
@@ -6685,5 +6692,24 @@ class PipelineSchemaGenerator:
                 identity,
                 action,
                 resource
+            )
+        )
+
+    def record_platform_audit(
+        self,
+        actor,
+        action,
+        resource,
+        successful
+    ):
+
+        return (
+            self
+            .platform_audit_engine
+            .record(
+                actor,
+                action,
+                resource,
+                successful
             )
         )
