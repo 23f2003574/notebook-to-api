@@ -926,6 +926,9 @@ from backend.platform import (
 from backend.platform import (
     PlatformAuthenticationEngine
 )
+from backend.platform import (
+    PlatformAuthorizationEngine
+)
 
 
 
@@ -2094,6 +2097,10 @@ class PipelineSchemaGenerator:
 
         self.platform_authentication_engine = (
             PlatformAuthenticationEngine()
+        )
+
+        self.platform_authorization_engine = (
+            PlatformAuthorizationEngine()
         )
 
 
@@ -6661,5 +6668,22 @@ class PipelineSchemaGenerator:
             .platform_authentication_engine
             .authenticate(
                 credentials
+            )
+        )
+
+    def authorize_platform_request(
+        self,
+        identity,
+        action,
+        resource
+    ):
+
+        return (
+            self
+            .platform_authorization_engine
+            .authorize(
+                identity,
+                action,
+                resource
             )
         )

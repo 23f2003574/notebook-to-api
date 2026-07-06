@@ -30,3 +30,9 @@ from .platform_authentication_engine import (
     PlatformIdentity,
     PlatformAuthenticationEngine
 )
+
+from .platform_authorization_engine import (
+    PlatformPermission,
+    AuthorizationResult,
+    PlatformAuthorizationEngine
+)
