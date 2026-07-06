@@ -932,6 +932,9 @@ from backend.platform import (
 from backend.platform import (
     PlatformAuditEngine
 )
+from backend.platform import (
+    PlatformObservabilityEngine
+)
 
 
 
@@ -2108,6 +2111,10 @@ class PipelineSchemaGenerator:
 
         self.platform_audit_engine = (
             PlatformAuditEngine()
+        )
+
+        self.platform_observability_engine = (
+            PlatformObservabilityEngine()
         )
 
 
@@ -6712,4 +6719,14 @@ class PipelineSchemaGenerator:
                 resource,
                 successful
             )
+        )
+
+    def collect_platform_health(
+        self
+    ):
+
+        return (
+            self
+            .platform_observability_engine
+            .collect()
         )

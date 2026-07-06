@@ -41,3 +41,9 @@ from .platform_audit_engine import (
     AuditRecord,
     PlatformAuditEngine
 )
+
+from .platform_observability_engine import (
+    PlatformMetric,
+    PlatformHealth,
+    PlatformObservabilityEngine
+)
