@@ -923,6 +923,9 @@ from backend.platform import (
 from backend.platform import (
     PlatformRequestPipeline
 )
+from backend.platform import (
+    PlatformAuthenticationEngine
+)
 
 
 
@@ -2087,6 +2090,10 @@ class PipelineSchemaGenerator:
 
         self.platform_request_pipeline = (
             PlatformRequestPipeline()
+        )
+
+        self.platform_authentication_engine = (
+            PlatformAuthenticationEngine()
         )
 
 
@@ -6642,4 +6649,17 @@ class PipelineSchemaGenerator:
             self
             .platform_request_pipeline
             .create()
+        )
+
+    def authenticate_platform_request(
+        self,
+        credentials
+    ):
+
+        return (
+            self
+            .platform_authentication_engine
+            .authenticate(
+                credentials
+            )
         )

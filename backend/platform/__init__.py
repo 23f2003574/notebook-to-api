@@ -25,3 +25,8 @@ from .platform_request_pipeline import (
     PlatformPipeline,
     PlatformRequestPipeline
 )
+
+from .platform_authentication_engine import (
+    PlatformIdentity,
+    PlatformAuthenticationEngine
+)
