@@ -52,3 +52,8 @@ from .platform_configuration_engine import (
     PlatformConfiguration,
     PlatformConfigurationEngine
 )
+
+from .platform_extension_sdk import (
+    PlatformExtension,
+    PlatformExtensionSdk
+)

@@ -938,6 +938,9 @@ from backend.platform import (
 from backend.platform import (
     PlatformConfigurationEngine
 )
+from backend.platform import (
+    PlatformExtensionSdk
+)
 
 
 
@@ -2122,6 +2125,10 @@ class PipelineSchemaGenerator:
 
         self.platform_configuration_engine = (
             PlatformConfigurationEngine()
+        )
+
+        self.platform_extension_sdk = (
+            PlatformExtensionSdk()
         )
 
 
@@ -6746,4 +6753,17 @@ class PipelineSchemaGenerator:
             self
             .platform_configuration_engine
             .load()
+        )
+
+    def register_platform_extension(
+        self,
+        extension
+    ):
+
+        return (
+            self
+            .platform_extension_sdk
+            .register_extension(
+                extension
+            )
         )
