@@ -911,6 +911,9 @@ from .enterprise_readiness_assessment import (
 from backend.platform import (
     PlatformApiGateway
 )
+from backend.platform import (
+    PlatformCommandRouter
+)
 
 
 
@@ -2059,6 +2062,10 @@ class PipelineSchemaGenerator:
 
         self.platform_api_gateway = (
             PlatformApiGateway()
+        )
+
+        self.platform_command_router = (
+            PlatformCommandRouter()
         )
 
 
@@ -6564,5 +6571,18 @@ class PipelineSchemaGenerator:
             .platform_api_gateway
             .handle(
                 request
+            )
+        )
+
+    def route_platform_command(
+        self,
+        command
+    ):
+
+        return (
+            self
+            .platform_command_router
+            .route(
+                command
             )
         )
