@@ -944,6 +944,9 @@ from backend.platform import (
 from backend.platform import (
     PlatformSdkGenerator
 )
+from backend.platform import (
+    PlatformControlPlane
+)
 
 
 
@@ -2136,6 +2139,10 @@ class PipelineSchemaGenerator:
 
         self.platform_sdk_generator = (
             PlatformSdkGenerator()
+        )
+
+        self.platform_control_plane = (
+            PlatformControlPlane()
         )
 
 
@@ -6786,4 +6793,14 @@ class PipelineSchemaGenerator:
             .generate(
                 language
             )
+        )
+
+    def initialize_platform(
+        self
+    ):
+
+        return (
+            self
+            .platform_control_plane
+            .initialize()
         )

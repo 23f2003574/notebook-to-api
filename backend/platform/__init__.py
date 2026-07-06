@@ -62,3 +62,8 @@ from .platform_sdk_generator import (
     GeneratedSdk,
     PlatformSdkGenerator
 )
+
+from .platform_control_plane import (
+    PlatformStatus,
+    PlatformControlPlane
+)
