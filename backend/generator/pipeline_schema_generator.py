@@ -983,6 +983,9 @@ from backend.project import (
 from backend.project import (
     ProjectDocumentationEngine
 )
+from backend.project import (
+    ProjectLifecycleOrchestrator
+)
 
 
 
@@ -2227,6 +2230,10 @@ class PipelineSchemaGenerator:
 
         self.project_documentation_engine = (
             ProjectDocumentationEngine()
+        )
+
+        self.project_lifecycle_orchestrator = (
+            ProjectLifecycleOrchestrator()
         )
 
 
@@ -7039,6 +7046,19 @@ class PipelineSchemaGenerator:
             self
             .project_documentation_engine
             .generate(
+                project_id
+            )
+        )
+
+    def initialize_project_lifecycle(
+        self,
+        project_id: str
+    ):
+
+        return (
+            self
+            .project_lifecycle_orchestrator
+            .initialize(
                 project_id
             )
         )

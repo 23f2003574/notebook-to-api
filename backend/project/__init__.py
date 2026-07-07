@@ -53,3 +53,7 @@ from .project_documentation_engine import (
     DocumentationBundle,
     ProjectDocumentationEngine
 )
+from .project_lifecycle_orchestrator import (
+    ProjectLifecycle,
+    ProjectLifecycleOrchestrator
+)
