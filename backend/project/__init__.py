@@ -38,3 +38,8 @@ from .project_testing_orchestrator import (
     TestExecution,
     ProjectTestingOrchestrator
 )
+from .project_quality_gate_engine import (
+    QualityCriterion,
+    QualityGateResult,
+    ProjectQualityGateEngine
+)

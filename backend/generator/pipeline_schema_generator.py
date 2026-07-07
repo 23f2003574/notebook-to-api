@@ -974,6 +974,9 @@ from backend.project import (
 from backend.project import (
     ProjectTestingOrchestrator
 )
+from backend.project import (
+    ProjectQualityGateEngine
+)
 
 
 
@@ -2206,6 +2209,10 @@ class PipelineSchemaGenerator:
 
         self.project_testing_orchestrator = (
             ProjectTestingOrchestrator()
+        )
+
+        self.project_quality_gate_engine = (
+            ProjectQualityGateEngine()
         )
 
 
@@ -6980,5 +6987,18 @@ class PipelineSchemaGenerator:
             .project_testing_orchestrator
             .execute(
                 suite
+            )
+        )
+
+    def evaluate_project_quality(
+        self,
+        test_execution
+    ):
+
+        return (
+            self
+            .project_quality_gate_engine
+            .evaluate(
+                test_execution
             )
         )
