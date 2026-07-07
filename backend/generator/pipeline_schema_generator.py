@@ -968,6 +968,9 @@ from backend.project import (
 from backend.project import (
     ProjectReleaseManagementEngine
 )
+from backend.project import (
+    ProjectCICDPipelineEngine
+)
 
 
 
@@ -2192,6 +2195,10 @@ class PipelineSchemaGenerator:
 
         self.project_release_management_engine = (
             ProjectReleaseManagementEngine()
+        )
+
+        self.project_cicd_pipeline_engine = (
+            ProjectCICDPipelineEngine()
         )
 
 
@@ -6940,5 +6947,18 @@ class PipelineSchemaGenerator:
             .create(
                 version,
                 artifacts
+            )
+        )
+
+    def create_project_pipeline(
+        self,
+        project_id: str
+    ):
+
+        return (
+            self
+            .project_cicd_pipeline_engine
+            .create(
+                project_id
             )
         )
