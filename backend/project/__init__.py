@@ -24,3 +24,7 @@ from .project_artifact_registry import (
     ProjectArtifact,
     ProjectArtifactRegistry
 )
+from .project_release_management_engine import (
+    ProjectRelease,
+    ProjectReleaseManagementEngine
+)

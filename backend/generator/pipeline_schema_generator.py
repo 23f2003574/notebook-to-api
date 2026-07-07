@@ -965,6 +965,9 @@ from backend.project import (
 from backend.project import (
     ProjectArtifactRegistry
 )
+from backend.project import (
+    ProjectReleaseManagementEngine
+)
 
 
 
@@ -2185,6 +2188,10 @@ class PipelineSchemaGenerator:
 
         self.project_artifact_registry = (
             ProjectArtifactRegistry()
+        )
+
+        self.project_release_management_engine = (
+            ProjectReleaseManagementEngine()
         )
 
 
@@ -6918,5 +6925,20 @@ class PipelineSchemaGenerator:
             .project_artifact_registry
             .register(
                 artifact
+            )
+        )
+
+    def create_project_release(
+        self,
+        version: str,
+        artifacts: list[str]
+    ):
+
+        return (
+            self
+            .project_release_management_engine
+            .create(
+                version,
+                artifacts
             )
         )
