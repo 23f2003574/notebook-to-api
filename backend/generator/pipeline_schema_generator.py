@@ -953,6 +953,9 @@ from backend.project import (
 from backend.project import (
     ProjectEnvironmentManager
 )
+from backend.project import (
+    ProjectDependencyManagementEngine
+)
 
 
 
@@ -2157,6 +2160,10 @@ class PipelineSchemaGenerator:
 
         self.project_environment_manager = (
             ProjectEnvironmentManager()
+        )
+
+        self.project_dependency_management_engine = (
+            ProjectDependencyManagementEngine()
         )
 
 
@@ -6842,4 +6849,14 @@ class PipelineSchemaGenerator:
             .create(
                 name
             )
+        )
+
+    def create_dependency_manifest(
+        self
+    ):
+
+        return (
+            self
+            .project_dependency_management_engine
+            .create_manifest()
         )

@@ -6,3 +6,8 @@ from .project_environment_manager import (
     ProjectEnvironment,
     ProjectEnvironmentManager
 )
+from .project_dependency_management_engine import (
+    ProjectDependency,
+    DependencyManifest,
+    ProjectDependencyManagementEngine
+)
