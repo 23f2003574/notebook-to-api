@@ -48,3 +48,8 @@ from .project_security_compliance_engine import (
     SecurityReport,
     ProjectSecurityComplianceEngine
 )
+from .project_documentation_engine import (
+    DocumentationArtifact,
+    DocumentationBundle,
+    ProjectDocumentationEngine
+)

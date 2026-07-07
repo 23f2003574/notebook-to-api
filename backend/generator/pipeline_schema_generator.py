@@ -980,6 +980,9 @@ from backend.project import (
 from backend.project import (
     ProjectSecurityComplianceEngine
 )
+from backend.project import (
+    ProjectDocumentationEngine
+)
 
 
 
@@ -2220,6 +2223,10 @@ class PipelineSchemaGenerator:
 
         self.project_security_compliance_engine = (
             ProjectSecurityComplianceEngine()
+        )
+
+        self.project_documentation_engine = (
+            ProjectDocumentationEngine()
         )
 
 
@@ -7019,6 +7026,19 @@ class PipelineSchemaGenerator:
             self
             .project_security_compliance_engine
             .analyze(
+                project_id
+            )
+        )
+
+    def generate_project_documentation(
+        self,
+        project_id: str
+    ):
+
+        return (
+            self
+            .project_documentation_engine
+            .generate(
                 project_id
             )
         )
