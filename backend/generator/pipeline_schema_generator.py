@@ -947,6 +947,9 @@ from backend.platform import (
 from backend.platform import (
     PlatformControlPlane
 )
+from backend.project import (
+    ProjectWorkspaceEngine
+)
 
 
 
@@ -2145,6 +2148,9 @@ class PipelineSchemaGenerator:
             PlatformControlPlane()
         )
 
+        self.project_workspace_engine = (
+            ProjectWorkspaceEngine()
+        )
 
 
 
@@ -6803,4 +6809,17 @@ class PipelineSchemaGenerator:
             self
             .platform_control_plane
             .initialize()
+        )
+
+    def create_project_workspace(
+        self,
+        name: str
+    ):
+
+        return (
+            self
+            .project_workspace_engine
+            .create(
+                name
+            )
         )
