@@ -977,6 +977,9 @@ from backend.project import (
 from backend.project import (
     ProjectQualityGateEngine
 )
+from backend.project import (
+    ProjectSecurityComplianceEngine
+)
 
 
 
@@ -2213,6 +2216,10 @@ class PipelineSchemaGenerator:
 
         self.project_quality_gate_engine = (
             ProjectQualityGateEngine()
+        )
+
+        self.project_security_compliance_engine = (
+            ProjectSecurityComplianceEngine()
         )
 
 
@@ -7000,5 +7007,18 @@ class PipelineSchemaGenerator:
             .project_quality_gate_engine
             .evaluate(
                 test_execution
+            )
+        )
+
+    def analyze_project_security(
+        self,
+        project_id: str
+    ):
+
+        return (
+            self
+            .project_security_compliance_engine
+            .analyze(
+                project_id
             )
         )

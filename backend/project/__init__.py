@@ -43,3 +43,8 @@ from .project_quality_gate_engine import (
     QualityGateResult,
     ProjectQualityGateEngine
 )
+from .project_security_compliance_engine import (
+    SecurityFinding,
+    SecurityReport,
+    ProjectSecurityComplianceEngine
+)
