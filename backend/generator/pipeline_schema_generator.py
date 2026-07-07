@@ -950,6 +950,9 @@ from backend.platform import (
 from backend.project import (
     ProjectWorkspaceEngine
 )
+from backend.project import (
+    ProjectEnvironmentManager
+)
 
 
 
@@ -2150,6 +2153,10 @@ class PipelineSchemaGenerator:
 
         self.project_workspace_engine = (
             ProjectWorkspaceEngine()
+        )
+
+        self.project_environment_manager = (
+            ProjectEnvironmentManager()
         )
 
 
@@ -6819,6 +6826,19 @@ class PipelineSchemaGenerator:
         return (
             self
             .project_workspace_engine
+            .create(
+                name
+            )
+        )
+
+    def create_project_environment(
+        self,
+        name: str
+    ):
+
+        return (
+            self
+            .project_environment_manager
             .create(
                 name
             )
