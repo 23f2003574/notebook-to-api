@@ -956,6 +956,9 @@ from backend.project import (
 from backend.project import (
     ProjectDependencyManagementEngine
 )
+from backend.project import (
+    ProjectTemplateEngine
+)
 
 
 
@@ -2164,6 +2167,10 @@ class PipelineSchemaGenerator:
 
         self.project_dependency_management_engine = (
             ProjectDependencyManagementEngine()
+        )
+
+        self.project_template_engine = (
+            ProjectTemplateEngine()
         )
 
 
@@ -6859,4 +6866,17 @@ class PipelineSchemaGenerator:
             self
             .project_dependency_management_engine
             .create_manifest()
+        )
+
+    def load_project_template(
+        self,
+        template_name: str
+    ):
+
+        return (
+            self
+            .project_template_engine
+            .load(
+                template_name
+            )
         )

@@ -11,3 +11,7 @@ from .project_dependency_management_engine import (
     DependencyManifest,
     ProjectDependencyManagementEngine
 )
+from .project_template_engine import (
+    ProjectTemplate,
+    ProjectTemplateEngine
+)
