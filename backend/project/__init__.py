@@ -20,3 +20,7 @@ from .project_build_system import (
     ProjectBuild,
     ProjectBuildSystem
 )
+from .project_artifact_registry import (
+    ProjectArtifact,
+    ProjectArtifactRegistry
+)

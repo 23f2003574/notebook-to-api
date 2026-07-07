@@ -962,6 +962,9 @@ from backend.project import (
 from backend.project import (
     ProjectBuildSystem
 )
+from backend.project import (
+    ProjectArtifactRegistry
+)
 
 
 
@@ -2178,6 +2181,10 @@ class PipelineSchemaGenerator:
 
         self.project_build_system = (
             ProjectBuildSystem()
+        )
+
+        self.project_artifact_registry = (
+            ProjectArtifactRegistry()
         )
 
 
@@ -6898,5 +6905,18 @@ class PipelineSchemaGenerator:
             .project_build_system
             .build(
                 project_id
+            )
+        )
+
+    def register_project_artifact(
+        self,
+        artifact
+    ):
+
+        return (
+            self
+            .project_artifact_registry
+            .register(
+                artifact
             )
         )
