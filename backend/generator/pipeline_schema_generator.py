@@ -971,6 +971,9 @@ from backend.project import (
 from backend.project import (
     ProjectCICDPipelineEngine
 )
+from backend.project import (
+    ProjectTestingOrchestrator
+)
 
 
 
@@ -2199,6 +2202,10 @@ class PipelineSchemaGenerator:
 
         self.project_cicd_pipeline_engine = (
             ProjectCICDPipelineEngine()
+        )
+
+        self.project_testing_orchestrator = (
+            ProjectTestingOrchestrator()
         )
 
 
@@ -6960,5 +6967,18 @@ class PipelineSchemaGenerator:
             .project_cicd_pipeline_engine
             .create(
                 project_id
+            )
+        )
+
+    def execute_project_tests(
+        self,
+        suite
+    ):
+
+        return (
+            self
+            .project_testing_orchestrator
+            .execute(
+                suite
             )
         )

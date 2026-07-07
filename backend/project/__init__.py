@@ -33,3 +33,8 @@ from .project_cicd_pipeline_engine import (
     ProjectPipeline,
     ProjectCICDPipelineEngine
 )
+from .project_testing_orchestrator import (
+    TestSuite,
+    TestExecution,
+    ProjectTestingOrchestrator
+)
