@@ -959,6 +959,9 @@ from backend.project import (
 from backend.project import (
     ProjectTemplateEngine
 )
+from backend.project import (
+    ProjectBuildSystem
+)
 
 
 
@@ -2171,6 +2174,10 @@ class PipelineSchemaGenerator:
 
         self.project_template_engine = (
             ProjectTemplateEngine()
+        )
+
+        self.project_build_system = (
+            ProjectBuildSystem()
         )
 
 
@@ -6878,5 +6885,18 @@ class PipelineSchemaGenerator:
             .project_template_engine
             .load(
                 template_name
+            )
+        )
+
+    def build_project(
+        self,
+        project_id: str
+    ):
+
+        return (
+            self
+            .project_build_system
+            .build(
+                project_id
             )
         )
