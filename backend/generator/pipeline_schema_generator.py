@@ -998,6 +998,9 @@ from backend.ai import (
 from backend.ai import (
     PromptExperimentationEngine
 )
+from backend.ai import (
+    AiEvaluationEngine
+)
 
 
 
@@ -2262,6 +2265,10 @@ class PipelineSchemaGenerator:
 
         self.prompt_experimentation_engine = (
             PromptExperimentationEngine()
+        )
+
+        self.ai_evaluation_engine = (
+            AiEvaluationEngine()
         )
 
 
@@ -7150,5 +7157,18 @@ class PipelineSchemaGenerator:
                 prompt_id,
                 baseline_version,
                 candidate_version
+            )
+        )
+
+    def evaluate_ai_experiment(
+        self,
+        experiment_id: str
+    ):
+
+        return (
+            self
+            .ai_evaluation_engine
+            .evaluate(
+                experiment_id
             )
         )

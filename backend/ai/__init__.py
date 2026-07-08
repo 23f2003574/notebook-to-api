@@ -16,3 +16,8 @@ from .prompt_experimentation_engine import (
     ExperimentResult,
     PromptExperimentationEngine
 )
+from .ai_evaluation_engine import (
+    EvaluationMetric,
+    EvaluationReport,
+    AiEvaluationEngine
+)
