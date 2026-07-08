@@ -1004,6 +1004,9 @@ from backend.ai import (
 from backend.ai import (
     AiDatasetManagementEngine
 )
+from backend.ai import (
+    AiExperimentTrackingEngine
+)
 
 
 
@@ -2276,6 +2279,10 @@ class PipelineSchemaGenerator:
 
         self.ai_dataset_management_engine = (
             AiDatasetManagementEngine()
+        )
+
+        self.ai_experiment_tracking_engine = (
+            AiExperimentTrackingEngine()
         )
 
 
@@ -7192,5 +7199,26 @@ class PipelineSchemaGenerator:
             .register(
                 name,
                 sample_count
+            )
+        )
+
+    def track_ai_experiment(
+        self,
+        experiment_id: str,
+        prompt_version: str,
+        model_id: str,
+        dataset_id: str,
+        evaluation_id: str
+    ):
+
+        return (
+            self
+            .ai_experiment_tracking_engine
+            .track(
+                experiment_id,
+                prompt_version,
+                model_id,
+                dataset_id,
+                evaluation_id
             )
         )
