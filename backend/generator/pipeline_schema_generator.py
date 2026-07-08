@@ -992,6 +992,9 @@ from backend.ai import (
 from backend.ai import (
     ModelRegistryEngine
 )
+from backend.ai import (
+    PromptVersionControlEngine
+)
 
 
 
@@ -2248,6 +2251,10 @@ class PipelineSchemaGenerator:
 
         self.model_registry_engine = (
             ModelRegistryEngine()
+        )
+
+        self.prompt_version_control_engine = (
+            PromptVersionControlEngine()
         )
 
 
@@ -7106,5 +7113,18 @@ class PipelineSchemaGenerator:
                 provider,
                 name,
                 version
+            )
+        )
+
+    def create_prompt_history(
+        self,
+        prompt_id: str
+    ):
+
+        return (
+            self
+            .prompt_version_control_engine
+            .create_history(
+                prompt_id
             )
         )
