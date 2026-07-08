@@ -1010,6 +1010,9 @@ from backend.ai import (
 from backend.ai import (
     AiBenchmarkingEngine
 )
+from backend.ai import (
+    AiGuardrailsEngine
+)
 
 
 
@@ -2290,6 +2293,10 @@ class PipelineSchemaGenerator:
 
         self.ai_benchmarking_engine = (
             AiBenchmarkingEngine()
+        )
+
+        self.ai_guardrails_engine = (
+            AiGuardrailsEngine()
         )
 
 
@@ -7240,5 +7247,18 @@ class PipelineSchemaGenerator:
             .ai_benchmarking_engine
             .benchmark(
                 dataset_id
+            )
+        )
+
+    def evaluate_ai_guardrails(
+        self,
+        prompt: str
+    ):
+
+        return (
+            self
+            .ai_guardrails_engine
+            .evaluate(
+                prompt
             )
         )
