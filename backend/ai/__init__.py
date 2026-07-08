@@ -53,3 +53,7 @@ from .ai_memory_management_engine import (
     MemoryStore,
     AiMemoryManagementEngine
 )
+from .ai_application_lifecycle_orchestrator import (
+    AiApplicationLifecycle,
+    AiApplicationLifecycleOrchestrator
+)

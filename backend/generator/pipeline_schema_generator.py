@@ -1022,6 +1022,9 @@ from backend.ai import (
 from backend.ai import (
     AiMemoryManagementEngine
 )
+from backend.ai import (
+    AiApplicationLifecycleOrchestrator
+)
 
 
 
@@ -2318,6 +2321,10 @@ class PipelineSchemaGenerator:
 
         self.ai_memory_management_engine = (
             AiMemoryManagementEngine()
+        )
+
+        self.ai_application_lifecycle_orchestrator = (
+            AiApplicationLifecycleOrchestrator()
         )
 
 
@@ -7324,5 +7331,18 @@ class PipelineSchemaGenerator:
             .ai_memory_management_engine
             .create_store(
                 namespace
+            )
+        )
+
+    def initialize_ai_application(
+        self,
+        application_id: str
+    ):
+
+        return (
+            self
+            .ai_application_lifecycle_orchestrator
+            .initialize(
+                application_id
             )
         )
