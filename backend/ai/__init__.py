@@ -11,3 +11,8 @@ from .prompt_version_control_engine import (
     PromptHistory,
     PromptVersionControlEngine
 )
+from .prompt_experimentation_engine import (
+    PromptExperiment,
+    ExperimentResult,
+    PromptExperimentationEngine
+)

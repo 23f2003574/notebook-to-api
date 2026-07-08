@@ -995,6 +995,9 @@ from backend.ai import (
 from backend.ai import (
     PromptVersionControlEngine
 )
+from backend.ai import (
+    PromptExperimentationEngine
+)
 
 
 
@@ -2255,6 +2258,10 @@ class PipelineSchemaGenerator:
 
         self.prompt_version_control_engine = (
             PromptVersionControlEngine()
+        )
+
+        self.prompt_experimentation_engine = (
+            PromptExperimentationEngine()
         )
 
 
@@ -7126,5 +7133,22 @@ class PipelineSchemaGenerator:
             .prompt_version_control_engine
             .create_history(
                 prompt_id
+            )
+        )
+
+    def create_prompt_experiment(
+        self,
+        prompt_id: str,
+        baseline_version: str,
+        candidate_version: str
+    ):
+
+        return (
+            self
+            .prompt_experimentation_engine
+            .create(
+                prompt_id,
+                baseline_version,
+                candidate_version
             )
         )
