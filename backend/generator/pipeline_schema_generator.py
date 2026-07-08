@@ -1013,6 +1013,9 @@ from backend.ai import (
 from backend.ai import (
     AiGuardrailsEngine
 )
+from backend.ai import (
+    AiAgentRegistryEngine
+)
 
 
 
@@ -2297,6 +2300,10 @@ class PipelineSchemaGenerator:
 
         self.ai_guardrails_engine = (
             AiGuardrailsEngine()
+        )
+
+        self.ai_agent_registry_engine = (
+            AiAgentRegistryEngine()
         )
 
 
@@ -7260,5 +7267,22 @@ class PipelineSchemaGenerator:
             .ai_guardrails_engine
             .evaluate(
                 prompt
+            )
+        )
+
+    def register_ai_agent(
+        self,
+        name: str,
+        model_id: str,
+        prompt_id: str
+    ):
+
+        return (
+            self
+            .ai_agent_registry_engine
+            .register(
+                name,
+                model_id,
+                prompt_id
             )
         )

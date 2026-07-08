@@ -39,3 +39,7 @@ from .ai_guardrails_engine import (
     GuardrailDecision,
     AiGuardrailsEngine
 )
+from .ai_agent_registry_engine import (
+    RegisteredAgent,
+    AiAgentRegistryEngine
+)
