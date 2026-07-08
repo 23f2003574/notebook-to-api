@@ -1007,6 +1007,9 @@ from backend.ai import (
 from backend.ai import (
     AiExperimentTrackingEngine
 )
+from backend.ai import (
+    AiBenchmarkingEngine
+)
 
 
 
@@ -2283,6 +2286,10 @@ class PipelineSchemaGenerator:
 
         self.ai_experiment_tracking_engine = (
             AiExperimentTrackingEngine()
+        )
+
+        self.ai_benchmarking_engine = (
+            AiBenchmarkingEngine()
         )
 
 
@@ -7220,5 +7227,18 @@ class PipelineSchemaGenerator:
                 model_id,
                 dataset_id,
                 evaluation_id
+            )
+        )
+
+    def benchmark_ai_models(
+        self,
+        dataset_id: str
+    ):
+
+        return (
+            self
+            .ai_benchmarking_engine
+            .benchmark(
+                dataset_id
             )
         )

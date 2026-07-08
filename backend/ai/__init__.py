@@ -29,3 +29,8 @@ from .ai_experiment_tracking_engine import (
     AiExperimentRun,
     AiExperimentTrackingEngine
 )
+from .ai_benchmarking_engine import (
+    BenchmarkEntry,
+    BenchmarkReport,
+    AiBenchmarkingEngine
+)
