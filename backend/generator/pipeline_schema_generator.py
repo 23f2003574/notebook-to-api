@@ -1016,6 +1016,9 @@ from backend.ai import (
 from backend.ai import (
     AiAgentRegistryEngine
 )
+from backend.ai import (
+    AiAgentOrchestrationEngine
+)
 
 
 
@@ -2304,6 +2307,10 @@ class PipelineSchemaGenerator:
 
         self.ai_agent_registry_engine = (
             AiAgentRegistryEngine()
+        )
+
+        self.ai_agent_orchestration_engine = (
+            AiAgentOrchestrationEngine()
         )
 
 
@@ -7284,5 +7291,18 @@ class PipelineSchemaGenerator:
                 name,
                 model_id,
                 prompt_id
+            )
+        )
+
+    def orchestrate_ai_agents(
+        self,
+        objective: str
+    ):
+
+        return (
+            self
+            .ai_agent_orchestration_engine
+            .orchestrate(
+                objective
             )
         )

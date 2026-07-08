@@ -43,3 +43,8 @@ from .ai_agent_registry_engine import (
     RegisteredAgent,
     AiAgentRegistryEngine
 )
+from .ai_agent_orchestration_engine import (
+    AgentTask,
+    AgentExecutionPlan,
+    AiAgentOrchestrationEngine
+)
