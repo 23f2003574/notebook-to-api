@@ -986,6 +986,9 @@ from backend.project import (
 from backend.project import (
     ProjectLifecycleOrchestrator
 )
+from backend.ai import (
+    PromptManagementEngine
+)
 
 
 
@@ -2234,6 +2237,10 @@ class PipelineSchemaGenerator:
 
         self.project_lifecycle_orchestrator = (
             ProjectLifecycleOrchestrator()
+        )
+
+        self.prompt_management_engine = (
+            PromptManagementEngine()
         )
 
 
@@ -7060,5 +7067,20 @@ class PipelineSchemaGenerator:
             .project_lifecycle_orchestrator
             .initialize(
                 project_id
+            )
+        )
+
+    def register_prompt(
+        self,
+        name: str,
+        content: str
+    ):
+
+        return (
+            self
+            .prompt_management_engine
+            .register(
+                name,
+                content
             )
         )
