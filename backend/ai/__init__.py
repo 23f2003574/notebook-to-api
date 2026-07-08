@@ -48,3 +48,8 @@ from .ai_agent_orchestration_engine import (
     AgentExecutionPlan,
     AiAgentOrchestrationEngine
 )
+from .ai_memory_management_engine import (
+    MemoryEntry,
+    MemoryStore,
+    AiMemoryManagementEngine
+)

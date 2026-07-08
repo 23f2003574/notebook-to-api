@@ -1019,6 +1019,9 @@ from backend.ai import (
 from backend.ai import (
     AiAgentOrchestrationEngine
 )
+from backend.ai import (
+    AiMemoryManagementEngine
+)
 
 
 
@@ -2311,6 +2314,10 @@ class PipelineSchemaGenerator:
 
         self.ai_agent_orchestration_engine = (
             AiAgentOrchestrationEngine()
+        )
+
+        self.ai_memory_management_engine = (
+            AiMemoryManagementEngine()
         )
 
 
@@ -7304,5 +7311,18 @@ class PipelineSchemaGenerator:
             .ai_agent_orchestration_engine
             .orchestrate(
                 objective
+            )
+        )
+
+    def create_ai_memory_store(
+        self,
+        namespace: str
+    ):
+
+        return (
+            self
+            .ai_memory_management_engine
+            .create_store(
+                namespace
             )
         )
