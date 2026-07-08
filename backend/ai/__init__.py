@@ -21,3 +21,7 @@ from .ai_evaluation_engine import (
     EvaluationReport,
     AiEvaluationEngine
 )
+from .ai_dataset_management_engine import (
+    AiDataset,
+    AiDatasetManagementEngine
+)

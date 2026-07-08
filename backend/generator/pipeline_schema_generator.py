@@ -1001,6 +1001,9 @@ from backend.ai import (
 from backend.ai import (
     AiEvaluationEngine
 )
+from backend.ai import (
+    AiDatasetManagementEngine
+)
 
 
 
@@ -2269,6 +2272,10 @@ class PipelineSchemaGenerator:
 
         self.ai_evaluation_engine = (
             AiEvaluationEngine()
+        )
+
+        self.ai_dataset_management_engine = (
+            AiDatasetManagementEngine()
         )
 
 
@@ -7170,5 +7177,20 @@ class PipelineSchemaGenerator:
             .ai_evaluation_engine
             .evaluate(
                 experiment_id
+            )
+        )
+
+    def register_ai_dataset(
+        self,
+        name: str,
+        sample_count: int
+    ):
+
+        return (
+            self
+            .ai_dataset_management_engine
+            .register(
+                name,
+                sample_count
             )
         )
