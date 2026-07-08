@@ -989,6 +989,9 @@ from backend.project import (
 from backend.ai import (
     PromptManagementEngine
 )
+from backend.ai import (
+    ModelRegistryEngine
+)
 
 
 
@@ -2241,6 +2244,10 @@ class PipelineSchemaGenerator:
 
         self.prompt_management_engine = (
             PromptManagementEngine()
+        )
+
+        self.model_registry_engine = (
+            ModelRegistryEngine()
         )
 
 
@@ -7082,5 +7089,22 @@ class PipelineSchemaGenerator:
             .register(
                 name,
                 content
+            )
+        )
+
+    def register_model(
+        self,
+        provider: str,
+        name: str,
+        version: str
+    ):
+
+        return (
+            self
+            .model_registry_engine
+            .register(
+                provider,
+                name,
+                version
             )
         )
