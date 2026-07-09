@@ -1046,6 +1046,11 @@ from backend.cloud import (
     LoadBalancingEngine
 )
 
+from backend.cloud import (
+    ScalingPolicy,
+    AutoscalingEngine
+)
+
 
 
 
@@ -2365,6 +2370,10 @@ class PipelineSchemaGenerator:
 
         self.load_balancing_engine = (
             LoadBalancingEngine()
+        )
+
+        self.autoscaling_engine = (
+            AutoscalingEngine()
         )
 
 
@@ -7457,5 +7466,18 @@ class PipelineSchemaGenerator:
             .load_balancing_engine
             .resolve(
                 service_name
+            )
+        )
+
+    def evaluate_autoscaling_policy(
+        self,
+        policy: ScalingPolicy
+    ):
+
+        return (
+            self
+            .autoscaling_engine
+            .evaluate(
+                policy
             )
         )

@@ -22,3 +22,9 @@ from .load_balancing_engine import (
     LoadBalancedEndpoint,
     LoadBalancingEngine
 )
+
+from .autoscaling_engine import (
+    ScalingPolicy,
+    ScalingDecision,
+    AutoscalingEngine
+)
