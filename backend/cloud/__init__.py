@@ -57,3 +57,8 @@ from .infrastructure_networking_engine import (
     VirtualNetwork,
     InfrastructureNetworkingEngine
 )
+
+from .cloud_infrastructure_lifecycle_orchestrator import (
+    InfrastructureLifecycle,
+    CloudInfrastructureLifecycleOrchestrator
+)

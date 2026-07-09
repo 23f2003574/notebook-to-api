@@ -1072,6 +1072,10 @@ from backend.cloud import (
     InfrastructureNetworkingEngine
 )
 
+from backend.cloud import (
+    CloudInfrastructureLifecycleOrchestrator
+)
+
 
 
 
@@ -2415,6 +2419,10 @@ class PipelineSchemaGenerator:
 
         self.infrastructure_networking_engine = (
             InfrastructureNetworkingEngine()
+        )
+
+        self.cloud_infrastructure_lifecycle_orchestrator = (
+            CloudInfrastructureLifecycleOrchestrator()
         )
 
 
@@ -7587,5 +7595,18 @@ class PipelineSchemaGenerator:
             .create(
                 name,
                 cidr
+            )
+        )
+
+    def initialize_cloud_infrastructure(
+        self,
+        infrastructure_id: str
+    ):
+
+        return (
+            self
+            .cloud_infrastructure_lifecycle_orchestrator
+            .initialize(
+                infrastructure_id
             )
         )
