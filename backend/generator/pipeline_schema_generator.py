@@ -1026,6 +1026,10 @@ from backend.ai import (
     AiApplicationLifecycleOrchestrator
 )
 
+from backend.cloud import (
+    ClusterManagementEngine
+)
+
 
 
 
@@ -2325,6 +2329,10 @@ class PipelineSchemaGenerator:
 
         self.ai_application_lifecycle_orchestrator = (
             AiApplicationLifecycleOrchestrator()
+        )
+
+        self.cluster_management_engine = (
+            ClusterManagementEngine()
         )
 
 
@@ -7344,5 +7352,20 @@ class PipelineSchemaGenerator:
             .ai_application_lifecycle_orchestrator
             .initialize(
                 application_id
+            )
+        )
+
+    def register_cluster(
+        self,
+        name: str,
+        node_count: int
+    ):
+
+        return (
+            self
+            .cluster_management_engine
+            .register(
+                name,
+                node_count
             )
         )
