@@ -1042,6 +1042,10 @@ from backend.cloud import (
     ServiceDiscoveryEngine
 )
 
+from backend.cloud import (
+    LoadBalancingEngine
+)
+
 
 
 
@@ -2357,6 +2361,10 @@ class PipelineSchemaGenerator:
 
         self.service_discovery_engine = (
             ServiceDiscoveryEngine()
+        )
+
+        self.load_balancing_engine = (
+            LoadBalancingEngine()
         )
 
 
@@ -7435,6 +7443,19 @@ class PipelineSchemaGenerator:
             self
             .service_discovery_engine
             .discover(
+                service_name
+            )
+        )
+
+    def resolve_service_endpoint(
+        self,
+        service_name: str
+    ):
+
+        return (
+            self
+            .load_balancing_engine
+            .resolve(
                 service_name
             )
         )

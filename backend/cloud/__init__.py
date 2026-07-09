@@ -17,3 +17,8 @@ from .service_discovery_engine import (
     ServiceEndpoint,
     ServiceDiscoveryEngine
 )
+
+from .load_balancing_engine import (
+    LoadBalancedEndpoint,
+    LoadBalancingEngine
+)
