@@ -1034,6 +1034,10 @@ from backend.cloud import (
     ComputeNodeManagementEngine
 )
 
+from backend.cloud import (
+    WorkloadSchedulingEngine
+)
+
 
 
 
@@ -2341,6 +2345,10 @@ class PipelineSchemaGenerator:
 
         self.compute_node_management_engine = (
             ComputeNodeManagementEngine()
+        )
+
+        self.workload_scheduling_engine = (
+            WorkloadSchedulingEngine()
         )
 
 
@@ -7392,5 +7400,20 @@ class PipelineSchemaGenerator:
                 hostname,
                 cpu_cores,
                 memory_gb
+            )
+        )
+
+    def schedule_workload(
+        self,
+        workload_id: str,
+        cluster_id: str
+    ):
+
+        return (
+            self
+            .workload_scheduling_engine
+            .schedule(
+                workload_id,
+                cluster_id
             )
         )
