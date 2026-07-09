@@ -1068,6 +1068,10 @@ from backend.cloud import (
     InfrastructureDeploymentOrchestrator
 )
 
+from backend.cloud import (
+    InfrastructureNetworkingEngine
+)
+
 
 
 
@@ -2407,6 +2411,10 @@ class PipelineSchemaGenerator:
 
         self.infrastructure_deployment_orchestrator = (
             InfrastructureDeploymentOrchestrator()
+        )
+
+        self.infrastructure_networking_engine = (
+            InfrastructureNetworkingEngine()
         )
 
 
@@ -7564,5 +7572,20 @@ class PipelineSchemaGenerator:
             .infrastructure_deployment_orchestrator
             .deploy(
                 application_id
+            )
+        )
+
+    def create_virtual_network(
+        self,
+        name: str,
+        cidr: str
+    ):
+
+        return (
+            self
+            .infrastructure_networking_engine
+            .create(
+                name,
+                cidr
             )
         )

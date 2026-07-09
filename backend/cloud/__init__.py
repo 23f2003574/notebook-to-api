@@ -52,3 +52,8 @@ from .infrastructure_deployment_orchestrator import (
     InfrastructureDeployment,
     InfrastructureDeploymentOrchestrator
 )
+
+from .infrastructure_networking_engine import (
+    VirtualNetwork,
+    InfrastructureNetworkingEngine
+)
