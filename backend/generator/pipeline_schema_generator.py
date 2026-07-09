@@ -1030,6 +1030,10 @@ from backend.cloud import (
     ClusterManagementEngine
 )
 
+from backend.cloud import (
+    ComputeNodeManagementEngine
+)
+
 
 
 
@@ -2333,6 +2337,10 @@ class PipelineSchemaGenerator:
 
         self.cluster_management_engine = (
             ClusterManagementEngine()
+        )
+
+        self.compute_node_management_engine = (
+            ComputeNodeManagementEngine()
         )
 
 
@@ -7367,5 +7375,22 @@ class PipelineSchemaGenerator:
             .register(
                 name,
                 node_count
+            )
+        )
+
+    def register_compute_node(
+        self,
+        hostname: str,
+        cpu_cores: int,
+        memory_gb: int
+    ):
+
+        return (
+            self
+            .compute_node_management_engine
+            .register(
+                hostname,
+                cpu_cores,
+                memory_gb
             )
         )
