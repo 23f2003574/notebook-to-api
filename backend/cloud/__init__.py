@@ -34,3 +34,9 @@ from .resource_quota_management_engine import (
     QuotaAllocation,
     ResourceQuotaManagementEngine
 )
+
+from .infrastructure_health_monitoring_engine import (
+    HealthStatus,
+    InfrastructureHealthReport,
+    InfrastructureHealthMonitoringEngine
+)

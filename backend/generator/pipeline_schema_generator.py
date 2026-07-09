@@ -1056,6 +1056,10 @@ from backend.cloud import (
     ResourceQuotaManagementEngine
 )
 
+from backend.cloud import (
+    InfrastructureHealthMonitoringEngine
+)
+
 
 
 
@@ -2383,6 +2387,10 @@ class PipelineSchemaGenerator:
 
         self.resource_quota_management_engine = (
             ResourceQuotaManagementEngine()
+        )
+
+        self.infrastructure_health_monitoring_engine = (
+            InfrastructureHealthMonitoringEngine()
         )
 
 
@@ -7501,5 +7509,18 @@ class PipelineSchemaGenerator:
             .resource_quota_management_engine
             .allocate(
                 quota
+            )
+        )
+
+    def evaluate_infrastructure_health(
+        self,
+        cluster_id: str
+    ):
+
+        return (
+            self
+            .infrastructure_health_monitoring_engine
+            .evaluate(
+                cluster_id
             )
         )
