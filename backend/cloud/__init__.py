@@ -28,3 +28,9 @@ from .autoscaling_engine import (
     ScalingDecision,
     AutoscalingEngine
 )
+
+from .resource_quota_management_engine import (
+    ResourceQuota,
+    QuotaAllocation,
+    ResourceQuotaManagementEngine
+)

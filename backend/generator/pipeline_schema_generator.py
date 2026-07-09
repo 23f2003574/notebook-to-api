@@ -1051,6 +1051,11 @@ from backend.cloud import (
     AutoscalingEngine
 )
 
+from backend.cloud import (
+    ResourceQuota,
+    ResourceQuotaManagementEngine
+)
+
 
 
 
@@ -2374,6 +2379,10 @@ class PipelineSchemaGenerator:
 
         self.autoscaling_engine = (
             AutoscalingEngine()
+        )
+
+        self.resource_quota_management_engine = (
+            ResourceQuotaManagementEngine()
         )
 
 
@@ -7479,5 +7488,18 @@ class PipelineSchemaGenerator:
             .autoscaling_engine
             .evaluate(
                 policy
+            )
+        )
+
+    def allocate_resource_quota(
+        self,
+        quota: ResourceQuota
+    ):
+
+        return (
+            self
+            .resource_quota_management_engine
+            .allocate(
+                quota
             )
         )
