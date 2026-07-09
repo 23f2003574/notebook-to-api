@@ -1038,6 +1038,10 @@ from backend.cloud import (
     WorkloadSchedulingEngine
 )
 
+from backend.cloud import (
+    ServiceDiscoveryEngine
+)
+
 
 
 
@@ -2349,6 +2353,10 @@ class PipelineSchemaGenerator:
 
         self.workload_scheduling_engine = (
             WorkloadSchedulingEngine()
+        )
+
+        self.service_discovery_engine = (
+            ServiceDiscoveryEngine()
         )
 
 
@@ -7415,5 +7423,18 @@ class PipelineSchemaGenerator:
             .schedule(
                 workload_id,
                 cluster_id
+            )
+        )
+
+    def discover_service(
+        self,
+        service_name: str
+    ):
+
+        return (
+            self
+            .service_discovery_engine
+            .discover(
+                service_name
             )
         )

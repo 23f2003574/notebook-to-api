@@ -12,3 +12,8 @@ from .workload_scheduling_engine import (
     ScheduledWorkload,
     WorkloadSchedulingEngine
 )
+
+from .service_discovery_engine import (
+    ServiceEndpoint,
+    ServiceDiscoveryEngine
+)
