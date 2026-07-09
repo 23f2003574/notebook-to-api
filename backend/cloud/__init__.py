@@ -40,3 +40,9 @@ from .infrastructure_health_monitoring_engine import (
     InfrastructureHealthReport,
     InfrastructureHealthMonitoringEngine
 )
+
+from .infrastructure_fault_recovery_engine import (
+    RecoveryAction,
+    RecoveryPlan,
+    InfrastructureFaultRecoveryEngine
+)

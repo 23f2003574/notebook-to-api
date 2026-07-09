@@ -1060,6 +1060,10 @@ from backend.cloud import (
     InfrastructureHealthMonitoringEngine
 )
 
+from backend.cloud import (
+    InfrastructureFaultRecoveryEngine
+)
+
 
 
 
@@ -2391,6 +2395,10 @@ class PipelineSchemaGenerator:
 
         self.infrastructure_health_monitoring_engine = (
             InfrastructureHealthMonitoringEngine()
+        )
+
+        self.infrastructure_fault_recovery_engine = (
+            InfrastructureFaultRecoveryEngine()
         )
 
 
@@ -7522,5 +7530,18 @@ class PipelineSchemaGenerator:
             .infrastructure_health_monitoring_engine
             .evaluate(
                 cluster_id
+            )
+        )
+
+    def recover_infrastructure_component(
+        self,
+        component: str
+    ):
+
+        return (
+            self
+            .infrastructure_fault_recovery_engine
+            .recover(
+                component
             )
         )
