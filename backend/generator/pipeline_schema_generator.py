@@ -1064,6 +1064,10 @@ from backend.cloud import (
     InfrastructureFaultRecoveryEngine
 )
 
+from backend.cloud import (
+    InfrastructureDeploymentOrchestrator
+)
+
 
 
 
@@ -2399,6 +2403,10 @@ class PipelineSchemaGenerator:
 
         self.infrastructure_fault_recovery_engine = (
             InfrastructureFaultRecoveryEngine()
+        )
+
+        self.infrastructure_deployment_orchestrator = (
+            InfrastructureDeploymentOrchestrator()
         )
 
 
@@ -7543,5 +7551,18 @@ class PipelineSchemaGenerator:
             .infrastructure_fault_recovery_engine
             .recover(
                 component
+            )
+        )
+
+    def deploy_infrastructure_application(
+        self,
+        application_id: str
+    ):
+
+        return (
+            self
+            .infrastructure_deployment_orchestrator
+            .deploy(
+                application_id
             )
         )

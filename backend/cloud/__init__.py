@@ -46,3 +46,9 @@ from .infrastructure_fault_recovery_engine import (
     RecoveryPlan,
     InfrastructureFaultRecoveryEngine
 )
+
+from .infrastructure_deployment_orchestrator import (
+    DeploymentStage,
+    InfrastructureDeployment,
+    InfrastructureDeploymentOrchestrator
+)
