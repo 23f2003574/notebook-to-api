@@ -1076,6 +1076,10 @@ from backend.cloud import (
     CloudInfrastructureLifecycleOrchestrator
 )
 
+from backend.cloud import (
+    CloudPlatformControlPlane
+)
+
 
 
 
@@ -2423,6 +2427,10 @@ class PipelineSchemaGenerator:
 
         self.cloud_infrastructure_lifecycle_orchestrator = (
             CloudInfrastructureLifecycleOrchestrator()
+        )
+
+        self.cloud_platform_control_plane = (
+            CloudPlatformControlPlane()
         )
 
 
@@ -7609,4 +7617,14 @@ class PipelineSchemaGenerator:
             .initialize(
                 infrastructure_id
             )
+        )
+
+    def initialize_cloud_platform(
+        self
+    ):
+
+        return (
+            self
+            .cloud_platform_control_plane
+            .initialize()
         )

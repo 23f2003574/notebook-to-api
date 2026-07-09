@@ -62,3 +62,8 @@ from .cloud_infrastructure_lifecycle_orchestrator import (
     InfrastructureLifecycle,
     CloudInfrastructureLifecycleOrchestrator
 )
+
+from .cloud_platform_control_plane import (
+    CloudPlatformStatus,
+    CloudPlatformControlPlane
+)
