@@ -1087,6 +1087,9 @@ from backend.marketplace import (
     ExtensionPackage,
     ExtensionPackageManagementEngine
 )
+from backend.marketplace import (
+    MarketplacePublishingEngine
+)
 
 
 
@@ -2447,6 +2450,10 @@ class PipelineSchemaGenerator:
 
         self.extension_package_management_engine = (
             ExtensionPackageManagementEngine()
+        )
+
+        self.marketplace_publishing_engine = (
+            MarketplacePublishingEngine()
         )
 
     def generate_cost_assessment(
@@ -7670,5 +7677,22 @@ class PipelineSchemaGenerator:
             .extension_package_management_engine
             .install(
                 package
+            )
+        )
+
+    def publish_extension(
+        self,
+        extension_id: str,
+        publisher: str,
+        visibility: str
+    ):
+
+        return (
+            self
+            .marketplace_publishing_engine
+            .publish(
+                extension_id,
+                publisher,
+                visibility
             )
         )

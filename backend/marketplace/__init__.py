@@ -7,3 +7,8 @@ from .extension_package_management_engine import (
     InstallationResult,
     ExtensionPackageManagementEngine
 )
+from .marketplace_publishing_engine import (
+    PublishedExtension,
+    PublicationResult,
+    MarketplacePublishingEngine
+)
