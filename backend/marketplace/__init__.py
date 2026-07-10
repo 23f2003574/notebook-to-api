@@ -27,3 +27,8 @@ from .marketplace_compatibility_engine import (
     CompatibilityResult,
     MarketplaceCompatibilityEngine
 )
+from .marketplace_dependency_resolution_engine import (
+    ExtensionDependency,
+    DependencyResolution,
+    MarketplaceDependencyResolutionEngine
+)

@@ -1100,6 +1100,10 @@ from backend.marketplace import (
     CompatibilityRequirement,
     MarketplaceCompatibilityEngine
 )
+from backend.marketplace import (
+    ExtensionDependency,
+    MarketplaceDependencyResolutionEngine
+)
 
 
 
@@ -2476,6 +2480,10 @@ class PipelineSchemaGenerator:
 
         self.marketplace_compatibility_engine = (
             MarketplaceCompatibilityEngine()
+        )
+
+        self.marketplace_dependency_resolution_engine = (
+            MarketplaceDependencyResolutionEngine()
         )
 
     def generate_cost_assessment(
@@ -7757,5 +7765,18 @@ class PipelineSchemaGenerator:
             .marketplace_compatibility_engine
             .validate(
                 requirements
+            )
+        )
+
+    def resolve_extension_dependencies(
+        self,
+        dependencies: list[ExtensionDependency]
+    ):
+
+        return (
+            self
+            .marketplace_dependency_resolution_engine
+            .resolve(
+                dependencies
             )
         )
