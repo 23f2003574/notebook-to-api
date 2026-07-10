@@ -12,3 +12,8 @@ from .marketplace_publishing_engine import (
     PublicationResult,
     MarketplacePublishingEngine
 )
+from .marketplace_discovery_engine import (
+    MarketplaceSearchResult,
+    DiscoveryResults,
+    MarketplaceDiscoveryEngine
+)

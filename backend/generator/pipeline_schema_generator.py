@@ -1090,6 +1090,9 @@ from backend.marketplace import (
 from backend.marketplace import (
     MarketplacePublishingEngine
 )
+from backend.marketplace import (
+    MarketplaceDiscoveryEngine
+)
 
 
 
@@ -2454,6 +2457,10 @@ class PipelineSchemaGenerator:
 
         self.marketplace_publishing_engine = (
             MarketplacePublishingEngine()
+        )
+
+        self.marketplace_discovery_engine = (
+            MarketplaceDiscoveryEngine()
         )
 
     def generate_cost_assessment(
@@ -7694,5 +7701,18 @@ class PipelineSchemaGenerator:
                 extension_id,
                 publisher,
                 visibility
+            )
+        )
+
+    def search_marketplace(
+        self,
+        query: str
+    ):
+
+        return (
+            self
+            .marketplace_discovery_engine
+            .search(
+                query
             )
         )
