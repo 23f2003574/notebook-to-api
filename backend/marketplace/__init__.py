@@ -22,3 +22,8 @@ from .marketplace_trust_verification_engine import (
     VerificationResult,
     MarketplaceTrustVerificationEngine
 )
+from .marketplace_compatibility_engine import (
+    CompatibilityRequirement,
+    CompatibilityResult,
+    MarketplaceCompatibilityEngine
+)

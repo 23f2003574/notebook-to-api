@@ -1096,6 +1096,10 @@ from backend.marketplace import (
 from backend.marketplace import (
     MarketplaceTrustVerificationEngine
 )
+from backend.marketplace import (
+    CompatibilityRequirement,
+    MarketplaceCompatibilityEngine
+)
 
 
 
@@ -2468,6 +2472,10 @@ class PipelineSchemaGenerator:
 
         self.marketplace_trust_verification_engine = (
             MarketplaceTrustVerificationEngine()
+        )
+
+        self.marketplace_compatibility_engine = (
+            MarketplaceCompatibilityEngine()
         )
 
     def generate_cost_assessment(
@@ -7736,5 +7744,18 @@ class PipelineSchemaGenerator:
             .verify(
                 extension_id,
                 publisher
+            )
+        )
+
+    def validate_extension_compatibility(
+        self,
+        requirements: CompatibilityRequirement
+    ):
+
+        return (
+            self
+            .marketplace_compatibility_engine
+            .validate(
+                requirements
             )
         )
