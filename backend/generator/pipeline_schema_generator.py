@@ -1080,6 +1080,10 @@ from backend.cloud import (
     CloudPlatformControlPlane
 )
 
+from backend.marketplace import (
+    ExtensionRegistryEngine
+)
+
 
 
 
@@ -2433,7 +2437,9 @@ class PipelineSchemaGenerator:
             CloudPlatformControlPlane()
         )
 
-
+        self.extension_registry_engine = (
+            ExtensionRegistryEngine()
+        )
 
     def generate_cost_assessment(
         self
@@ -7627,4 +7633,21 @@ class PipelineSchemaGenerator:
             self
             .cloud_platform_control_plane
             .initialize()
+        )
+
+    def register_extension(
+        self,
+        name: str,
+        version: str,
+        publisher: str
+    ):
+
+        return (
+            self
+            .extension_registry_engine
+            .register(
+                name,
+                version,
+                publisher
+            )
         )
