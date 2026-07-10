@@ -32,3 +32,7 @@ from .marketplace_dependency_resolution_engine import (
     DependencyResolution,
     MarketplaceDependencyResolutionEngine
 )
+from .marketplace_lifecycle_orchestrator import (
+    MarketplaceLifecycle,
+    MarketplaceLifecycleOrchestrator
+)

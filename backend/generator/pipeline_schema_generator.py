@@ -1104,6 +1104,9 @@ from backend.marketplace import (
     ExtensionDependency,
     MarketplaceDependencyResolutionEngine
 )
+from backend.marketplace import (
+    MarketplaceLifecycleOrchestrator
+)
 
 
 
@@ -2484,6 +2487,10 @@ class PipelineSchemaGenerator:
 
         self.marketplace_dependency_resolution_engine = (
             MarketplaceDependencyResolutionEngine()
+        )
+
+        self.marketplace_lifecycle_orchestrator = (
+            MarketplaceLifecycleOrchestrator()
         )
 
     def generate_cost_assessment(
@@ -7778,5 +7785,18 @@ class PipelineSchemaGenerator:
             .marketplace_dependency_resolution_engine
             .resolve(
                 dependencies
+            )
+        )
+
+    def initialize_marketplace_extension(
+        self,
+        extension_id: str
+    ):
+
+        return (
+            self
+            .marketplace_lifecycle_orchestrator
+            .initialize(
+                extension_id
             )
         )
