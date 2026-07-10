@@ -40,3 +40,7 @@ from .marketplace_control_plane import (
     MarketplacePlatformStatus,
     MarketplaceControlPlane
 )
+from .marketplace_platform import (
+    MarketplaceState,
+    MarketplacePlatform
+)

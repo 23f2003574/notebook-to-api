@@ -1110,6 +1110,9 @@ from backend.marketplace import (
 from backend.marketplace import (
     MarketplaceControlPlane
 )
+from backend.marketplace import (
+    MarketplacePlatform
+)
 
 
 
@@ -2498,6 +2501,10 @@ class PipelineSchemaGenerator:
 
         self.marketplace_control_plane = (
             MarketplaceControlPlane()
+        )
+
+        self.marketplace_platform = (
+            MarketplacePlatform()
         )
 
     def generate_cost_assessment(
@@ -7815,5 +7822,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .marketplace_control_plane
+            .initialize()
+        )
+
+    def initialize_marketplace_platform(
+        self
+    ):
+
+        return (
+            self
+            .marketplace_platform
             .initialize()
         )
