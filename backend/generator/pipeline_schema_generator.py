@@ -1119,6 +1119,9 @@ from backend.marketplace import (
 from backend.marketplace import (
     EcosystemControlPlane
 )
+from backend.marketplace import (
+    EcosystemPlatform
+)
 
 
 
@@ -2519,6 +2522,10 @@ class PipelineSchemaGenerator:
 
         self.ecosystem_control_plane = (
             EcosystemControlPlane()
+        )
+
+        self.ecosystem_platform = (
+            EcosystemPlatform()
         )
 
     def generate_cost_assessment(
@@ -7869,5 +7876,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .ecosystem_control_plane
+            .initialize()
+        )
+
+    def initialize_ecosystem_platform(
+        self
+    ):
+
+        return (
+            self
+            .ecosystem_platform
             .initialize()
         )

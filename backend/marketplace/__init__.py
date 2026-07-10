@@ -52,3 +52,7 @@ from .ecosystem_control_plane import (
     EcosystemStatus,
     EcosystemControlPlane
 )
+from .ecosystem_platform import (
+    EcosystemPlatformState,
+    EcosystemPlatform
+)
