@@ -1083,6 +1083,10 @@ from backend.cloud import (
 from backend.marketplace import (
     ExtensionRegistryEngine
 )
+from backend.marketplace import (
+    ExtensionPackage,
+    ExtensionPackageManagementEngine
+)
 
 
 
@@ -2439,6 +2443,10 @@ class PipelineSchemaGenerator:
 
         self.extension_registry_engine = (
             ExtensionRegistryEngine()
+        )
+
+        self.extension_package_management_engine = (
+            ExtensionPackageManagementEngine()
         )
 
     def generate_cost_assessment(
@@ -7649,5 +7657,18 @@ class PipelineSchemaGenerator:
                 name,
                 version,
                 publisher
+            )
+        )
+
+    def install_extension_package(
+        self,
+        package: ExtensionPackage
+    ):
+
+        return (
+            self
+            .extension_package_management_engine
+            .install(
+                package
             )
         )
