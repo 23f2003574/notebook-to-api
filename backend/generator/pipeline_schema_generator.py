@@ -1113,6 +1113,9 @@ from backend.marketplace import (
 from backend.marketplace import (
     MarketplacePlatform
 )
+from backend.marketplace import (
+    EcosystemLifecycleOrchestrator
+)
 
 
 
@@ -2505,6 +2508,10 @@ class PipelineSchemaGenerator:
 
         self.marketplace_platform = (
             MarketplacePlatform()
+        )
+
+        self.ecosystem_lifecycle_orchestrator = (
+            EcosystemLifecycleOrchestrator()
         )
 
     def generate_cost_assessment(
@@ -7833,4 +7840,17 @@ class PipelineSchemaGenerator:
             self
             .marketplace_platform
             .initialize()
+        )
+
+    def initialize_extension_ecosystem(
+        self,
+        ecosystem_id: str
+    ):
+
+        return (
+            self
+            .ecosystem_lifecycle_orchestrator
+            .initialize(
+                ecosystem_id
+            )
         )
