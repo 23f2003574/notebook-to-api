@@ -1107,6 +1107,9 @@ from backend.marketplace import (
 from backend.marketplace import (
     MarketplaceLifecycleOrchestrator
 )
+from backend.marketplace import (
+    MarketplaceControlPlane
+)
 
 
 
@@ -2491,6 +2494,10 @@ class PipelineSchemaGenerator:
 
         self.marketplace_lifecycle_orchestrator = (
             MarketplaceLifecycleOrchestrator()
+        )
+
+        self.marketplace_control_plane = (
+            MarketplaceControlPlane()
         )
 
     def generate_cost_assessment(
@@ -7799,4 +7806,14 @@ class PipelineSchemaGenerator:
             .initialize(
                 extension_id
             )
+        )
+
+    def initialize_marketplace(
+        self
+    ):
+
+        return (
+            self
+            .marketplace_control_plane
+            .initialize()
         )

@@ -36,3 +36,7 @@ from .marketplace_lifecycle_orchestrator import (
     MarketplaceLifecycle,
     MarketplaceLifecycleOrchestrator
 )
+from .marketplace_control_plane import (
+    MarketplacePlatformStatus,
+    MarketplaceControlPlane
+)
