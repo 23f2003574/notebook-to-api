@@ -1093,6 +1093,9 @@ from backend.marketplace import (
 from backend.marketplace import (
     MarketplaceDiscoveryEngine
 )
+from backend.marketplace import (
+    MarketplaceTrustVerificationEngine
+)
 
 
 
@@ -2461,6 +2464,10 @@ class PipelineSchemaGenerator:
 
         self.marketplace_discovery_engine = (
             MarketplaceDiscoveryEngine()
+        )
+
+        self.marketplace_trust_verification_engine = (
+            MarketplaceTrustVerificationEngine()
         )
 
     def generate_cost_assessment(
@@ -7714,5 +7721,20 @@ class PipelineSchemaGenerator:
             .marketplace_discovery_engine
             .search(
                 query
+            )
+        )
+
+    def verify_marketplace_extension(
+        self,
+        extension_id: str,
+        publisher: str
+    ):
+
+        return (
+            self
+            .marketplace_trust_verification_engine
+            .verify(
+                extension_id,
+                publisher
             )
         )

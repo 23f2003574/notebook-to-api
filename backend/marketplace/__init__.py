@@ -17,3 +17,8 @@ from .marketplace_discovery_engine import (
     DiscoveryResults,
     MarketplaceDiscoveryEngine
 )
+from .marketplace_trust_verification_engine import (
+    VerifiedPublisher,
+    VerificationResult,
+    MarketplaceTrustVerificationEngine
+)
