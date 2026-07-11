@@ -38,3 +38,7 @@ from .recovery_verification_engine import (
     RecoveryVerification,
     RecoveryVerificationEngine
 )
+from .reliability_learning_engine import (
+    ReliabilityLearningRecord,
+    ReliabilityLearningEngine
+)

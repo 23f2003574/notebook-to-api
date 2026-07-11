@@ -1152,6 +1152,9 @@ from backend.observability import (
 from backend.observability import (
     RecoveryVerificationEngine
 )
+from backend.observability import (
+    ReliabilityLearningEngine
+)
 
 
 
@@ -2596,6 +2599,10 @@ class PipelineSchemaGenerator:
 
         self.recovery_verification_engine = (
             RecoveryVerificationEngine()
+        )
+
+        self.reliability_learning_engine = (
+            ReliabilityLearningEngine()
         )
 
     def generate_cost_assessment(
@@ -8130,5 +8137,24 @@ class PipelineSchemaGenerator:
                 incident_id,
                 expected_state,
                 observed_state
+            )
+        )
+
+    def record_reliability_learning(
+        self,
+        incident_id: str,
+        root_cause: str,
+        remediation_action: str,
+        recovery_successful: bool
+    ):
+
+        return (
+            self
+            .reliability_learning_engine
+            .learn(
+                incident_id,
+                root_cause,
+                remediation_action,
+                recovery_successful
             )
         )
