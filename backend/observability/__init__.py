@@ -30,3 +30,7 @@ from .root_cause_analysis_engine import (
     RootCauseAnalysis,
     RootCauseAnalysisEngine
 )
+from .automated_remediation_engine import (
+    RemediationAction,
+    AutomatedRemediationEngine
+)

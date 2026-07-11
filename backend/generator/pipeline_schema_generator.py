@@ -1146,6 +1146,9 @@ from backend.observability import (
 from backend.observability import (
     RootCauseAnalysisEngine
 )
+from backend.observability import (
+    AutomatedRemediationEngine
+)
 
 
 
@@ -2582,6 +2585,10 @@ class PipelineSchemaGenerator:
 
         self.root_cause_analysis_engine = (
             RootCauseAnalysisEngine()
+        )
+
+        self.automated_remediation_engine = (
+            AutomatedRemediationEngine()
         )
 
     def generate_cost_assessment(
@@ -8082,5 +8089,22 @@ class PipelineSchemaGenerator:
                 incident_id,
                 suspected_component,
                 probable_cause
+            )
+        )
+
+    def remediate_platform_incident(
+        self,
+        incident_id: str,
+        action: str,
+        target: str
+    ):
+
+        return (
+            self
+            .automated_remediation_engine
+            .remediate(
+                incident_id,
+                action,
+                target
             )
         )
