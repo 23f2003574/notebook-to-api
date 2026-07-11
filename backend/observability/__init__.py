@@ -6,3 +6,7 @@ from .structured_logging_engine import (
     StructuredLogRecord,
     StructuredLoggingEngine
 )
+from .distributed_tracing_engine import (
+    TraceSpan,
+    DistributedTracingEngine
+)

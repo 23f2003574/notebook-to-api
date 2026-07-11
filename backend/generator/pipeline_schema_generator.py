@@ -1128,6 +1128,9 @@ from backend.observability import (
 from backend.observability import (
     StructuredLoggingEngine
 )
+from backend.observability import (
+    DistributedTracingEngine
+)
 
 
 
@@ -2540,6 +2543,10 @@ class PipelineSchemaGenerator:
 
         self.structured_logging_engine = (
             StructuredLoggingEngine()
+        )
+
+        self.distributed_tracing_engine = (
+            DistributedTracingEngine()
         )
 
     def generate_cost_assessment(
@@ -7936,5 +7943,22 @@ class PipelineSchemaGenerator:
                 message,
                 component,
                 metadata
+            )
+        )
+
+    def start_trace_span(
+        self,
+        trace_id: str,
+        operation_name: str,
+        component: str
+    ):
+
+        return (
+            self
+            .distributed_tracing_engine
+            .start_span(
+                trace_id,
+                operation_name,
+                component
             )
         )
