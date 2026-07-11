@@ -1134,6 +1134,9 @@ from backend.observability import (
 from backend.observability import (
     TelemetryCorrelationEngine
 )
+from backend.observability import (
+    ObservabilityAnomalyDetectionEngine
+)
 
 
 
@@ -2554,6 +2557,10 @@ class PipelineSchemaGenerator:
 
         self.telemetry_correlation_engine = (
             TelemetryCorrelationEngine()
+        )
+
+        self.observability_anomaly_detection_engine = (
+            ObservabilityAnomalyDetectionEngine()
         )
 
     def generate_cost_assessment(
@@ -7984,5 +7991,22 @@ class PipelineSchemaGenerator:
                 trace_id,
                 metric_name,
                 log_component
+            )
+        )
+
+    def detect_observability_anomaly(
+        self,
+        signal_name: str,
+        observed_value: float,
+        expected_value: float
+    ):
+
+        return (
+            self
+            .observability_anomaly_detection_engine
+            .detect(
+                signal_name,
+                observed_value,
+                expected_value
             )
         )

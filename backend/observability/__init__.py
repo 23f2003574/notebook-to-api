@@ -14,3 +14,7 @@ from .telemetry_correlation_engine import (
     TelemetryCorrelation,
     TelemetryCorrelationEngine
 )
+from .observability_anomaly_detection_engine import (
+    AnomalyDetectionResult,
+    ObservabilityAnomalyDetectionEngine
+)
