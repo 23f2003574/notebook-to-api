@@ -1149,6 +1149,9 @@ from backend.observability import (
 from backend.observability import (
     AutomatedRemediationEngine
 )
+from backend.observability import (
+    RecoveryVerificationEngine
+)
 
 
 
@@ -2589,6 +2592,10 @@ class PipelineSchemaGenerator:
 
         self.automated_remediation_engine = (
             AutomatedRemediationEngine()
+        )
+
+        self.recovery_verification_engine = (
+            RecoveryVerificationEngine()
         )
 
     def generate_cost_assessment(
@@ -8106,5 +8113,22 @@ class PipelineSchemaGenerator:
                 incident_id,
                 action,
                 target
+            )
+        )
+
+    def verify_platform_recovery(
+        self,
+        incident_id: str,
+        expected_state: str,
+        observed_state: str
+    ):
+
+        return (
+            self
+            .recovery_verification_engine
+            .verify(
+                incident_id,
+                expected_state,
+                observed_state
             )
         )

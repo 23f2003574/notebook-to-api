@@ -34,3 +34,7 @@ from .automated_remediation_engine import (
     RemediationAction,
     AutomatedRemediationEngine
 )
+from .recovery_verification_engine import (
+    RecoveryVerification,
+    RecoveryVerificationEngine
+)
