@@ -1122,6 +1122,9 @@ from backend.marketplace import (
 from backend.marketplace import (
     EcosystemPlatform
 )
+from backend.observability import (
+    MetricsCollectionEngine
+)
 
 
 
@@ -2526,6 +2529,10 @@ class PipelineSchemaGenerator:
 
         self.ecosystem_platform = (
             EcosystemPlatform()
+        )
+
+        self.metrics_collection_engine = (
+            MetricsCollectionEngine()
         )
 
     def generate_cost_assessment(
@@ -7887,4 +7894,21 @@ class PipelineSchemaGenerator:
             self
             .ecosystem_platform
             .initialize()
+        )
+
+    def collect_metric(
+        self,
+        metric_name: str,
+        value: float,
+        unit: str
+    ):
+
+        return (
+            self
+            .metrics_collection_engine
+            .collect(
+                metric_name,
+                value,
+                unit
+            )
         )
