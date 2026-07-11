@@ -1125,6 +1125,9 @@ from backend.marketplace import (
 from backend.observability import (
     MetricsCollectionEngine
 )
+from backend.observability import (
+    StructuredLoggingEngine
+)
 
 
 
@@ -2533,6 +2536,10 @@ class PipelineSchemaGenerator:
 
         self.metrics_collection_engine = (
             MetricsCollectionEngine()
+        )
+
+        self.structured_logging_engine = (
+            StructuredLoggingEngine()
         )
 
     def generate_cost_assessment(
@@ -7910,5 +7917,24 @@ class PipelineSchemaGenerator:
                 metric_name,
                 value,
                 unit
+            )
+        )
+
+    def record_structured_log(
+        self,
+        level: str,
+        message: str,
+        component: str,
+        metadata: dict
+    ):
+
+        return (
+            self
+            .structured_logging_engine
+            .log(
+                level,
+                message,
+                component,
+                metadata
             )
         )
