@@ -42,3 +42,7 @@ from .reliability_learning_engine import (
     ReliabilityLearningRecord,
     ReliabilityLearningEngine
 )
+from .reliability_control_plane import (
+    ReliabilityPlatformStatus,
+    ReliabilityControlPlane
+)

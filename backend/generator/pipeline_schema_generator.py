@@ -1155,6 +1155,9 @@ from backend.observability import (
 from backend.observability import (
     ReliabilityLearningEngine
 )
+from backend.observability import (
+    ReliabilityControlPlane
+)
 
 
 
@@ -2603,6 +2606,10 @@ class PipelineSchemaGenerator:
 
         self.reliability_learning_engine = (
             ReliabilityLearningEngine()
+        )
+
+        self.reliability_control_plane = (
+            ReliabilityControlPlane()
         )
 
     def generate_cost_assessment(
@@ -8157,4 +8164,14 @@ class PipelineSchemaGenerator:
                 remediation_action,
                 recovery_successful
             )
+        )
+
+    def initialize_reliability_control_plane(
+        self
+    ):
+
+        return (
+            self
+            .reliability_control_plane
+            .initialize()
         )
