@@ -1131,6 +1131,9 @@ from backend.observability import (
 from backend.observability import (
     DistributedTracingEngine
 )
+from backend.observability import (
+    TelemetryCorrelationEngine
+)
 
 
 
@@ -2547,6 +2550,10 @@ class PipelineSchemaGenerator:
 
         self.distributed_tracing_engine = (
             DistributedTracingEngine()
+        )
+
+        self.telemetry_correlation_engine = (
+            TelemetryCorrelationEngine()
         )
 
     def generate_cost_assessment(
@@ -7960,5 +7967,22 @@ class PipelineSchemaGenerator:
                 trace_id,
                 operation_name,
                 component
+            )
+        )
+
+    def correlate_platform_telemetry(
+        self,
+        trace_id: str,
+        metric_name: str,
+        log_component: str
+    ):
+
+        return (
+            self
+            .telemetry_correlation_engine
+            .correlate(
+                trace_id,
+                metric_name,
+                log_component
             )
         )

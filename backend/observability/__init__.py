@@ -10,3 +10,7 @@ from .distributed_tracing_engine import (
     TraceSpan,
     DistributedTracingEngine
 )
+from .telemetry_correlation_engine import (
+    TelemetryCorrelation,
+    TelemetryCorrelationEngine
+)
