@@ -22,3 +22,7 @@ from .intelligent_alerting_engine import (
     PlatformAlert,
     IntelligentAlertingEngine
 )
+from .incident_management_engine import (
+    PlatformIncident,
+    IncidentManagementEngine
+)

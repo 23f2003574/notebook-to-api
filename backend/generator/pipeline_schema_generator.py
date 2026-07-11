@@ -1140,6 +1140,9 @@ from backend.observability import (
 from backend.observability import (
     IntelligentAlertingEngine
 )
+from backend.observability import (
+    IncidentManagementEngine
+)
 
 
 
@@ -2568,6 +2571,10 @@ class PipelineSchemaGenerator:
 
         self.intelligent_alerting_engine = (
             IntelligentAlertingEngine()
+        )
+
+        self.incident_management_engine = (
+            IncidentManagementEngine()
         )
 
     def generate_cost_assessment(
@@ -8032,5 +8039,24 @@ class PipelineSchemaGenerator:
                 title,
                 severity,
                 component
+            )
+        )
+
+    def create_platform_incident(
+        self,
+        title: str,
+        severity: str,
+        component: str,
+        owner: str
+    ):
+
+        return (
+            self
+            .incident_management_engine
+            .create_incident(
+                title,
+                severity,
+                component,
+                owner
             )
         )
