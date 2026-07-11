@@ -1143,6 +1143,9 @@ from backend.observability import (
 from backend.observability import (
     IncidentManagementEngine
 )
+from backend.observability import (
+    RootCauseAnalysisEngine
+)
 
 
 
@@ -2575,6 +2578,10 @@ class PipelineSchemaGenerator:
 
         self.incident_management_engine = (
             IncidentManagementEngine()
+        )
+
+        self.root_cause_analysis_engine = (
+            RootCauseAnalysisEngine()
         )
 
     def generate_cost_assessment(
@@ -8058,5 +8065,22 @@ class PipelineSchemaGenerator:
                 severity,
                 component,
                 owner
+            )
+        )
+
+    def analyze_incident_root_cause(
+        self,
+        incident_id: str,
+        suspected_component: str,
+        probable_cause: str
+    ):
+
+        return (
+            self
+            .root_cause_analysis_engine
+            .analyze(
+                incident_id,
+                suspected_component,
+                probable_cause
             )
         )

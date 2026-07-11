@@ -26,3 +26,7 @@ from .incident_management_engine import (
     PlatformIncident,
     IncidentManagementEngine
 )
+from .root_cause_analysis_engine import (
+    RootCauseAnalysis,
+    RootCauseAnalysisEngine
+)
