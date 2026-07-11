@@ -1158,6 +1158,9 @@ from backend.observability import (
 from backend.observability import (
     ReliabilityControlPlane
 )
+from backend.observability import (
+    ObservabilityReliabilityPlatform
+)
 
 
 
@@ -2610,6 +2613,10 @@ class PipelineSchemaGenerator:
 
         self.reliability_control_plane = (
             ReliabilityControlPlane()
+        )
+
+        self.observability_reliability_platform = (
+            ObservabilityReliabilityPlatform()
         )
 
     def generate_cost_assessment(
@@ -8173,5 +8180,15 @@ class PipelineSchemaGenerator:
         return (
             self
             .reliability_control_plane
+            .initialize()
+        )
+
+    def initialize_observability_reliability_platform(
+        self
+    ):
+
+        return (
+            self
+            .observability_reliability_platform
             .initialize()
         )

@@ -46,3 +46,7 @@ from .reliability_control_plane import (
     ReliabilityPlatformStatus,
     ReliabilityControlPlane
 )
+from .observability_reliability_platform import (
+    ObservabilityReliabilityPlatformState,
+    ObservabilityReliabilityPlatform
+)
