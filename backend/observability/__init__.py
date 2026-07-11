@@ -18,3 +18,7 @@ from .observability_anomaly_detection_engine import (
     AnomalyDetectionResult,
     ObservabilityAnomalyDetectionEngine
 )
+from .intelligent_alerting_engine import (
+    PlatformAlert,
+    IntelligentAlertingEngine
+)

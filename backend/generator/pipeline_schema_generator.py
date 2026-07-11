@@ -1137,6 +1137,9 @@ from backend.observability import (
 from backend.observability import (
     ObservabilityAnomalyDetectionEngine
 )
+from backend.observability import (
+    IntelligentAlertingEngine
+)
 
 
 
@@ -2561,6 +2564,10 @@ class PipelineSchemaGenerator:
 
         self.observability_anomaly_detection_engine = (
             ObservabilityAnomalyDetectionEngine()
+        )
+
+        self.intelligent_alerting_engine = (
+            IntelligentAlertingEngine()
         )
 
     def generate_cost_assessment(
@@ -8008,5 +8015,22 @@ class PipelineSchemaGenerator:
                 signal_name,
                 observed_value,
                 expected_value
+            )
+        )
+
+    def create_platform_alert(
+        self,
+        title: str,
+        severity: str,
+        component: str
+    ):
+
+        return (
+            self
+            .intelligent_alerting_engine
+            .create_alert(
+                title,
+                severity,
+                component
             )
         )
