@@ -1197,6 +1197,9 @@ from backend.observability import (
 from backend.observability import (
     ReliabilityAwareDeliveryControlPlane
 )
+from backend.observability import (
+    SREProgressiveDeliveryPlatform
+)
 
 
 
@@ -2701,6 +2704,10 @@ class PipelineSchemaGenerator:
 
         self.reliability_aware_delivery_control_plane = (
             ReliabilityAwareDeliveryControlPlane()
+        )
+
+        self.sre_progressive_delivery_platform = (
+            SREProgressiveDeliveryPlatform()
         )
 
     def generate_cost_assessment(
@@ -8510,5 +8517,122 @@ class PipelineSchemaGenerator:
                 failed_events,
                 budget_consumed_percentage,
                 window_elapsed_percentage
+            )
+        )
+
+    def evaluate_service_reliability_objective(
+        self,
+        service_name: str,
+        indicator_name: str,
+        target: float,
+        current_value: float
+    ):
+
+        return (
+            self
+            .sre_progressive_delivery_platform
+            .evaluate_reliability_objective(
+                service_name,
+                indicator_name,
+                target,
+                current_value
+            )
+        )
+
+    def plan_sre_managed_release(
+        self,
+        service_name: str,
+        change_id: str,
+        files_changed: int,
+        affected_components: int,
+        database_change: bool,
+        infrastructure_change: bool,
+        slo_target: float,
+        total_events: int,
+        failed_events: int,
+        budget_consumed_percentage: float,
+        window_elapsed_percentage: float
+    ):
+
+        return (
+            self
+            .sre_progressive_delivery_platform
+            .plan_release(
+                service_name,
+                change_id,
+                files_changed,
+                affected_components,
+                database_change,
+                infrastructure_change,
+                slo_target,
+                total_events,
+                failed_events,
+                budget_consumed_percentage,
+                window_elapsed_percentage
+            )
+        )
+
+    def evaluate_sre_managed_rollout(
+        self,
+        deployment_id: str,
+        current_traffic_percentage: int,
+        error_rate: float,
+        latency_ms: float,
+        health_check_passed: bool,
+        deployed_version: str,
+        previous_stable_version: str
+    ):
+
+        return (
+            self
+            .sre_progressive_delivery_platform
+            .evaluate_rollout(
+                deployment_id,
+                current_traffic_percentage,
+                error_rate,
+                latency_ms,
+                health_check_passed,
+                deployed_version,
+                previous_stable_version
+            )
+        )
+
+    def verify_sre_managed_rollback(
+        self,
+        deployment_id: str,
+        expected_version: str,
+        active_version: str,
+        health_check_passed: bool
+    ):
+
+        return (
+            self
+            .sre_progressive_delivery_platform
+            .verify_rollback(
+                deployment_id,
+                expected_version,
+                active_version,
+                health_check_passed
+            )
+        )
+
+    def evaluate_sre_managed_stability(
+        self,
+        deployment_id: str,
+        error_rate: float,
+        latency_ms: float,
+        burn_rate: float,
+        active_incidents: int
+    ):
+
+        return (
+            self
+            .sre_progressive_delivery_platform
+            .evaluate_stability(
+                deployment_id,
+                error_rate,
+                latency_ms,
+                burn_rate,
+                active_incidents
             )
         )

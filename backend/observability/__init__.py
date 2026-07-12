@@ -98,3 +98,7 @@ from .reliability_aware_delivery_control_plane import (
     ReliabilityAwareDeliveryPlan,
     ReliabilityAwareDeliveryControlPlane
 )
+from .sre_progressive_delivery_platform import (
+    ServiceReliabilityObjectiveResult,
+    SREProgressiveDeliveryPlatform
+)
