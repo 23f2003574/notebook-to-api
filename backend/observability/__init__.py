@@ -58,3 +58,7 @@ from .error_budget_management_engine import (
     ErrorBudget,
     ErrorBudgetManagementEngine
 )
+from .error_budget_burn_rate_engine import (
+    ErrorBudgetBurnRate,
+    ErrorBudgetBurnRateEngine
+)

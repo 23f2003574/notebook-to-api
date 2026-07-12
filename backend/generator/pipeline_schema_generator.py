@@ -1167,6 +1167,9 @@ from backend.observability import (
 from backend.observability import (
     ErrorBudgetManagementEngine
 )
+from backend.observability import (
+    ErrorBudgetBurnRateEngine
+)
 
 
 
@@ -2631,6 +2634,10 @@ class PipelineSchemaGenerator:
 
         self.error_budget_management_engine = (
             ErrorBudgetManagementEngine()
+        )
+
+        self.error_budget_burn_rate_engine = (
+            ErrorBudgetBurnRateEngine()
         )
 
     def generate_cost_assessment(
@@ -8242,5 +8249,22 @@ class PipelineSchemaGenerator:
                 slo_target,
                 total_events,
                 failed_events
+            )
+        )
+
+    def calculate_error_budget_burn_rate(
+        self,
+        service_name: str,
+        budget_consumed_percentage: float,
+        window_elapsed_percentage: float
+    ):
+
+        return (
+            self
+            .error_budget_burn_rate_engine
+            .calculate(
+                service_name,
+                budget_consumed_percentage,
+                window_elapsed_percentage
             )
         )
