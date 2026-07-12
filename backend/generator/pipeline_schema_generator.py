@@ -1176,6 +1176,9 @@ from backend.observability import (
 from backend.observability import (
     ChangeRiskAssessmentEngine
 )
+from backend.observability import (
+    ProgressiveDeliveryStrategyEngine
+)
 
 
 
@@ -2652,6 +2655,10 @@ class PipelineSchemaGenerator:
 
         self.change_risk_assessment_engine = (
             ChangeRiskAssessmentEngine()
+        )
+
+        self.progressive_delivery_strategy_engine = (
+            ProgressiveDeliveryStrategyEngine()
         )
 
     def generate_cost_assessment(
@@ -8318,5 +8325,20 @@ class PipelineSchemaGenerator:
                 affected_components,
                 database_change,
                 infrastructure_change
+            )
+        )
+
+    def select_progressive_delivery_strategy(
+        self,
+        service_name: str,
+        risk_level: str
+    ):
+
+        return (
+            self
+            .progressive_delivery_strategy_engine
+            .select(
+                service_name,
+                risk_level
             )
         )
