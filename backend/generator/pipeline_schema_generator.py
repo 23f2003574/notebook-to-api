@@ -1188,6 +1188,9 @@ from backend.observability import (
 from backend.observability import (
     AutomatedDeploymentRollbackEngine
 )
+from backend.observability import (
+    PostRollbackVerificationEngine
+)
 
 
 
@@ -2680,6 +2683,10 @@ class PipelineSchemaGenerator:
 
         self.automated_deployment_rollback_engine = (
             AutomatedDeploymentRollbackEngine()
+        )
+
+        self.post_rollback_verification_engine = (
+            PostRollbackVerificationEngine()
         )
 
     def generate_cost_assessment(
@@ -8416,5 +8423,24 @@ class PipelineSchemaGenerator:
                 failed_version,
                 previous_stable_version,
                 deployment_healthy
+            )
+        )
+
+    def verify_post_rollback_state(
+        self,
+        deployment_id: str,
+        expected_version: str,
+        active_version: str,
+        health_check_passed: bool
+    ):
+
+        return (
+            self
+            .post_rollback_verification_engine
+            .verify(
+                deployment_id,
+                expected_version,
+                active_version,
+                health_check_passed
             )
         )

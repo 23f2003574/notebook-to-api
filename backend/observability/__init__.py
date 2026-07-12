@@ -86,3 +86,7 @@ from .automated_deployment_rollback_engine import (
     DeploymentRollback,
     AutomatedDeploymentRollbackEngine
 )
+from .post_rollback_verification_engine import (
+    PostRollbackVerification,
+    PostRollbackVerificationEngine
+)
