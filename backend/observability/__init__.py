@@ -62,3 +62,7 @@ from .error_budget_burn_rate_engine import (
     ErrorBudgetBurnRate,
     ErrorBudgetBurnRateEngine
 )
+from .reliability_aware_release_gating_engine import (
+    ReleaseGateDecision,
+    ReliabilityAwareReleaseGatingEngine
+)

@@ -1170,6 +1170,9 @@ from backend.observability import (
 from backend.observability import (
     ErrorBudgetBurnRateEngine
 )
+from backend.observability import (
+    ReliabilityAwareReleaseGatingEngine
+)
 
 
 
@@ -2638,6 +2641,10 @@ class PipelineSchemaGenerator:
 
         self.error_budget_burn_rate_engine = (
             ErrorBudgetBurnRateEngine()
+        )
+
+        self.reliability_aware_release_gating_engine = (
+            ReliabilityAwareReleaseGatingEngine()
         )
 
     def generate_cost_assessment(
@@ -8266,5 +8273,22 @@ class PipelineSchemaGenerator:
                 service_name,
                 budget_consumed_percentage,
                 window_elapsed_percentage
+            )
+        )
+
+    def evaluate_reliability_release_gate(
+        self,
+        service_name: str,
+        error_budget_exhausted: bool,
+        burn_rate: float
+    ):
+
+        return (
+            self
+            .reliability_aware_release_gating_engine
+            .evaluate(
+                service_name,
+                error_budget_exhausted,
+                burn_rate
             )
         )
