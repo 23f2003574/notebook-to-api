@@ -1194,6 +1194,9 @@ from backend.observability import (
 from backend.observability import (
     PostDeploymentStabilityMonitoringEngine
 )
+from backend.observability import (
+    ReliabilityAwareDeliveryControlPlane
+)
 
 
 
@@ -2694,6 +2697,10 @@ class PipelineSchemaGenerator:
 
         self.post_deployment_stability_monitoring_engine = (
             PostDeploymentStabilityMonitoringEngine()
+        )
+
+        self.reliability_aware_delivery_control_plane = (
+            ReliabilityAwareDeliveryControlPlane()
         )
 
     def generate_cost_assessment(
@@ -8470,5 +8477,38 @@ class PipelineSchemaGenerator:
                 latency_ms,
                 burn_rate,
                 active_incidents
+            )
+        )
+
+    def plan_reliability_aware_delivery(
+        self,
+        service_name: str,
+        change_id: str,
+        files_changed: int,
+        affected_components: int,
+        database_change: bool,
+        infrastructure_change: bool,
+        slo_target: float,
+        total_events: int,
+        failed_events: int,
+        budget_consumed_percentage: float,
+        window_elapsed_percentage: float
+    ):
+
+        return (
+            self
+            .reliability_aware_delivery_control_plane
+            .plan_release(
+                service_name,
+                change_id,
+                files_changed,
+                affected_components,
+                database_change,
+                infrastructure_change,
+                slo_target,
+                total_events,
+                failed_events,
+                budget_consumed_percentage,
+                window_elapsed_percentage
             )
         )
