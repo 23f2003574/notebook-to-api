@@ -1164,6 +1164,9 @@ from backend.observability import (
 from backend.observability import (
     ServiceLevelObjectiveEngine
 )
+from backend.observability import (
+    ErrorBudgetManagementEngine
+)
 
 
 
@@ -2624,6 +2627,10 @@ class PipelineSchemaGenerator:
 
         self.service_level_objective_engine = (
             ServiceLevelObjectiveEngine()
+        )
+
+        self.error_budget_management_engine = (
+            ErrorBudgetManagementEngine()
         )
 
     def generate_cost_assessment(
@@ -8216,5 +8223,24 @@ class PipelineSchemaGenerator:
                 indicator_name,
                 target,
                 current_value
+            )
+        )
+
+    def calculate_service_error_budget(
+        self,
+        service_name: str,
+        slo_target: float,
+        total_events: int,
+        failed_events: int
+    ):
+
+        return (
+            self
+            .error_budget_management_engine
+            .calculate(
+                service_name,
+                slo_target,
+                total_events,
+                failed_events
             )
         )

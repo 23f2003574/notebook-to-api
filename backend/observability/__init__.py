@@ -54,3 +54,7 @@ from .service_level_objective_engine import (
     ServiceLevelObjective,
     ServiceLevelObjectiveEngine
 )
+from .error_budget_management_engine import (
+    ErrorBudget,
+    ErrorBudgetManagementEngine
+)
