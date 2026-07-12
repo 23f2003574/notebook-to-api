@@ -82,3 +82,7 @@ from .progressive_rollout_promotion_engine import (
     RolloutPromotionDecision,
     ProgressiveRolloutPromotionEngine
 )
+from .automated_deployment_rollback_engine import (
+    DeploymentRollback,
+    AutomatedDeploymentRollbackEngine
+)

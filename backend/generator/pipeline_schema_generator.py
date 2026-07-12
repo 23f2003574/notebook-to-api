@@ -1185,6 +1185,9 @@ from backend.observability import (
 from backend.observability import (
     ProgressiveRolloutPromotionEngine
 )
+from backend.observability import (
+    AutomatedDeploymentRollbackEngine
+)
 
 
 
@@ -2673,6 +2676,10 @@ class PipelineSchemaGenerator:
 
         self.progressive_rollout_promotion_engine = (
             ProgressiveRolloutPromotionEngine()
+        )
+
+        self.automated_deployment_rollback_engine = (
+            AutomatedDeploymentRollbackEngine()
         )
 
     def generate_cost_assessment(
@@ -8389,6 +8396,25 @@ class PipelineSchemaGenerator:
             .evaluate(
                 deployment_id,
                 current_traffic_percentage,
+                deployment_healthy
+            )
+        )
+
+    def evaluate_deployment_rollback(
+        self,
+        deployment_id: str,
+        failed_version: str,
+        previous_stable_version: str,
+        deployment_healthy: bool
+    ):
+
+        return (
+            self
+            .automated_deployment_rollback_engine
+            .evaluate(
+                deployment_id,
+                failed_version,
+                previous_stable_version,
                 deployment_healthy
             )
         )
