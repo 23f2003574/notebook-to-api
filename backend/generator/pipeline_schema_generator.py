@@ -1179,6 +1179,9 @@ from backend.observability import (
 from backend.observability import (
     ProgressiveDeliveryStrategyEngine
 )
+from backend.observability import (
+    DeploymentHealthVerificationEngine
+)
 
 
 
@@ -2659,6 +2662,10 @@ class PipelineSchemaGenerator:
 
         self.progressive_delivery_strategy_engine = (
             ProgressiveDeliveryStrategyEngine()
+        )
+
+        self.deployment_health_verification_engine = (
+            DeploymentHealthVerificationEngine()
         )
 
     def generate_cost_assessment(
@@ -8340,5 +8347,24 @@ class PipelineSchemaGenerator:
             .select(
                 service_name,
                 risk_level
+            )
+        )
+
+    def verify_deployment_health(
+        self,
+        deployment_id: str,
+        error_rate: float,
+        latency_ms: float,
+        health_check_passed: bool
+    ):
+
+        return (
+            self
+            .deployment_health_verification_engine
+            .verify(
+                deployment_id,
+                error_rate,
+                latency_ms,
+                health_check_passed
             )
         )

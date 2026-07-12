@@ -74,3 +74,7 @@ from .progressive_delivery_strategy_engine import (
     ProgressiveDeliveryStrategy,
     ProgressiveDeliveryStrategyEngine
 )
+from .deployment_health_verification_engine import (
+    DeploymentHealthVerification,
+    DeploymentHealthVerificationEngine
+)
