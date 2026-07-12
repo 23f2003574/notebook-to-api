@@ -50,3 +50,7 @@ from .observability_reliability_platform import (
     ObservabilityReliabilityPlatformState,
     ObservabilityReliabilityPlatform
 )
+from .service_level_objective_engine import (
+    ServiceLevelObjective,
+    ServiceLevelObjectiveEngine
+)

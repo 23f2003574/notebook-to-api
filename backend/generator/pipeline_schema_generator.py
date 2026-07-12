@@ -1161,6 +1161,9 @@ from backend.observability import (
 from backend.observability import (
     ObservabilityReliabilityPlatform
 )
+from backend.observability import (
+    ServiceLevelObjectiveEngine
+)
 
 
 
@@ -2617,6 +2620,10 @@ class PipelineSchemaGenerator:
 
         self.observability_reliability_platform = (
             ObservabilityReliabilityPlatform()
+        )
+
+        self.service_level_objective_engine = (
+            ServiceLevelObjectiveEngine()
         )
 
     def generate_cost_assessment(
@@ -8191,4 +8198,23 @@ class PipelineSchemaGenerator:
             self
             .observability_reliability_platform
             .initialize()
+        )
+
+    def evaluate_service_level_objective(
+        self,
+        service_name: str,
+        indicator_name: str,
+        target: float,
+        current_value: float
+    ):
+
+        return (
+            self
+            .service_level_objective_engine
+            .evaluate(
+                service_name,
+                indicator_name,
+                target,
+                current_value
+            )
         )
