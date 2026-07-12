@@ -1191,6 +1191,9 @@ from backend.observability import (
 from backend.observability import (
     PostRollbackVerificationEngine
 )
+from backend.observability import (
+    PostDeploymentStabilityMonitoringEngine
+)
 
 
 
@@ -2687,6 +2690,10 @@ class PipelineSchemaGenerator:
 
         self.post_rollback_verification_engine = (
             PostRollbackVerificationEngine()
+        )
+
+        self.post_deployment_stability_monitoring_engine = (
+            PostDeploymentStabilityMonitoringEngine()
         )
 
     def generate_cost_assessment(
@@ -8442,5 +8449,26 @@ class PipelineSchemaGenerator:
                 expected_version,
                 active_version,
                 health_check_passed
+            )
+        )
+
+    def evaluate_post_deployment_stability(
+        self,
+        deployment_id: str,
+        error_rate: float,
+        latency_ms: float,
+        burn_rate: float,
+        active_incidents: int
+    ):
+
+        return (
+            self
+            .post_deployment_stability_monitoring_engine
+            .evaluate(
+                deployment_id,
+                error_rate,
+                latency_ms,
+                burn_rate,
+                active_incidents
             )
         )
