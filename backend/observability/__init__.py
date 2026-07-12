@@ -66,3 +66,7 @@ from .reliability_aware_release_gating_engine import (
     ReleaseGateDecision,
     ReliabilityAwareReleaseGatingEngine
 )
+from .change_risk_assessment_engine import (
+    ChangeRiskAssessment,
+    ChangeRiskAssessmentEngine
+)

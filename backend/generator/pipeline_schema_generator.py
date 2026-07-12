@@ -1173,6 +1173,9 @@ from backend.observability import (
 from backend.observability import (
     ReliabilityAwareReleaseGatingEngine
 )
+from backend.observability import (
+    ChangeRiskAssessmentEngine
+)
 
 
 
@@ -2645,6 +2648,10 @@ class PipelineSchemaGenerator:
 
         self.reliability_aware_release_gating_engine = (
             ReliabilityAwareReleaseGatingEngine()
+        )
+
+        self.change_risk_assessment_engine = (
+            ChangeRiskAssessmentEngine()
         )
 
     def generate_cost_assessment(
@@ -8290,5 +8297,26 @@ class PipelineSchemaGenerator:
                 service_name,
                 error_budget_exhausted,
                 burn_rate
+            )
+        )
+
+    def assess_change_risk(
+        self,
+        change_id: str,
+        files_changed: int,
+        affected_components: int,
+        database_change: bool,
+        infrastructure_change: bool
+    ):
+
+        return (
+            self
+            .change_risk_assessment_engine
+            .assess(
+                change_id,
+                files_changed,
+                affected_components,
+                database_change,
+                infrastructure_change
             )
         )
