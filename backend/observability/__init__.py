@@ -78,3 +78,7 @@ from .deployment_health_verification_engine import (
     DeploymentHealthVerification,
     DeploymentHealthVerificationEngine
 )
+from .progressive_rollout_promotion_engine import (
+    RolloutPromotionDecision,
+    ProgressiveRolloutPromotionEngine
+)

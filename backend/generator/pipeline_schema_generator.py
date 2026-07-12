@@ -1182,6 +1182,9 @@ from backend.observability import (
 from backend.observability import (
     DeploymentHealthVerificationEngine
 )
+from backend.observability import (
+    ProgressiveRolloutPromotionEngine
+)
 
 
 
@@ -2666,6 +2669,10 @@ class PipelineSchemaGenerator:
 
         self.deployment_health_verification_engine = (
             DeploymentHealthVerificationEngine()
+        )
+
+        self.progressive_rollout_promotion_engine = (
+            ProgressiveRolloutPromotionEngine()
         )
 
     def generate_cost_assessment(
@@ -8366,5 +8373,22 @@ class PipelineSchemaGenerator:
                 error_rate,
                 latency_ms,
                 health_check_passed
+            )
+        )
+
+    def evaluate_rollout_promotion(
+        self,
+        deployment_id: str,
+        current_traffic_percentage: int,
+        deployment_healthy: bool
+    ):
+
+        return (
+            self
+            .progressive_rollout_promotion_engine
+            .evaluate(
+                deployment_id,
+                current_traffic_percentage,
+                deployment_healthy
             )
         )
