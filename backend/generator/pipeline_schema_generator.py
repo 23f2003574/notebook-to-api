@@ -1248,6 +1248,10 @@ from backend.observability import (
 from backend.observability import (
     DeploymentGovernanceTraceEngine
 )
+from backend.observability import (
+    DeploymentGovernanceTraceQuery,
+    DeploymentGovernanceTraceRegistry
+)
 
 
 
@@ -2796,6 +2800,13 @@ class PipelineSchemaGenerator:
 
         self.deployment_governance_trace_engine = (
             DeploymentGovernanceTraceEngine()
+        )
+
+        self.deployment_governance_trace_registry = (
+            DeploymentGovernanceTraceRegistry(
+                self
+                .deployment_governance_trace_engine
+            )
         )
 
     def generate_cost_assessment(
@@ -9593,4 +9604,100 @@ class PipelineSchemaGenerator:
                 ),
                 receipt.receipt_id
             )
+        )
+
+    def register_deployment_governance_trace(
+        self,
+        trace
+    ):
+
+        return (
+            self
+            .deployment_governance_trace_registry
+            .register(
+                trace
+            )
+        )
+
+    def get_deployment_governance_trace(
+        self,
+        trace_id: str
+    ):
+
+        return (
+            self
+            .deployment_governance_trace_registry
+            .get_by_trace_id(
+                trace_id
+            )
+        )
+
+    def get_deployment_governance_trace_by_deployment(
+        self,
+        deployment_id: str
+    ):
+
+        return (
+            self
+            .deployment_governance_trace_registry
+            .get_by_deployment_id(
+                deployment_id
+            )
+        )
+
+    def list_deployment_governance_traces(
+        self
+    ):
+
+        return (
+            self
+            .deployment_governance_trace_registry
+            .list_all()
+        )
+
+    def query_deployment_governance_traces(
+        self,
+        service_name: str | None = None,
+        environment: str | None = None,
+        current_stage: str | None = None,
+        final_status: str | None = None,
+        completed: bool | None = None
+    ):
+
+        query = (
+            DeploymentGovernanceTraceQuery(
+
+                service_name=
+                    service_name,
+
+                environment=
+                    environment,
+
+                current_stage=
+                    current_stage,
+
+                final_status=
+                    final_status,
+
+                completed=
+                    completed
+            )
+        )
+
+        return (
+            self
+            .deployment_governance_trace_registry
+            .query(
+                query
+            )
+        )
+
+    def get_deployment_governance_statistics(
+        self
+    ):
+
+        return (
+            self
+            .deployment_governance_trace_registry
+            .statistics()
         )

@@ -153,3 +153,8 @@ from .deployment_governance_trace_engine import (
     DeploymentGovernanceTraceSummary,
     DeploymentGovernanceTraceEngine
 )
+from .deployment_governance_trace_registry import (
+    DeploymentGovernanceTraceQuery,
+    DeploymentGovernanceTraceRegistryStatistics,
+    DeploymentGovernanceTraceRegistry
+)

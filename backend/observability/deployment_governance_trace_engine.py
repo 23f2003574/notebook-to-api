@@ -33,6 +33,8 @@ class DeploymentGovernanceTrace:
 
     artifact_digest: str
 
+    created_at: str
+
     events: List[
         DeploymentGovernanceTraceEvent
     ] = field(
@@ -83,7 +85,12 @@ class DeploymentGovernanceTraceEngine:
                 .lower(),
 
             artifact_digest=
-                artifact_digest
+                artifact_digest,
+
+            created_at=
+                datetime
+                .now(timezone.utc)
+                .isoformat()
         )
 
     def record_event(
