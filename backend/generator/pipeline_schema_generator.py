@@ -1218,6 +1218,12 @@ from backend.observability import (
 from backend.observability import (
     DeploymentGovernanceOutcome
 )
+from backend.observability import (
+    DeploymentApprovalAuthorizationEngine
+)
+from backend.observability import (
+    AuthorizedDeploymentApprovalResult
+)
 
 
 
@@ -2742,6 +2748,10 @@ class PipelineSchemaGenerator:
 
         self.deployment_approval_workflow_engine = (
             DeploymentApprovalWorkflowEngine()
+        )
+
+        self.deployment_approval_authorization_engine = (
+            DeploymentApprovalAuthorizationEngine()
         )
 
     def generate_cost_assessment(
@@ -8874,6 +8884,101 @@ class PipelineSchemaGenerator:
 
             audit_record=
                 audited_decision.audit_record,
+
+            approval_request=
+                approval_request
+        )
+
+    def authorize_deployment_approval(
+        self,
+        actor_id: str,
+        role: str,
+        environment: str
+    ):
+
+        return (
+            self
+            .deployment_approval_authorization_engine
+            .authorize(
+                actor_id,
+                role,
+                environment
+            )
+        )
+
+    def authorize_and_approve_deployment(
+        self,
+        approval_request,
+        actor_id: str,
+        role: str,
+        reason: str
+    ):
+
+        authorization = (
+            self
+            .deployment_approval_authorization_engine
+            .authorize(
+                actor_id,
+                role,
+                approval_request.environment
+            )
+        )
+
+        if authorization.authorized:
+
+            approval_request = (
+                self
+                .deployment_approval_workflow_engine
+                .approve(
+                    approval_request,
+                    actor_id,
+                    reason
+                )
+            )
+
+        return AuthorizedDeploymentApprovalResult(
+
+            authorization=
+                authorization,
+
+            approval_request=
+                approval_request
+        )
+
+    def authorize_and_reject_deployment(
+        self,
+        approval_request,
+        actor_id: str,
+        role: str,
+        reason: str
+    ):
+
+        authorization = (
+            self
+            .deployment_approval_authorization_engine
+            .authorize(
+                actor_id,
+                role,
+                approval_request.environment
+            )
+        )
+
+        if authorization.authorized:
+
+            approval_request = (
+                self
+                .deployment_approval_workflow_engine
+                .reject(
+                    approval_request,
+                    actor_id,
+                    reason
+                )
+            )
+
+        return AuthorizedDeploymentApprovalResult(
+
+            authorization=
+                authorization,
 
             approval_request=
                 approval_request

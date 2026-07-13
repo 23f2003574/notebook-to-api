@@ -121,3 +121,8 @@ from .deployment_approval_workflow_engine import (
     DeploymentGovernanceOutcome,
     DeploymentApprovalWorkflowEngine
 )
+from .deployment_approval_authorization_engine import (
+    DeploymentApprovalAuthorizationDecision,
+    AuthorizedDeploymentApprovalResult,
+    DeploymentApprovalAuthorizationEngine
+)
