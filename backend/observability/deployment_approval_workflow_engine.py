@@ -15,6 +15,10 @@ class DeploymentApprovalRequest:
 
     environment: str
 
+    artifact_digest: str
+
+    validity_minutes: int
+
     requested_by: str
 
     status: str
@@ -47,8 +51,17 @@ class DeploymentApprovalWorkflowEngine:
         audit_id: str,
         service_name: str,
         environment: str,
+        artifact_digest: str,
+        validity_minutes: int,
         requested_by: str
     ):
+
+        if validity_minutes <= 0:
+
+            raise ValueError(
+                "approval validity duration "
+                "must be greater than zero"
+            )
 
         return DeploymentApprovalRequest(
 
@@ -63,6 +76,12 @@ class DeploymentApprovalWorkflowEngine:
 
             environment=
                 environment,
+
+            artifact_digest=
+                artifact_digest,
+
+            validity_minutes=
+                validity_minutes,
 
             requested_by=
                 requested_by,

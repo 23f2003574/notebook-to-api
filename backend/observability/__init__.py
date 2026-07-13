@@ -126,3 +126,7 @@ from .deployment_approval_authorization_engine import (
     AuthorizedDeploymentApprovalResult,
     DeploymentApprovalAuthorizationEngine
 )
+from .deployment_approval_validity_engine import (
+    DeploymentApprovalValidityDecision,
+    DeploymentApprovalValidityEngine
+)

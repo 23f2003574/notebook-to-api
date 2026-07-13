@@ -1224,6 +1224,9 @@ from backend.observability import (
 from backend.observability import (
     AuthorizedDeploymentApprovalResult
 )
+from backend.observability import (
+    DeploymentApprovalValidityEngine
+)
 
 
 
@@ -2752,6 +2755,10 @@ class PipelineSchemaGenerator:
 
         self.deployment_approval_authorization_engine = (
             DeploymentApprovalAuthorizationEngine()
+        )
+
+        self.deployment_approval_validity_engine = (
+            DeploymentApprovalValidityEngine()
         )
 
     def generate_cost_assessment(
@@ -8783,6 +8790,8 @@ class PipelineSchemaGenerator:
         audit_id: str,
         service_name: str,
         environment: str,
+        artifact_digest: str,
+        validity_minutes: int,
         requested_by: str
     ):
 
@@ -8793,6 +8802,8 @@ class PipelineSchemaGenerator:
                 audit_id,
                 service_name,
                 environment,
+                artifact_digest,
+                validity_minutes,
                 requested_by
             )
         )
@@ -8838,6 +8849,8 @@ class PipelineSchemaGenerator:
         risk_level: str,
         error_budget_exhausted: bool,
         burn_rate: float,
+        artifact_digest: str,
+        validity_minutes: int,
         requested_by: str
     ):
 
@@ -8872,6 +8885,10 @@ class PipelineSchemaGenerator:
                     service_name,
 
                     environment,
+
+                    artifact_digest,
+
+                    validity_minutes,
 
                     requested_by
                 )
@@ -8982,6 +8999,67 @@ class PipelineSchemaGenerator:
 
             approval_request=
                 approval_request
+        )
+
+    def evaluate_deployment_approval_validity(
+        self,
+        approval_id: str,
+        approval_status: str,
+        approved_at: str,
+        validity_minutes: int,
+        approved_artifact_digest: str,
+        deployment_artifact_digest: str,
+        approved_environment: str,
+        deployment_environment: str
+    ):
+
+        return (
+            self
+            .deployment_approval_validity_engine
+            .evaluate(
+                approval_id,
+                approval_status,
+                approved_at,
+                validity_minutes,
+                approved_artifact_digest,
+                deployment_artifact_digest,
+                approved_environment,
+                deployment_environment
+            )
+        )
+
+    def validate_deployment_approval(
+        self,
+        approval_request,
+        deployment_artifact_digest: str,
+        deployment_environment: str
+    ):
+
+        if approval_request.decided_at is None:
+
+            approved_at = (
+                approval_request.requested_at
+            )
+
+        else:
+
+            approved_at = (
+                approval_request.decided_at
+            )
+
+        return (
+            self
+            .deployment_approval_validity_engine
+            .evaluate(
+                approval_request.approval_id,
+                approval_request.status,
+                approved_at,
+                approval_request.validity_minutes,
+                approval_request.artifact_digest,
+                deployment_artifact_digest,
+                approval_request.environment,
+                deployment_environment
+            )
         )
 
     def get_deployment_governance_state(
