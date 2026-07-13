@@ -141,3 +141,9 @@ from .deployment_execution_authorization_token_engine import (
     AuthorizedDeploymentExecution,
     DeploymentExecutionAuthorizationTokenEngine
 )
+from .deployment_execution_receipt_engine import (
+    DeploymentExecutionReceipt,
+    DeploymentExecutionReceiptValidation,
+    DeploymentExecutionHandoff,
+    DeploymentExecutionReceiptEngine
+)

@@ -1239,6 +1239,12 @@ from backend.observability import (
 from backend.observability import (
     AuthorizedDeploymentExecution
 )
+from backend.observability import (
+    DeploymentExecutionReceiptEngine
+)
+from backend.observability import (
+    DeploymentExecutionHandoff
+)
 
 
 
@@ -2779,6 +2785,10 @@ class PipelineSchemaGenerator:
 
         self.deployment_execution_authorization_token_engine = (
             DeploymentExecutionAuthorizationTokenEngine()
+        )
+
+        self.deployment_execution_receipt_engine = (
+            DeploymentExecutionReceiptEngine()
         )
 
     def generate_cost_assessment(
@@ -9305,5 +9315,116 @@ class PipelineSchemaGenerator:
             .deployment_governance_state_projector
             .project(
                 trace
+            )
+        )
+
+    def create_deployment_execution_receipt(
+        self,
+        token,
+        deployment_id: str,
+        artifact_digest: str,
+        environment: str,
+        executor_id: str
+    ):
+
+        return (
+            self
+            .deployment_execution_receipt_engine
+            .create(
+                token,
+                deployment_id,
+                artifact_digest,
+                environment,
+                executor_id
+            )
+        )
+
+    def validate_deployment_execution_receipt(
+        self,
+        receipt,
+        token,
+        deployment_id: str,
+        artifact_digest: str,
+        environment: str
+    ):
+
+        return (
+            self
+            .deployment_execution_receipt_engine
+            .validate(
+                receipt,
+                token,
+                deployment_id,
+                artifact_digest,
+                environment
+            )
+        )
+
+    def handoff_authorized_deployment_execution(
+        self,
+        token,
+        deployment_id: str,
+        artifact_digest: str,
+        environment: str,
+        executor_id: str
+    ):
+
+        consumed_token = (
+            self
+            .deployment_execution_authorization_token_engine
+            .consume(
+                token,
+                deployment_id,
+                artifact_digest,
+                environment
+            )
+        )
+
+        execution_receipt = (
+            self
+            .deployment_execution_receipt_engine
+            .create(
+                consumed_token,
+                deployment_id,
+                artifact_digest,
+                environment,
+                executor_id
+            )
+        )
+
+        return DeploymentExecutionHandoff(
+
+            authorization_token=
+                consumed_token,
+
+            execution_receipt=
+                execution_receipt
+        )
+
+    def mark_deployment_execution_succeeded(
+        self,
+        receipt
+    ):
+
+        return (
+            self
+            .deployment_execution_receipt_engine
+            .mark_succeeded(
+                receipt
+            )
+        )
+
+    def mark_deployment_execution_failed(
+        self,
+        receipt,
+        failure_reason: str
+    ):
+
+        return (
+            self
+            .deployment_execution_receipt_engine
+            .mark_failed(
+                receipt,
+                failure_reason
             )
         )
