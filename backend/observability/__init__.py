@@ -102,3 +102,7 @@ from .sre_progressive_delivery_platform import (
     ServiceReliabilityObjectiveResult,
     SREProgressiveDeliveryPlatform
 )
+from .deployment_governance_state_projector import (
+    DeploymentGovernanceState,
+    DeploymentGovernanceStateProjector
+)

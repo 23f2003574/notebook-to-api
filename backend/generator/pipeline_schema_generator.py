@@ -1200,6 +1200,9 @@ from backend.observability import (
 from backend.observability import (
     SREProgressiveDeliveryPlatform
 )
+from backend.observability import (
+    DeploymentGovernanceStateProjector
+)
 
 
 
@@ -2708,6 +2711,10 @@ class PipelineSchemaGenerator:
 
         self.sre_progressive_delivery_platform = (
             SREProgressiveDeliveryPlatform()
+        )
+
+        self.deployment_governance_state_projector = (
+            DeploymentGovernanceStateProjector()
         )
 
     def generate_cost_assessment(
@@ -8634,5 +8641,43 @@ class PipelineSchemaGenerator:
                 latency_ms,
                 burn_rate,
                 active_incidents
+            )
+        )
+
+    def project_deployment_governance_state(
+        self,
+        trace
+    ):
+
+        return (
+            self
+            .deployment_governance_state_projector
+            .project(
+                trace
+            )
+        )
+
+    def get_deployment_governance_state(
+        self,
+        deployment_id: str
+    ):
+
+        trace = (
+            self
+            .deployment_governance_trace_registry
+            .get_by_deployment_id(
+                deployment_id
+            )
+        )
+
+        if trace is None:
+
+            return None
+
+        return (
+            self
+            .deployment_governance_state_projector
+            .project(
+                trace
             )
         )
