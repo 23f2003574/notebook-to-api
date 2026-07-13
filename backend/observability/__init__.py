@@ -116,3 +116,8 @@ from .deployment_decision_audit_engine import (
     AuditedDeploymentDecision,
     DeploymentDecisionAuditEngine
 )
+from .deployment_approval_workflow_engine import (
+    DeploymentApprovalRequest,
+    DeploymentGovernanceOutcome,
+    DeploymentApprovalWorkflowEngine
+)

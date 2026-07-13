@@ -1212,6 +1212,12 @@ from backend.observability import (
 from backend.observability import (
     AuditedDeploymentDecision
 )
+from backend.observability import (
+    DeploymentApprovalWorkflowEngine
+)
+from backend.observability import (
+    DeploymentGovernanceOutcome
+)
 
 
 
@@ -2732,6 +2738,10 @@ class PipelineSchemaGenerator:
 
         self.deployment_decision_audit_engine = (
             DeploymentDecisionAuditEngine()
+        )
+
+        self.deployment_approval_workflow_engine = (
+            DeploymentApprovalWorkflowEngine()
         )
 
     def generate_cost_assessment(
@@ -8756,6 +8766,117 @@ class PipelineSchemaGenerator:
 
             audit_record=
                 audit_record
+        )
+
+    def request_deployment_approval(
+        self,
+        audit_id: str,
+        service_name: str,
+        environment: str,
+        requested_by: str
+    ):
+
+        return (
+            self
+            .deployment_approval_workflow_engine
+            .request(
+                audit_id,
+                service_name,
+                environment,
+                requested_by
+            )
+        )
+
+    def approve_deployment(
+        self,
+        approval_request,
+        approved_by: str,
+        reason: str
+    ):
+
+        return (
+            self
+            .deployment_approval_workflow_engine
+            .approve(
+                approval_request,
+                approved_by,
+                reason
+            )
+        )
+
+    def reject_deployment(
+        self,
+        approval_request,
+        rejected_by: str,
+        reason: str
+    ):
+
+        return (
+            self
+            .deployment_approval_workflow_engine
+            .reject(
+                approval_request,
+                rejected_by,
+                reason
+            )
+        )
+
+    def evaluate_deployment_governance(
+        self,
+        service_name: str,
+        environment: str,
+        risk_level: str,
+        error_budget_exhausted: bool,
+        burn_rate: float,
+        requested_by: str
+    ):
+
+        audited_decision = (
+            self
+            .evaluate_and_audit_deployment_policy(
+                service_name,
+                environment,
+                risk_level,
+                error_budget_exhausted,
+                burn_rate
+            )
+        )
+
+        approval_request = None
+
+        if (
+            audited_decision
+            .decision
+            .decision
+            == "require_approval"
+        ):
+
+            approval_request = (
+                self
+                .deployment_approval_workflow_engine
+                .request(
+                    audited_decision
+                    .audit_record
+                    .audit_id,
+
+                    service_name,
+
+                    environment,
+
+                    requested_by
+                )
+            )
+
+        return DeploymentGovernanceOutcome(
+
+            decision=
+                audited_decision.decision,
+
+            audit_record=
+                audited_decision.audit_record,
+
+            approval_request=
+                approval_request
         )
 
     def get_deployment_governance_state(
