@@ -1233,6 +1233,12 @@ from backend.observability import (
 from backend.observability import (
     DeploymentExecutionReadiness
 )
+from backend.observability import (
+    DeploymentExecutionAuthorizationTokenEngine
+)
+from backend.observability import (
+    AuthorizedDeploymentExecution
+)
 
 
 
@@ -2769,6 +2775,10 @@ class PipelineSchemaGenerator:
 
         self.deployment_execution_eligibility_engine = (
             DeploymentExecutionEligibilityEngine()
+        )
+
+        self.deployment_execution_authorization_token_engine = (
+            DeploymentExecutionAuthorizationTokenEngine()
         )
 
     def generate_cost_assessment(
@@ -9172,6 +9182,105 @@ class PipelineSchemaGenerator:
 
             eligibility=
                 eligibility
+        )
+
+    def issue_deployment_execution_authorization(
+        self,
+        deployment_id: str,
+        artifact_digest: str,
+        environment: str,
+        eligibility_decision: str,
+        validity_minutes: int = 5
+    ):
+
+        return (
+            self
+            .deployment_execution_authorization_token_engine
+            .issue(
+                deployment_id,
+                artifact_digest,
+                environment,
+                eligibility_decision,
+                validity_minutes
+            )
+        )
+
+    def validate_deployment_execution_authorization(
+        self,
+        token,
+        deployment_id: str,
+        artifact_digest: str,
+        environment: str
+    ):
+
+        return (
+            self
+            .deployment_execution_authorization_token_engine
+            .validate(
+                token,
+                deployment_id,
+                artifact_digest,
+                environment
+            )
+        )
+
+    def consume_deployment_execution_authorization(
+        self,
+        token,
+        deployment_id: str,
+        artifact_digest: str,
+        environment: str
+    ):
+
+        return (
+            self
+            .deployment_execution_authorization_token_engine
+            .consume(
+                token,
+                deployment_id,
+                artifact_digest,
+                environment
+            )
+        )
+
+    def authorize_ready_deployment_execution(
+        self,
+        deployment_id: str,
+        artifact_digest: str,
+        environment: str,
+        readiness,
+        validity_minutes: int = 5
+    ):
+
+        authorization_token = None
+
+        if (
+            readiness
+            .eligibility
+            .eligible
+        ):
+
+            authorization_token = (
+                self
+                .deployment_execution_authorization_token_engine
+                .issue(
+                    deployment_id,
+                    artifact_digest,
+                    environment,
+                    readiness
+                    .eligibility
+                    .decision,
+                    validity_minutes
+                )
+            )
+
+        return AuthorizedDeploymentExecution(
+
+            readiness=
+                readiness,
+
+            authorization_token=
+                authorization_token
         )
 
     def get_deployment_governance_state(

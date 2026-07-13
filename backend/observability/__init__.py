@@ -135,3 +135,9 @@ from .deployment_execution_eligibility_engine import (
     DeploymentExecutionReadiness,
     DeploymentExecutionEligibilityEngine
 )
+from .deployment_execution_authorization_token_engine import (
+    DeploymentExecutionAuthorizationToken,
+    DeploymentExecutionAuthorizationValidation,
+    AuthorizedDeploymentExecution,
+    DeploymentExecutionAuthorizationTokenEngine
+)
