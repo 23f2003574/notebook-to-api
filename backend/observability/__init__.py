@@ -147,3 +147,9 @@ from .deployment_execution_receipt_engine import (
     DeploymentExecutionHandoff,
     DeploymentExecutionReceiptEngine
 )
+from .deployment_governance_trace_engine import (
+    DeploymentGovernanceTraceEvent,
+    DeploymentGovernanceTrace,
+    DeploymentGovernanceTraceSummary,
+    DeploymentGovernanceTraceEngine
+)

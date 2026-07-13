@@ -1245,6 +1245,9 @@ from backend.observability import (
 from backend.observability import (
     DeploymentExecutionHandoff
 )
+from backend.observability import (
+    DeploymentGovernanceTraceEngine
+)
 
 
 
@@ -2789,6 +2792,10 @@ class PipelineSchemaGenerator:
 
         self.deployment_execution_receipt_engine = (
             DeploymentExecutionReceiptEngine()
+        )
+
+        self.deployment_governance_trace_engine = (
+            DeploymentGovernanceTraceEngine()
         )
 
     def generate_cost_assessment(
@@ -9426,5 +9433,164 @@ class PipelineSchemaGenerator:
             .mark_failed(
                 receipt,
                 failure_reason
+            )
+        )
+
+    def create_deployment_governance_trace(
+        self,
+        deployment_id: str,
+        service_name: str,
+        environment: str,
+        artifact_digest: str
+    ):
+
+        return (
+            self
+            .deployment_governance_trace_engine
+            .create(
+                deployment_id,
+                service_name,
+                environment,
+                artifact_digest
+            )
+        )
+
+    def record_deployment_governance_trace_event(
+        self,
+        trace,
+        event_type: str,
+        status: str,
+        details: str,
+        reference_id: str | None = None
+    ):
+
+        return (
+            self
+            .deployment_governance_trace_engine
+            .record_event(
+                trace,
+                event_type,
+                status,
+                details,
+                reference_id
+            )
+        )
+
+    def summarize_deployment_governance_trace(
+        self,
+        trace
+    ):
+
+        return (
+            self
+            .deployment_governance_trace_engine
+            .summarize(
+                trace
+            )
+        )
+
+    def validate_deployment_governance_trace_context(
+        self,
+        trace,
+        deployment_id: str,
+        artifact_digest: str,
+        environment: str
+    ):
+
+        return (
+            self
+            .deployment_governance_trace_engine
+            .validate_context(
+                trace,
+                deployment_id,
+                artifact_digest,
+                environment
+            )
+        )
+
+    def trace_deployment_policy_decision(
+        self,
+        trace,
+        decision,
+        audit_record
+    ):
+
+        return (
+            self
+            .deployment_governance_trace_engine
+            .record_event(
+                trace,
+                "policy_evaluation",
+                decision.decision,
+                "; ".join(
+                    decision.reasons
+                ),
+                audit_record.audit_id
+            )
+        )
+
+    def trace_deployment_approval_request(
+        self,
+        trace,
+        approval_request
+    ):
+
+        return (
+            self
+            .deployment_governance_trace_engine
+            .record_event(
+                trace,
+                "approval_request",
+                approval_request.status,
+                "deployment approval request created",
+                approval_request.approval_id
+            )
+        )
+
+    def trace_deployment_execution_authorization(
+        self,
+        trace,
+        token
+    ):
+
+        status = (
+            "consumed"
+            if token.consumed
+            else "issued"
+        )
+
+        return (
+            self
+            .deployment_governance_trace_engine
+            .record_event(
+                trace,
+                "execution_authorization",
+                status,
+                (
+                    "deployment execution "
+                    "authorization state recorded"
+                ),
+                token.token_id
+            )
+        )
+
+    def trace_deployment_execution_receipt(
+        self,
+        trace,
+        receipt
+    ):
+
+        return (
+            self
+            .deployment_governance_trace_engine
+            .record_event(
+                trace,
+                "deployment_execution",
+                receipt.execution_status,
+                (
+                    "deployment execution "
+                    "receipt state recorded"
+                ),
+                receipt.receipt_id
             )
         )
