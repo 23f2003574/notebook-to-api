@@ -158,3 +158,9 @@ from .deployment_governance_trace_registry import (
     DeploymentGovernanceTraceRegistryStatistics,
     DeploymentGovernanceTraceRegistry
 )
+from .deployment_governance_projection_engine import (
+    DeploymentGovernanceListProjection,
+    DeploymentGovernanceTimelineEventProjection,
+    DeploymentGovernanceDetailProjection,
+    DeploymentGovernanceProjectionEngine
+)

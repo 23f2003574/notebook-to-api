@@ -1252,6 +1252,9 @@ from backend.observability import (
     DeploymentGovernanceTraceQuery,
     DeploymentGovernanceTraceRegistry
 )
+from backend.observability import (
+    DeploymentGovernanceProjectionEngine
+)
 
 
 
@@ -2804,6 +2807,13 @@ class PipelineSchemaGenerator:
 
         self.deployment_governance_trace_registry = (
             DeploymentGovernanceTraceRegistry(
+                self
+                .deployment_governance_trace_engine
+            )
+        )
+
+        self.deployment_governance_projection_engine = (
+            DeploymentGovernanceProjectionEngine(
                 self
                 .deployment_governance_trace_engine
             )
@@ -9700,4 +9710,121 @@ class PipelineSchemaGenerator:
             self
             .deployment_governance_trace_registry
             .statistics()
+        )
+
+    def project_deployment_governance_list_item(
+        self,
+        trace
+    ):
+
+        return (
+            self
+            .deployment_governance_projection_engine
+            .project_list_item(
+                trace
+            )
+        )
+
+    def project_deployment_governance_list(
+        self,
+        traces
+    ):
+
+        return (
+            self
+            .deployment_governance_projection_engine
+            .project_list(
+                traces
+            )
+        )
+
+    def project_deployment_governance_detail(
+        self,
+        trace
+    ):
+
+        return (
+            self
+            .deployment_governance_projection_engine
+            .project_detail(
+                trace
+            )
+        )
+
+    def query_deployment_governance_history(
+        self,
+        service_name: str | None = None,
+        environment: str | None = None,
+        current_stage: str | None = None,
+        final_status: str | None = None,
+        completed: bool | None = None
+    ):
+
+        traces = (
+            self
+            .query_deployment_governance_traces(
+                service_name,
+                environment,
+                current_stage,
+                final_status,
+                completed
+            )
+        )
+
+        return (
+            self
+            .deployment_governance_projection_engine
+            .project_list(
+                traces
+            )
+        )
+
+    def get_deployment_governance_detail(
+        self,
+        deployment_id: str
+    ):
+
+        trace = (
+            self
+            .deployment_governance_trace_registry
+            .get_by_deployment_id(
+                deployment_id
+            )
+        )
+
+        if trace is None:
+
+            return None
+
+        return (
+            self
+            .deployment_governance_projection_engine
+            .project_detail(
+                trace
+            )
+        )
+
+    def get_deployment_governance_detail_by_trace(
+        self,
+        trace_id: str
+    ):
+
+        trace = (
+            self
+            .deployment_governance_trace_registry
+            .get_by_trace_id(
+                trace_id
+            )
+        )
+
+        if trace is None:
+
+            return None
+
+        return (
+            self
+            .deployment_governance_projection_engine
+            .project_detail(
+                trace
+            )
         )
