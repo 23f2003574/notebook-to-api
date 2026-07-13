@@ -164,3 +164,10 @@ from .deployment_governance_projection_engine import (
     DeploymentGovernanceDetailProjection,
     DeploymentGovernanceProjectionEngine
 )
+from .deployment_governance_orchestrator import (
+    DeploymentGovernanceInitiation,
+    DeploymentGovernanceApprovalResult,
+    DeploymentGovernanceExecutionPreparation,
+    DeploymentGovernanceExecutionHandoffResult,
+    DeploymentGovernanceOrchestrator
+)

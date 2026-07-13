@@ -1255,6 +1255,9 @@ from backend.observability import (
 from backend.observability import (
     DeploymentGovernanceProjectionEngine
 )
+from backend.observability import (
+    DeploymentGovernanceOrchestrator
+)
 
 
 
@@ -2816,6 +2819,41 @@ class PipelineSchemaGenerator:
             DeploymentGovernanceProjectionEngine(
                 self
                 .deployment_governance_trace_engine
+            )
+        )
+
+        self.deployment_governance_orchestrator = (
+            DeploymentGovernanceOrchestrator(
+
+                self
+                .deployment_governance_trace_engine,
+
+                self
+                .deployment_governance_trace_registry,
+
+                self
+                .deployment_policy_evaluation_engine,
+
+                self
+                .deployment_decision_audit_engine,
+
+                self
+                .deployment_approval_workflow_engine,
+
+                self
+                .deployment_approval_authorization_engine,
+
+                self
+                .deployment_approval_validity_engine,
+
+                self
+                .deployment_execution_eligibility_engine,
+
+                self
+                .deployment_execution_authorization_token_engine,
+
+                self
+                .deployment_execution_receipt_engine
             )
         )
 
@@ -9826,5 +9864,132 @@ class PipelineSchemaGenerator:
             .deployment_governance_projection_engine
             .project_detail(
                 trace
+            )
+        )
+
+    def initiate_deployment_governance(
+        self,
+        deployment_id: str,
+        service_name: str,
+        environment: str,
+        artifact_digest: str,
+        risk_level: str,
+        error_budget_exhausted: bool,
+        burn_rate: float,
+        requested_by: str,
+        approval_validity_minutes: int = 60
+    ):
+
+        return (
+            self
+            .deployment_governance_orchestrator
+            .initiate(
+                deployment_id,
+                service_name,
+                environment,
+                artifact_digest,
+                risk_level,
+                error_budget_exhausted,
+                burn_rate,
+                requested_by,
+                approval_validity_minutes
+            )
+        )
+
+    def decide_deployment_governance_approval(
+        self,
+        trace,
+        approval_request,
+        actor_id: str,
+        actor_roles,
+        decision: str,
+        reason: str
+    ):
+
+        return (
+            self
+            .deployment_governance_orchestrator
+            .decide_approval(
+                trace,
+                approval_request,
+                actor_id,
+                actor_roles,
+                decision,
+                reason
+            )
+        )
+
+    def prepare_governed_deployment_execution(
+        self,
+        trace,
+        service_name: str,
+        environment: str,
+        risk_level: str,
+        error_budget_exhausted: bool,
+        burn_rate: float,
+        active_incidents: int,
+        deployment_id: str,
+        artifact_digest: str,
+        approval_request=None,
+        authorization_validity_minutes: int = 5
+    ):
+
+        return (
+            self
+            .deployment_governance_orchestrator
+            .prepare_execution(
+                trace,
+                service_name,
+                environment,
+                risk_level,
+                error_budget_exhausted,
+                burn_rate,
+                active_incidents,
+                deployment_id,
+                artifact_digest,
+                approval_request,
+                authorization_validity_minutes
+            )
+        )
+
+    def handoff_governed_deployment_execution(
+        self,
+        trace,
+        token,
+        deployment_id: str,
+        artifact_digest: str,
+        environment: str,
+        executor_id: str
+    ):
+
+        return (
+            self
+            .deployment_governance_orchestrator
+            .handoff_execution(
+                trace,
+                token,
+                deployment_id,
+                artifact_digest,
+                environment,
+                executor_id
+            )
+        )
+
+    def complete_governed_deployment_execution(
+        self,
+        trace,
+        receipt,
+        succeeded: bool,
+        failure_reason: str | None = None
+    ):
+
+        return (
+            self
+            .deployment_governance_orchestrator
+            .complete_execution(
+                trace,
+                receipt,
+                succeeded,
+                failure_reason
             )
         )
