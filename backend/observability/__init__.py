@@ -111,3 +111,8 @@ from .deployment_policy_evaluation_engine import (
     DeploymentPolicyDecision,
     DeploymentPolicyEvaluationEngine
 )
+from .deployment_decision_audit_engine import (
+    DeploymentDecisionAuditRecord,
+    AuditedDeploymentDecision,
+    DeploymentDecisionAuditEngine
+)

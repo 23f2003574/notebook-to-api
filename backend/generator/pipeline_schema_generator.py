@@ -1206,6 +1206,12 @@ from backend.observability import (
 from backend.observability import (
     DeploymentPolicyEvaluationEngine
 )
+from backend.observability import (
+    DeploymentDecisionAuditEngine
+)
+from backend.observability import (
+    AuditedDeploymentDecision
+)
 
 
 
@@ -2722,6 +2728,10 @@ class PipelineSchemaGenerator:
 
         self.deployment_policy_evaluation_engine = (
             DeploymentPolicyEvaluationEngine()
+        )
+
+        self.deployment_decision_audit_engine = (
+            DeploymentDecisionAuditEngine()
         )
 
     def generate_cost_assessment(
@@ -8683,6 +8693,69 @@ class PipelineSchemaGenerator:
                 error_budget_exhausted,
                 burn_rate
             )
+        )
+
+    def record_deployment_decision_audit(
+        self,
+        service_name: str,
+        environment: str,
+        decision: str,
+        matched_rules: list,
+        reasons: list
+    ):
+
+        return (
+            self
+            .deployment_decision_audit_engine
+            .record(
+                service_name,
+                environment,
+                decision,
+                matched_rules,
+                reasons
+            )
+        )
+
+    def evaluate_and_audit_deployment_policy(
+        self,
+        service_name: str,
+        environment: str,
+        risk_level: str,
+        error_budget_exhausted: bool,
+        burn_rate: float
+    ):
+
+        decision = (
+            self
+            .deployment_policy_evaluation_engine
+            .evaluate(
+                service_name,
+                environment,
+                risk_level,
+                error_budget_exhausted,
+                burn_rate
+            )
+        )
+
+        audit_record = (
+            self
+            .deployment_decision_audit_engine
+            .record(
+                decision.service_name,
+                decision.environment,
+                decision.decision,
+                decision.matched_rules,
+                decision.reasons
+            )
+        )
+
+        return AuditedDeploymentDecision(
+
+            decision=
+                decision,
+
+            audit_record=
+                audit_record
         )
 
     def get_deployment_governance_state(
