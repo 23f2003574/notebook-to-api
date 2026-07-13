@@ -1203,6 +1203,9 @@ from backend.observability import (
 from backend.observability import (
     DeploymentGovernanceStateProjector
 )
+from backend.observability import (
+    DeploymentPolicyEvaluationEngine
+)
 
 
 
@@ -2715,6 +2718,10 @@ class PipelineSchemaGenerator:
 
         self.deployment_governance_state_projector = (
             DeploymentGovernanceStateProjector()
+        )
+
+        self.deployment_policy_evaluation_engine = (
+            DeploymentPolicyEvaluationEngine()
         )
 
     def generate_cost_assessment(
@@ -8654,6 +8661,27 @@ class PipelineSchemaGenerator:
             .deployment_governance_state_projector
             .project(
                 trace
+            )
+        )
+
+    def evaluate_deployment_policy(
+        self,
+        service_name: str,
+        environment: str,
+        risk_level: str,
+        error_budget_exhausted: bool,
+        burn_rate: float
+    ):
+
+        return (
+            self
+            .deployment_policy_evaluation_engine
+            .evaluate(
+                service_name,
+                environment,
+                risk_level,
+                error_budget_exhausted,
+                burn_rate
             )
         )
 

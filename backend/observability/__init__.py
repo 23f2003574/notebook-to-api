@@ -106,3 +106,8 @@ from .deployment_governance_state_projector import (
     DeploymentGovernanceState,
     DeploymentGovernanceStateProjector
 )
+from .deployment_policy_evaluation_engine import (
+    DeploymentPolicyRule,
+    DeploymentPolicyDecision,
+    DeploymentPolicyEvaluationEngine
+)
