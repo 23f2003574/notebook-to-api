@@ -130,3 +130,8 @@ from .deployment_approval_validity_engine import (
     DeploymentApprovalValidityDecision,
     DeploymentApprovalValidityEngine
 )
+from .deployment_execution_eligibility_engine import (
+    DeploymentExecutionEligibilityDecision,
+    DeploymentExecutionReadiness,
+    DeploymentExecutionEligibilityEngine
+)

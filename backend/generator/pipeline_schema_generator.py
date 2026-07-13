@@ -1227,6 +1227,12 @@ from backend.observability import (
 from backend.observability import (
     DeploymentApprovalValidityEngine
 )
+from backend.observability import (
+    DeploymentExecutionEligibilityEngine
+)
+from backend.observability import (
+    DeploymentExecutionReadiness
+)
 
 
 
@@ -2759,6 +2765,10 @@ class PipelineSchemaGenerator:
 
         self.deployment_approval_validity_engine = (
             DeploymentApprovalValidityEngine()
+        )
+
+        self.deployment_execution_eligibility_engine = (
+            DeploymentExecutionEligibilityEngine()
         )
 
     def generate_cost_assessment(
@@ -9060,6 +9070,108 @@ class PipelineSchemaGenerator:
                 approval_request.environment,
                 deployment_environment
             )
+        )
+
+    def evaluate_deployment_execution_eligibility(
+        self,
+        service_name: str,
+        environment: str,
+        policy_decision: str,
+        approval_required: bool,
+        approval_valid: bool,
+        error_budget_exhausted: bool,
+        burn_rate: float,
+        active_incidents: int
+    ):
+
+        return (
+            self
+            .deployment_execution_eligibility_engine
+            .evaluate(
+                service_name,
+                environment,
+                policy_decision,
+                approval_required,
+                approval_valid,
+                error_budget_exhausted,
+                burn_rate,
+                active_incidents
+            )
+        )
+
+    def evaluate_deployment_execution_readiness(
+        self,
+        service_name: str,
+        environment: str,
+        risk_level: str,
+        error_budget_exhausted: bool,
+        burn_rate: float,
+        active_incidents: int,
+        approval_request,
+        deployment_artifact_digest: str
+    ):
+
+        policy_decision = (
+            self
+            .deployment_policy_evaluation_engine
+            .evaluate(
+                service_name,
+                environment,
+                risk_level,
+                error_budget_exhausted,
+                burn_rate
+            )
+        )
+
+        approval_required = (
+            policy_decision.decision
+            == "require_approval"
+        )
+
+        approval_validity = None
+
+        approval_valid = False
+
+        if approval_request is not None:
+
+            approval_validity = (
+                self
+                .validate_deployment_approval(
+                    approval_request,
+                    deployment_artifact_digest,
+                    environment
+                )
+            )
+
+            approval_valid = (
+                approval_validity.valid
+            )
+
+        eligibility = (
+            self
+            .deployment_execution_eligibility_engine
+            .evaluate(
+                service_name,
+                environment,
+                policy_decision.decision,
+                approval_required,
+                approval_valid,
+                error_budget_exhausted,
+                burn_rate,
+                active_incidents
+            )
+        )
+
+        return DeploymentExecutionReadiness(
+
+            policy_decision=
+                policy_decision,
+
+            approval_validity=
+                approval_validity,
+
+            eligibility=
+                eligibility
         )
 
     def get_deployment_governance_state(
