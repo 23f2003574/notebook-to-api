@@ -28,6 +28,24 @@ docker run -p 8000:8000 notebook-api
 ```
 Visit `http://localhost:8000/docs` to explore the generated API.
 
+## Deployment Governance Persistence Diagnostics
+Inspect the active governance persistence backend:
+```bash
+.venv/bin/python -m backend.cli governance doctor
+```
+Perform a full persisted-record integrity audit:
+```bash
+.venv/bin/python -m backend.cli governance doctor --deep
+```
+Emit machine-readable diagnostics:
+```bash
+.venv/bin/python -m backend.cli governance doctor --deep --json
+```
+Exit codes:
+- `0` persistence healthy
+- `1` diagnostics completed but persistence unhealthy
+- `2` diagnostics could not be completed
+
 ## Next Steps
 - Implement one‑command deployment (`notebook-to-api deploy <notebook.ipynb>`)
 - Add support for async functions, auth, and more advanced type handling.
