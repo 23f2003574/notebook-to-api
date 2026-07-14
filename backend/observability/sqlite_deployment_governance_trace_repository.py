@@ -16,6 +16,11 @@ from .deployment_governance_trace_repository import (
     GovernanceTraceRecord,
     GovernanceTraceRepositoryStatistics,
 )
+from .deployment_governance_trace_integrity import (
+    DeploymentGovernanceTraceIntegrity,
+    GovernanceTraceIntegrityMetadata,
+    GovernanceTraceIntegrityMetadataMissingError,
+)
 from .in_memory_deployment_governance_trace_repository import (
     GovernanceTraceAlreadyExistsError,
     GovernanceTraceNotFoundError,
@@ -61,7 +66,10 @@ class SQLiteDeploymentGovernanceTraceRepository(
         governance_state,
         final_status,
         completed,
-        payload
+        payload,
+        integrity_algorithm,
+        integrity_version,
+        integrity_digest
     """
 
     def __init__(
@@ -112,7 +120,10 @@ class SQLiteDeploymentGovernanceTraceRepository(
                         governance_state,
                         final_status,
                         completed,
-                        payload
+                        payload,
+                        integrity_algorithm,
+                        integrity_version,
+                        integrity_digest
                     )
                     VALUES
                     (
@@ -126,7 +137,10 @@ class SQLiteDeploymentGovernanceTraceRepository(
                         :governance_state,
                         :final_status,
                         :completed,
-                        :payload
+                        :payload,
+                        :integrity_algorithm,
+                        :integrity_version,
+                        :integrity_digest
                     )
                     """,
                     parameters,
@@ -183,7 +197,10 @@ class SQLiteDeploymentGovernanceTraceRepository(
                                 governance_state,
                                 final_status,
                                 completed,
-                                payload
+                                payload,
+                                integrity_algorithm,
+                                integrity_version,
+                                integrity_digest
                             )
                             VALUES
                             (
@@ -197,7 +214,10 @@ class SQLiteDeploymentGovernanceTraceRepository(
                                 :governance_state,
                                 :final_status,
                                 :completed,
-                                :payload
+                                :payload,
+                                :integrity_algorithm,
+                                :integrity_version,
+                                :integrity_digest
                             )
                             """,
                             parameters,
@@ -251,7 +271,10 @@ class SQLiteDeploymentGovernanceTraceRepository(
                         governance_state = :governance_state,
                         final_status = :final_status,
                         completed = :completed,
-                        payload = :payload
+                        payload = :payload,
+                        integrity_algorithm = :integrity_algorithm,
+                        integrity_version = :integrity_version,
+                        integrity_digest = :integrity_digest
                     WHERE
                         trace_id = :trace_id
                     """,
@@ -308,7 +331,10 @@ class SQLiteDeploymentGovernanceTraceRepository(
                         governance_state,
                         final_status,
                         completed,
-                        payload
+                        payload,
+                        integrity_algorithm,
+                        integrity_version,
+                        integrity_digest
                     )
                     VALUES
                     (
@@ -322,7 +348,10 @@ class SQLiteDeploymentGovernanceTraceRepository(
                         :governance_state,
                         :final_status,
                         :completed,
-                        :payload
+                        :payload,
+                        :integrity_algorithm,
+                        :integrity_version,
+                        :integrity_digest
                     )
                     ON CONFLICT(trace_id)
                     DO UPDATE SET
@@ -335,7 +364,10 @@ class SQLiteDeploymentGovernanceTraceRepository(
                         governance_state = excluded.governance_state,
                         final_status = excluded.final_status,
                         completed = excluded.completed,
-                        payload = excluded.payload
+                        payload = excluded.payload,
+                        integrity_algorithm = excluded.integrity_algorithm,
+                        integrity_version = excluded.integrity_version,
+                        integrity_digest = excluded.integrity_digest
                     """,
                     parameters,
                 )
@@ -701,6 +733,8 @@ class SQLiteDeploymentGovernanceTraceRepository(
                 "JSON serializable"
             ) from exc
 
+        integrity = DeploymentGovernanceTraceIntegrity.calculate(record)
+
         return {
             "trace_id": record.trace_id,
             "deployment_id": record.deployment_id,
@@ -713,6 +747,9 @@ class SQLiteDeploymentGovernanceTraceRepository(
             "final_status": record.final_status,
             "completed": 1 if record.completed else 0,
             "payload": payload,
+            "integrity_algorithm": integrity.algorithm,
+            "integrity_version": integrity.version,
+            "integrity_digest": integrity.digest,
         }
 
     def _row_to_record(
@@ -736,7 +773,7 @@ class SQLiteDeploymentGovernanceTraceRepository(
             )
 
         try:
-            return GovernanceTraceRecord(
+            record = GovernanceTraceRecord(
                 trace_id=str(row["trace_id"]),
                 deployment_id=str(row["deployment_id"]),
                 service_name=str(row["service_name"]),
@@ -763,6 +800,30 @@ class SQLiteDeploymentGovernanceTraceRepository(
                 "persisted deployment governance trace row "
                 "cannot be reconstructed"
             ) from exc
+
+        integrity_algorithm = row["integrity_algorithm"]
+        integrity_version = row["integrity_version"]
+        integrity_digest = row["integrity_digest"]
+
+        if (
+            integrity_algorithm is None
+            or integrity_version is None
+            or integrity_digest is None
+        ):
+            raise GovernanceTraceIntegrityMetadataMissingError(
+                "persisted deployment governance trace "
+                f"'{record.trace_id}' has no integrity metadata"
+            )
+
+        metadata = GovernanceTraceIntegrityMetadata(
+            algorithm=str(integrity_algorithm),
+            version=int(integrity_version),
+            digest=str(integrity_digest),
+        )
+
+        DeploymentGovernanceTraceIntegrity.verify(record, metadata)
+
+        return record
 
     def _raise_integrity_error(
         self,

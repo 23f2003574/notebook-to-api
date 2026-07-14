@@ -40,6 +40,7 @@ class DeploymentGovernanceSQLiteSchema:
         return (
             DeploymentGovernanceSQLiteSchema._create_trace_table_migration(),
             DeploymentGovernanceSQLiteSchema._create_query_indexes_migration(),
+            DeploymentGovernanceSQLiteSchema._add_integrity_metadata_migration(),
         )
 
     @staticmethod
@@ -244,6 +245,43 @@ class DeploymentGovernanceSQLiteSchema:
                     created_at DESC,
                     trace_id DESC
                 )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _add_integrity_metadata_migration() -> SQLiteMigration:
+        """
+        Migration 3 adds integrity metadata columns for detecting
+        corruption or unexpected mutation of persisted governance traces.
+
+        The columns are nullable because rows already persisted under
+        schema version 2 have no historical digest to backfill; they are
+        recognized as unverified legacy data rather than given a fabricated
+        digest.
+        """
+
+        return SQLiteMigration(
+            version=3,
+            name="add deployment governance trace integrity metadata",
+            statements=(
+                f"""
+                ALTER TABLE
+                    {DEPLOYMENT_GOVERNANCE_TRACE_TABLE}
+                ADD COLUMN
+                    integrity_algorithm TEXT
+                """,
+                f"""
+                ALTER TABLE
+                    {DEPLOYMENT_GOVERNANCE_TRACE_TABLE}
+                ADD COLUMN
+                    integrity_version INTEGER
+                """,
+                f"""
+                ALTER TABLE
+                    {DEPLOYMENT_GOVERNANCE_TRACE_TABLE}
+                ADD COLUMN
+                    integrity_digest TEXT
                 """,
             ),
         )
