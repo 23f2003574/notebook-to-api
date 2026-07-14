@@ -197,6 +197,10 @@ class DeploymentGovernanceOrchestrator:
                 approval_request.approval_id
             )
 
+        self.trace_registry.update(
+            trace
+        )
+
         return DeploymentGovernanceInitiation(
 
             trace=
@@ -250,6 +254,10 @@ class DeploymentGovernanceOrchestrator:
         )
 
         if not authorization_decision.authorized:
+
+            self.trace_registry.update(
+                trace
+            )
 
             return (
                 DeploymentGovernanceApprovalResult(
@@ -308,6 +316,10 @@ class DeploymentGovernanceOrchestrator:
             approval_request.status,
             reason,
             approval_request.approval_id
+        )
+
+        self.trace_registry.update(
+            trace
         )
 
         return DeploymentGovernanceApprovalResult(
@@ -512,6 +524,10 @@ class DeploymentGovernanceOrchestrator:
                 authorization_token.token_id
             )
 
+        self.trace_registry.update(
+            trace
+        )
+
         return (
             DeploymentGovernanceExecutionPreparation(
 
@@ -594,6 +610,10 @@ class DeploymentGovernanceOrchestrator:
             execution_receipt.receipt_id
         )
 
+        self.trace_registry.update(
+            trace
+        )
+
         return (
             DeploymentGovernanceExecutionHandoffResult(
 
@@ -656,6 +676,10 @@ class DeploymentGovernanceOrchestrator:
             receipt.execution_status,
             details,
             receipt.receipt_id
+        )
+
+        self.trace_registry.update(
+            trace
         )
 
         return receipt
