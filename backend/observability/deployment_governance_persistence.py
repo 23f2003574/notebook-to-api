@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Final, Mapping
+from typing import TYPE_CHECKING, Final, Mapping
 
 from backend.persistence.sqlite_database import (
     SQLiteDatabase,
@@ -30,6 +30,11 @@ from .in_memory_deployment_governance_trace_repository import (
 from .sqlite_deployment_governance_trace_repository import (
     SQLiteDeploymentGovernanceTraceRepository,
 )
+
+if TYPE_CHECKING:
+    from .deployment_governance_persistence_diagnostics import (
+        DeploymentGovernancePersistenceDiagnosticsService,
+    )
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -262,6 +267,27 @@ class DeploymentGovernancePersistenceRuntime:
 
         return DeploymentGovernanceIntegrityAuditService(
             self.repository
+        )
+
+    def build_diagnostics_service(
+        self,
+    ) -> "DeploymentGovernancePersistenceDiagnosticsService":
+        """
+        Build a diagnostics service for this persistence runtime.
+
+        Imported locally (not at module top level) because the diagnostics
+        module imports this module's types; a top-level import here would
+        create a circular import.
+        """
+
+        from .deployment_governance_persistence_diagnostics import (
+            DeploymentGovernancePersistenceDiagnosticsService,
+        )
+
+        return (
+            DeploymentGovernancePersistenceDiagnosticsService(
+                self
+            )
         )
 
 
