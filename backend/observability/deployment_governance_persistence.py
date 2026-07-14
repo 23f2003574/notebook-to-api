@@ -11,6 +11,10 @@ from backend.persistence.sqlite_database import (
     SQLiteDatabaseConfig,
 )
 
+from .deployment_governance_integrity_audit import (
+    DeploymentGovernanceIntegrityAuditService,
+    DeploymentGovernanceTraceIntegrityAuditSource,
+)
 from .deployment_governance_trace_engine import (
     DeploymentGovernanceTraceEngine,
 )
@@ -225,6 +229,40 @@ class DeploymentGovernancePersistenceRuntime:
         """
 
         return self.config.backend
+
+    @property
+    def supports_integrity_audit(
+        self,
+    ) -> bool:
+        """
+        Return whether the active repository exposes integrity audit
+        candidates.
+        """
+
+        return isinstance(
+            self.repository,
+            DeploymentGovernanceTraceIntegrityAuditSource,
+        )
+
+    def build_integrity_audit_service(
+        self,
+    ) -> DeploymentGovernanceIntegrityAuditService:
+        """
+        Build an integrity audit service for the active repository.
+        """
+
+        if not isinstance(
+            self.repository,
+            DeploymentGovernanceTraceIntegrityAuditSource,
+        ):
+            raise RuntimeError(
+                "the active deployment governance persistence "
+                "backend does not support integrity auditing"
+            )
+
+        return DeploymentGovernanceIntegrityAuditService(
+            self.repository
+        )
 
 
 def build_deployment_governance_persistence(

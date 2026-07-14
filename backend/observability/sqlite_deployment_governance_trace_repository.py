@@ -16,6 +16,9 @@ from .deployment_governance_trace_repository import (
     GovernanceTraceRecord,
     GovernanceTraceRepositoryStatistics,
 )
+from .deployment_governance_integrity_audit import (
+    GovernanceTraceIntegrityAuditCandidate,
+)
 from .deployment_governance_trace_integrity import (
     DeploymentGovernanceTraceIntegrity,
     GovernanceTraceIntegrityMetadata,
@@ -713,6 +716,162 @@ class SQLiteDeploymentGovernanceTraceRepository(
             raise SQLitePersistenceError(
                 "failed to clear deployment governance traces"
             ) from exc
+
+    def iter_integrity_audit_candidates(
+        self,
+        *,
+        batch_size: int = 500,
+    ) -> tuple[
+        GovernanceTraceIntegrityAuditCandidate,
+        ...
+    ]:
+        """
+        Return raw persisted governance trace candidates for integrity
+        auditing.
+
+        Normal read-time integrity verification (via _row_to_record) is
+        intentionally bypassed here so an audit can inspect every row and
+        report all failures in one pass, rather than raising on the first
+        corrupted record.
+        """
+
+        if batch_size <= 0:
+            raise ValueError(
+                "batch_size must be greater than zero"
+            )
+
+        candidates: list[
+            GovernanceTraceIntegrityAuditCandidate
+        ] = []
+
+        offset = 0
+
+        while True:
+            try:
+                rows = self._database.query_all(
+                    f"""
+                    SELECT
+                        {self._SELECT_COLUMNS}
+                    FROM
+                        {DEPLOYMENT_GOVERNANCE_TRACE_TABLE}
+                    ORDER BY
+                        trace_id ASC
+                    LIMIT ?
+                    OFFSET ?
+                    """,
+                    (
+                        batch_size,
+                        offset,
+                    ),
+                )
+
+            except sqlite3.Error as exc:
+                raise SQLitePersistenceError(
+                    "failed to read deployment governance "
+                    "traces for integrity audit"
+                ) from exc
+
+            if not rows:
+                break
+
+            for row in rows:
+                candidates.append(
+                    self._row_to_integrity_audit_candidate(
+                        row
+                    )
+                )
+
+            if len(rows) < batch_size:
+                break
+
+            offset += len(rows)
+
+        return tuple(candidates)
+
+    def _row_to_integrity_audit_candidate(
+        self,
+        row: Mapping[str, Any],
+    ) -> GovernanceTraceIntegrityAuditCandidate:
+        """
+        Convert one SQLite row into an integrity audit candidate.
+
+        This method reconstructs the persistence record but deliberately
+        does not verify its integrity digest.
+        """
+
+        trace_id = str(row["trace_id"])
+
+        integrity_algorithm = (
+            None
+            if row["integrity_algorithm"] is None
+            else str(row["integrity_algorithm"])
+        )
+
+        integrity_version = (
+            None
+            if row["integrity_version"] is None
+            else int(row["integrity_version"])
+        )
+
+        integrity_digest = (
+            None
+            if row["integrity_digest"] is None
+            else str(row["integrity_digest"])
+        )
+
+        try:
+            payload = json.loads(str(row["payload"]))
+
+            if not isinstance(payload, dict):
+                raise ValueError(
+                    "payload must decode to a JSON object"
+                )
+
+            record = GovernanceTraceRecord(
+                trace_id=trace_id,
+                deployment_id=str(row["deployment_id"]),
+                service_name=str(row["service_name"]),
+                environment=str(row["environment"]),
+                artifact_digest=str(row["artifact_digest"]),
+                created_at=self._datetime_from_storage(
+                    str(row["created_at"])
+                ),
+                updated_at=self._datetime_from_storage(
+                    str(row["updated_at"])
+                ),
+                governance_state=str(row["governance_state"]),
+                final_status=(
+                    None
+                    if row["final_status"] is None
+                    else str(row["final_status"])
+                ),
+                completed=bool(int(row["completed"])),
+                payload=payload,
+            )
+
+        except (
+            TypeError,
+            ValueError,
+            KeyError,
+            json.JSONDecodeError,
+        ) as exc:
+            return GovernanceTraceIntegrityAuditCandidate(
+                trace_id=trace_id,
+                record=None,
+                integrity_algorithm=integrity_algorithm,
+                integrity_version=integrity_version,
+                integrity_digest=integrity_digest,
+                reconstruction_error=str(exc),
+            )
+
+        return GovernanceTraceIntegrityAuditCandidate(
+            trace_id=trace_id,
+            record=record,
+            integrity_algorithm=integrity_algorithm,
+            integrity_version=integrity_version,
+            integrity_digest=integrity_digest,
+            reconstruction_error=None,
+        )
 
     def _record_to_parameters(
         self,

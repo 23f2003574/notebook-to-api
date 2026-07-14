@@ -248,3 +248,49 @@ def test_invalid_boolean_environment_value_is_rejected() -> None:
                 ),
             }
         )
+
+
+def test_memory_runtime_does_not_support_integrity_audit() -> None:
+    runtime = (
+        build_deployment_governance_persistence(
+            DeploymentGovernancePersistenceConfig.memory()
+        )
+    )
+
+    assert (
+        runtime.supports_integrity_audit
+        is False
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="does not support integrity auditing",
+    ):
+        runtime.build_integrity_audit_service()
+
+
+def test_sqlite_runtime_supports_integrity_audit(
+    tmp_path: Path,
+) -> None:
+    runtime = (
+        build_deployment_governance_persistence(
+            DeploymentGovernancePersistenceConfig.sqlite(
+                tmp_path
+                / "audit-runtime.db"
+            )
+        )
+    )
+
+    assert (
+        runtime.supports_integrity_audit
+        is True
+    )
+
+    service = (
+        runtime.build_integrity_audit_service()
+    )
+
+    report = service.audit()
+
+    assert report.healthy is True
+    assert report.total_records == 0
