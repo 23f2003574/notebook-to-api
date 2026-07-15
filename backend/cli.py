@@ -28,6 +28,9 @@ from backend.observability.deployment_governance_check_cli import (
 from backend.observability.deployment_governance_audit_prune_cli import (
     run_deployment_governance_audit_prune,
 )
+from backend.observability.deployment_governance_audit_export_cli import (
+    run_deployment_governance_audit_export,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -244,6 +247,81 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    export_parser = audits_subparsers.add_parser(
+        "export",
+        help="Export a portable governance audit evidence bundle.",
+        description=(
+            "Export a deterministic, self-contained JSON evidence bundle "
+            "(selected audit records plus a summary and, by default, "
+            "trend and regression analysis derived only from the "
+            "exported records) to a file.\n\n"
+            "The bundle is written to --output; only a concise success "
+            "summary is printed to stdout.\n\n"
+            "Exit codes: 0 export succeeded, 2 invalid configuration or "
+            "execution failure (including refusing to overwrite an "
+            "existing file without --force)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    export_parser.add_argument(
+        "--output",
+        required=True,
+        dest="output",
+        help="Path to write the evidence bundle JSON file to.",
+    )
+    export_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        dest="limit",
+        help="Maximum number of audit records to include. Default: all.",
+    )
+    export_parser.add_argument(
+        "--trend",
+        action="store_true",
+        dest="include_trend",
+        default=True,
+        help="Include trend analysis derived from the exported records (default).",
+    )
+    export_parser.add_argument(
+        "--no-trend",
+        action="store_false",
+        dest="include_trend",
+        help="Omit trend analysis from the exported bundle.",
+    )
+    export_parser.add_argument(
+        "--regression",
+        action="store_true",
+        dest="include_regression",
+        default=True,
+        help="Include regression analysis derived from the exported records (default).",
+    )
+    export_parser.add_argument(
+        "--no-regression",
+        action="store_false",
+        dest="include_regression",
+        help="Omit regression analysis from the exported bundle.",
+    )
+    export_parser.add_argument(
+        "--trend-window",
+        type=int,
+        default=20,
+        dest="trend_window",
+        help="Number of most recent exported records to analyze for trends. Default: 20.",
+    )
+    export_parser.add_argument(
+        "--compact",
+        action="store_true",
+        dest="compact",
+        help="Write compact (non-indented) JSON instead of pretty-printed.",
+    )
+    export_parser.add_argument(
+        "--force",
+        action="store_true",
+        dest="force",
+        help="Overwrite the output file if it already exists.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -326,6 +404,17 @@ def main():
                     preserve_latest=args.preserve_latest,
                     apply=args.apply,
                     json_output=args.json_output,
+                )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "export":
+                exit_code = run_deployment_governance_audit_export(
+                    output_path=args.output,
+                    limit=args.limit,
+                    include_trend=args.include_trend,
+                    include_regression=args.include_regression,
+                    trend_window=args.trend_window,
+                    pretty=not args.compact,
+                    force=args.force,
                 )
                 sys.exit(exit_code)
             try:

@@ -176,6 +176,68 @@ class GovernanceIntegrityAuditTrendSnapshot:
         }
 
 
+def analyze_governance_integrity_audit_records(
+    records: tuple[GovernanceIntegrityAuditRecord, ...],
+) -> GovernanceIntegrityAuditTrendSnapshot:
+    """
+    Pure trend analysis over an already-selected, newest-first record set.
+
+    Extracted from GovernanceIntegrityAuditTrendService.analyze() so other
+    callers (e.g. the evidence export service) can derive a trend snapshot
+    from a specific record subset without re-querying the repository,
+    keeping a bundle's trend self-consistent with the records it contains.
+    """
+
+    sample_size = len(records)
+
+    if sample_size == 0:
+        return GovernanceIntegrityAuditTrendSnapshot(
+            sample_size=0,
+            healthy_audits=0,
+            unhealthy_audits=0,
+            health_rate=None,
+            failure_rate=None,
+            current_outcome=None,
+            previous_outcome=None,
+            current_streak=0,
+            direction=(
+                GovernanceIntegrityAuditTrendDirection.INSUFFICIENT_DATA
+            ),
+        )
+
+    healthy_audits = sum(
+        1
+        for record in records
+        if record.outcome is GovernanceIntegrityAuditOutcome.HEALTHY
+    )
+
+    unhealthy_audits = sample_size - healthy_audits
+
+    health_rate = healthy_audits / sample_size
+
+    failure_rate = unhealthy_audits / sample_size
+
+    return GovernanceIntegrityAuditTrendSnapshot(
+        sample_size=sample_size,
+        healthy_audits=healthy_audits,
+        unhealthy_audits=unhealthy_audits,
+        health_rate=health_rate,
+        failure_rate=failure_rate,
+        current_outcome=records[0].outcome,
+        previous_outcome=(
+            None if sample_size < 2 else records[1].outcome
+        ),
+        current_streak=(
+            calculate_governance_integrity_audit_streak(records)
+        ),
+        direction=(
+            determine_governance_integrity_audit_trend_direction(
+                records
+            )
+        ),
+    )
+
+
 class GovernanceIntegrityAuditTrendService:
     """
     Derives recent operational trends from audit history.
@@ -208,52 +270,4 @@ class GovernanceIntegrityAuditTrendService:
 
         records = self._repository.list(limit=window)
 
-        sample_size = len(records)
-
-        if sample_size == 0:
-            return GovernanceIntegrityAuditTrendSnapshot(
-                sample_size=0,
-                healthy_audits=0,
-                unhealthy_audits=0,
-                health_rate=None,
-                failure_rate=None,
-                current_outcome=None,
-                previous_outcome=None,
-                current_streak=0,
-                direction=(
-                    GovernanceIntegrityAuditTrendDirection
-                    .INSUFFICIENT_DATA
-                ),
-            )
-
-        healthy_audits = sum(
-            1
-            for record in records
-            if record.outcome is GovernanceIntegrityAuditOutcome.HEALTHY
-        )
-
-        unhealthy_audits = sample_size - healthy_audits
-
-        health_rate = healthy_audits / sample_size
-
-        failure_rate = unhealthy_audits / sample_size
-
-        return GovernanceIntegrityAuditTrendSnapshot(
-            sample_size=sample_size,
-            healthy_audits=healthy_audits,
-            unhealthy_audits=unhealthy_audits,
-            health_rate=health_rate,
-            failure_rate=failure_rate,
-            current_outcome=records[0].outcome,
-            previous_outcome=(
-                None if sample_size < 2 else records[1].outcome
-            ),
-            current_streak=(
-                calculate_governance_integrity_audit_streak(records)
-            ),
-            direction=(
-                determine_governance_integrity_audit_trend_direction(
-                    records
-                )
-            ),
-        )
+        return analyze_governance_integrity_audit_records(records)

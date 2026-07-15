@@ -148,6 +148,132 @@ class GovernanceIntegrityRegressionSnapshot:
         }
 
 
+def detect_governance_integrity_regression(
+    records: tuple[GovernanceIntegrityAuditRecord, ...],
+) -> GovernanceIntegrityRegressionSnapshot:
+    """
+    Pure regression detection over an already-selected, newest-first
+    record set (only the first two entries matter).
+
+    Extracted from GovernanceIntegrityRegressionService.detect() so other
+    callers (e.g. the evidence export service) can derive a regression
+    snapshot from a specific record subset without re-querying the
+    repository, keeping a bundle's regression analysis self-consistent
+    with the records it contains.
+    """
+
+    if not records:
+        return _no_history_snapshot()
+
+    current = records[0]
+
+    if len(records) == 1:
+        return _single_audit_snapshot(current)
+
+    baseline = records[1]
+
+    return _compare_regression(baseline=baseline, current=current)
+
+
+def _no_history_snapshot() -> GovernanceIntegrityRegressionSnapshot:
+    return GovernanceIntegrityRegressionSnapshot(
+        status=GovernanceIntegrityRegressionStatus.NO_HISTORY,
+        regression_detected=False,
+        current_audit_id=None,
+        baseline_audit_id=None,
+        current_outcome=None,
+        baseline_outcome=None,
+        current_invalid_records=None,
+        baseline_invalid_records=None,
+        invalid_record_delta=None,
+        integrity_mismatch_delta=None,
+        missing_integrity_metadata_delta=None,
+        invalid_integrity_metadata_delta=None,
+        invalid_persisted_records_delta=None,
+        newly_introduced_failure_categories=(),
+    )
+
+
+def _single_audit_snapshot(
+    current: GovernanceIntegrityAuditRecord,
+) -> GovernanceIntegrityRegressionSnapshot:
+    status = (
+        GovernanceIntegrityRegressionStatus.HEALTHY
+        if current.healthy
+        else GovernanceIntegrityRegressionStatus.INSUFFICIENT_BASELINE
+    )
+
+    return GovernanceIntegrityRegressionSnapshot(
+        status=status,
+        regression_detected=False,
+        current_audit_id=current.audit_id,
+        baseline_audit_id=None,
+        current_outcome=current.outcome,
+        baseline_outcome=None,
+        current_invalid_records=current.invalid_records,
+        baseline_invalid_records=None,
+        invalid_record_delta=None,
+        integrity_mismatch_delta=None,
+        missing_integrity_metadata_delta=None,
+        invalid_integrity_metadata_delta=None,
+        invalid_persisted_records_delta=None,
+        newly_introduced_failure_categories=(),
+    )
+
+
+def _compare_regression(
+    *,
+    baseline: GovernanceIntegrityAuditRecord,
+    current: GovernanceIntegrityAuditRecord,
+) -> GovernanceIntegrityRegressionSnapshot:
+    if current.healthy:
+        status = GovernanceIntegrityRegressionStatus.HEALTHY
+
+    elif baseline.healthy:
+        status = GovernanceIntegrityRegressionStatus.REGRESSION
+
+    else:
+        status = GovernanceIntegrityRegressionStatus.PERSISTENT_FAILURE
+
+    return GovernanceIntegrityRegressionSnapshot(
+        status=status,
+        regression_detected=(
+            status is GovernanceIntegrityRegressionStatus.REGRESSION
+        ),
+        current_audit_id=current.audit_id,
+        baseline_audit_id=baseline.audit_id,
+        current_outcome=current.outcome,
+        baseline_outcome=baseline.outcome,
+        current_invalid_records=current.invalid_records,
+        baseline_invalid_records=baseline.invalid_records,
+        invalid_record_delta=(
+            current.invalid_records - baseline.invalid_records
+        ),
+        integrity_mismatch_delta=(
+            current.integrity_mismatches
+            - baseline.integrity_mismatches
+        ),
+        missing_integrity_metadata_delta=(
+            current.missing_integrity_metadata
+            - baseline.missing_integrity_metadata
+        ),
+        invalid_integrity_metadata_delta=(
+            current.invalid_integrity_metadata
+            - baseline.invalid_integrity_metadata
+        ),
+        invalid_persisted_records_delta=(
+            current.invalid_persisted_records
+            - baseline.invalid_persisted_records
+        ),
+        newly_introduced_failure_categories=(
+            determine_newly_introduced_failure_categories(
+                baseline=baseline,
+                current=current,
+            )
+        ),
+    )
+
+
 class GovernanceIntegrityRegressionService:
     """
     Detects newly introduced integrity regressions from audit history.
@@ -166,113 +292,4 @@ class GovernanceIntegrityRegressionService:
 
         records = self._repository.list(limit=2)
 
-        if not records:
-            return self._no_history_snapshot()
-
-        current = records[0]
-
-        if len(records) == 1:
-            return self._single_audit_snapshot(current)
-
-        baseline = records[1]
-
-        return self._compare(baseline=baseline, current=current)
-
-    @staticmethod
-    def _no_history_snapshot() -> GovernanceIntegrityRegressionSnapshot:
-        return GovernanceIntegrityRegressionSnapshot(
-            status=GovernanceIntegrityRegressionStatus.NO_HISTORY,
-            regression_detected=False,
-            current_audit_id=None,
-            baseline_audit_id=None,
-            current_outcome=None,
-            baseline_outcome=None,
-            current_invalid_records=None,
-            baseline_invalid_records=None,
-            invalid_record_delta=None,
-            integrity_mismatch_delta=None,
-            missing_integrity_metadata_delta=None,
-            invalid_integrity_metadata_delta=None,
-            invalid_persisted_records_delta=None,
-            newly_introduced_failure_categories=(),
-        )
-
-    @staticmethod
-    def _single_audit_snapshot(
-        current: GovernanceIntegrityAuditRecord,
-    ) -> GovernanceIntegrityRegressionSnapshot:
-        status = (
-            GovernanceIntegrityRegressionStatus.HEALTHY
-            if current.healthy
-            else GovernanceIntegrityRegressionStatus.INSUFFICIENT_BASELINE
-        )
-
-        return GovernanceIntegrityRegressionSnapshot(
-            status=status,
-            regression_detected=False,
-            current_audit_id=current.audit_id,
-            baseline_audit_id=None,
-            current_outcome=current.outcome,
-            baseline_outcome=None,
-            current_invalid_records=current.invalid_records,
-            baseline_invalid_records=None,
-            invalid_record_delta=None,
-            integrity_mismatch_delta=None,
-            missing_integrity_metadata_delta=None,
-            invalid_integrity_metadata_delta=None,
-            invalid_persisted_records_delta=None,
-            newly_introduced_failure_categories=(),
-        )
-
-    @staticmethod
-    def _compare(
-        *,
-        baseline: GovernanceIntegrityAuditRecord,
-        current: GovernanceIntegrityAuditRecord,
-    ) -> GovernanceIntegrityRegressionSnapshot:
-        if current.healthy:
-            status = GovernanceIntegrityRegressionStatus.HEALTHY
-
-        elif baseline.healthy:
-            status = GovernanceIntegrityRegressionStatus.REGRESSION
-
-        else:
-            status = GovernanceIntegrityRegressionStatus.PERSISTENT_FAILURE
-
-        return GovernanceIntegrityRegressionSnapshot(
-            status=status,
-            regression_detected=(
-                status is GovernanceIntegrityRegressionStatus.REGRESSION
-            ),
-            current_audit_id=current.audit_id,
-            baseline_audit_id=baseline.audit_id,
-            current_outcome=current.outcome,
-            baseline_outcome=baseline.outcome,
-            current_invalid_records=current.invalid_records,
-            baseline_invalid_records=baseline.invalid_records,
-            invalid_record_delta=(
-                current.invalid_records - baseline.invalid_records
-            ),
-            integrity_mismatch_delta=(
-                current.integrity_mismatches
-                - baseline.integrity_mismatches
-            ),
-            missing_integrity_metadata_delta=(
-                current.missing_integrity_metadata
-                - baseline.missing_integrity_metadata
-            ),
-            invalid_integrity_metadata_delta=(
-                current.invalid_integrity_metadata
-                - baseline.invalid_integrity_metadata
-            ),
-            invalid_persisted_records_delta=(
-                current.invalid_persisted_records
-                - baseline.invalid_persisted_records
-            ),
-            newly_introduced_failure_categories=(
-                determine_newly_introduced_failure_categories(
-                    baseline=baseline,
-                    current=current,
-                )
-            ),
-        )
+        return detect_governance_integrity_regression(records)
