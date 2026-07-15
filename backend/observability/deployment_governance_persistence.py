@@ -60,6 +60,9 @@ if TYPE_CHECKING:
     from .deployment_governance_audit_export import (
         GovernanceIntegrityAuditExportService,
     )
+    from .deployment_governance_audit_statistics import (
+        GovernanceIntegrityAuditStatisticsService,
+    )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
     )
@@ -450,6 +453,24 @@ class DeploymentGovernancePersistenceRuntime:
 
         return GovernanceIntegrityAuditExportService(
             repository=self.audit_history_repository
+        )
+
+    def build_integrity_audit_statistics_service(
+        self,
+    ) -> "GovernanceIntegrityAuditStatisticsService":
+        """
+        Build the audit-history statistics service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_audit_statistics import (
+            GovernanceIntegrityAuditStatisticsService,
+        )
+
+        return GovernanceIntegrityAuditStatisticsService(
+            self.audit_history_repository
         )
 
     def build_diagnostics_service(

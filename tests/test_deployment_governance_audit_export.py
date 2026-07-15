@@ -396,3 +396,28 @@ def test_sqlite_audit_history_can_be_exported_as_portable_json(
     )
 
     assert verification.verified is True
+
+
+def test_exported_bundle_records_can_be_statistically_analyzed_independently() -> None:
+    from backend.observability.deployment_governance_audit_statistics import (
+        calculate_governance_integrity_audit_statistics,
+    )
+
+    repository = InMemoryGovernanceIntegrityAuditHistoryRepository()
+
+    repository.save(make_record(audit_id="audit-1", invalid_records=0))
+    repository.save(
+        make_record(
+            audit_id="audit-2", offset_minutes=10, invalid_records=1
+        )
+    )
+
+    bundle = make_export_service(repository).build_bundle()
+
+    statistics = calculate_governance_integrity_audit_statistics(
+        bundle.records
+    )
+
+    assert statistics.total_audits == bundle.record_count
+    assert statistics.healthy_audits == 1
+    assert statistics.unhealthy_audits == 1

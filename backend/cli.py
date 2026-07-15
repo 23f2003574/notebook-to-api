@@ -34,6 +34,9 @@ from backend.observability.deployment_governance_audit_export_cli import (
 from backend.observability.deployment_governance_audit_verify_cli import (
     run_deployment_governance_audit_verify,
 )
+from backend.observability.deployment_governance_audit_statistics_cli import (
+    run_deployment_governance_audit_stats,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -368,6 +371,35 @@ def main():
         help="Path to the manifest file. Default: <evidence>.manifest.json.",
     )
 
+    stats_parser = audits_subparsers.add_parser(
+        "stats",
+        help="Show an operational summary of governance audit history.",
+        description=(
+            "Show a compact operational summary of governance audit "
+            "history: health rate, current and longest streaks, first/"
+            "latest audit timestamps, and aggregate failure counts.\n\n"
+            "This is read-only: it never executes a new audit. Run "
+            "`governance doctor --deep` or `governance check` to record "
+            "one.\n\n"
+            "Exit codes: 0 the summary was produced (even for empty "
+            "history), 2 the summary could not be produced."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    stats_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        dest="limit",
+        help="Calculate statistics from only the most recent N audits. Default: all audits.",
+    )
+    stats_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -468,6 +500,12 @@ def main():
                 exit_code = run_deployment_governance_audit_verify(
                     evidence_path=args.evidence,
                     manifest_path=args.manifest,
+                )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "stats":
+                exit_code = run_deployment_governance_audit_stats(
+                    limit=args.limit,
+                    json_output=args.json_output,
                 )
                 sys.exit(exit_code)
             try:
