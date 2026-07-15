@@ -16,6 +16,12 @@ from backend.observability.in_memory_deployment_governance_trace_repository impo
 from backend.observability.sqlite_deployment_governance_trace_repository import (
     SQLiteDeploymentGovernanceTraceRepository,
 )
+from backend.observability.deployment_governance_audit_history import (
+    InMemoryGovernanceIntegrityAuditHistoryRepository,
+)
+from backend.observability.sqlite_deployment_governance_audit_history import (
+    SQLiteGovernanceIntegrityAuditHistoryRepository,
+)
 
 
 def test_memory_config_builds_in_memory_runtime() -> None:
@@ -294,3 +300,88 @@ def test_sqlite_runtime_supports_integrity_audit(
 
     assert report.healthy is True
     assert report.total_records == 0
+
+
+def test_memory_runtime_builds_in_memory_audit_history() -> None:
+    runtime = (
+        build_deployment_governance_persistence(
+            DeploymentGovernancePersistenceConfig.memory()
+        )
+    )
+
+    assert isinstance(
+        runtime.audit_history_repository,
+        InMemoryGovernanceIntegrityAuditHistoryRepository,
+    )
+
+    # The in-memory trace repository does not implement
+    # DeploymentGovernanceTraceIntegrityAuditSource (see
+    # test_memory_runtime_does_not_support_integrity_audit above), so the
+    # recording service inherits the same "unsupported" failure rather than
+    # silently producing an empty audit.
+    with pytest.raises(
+        RuntimeError,
+        match="does not support integrity auditing",
+    ):
+        runtime.build_integrity_audit_recording_service().audit_and_record()
+
+    assert (
+        runtime.audit_history_repository.count()
+        == 0
+    )
+
+
+def test_sqlite_runtime_records_audit_history_durably(
+    tmp_path: Path,
+) -> None:
+    database_path = (
+        tmp_path
+        / "runtime-audit-recording.db"
+    )
+
+    runtime = (
+        build_deployment_governance_persistence(
+            DeploymentGovernancePersistenceConfig.sqlite(
+                database_path
+            )
+        )
+    )
+
+    assert isinstance(
+        runtime.audit_history_repository,
+        SQLiteGovernanceIntegrityAuditHistoryRepository,
+    )
+
+    result = (
+        runtime
+        .build_integrity_audit_recording_service()
+        .audit_and_record()
+    )
+
+    assert result.healthy is True
+
+    assert (
+        runtime.audit_history_repository.count()
+        == 1
+    )
+
+    second_runtime = (
+        build_deployment_governance_persistence(
+            DeploymentGovernancePersistenceConfig.sqlite(
+                database_path
+            )
+        )
+    )
+
+    latest = (
+        second_runtime
+        .audit_history_repository
+        .latest()
+    )
+
+    assert latest is not None
+
+    assert (
+        latest.audit_id
+        == result.audit_id
+    )

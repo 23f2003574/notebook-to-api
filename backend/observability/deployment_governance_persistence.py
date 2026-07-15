@@ -11,6 +11,10 @@ from backend.persistence.sqlite_database import (
     SQLiteDatabaseConfig,
 )
 
+from .deployment_governance_audit_history import (
+    GovernanceIntegrityAuditHistoryRepository,
+    InMemoryGovernanceIntegrityAuditHistoryRepository,
+)
 from .deployment_governance_integrity_audit import (
     DeploymentGovernanceIntegrityAuditService,
     DeploymentGovernanceTraceIntegrityAuditSource,
@@ -27,11 +31,17 @@ from .deployment_governance_trace_repository import (
 from .in_memory_deployment_governance_trace_repository import (
     InMemoryDeploymentGovernanceTraceRepository,
 )
+from .sqlite_deployment_governance_audit_history import (
+    SQLiteGovernanceIntegrityAuditHistoryRepository,
+)
 from .sqlite_deployment_governance_trace_repository import (
     SQLiteDeploymentGovernanceTraceRepository,
 )
 
 if TYPE_CHECKING:
+    from .deployment_governance_audit_recording import (
+        GovernanceIntegrityAuditRecordingService,
+    )
     from .deployment_governance_persistence_diagnostics import (
         DeploymentGovernancePersistenceDiagnosticsService,
     )
@@ -210,6 +220,8 @@ class DeploymentGovernancePersistenceRuntime:
 
     registry: DeploymentGovernanceTraceRegistry
 
+    audit_history_repository: GovernanceIntegrityAuditHistoryRepository
+
     database: SQLiteDatabase | None = None
 
     @property
@@ -267,6 +279,31 @@ class DeploymentGovernancePersistenceRuntime:
 
         return DeploymentGovernanceIntegrityAuditService(
             self.repository
+        )
+
+    def build_integrity_audit_recording_service(
+        self,
+    ) -> "GovernanceIntegrityAuditRecordingService":
+        """
+        Build an integrity audit service that records completed audit
+        history alongside the active persistence backend's trace
+        repository.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_audit_recording import (
+            GovernanceIntegrityAuditRecordMapper,
+            GovernanceIntegrityAuditRecordingService,
+        )
+
+        return GovernanceIntegrityAuditRecordingService(
+            audit_executor=self.build_integrity_audit_service(),
+            history_repository=self.audit_history_repository,
+            record_mapper=GovernanceIntegrityAuditRecordMapper(
+                backend=self.backend.value
+            ),
         )
 
     def build_diagnostics_service(
@@ -351,10 +388,15 @@ def _build_memory_runtime(
         repository=repository,
     )
 
+    audit_history_repository = (
+        InMemoryGovernanceIntegrityAuditHistoryRepository()
+    )
+
     return DeploymentGovernancePersistenceRuntime(
         config=config,
         repository=repository,
         registry=registry,
+        audit_history_repository=audit_history_repository,
         database=None,
     )
 
@@ -392,6 +434,15 @@ def _build_sqlite_runtime(
         )
     )
 
+    audit_history_repository = (
+        SQLiteGovernanceIntegrityAuditHistoryRepository(
+            database,
+            initialize_schema=(
+                config.initialize_schema
+            ),
+        )
+    )
+
     trace_engine = DeploymentGovernanceTraceEngine()
 
     registry = DeploymentGovernanceTraceRegistry(
@@ -403,6 +454,7 @@ def _build_sqlite_runtime(
         config=config,
         repository=repository,
         registry=registry,
+        audit_history_repository=audit_history_repository,
         database=database,
     )
 
