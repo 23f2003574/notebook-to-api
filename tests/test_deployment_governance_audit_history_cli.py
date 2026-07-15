@@ -21,6 +21,10 @@ from backend.observability.deployment_governance_audit_history_service import (
     GovernanceIntegrityAuditHistoryResult,
     GovernanceIntegrityAuditHistorySummary,
 )
+from backend.observability.deployment_governance_audit_regression import (
+    GovernanceIntegrityRegressionSnapshot,
+    GovernanceIntegrityRegressionStatus,
+)
 from backend.observability.deployment_governance_audit_trends import (
     GovernanceIntegrityAuditTrendDirection,
     GovernanceIntegrityAuditTrendSnapshot,
@@ -82,7 +86,7 @@ def test_audit_history_human_output_contains_records() -> None:
 
     stdout = StringIO()
 
-    _render_human(result, trend=None, stdout=stdout)
+    _render_human(result, trend=None, regression=None, stdout=stdout)
 
     output = stdout.getvalue()
 
@@ -106,7 +110,7 @@ def test_audit_history_human_output_shows_failure_breakdown() -> None:
 
     stdout = StringIO()
 
-    _render_human(result, trend=None, stdout=stdout)
+    _render_human(result, trend=None, regression=None, stdout=stdout)
 
     output = stdout.getvalue()
 
@@ -128,7 +132,7 @@ def test_audit_history_human_output_handles_no_matches() -> None:
 
     stdout = StringIO()
 
-    _render_human(result, trend=None, stdout=stdout)
+    _render_human(result, trend=None, regression=None, stdout=stdout)
 
     assert (
         "No matching integrity audits found."
@@ -141,7 +145,7 @@ def test_audit_history_json_output_is_valid_json() -> None:
 
     stdout = StringIO()
 
-    _render_json(result, trend=None, stdout=stdout)
+    _render_json(result, trend=None, regression=None, stdout=stdout)
 
     payload = json.loads(stdout.getvalue())
 
@@ -169,7 +173,7 @@ def test_audit_history_human_output_renders_trend_section() -> None:
 
     stdout = StringIO()
 
-    _render_human(result, trend=make_trend_snapshot(), stdout=stdout)
+    _render_human(result, trend=make_trend_snapshot(), regression=None, stdout=stdout)
 
     output = stdout.getvalue()
 
@@ -193,7 +197,7 @@ def test_audit_history_human_output_renders_trend_for_empty_results() -> None:
 
     stdout = StringIO()
 
-    _render_human(result, trend=make_trend_snapshot(), stdout=stdout)
+    _render_human(result, trend=make_trend_snapshot(), regression=None, stdout=stdout)
 
     output = stdout.getvalue()
 
@@ -206,7 +210,7 @@ def test_audit_history_human_output_omits_trend_section_by_default() -> None:
 
     stdout = StringIO()
 
-    _render_human(result, trend=None, stdout=stdout)
+    _render_human(result, trend=None, regression=None, stdout=stdout)
 
     assert "Trend Analysis" not in stdout.getvalue()
 
@@ -216,7 +220,7 @@ def test_audit_history_json_output_includes_trend_when_requested() -> None:
 
     stdout = StringIO()
 
-    _render_json(result, trend=make_trend_snapshot(), stdout=stdout)
+    _render_json(result, trend=make_trend_snapshot(), regression=None, stdout=stdout)
 
     payload = json.loads(stdout.getvalue())
 
@@ -245,7 +249,7 @@ def test_audit_history_human_output_insufficient_data_trend() -> None:
 
     stdout = StringIO()
 
-    _render_human(result, trend=trend, stdout=stdout)
+    _render_human(result, trend=trend, regression=None, stdout=stdout)
 
     output = stdout.getvalue()
 
@@ -253,6 +257,180 @@ def test_audit_history_human_output_insufficient_data_trend() -> None:
     assert "Current outcome: not available" in output
     assert "Health rate: not available" in output
     assert "Failure rate: not available" in output
+
+
+def make_regression_snapshot() -> GovernanceIntegrityRegressionSnapshot:
+    return GovernanceIntegrityRegressionSnapshot(
+        status=GovernanceIntegrityRegressionStatus.REGRESSION,
+        regression_detected=True,
+        current_audit_id="current",
+        baseline_audit_id="baseline",
+        current_outcome=GovernanceIntegrityAuditOutcome.UNHEALTHY,
+        baseline_outcome=GovernanceIntegrityAuditOutcome.HEALTHY,
+        current_invalid_records=3,
+        baseline_invalid_records=0,
+        invalid_record_delta=3,
+        integrity_mismatch_delta=2,
+        missing_integrity_metadata_delta=0,
+        invalid_integrity_metadata_delta=0,
+        invalid_persisted_records_delta=1,
+        newly_introduced_failure_categories=(
+            "integrity_mismatches",
+            "invalid_persisted_records",
+        ),
+    )
+
+
+def test_audit_history_human_output_renders_regression_section() -> None:
+    result = make_history_result()
+
+    stdout = StringIO()
+
+    _render_human(
+        result,
+        trend=None,
+        regression=make_regression_snapshot(),
+        stdout=stdout,
+    )
+
+    output = stdout.getvalue()
+
+    assert "Regression Analysis" in output
+    assert "Status: REGRESSION" in output
+    assert "Regression detected: yes" in output
+    assert "Baseline audit: baseline" in output
+    assert "Current audit: current" in output
+    assert "Invalid record delta: +3" in output
+    assert "New failure categories:" in output
+    assert "  integrity_mismatches" in output
+    assert "  invalid_persisted_records" in output
+
+
+def test_audit_history_human_output_omits_regression_section_by_default() -> None:
+    result = make_history_result()
+
+    stdout = StringIO()
+
+    _render_human(result, trend=None, regression=None, stdout=stdout)
+
+    assert "Regression Analysis" not in stdout.getvalue()
+
+
+def test_audit_history_human_output_regression_persistent_failure() -> None:
+    result = make_history_result()
+
+    snapshot = GovernanceIntegrityRegressionSnapshot(
+        status=GovernanceIntegrityRegressionStatus.PERSISTENT_FAILURE,
+        regression_detected=False,
+        current_audit_id="current",
+        baseline_audit_id="baseline",
+        current_outcome=GovernanceIntegrityAuditOutcome.UNHEALTHY,
+        baseline_outcome=GovernanceIntegrityAuditOutcome.UNHEALTHY,
+        current_invalid_records=1,
+        baseline_invalid_records=3,
+        invalid_record_delta=-2,
+        integrity_mismatch_delta=-2,
+        missing_integrity_metadata_delta=0,
+        invalid_integrity_metadata_delta=0,
+        invalid_persisted_records_delta=0,
+        newly_introduced_failure_categories=(),
+    )
+
+    stdout = StringIO()
+
+    _render_human(result, trend=None, regression=snapshot, stdout=stdout)
+
+    output = stdout.getvalue()
+
+    assert "Status: PERSISTENT_FAILURE" in output
+    assert "Regression detected: no" in output
+    assert "Invalid record delta: -2" in output
+    assert "New failure categories:" not in output
+
+
+def test_audit_history_human_output_regression_no_history() -> None:
+    result = make_history_result()
+
+    snapshot = GovernanceIntegrityRegressionSnapshot(
+        status=GovernanceIntegrityRegressionStatus.NO_HISTORY,
+        regression_detected=False,
+        current_audit_id=None,
+        baseline_audit_id=None,
+        current_outcome=None,
+        baseline_outcome=None,
+        current_invalid_records=None,
+        baseline_invalid_records=None,
+        invalid_record_delta=None,
+        integrity_mismatch_delta=None,
+        missing_integrity_metadata_delta=None,
+        invalid_integrity_metadata_delta=None,
+        invalid_persisted_records_delta=None,
+        newly_introduced_failure_categories=(),
+    )
+
+    stdout = StringIO()
+
+    _render_human(result, trend=None, regression=snapshot, stdout=stdout)
+
+    output = stdout.getvalue()
+
+    assert "Status: NO_HISTORY" in output
+    assert "Regression detected: no" in output
+    assert "Baseline audit:" not in output
+    assert "Current audit:" not in output
+
+
+def test_audit_history_json_output_includes_regression_when_requested() -> None:
+    result = make_history_result()
+
+    stdout = StringIO()
+
+    _render_json(
+        result,
+        trend=None,
+        regression=make_regression_snapshot(),
+        stdout=stdout,
+    )
+
+    payload = json.loads(stdout.getvalue())
+
+    assert "regression" in payload
+    assert payload["regression"]["status"] == "regression"
+    assert payload["regression"]["regression_detected"] is True
+
+
+def test_audit_history_json_output_omits_regression_by_default() -> None:
+    result = make_history_result()
+
+    stdout = StringIO()
+
+    _render_json(result, trend=None, regression=None, stdout=stdout)
+
+    payload = json.loads(stdout.getvalue())
+
+    assert "regression" not in payload
+
+
+def test_audit_history_json_output_supports_trend_and_regression_together() -> None:
+    result = make_history_result()
+
+    stdout = StringIO()
+
+    _render_json(
+        result,
+        trend=make_trend_snapshot(),
+        regression=make_regression_snapshot(),
+        stdout=stdout,
+    )
+
+    payload = json.loads(stdout.getvalue())
+
+    assert set(payload.keys()) == {
+        "summary",
+        "records",
+        "trend",
+        "regression",
+    }
 
 
 def test_render_failure_human() -> None:
@@ -340,3 +518,9 @@ def test_options_reject_non_positive_trend_window() -> None:
         ValueError, match="trend_window must be greater than zero"
     ):
         GovernanceAuditHistoryOptions(trend_window=0)
+
+
+def test_options_accept_include_regression_flag() -> None:
+    options = GovernanceAuditHistoryOptions(include_regression=True)
+
+    assert options.include_regression is True

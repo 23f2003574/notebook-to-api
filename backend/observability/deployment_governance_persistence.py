@@ -45,6 +45,9 @@ if TYPE_CHECKING:
     from .deployment_governance_audit_recording import (
         GovernanceIntegrityAuditRecordingService,
     )
+    from .deployment_governance_audit_regression import (
+        GovernanceIntegrityRegressionService,
+    )
     from .deployment_governance_audit_trends import (
         GovernanceIntegrityAuditTrendService,
     )
@@ -345,6 +348,24 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return GovernanceIntegrityAuditTrendService(
+            self.audit_history_repository
+        )
+
+    def build_integrity_regression_service(
+        self,
+    ) -> "GovernanceIntegrityRegressionService":
+        """
+        Build the governance integrity regression detection service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_audit_regression import (
+            GovernanceIntegrityRegressionService,
+        )
+
+        return GovernanceIntegrityRegressionService(
             self.audit_history_repository
         )
 

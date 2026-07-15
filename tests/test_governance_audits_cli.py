@@ -178,6 +178,144 @@ def test_governance_doctor_deep_then_audits_reports_trend(
     assert payload["trend"]["current_streak"] == 2
 
 
+def test_governance_audits_can_render_regression_analysis() -> None:
+    result = run_cli(
+        "governance",
+        "audits",
+        "--regression",
+    )
+
+    assert result.returncode == 0
+
+    assert "Regression Analysis" in result.stdout
+    assert "Regression detected:" in result.stdout
+
+
+def test_governance_audits_can_emit_regression_json() -> None:
+    result = run_cli(
+        "governance",
+        "audits",
+        "--regression",
+        "--json",
+    )
+
+    assert result.returncode == 0
+
+    payload = json.loads(result.stdout)
+
+    assert "regression" in payload
+    assert "status" in payload["regression"]
+    assert "regression_detected" in payload["regression"]
+
+
+def test_governance_audits_json_without_regression_omits_regression_key() -> None:
+    result = run_cli(
+        "governance",
+        "audits",
+        "--json",
+    )
+
+    assert result.returncode == 0
+
+    payload = json.loads(result.stdout)
+
+    assert "regression" not in payload
+
+
+def test_governance_audits_supports_trend_and_regression_together(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "audits-cli-trend-and-regression.db"
+
+    env = dict(os.environ)
+
+    env["NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND"] = "sqlite"
+    env["NOTEBOOK2API_GOVERNANCE_DATABASE_PATH"] = str(database_path)
+
+    run_cli("governance", "doctor", "--deep", env=env)
+    run_cli("governance", "doctor", "--deep", env=env)
+
+    result = run_cli(
+        "governance",
+        "audits",
+        "--trend",
+        "--regression",
+        "--json",
+        env=env,
+    )
+
+    assert result.returncode == 0
+
+    payload = json.loads(result.stdout)
+
+    assert set(payload.keys()) == {
+        "summary",
+        "records",
+        "trend",
+        "regression",
+    }
+
+    # doctor --deep does not fail exit code even when regression is found;
+    # this is inspection only, per the "no --fail-on-regression yet" scope.
+    assert payload["regression"]["status"] == "healthy"
+
+
+def test_governance_audits_regression_exit_code_stays_zero_on_detection(
+    tmp_path: Path,
+) -> None:
+    # governance audits --regression is inspection-only: even when it
+    # detects a genuine regression, the command still exits 0 because the
+    # query itself succeeded. A CI enforcement mode is a separate concern.
+    import sqlite3
+
+    database_path = tmp_path / "audits-cli-regression-detected.db"
+
+    env = dict(os.environ)
+
+    env["NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND"] = "sqlite"
+    env["NOTEBOOK2API_GOVERNANCE_DATABASE_PATH"] = str(database_path)
+
+    first = run_cli("governance", "doctor", "--deep", env=env)
+    assert first.returncode == 0
+
+    connection = sqlite3.connect(str(database_path))
+    connection.execute(
+        """
+        INSERT INTO deployment_governance_traces (
+            trace_id, deployment_id, service_name, environment,
+            artifact_digest, created_at, updated_at, governance_state,
+            final_status, completed, payload
+        ) VALUES (
+            'trace-regression', 'deployment-regression', 'payments-api',
+            'staging', 'sha256:regression', '2026-07-15T00:00:00+00:00',
+            '2026-07-15T00:00:00+00:00', 'created', NULL, 0, '{}'
+        )
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    second_doctor = run_cli(
+        "governance", "doctor", "--deep", env=env
+    )
+    assert second_doctor.returncode == 1  # unhealthy, but audits succeeds
+
+    second = run_cli(
+        "governance",
+        "audits",
+        "--regression",
+        "--json",
+        env=env,
+    )
+
+    assert second.returncode == 0
+
+    payload = json.loads(second.stdout)
+
+    assert payload["regression"]["status"] == "regression"
+    assert payload["regression"]["regression_detected"] is True
+
+
 def test_governance_doctor_deep_then_audits_lists_recorded_audit(
     tmp_path: Path,
 ) -> None:

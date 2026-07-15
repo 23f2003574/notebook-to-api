@@ -166,6 +166,15 @@ def main():
         help="Number of most recent audits to analyze for trends. Default: 20.",
     )
     audits_parser.add_argument(
+        "--regression",
+        action="store_true",
+        dest="include_regression",
+        help=(
+            "Compare the latest audit against its immediately preceding "
+            "audit to detect a newly introduced integrity regression."
+        ),
+    )
+    audits_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -218,6 +227,7 @@ def main():
                 limit=args.limit,
                 include_trend=args.include_trend,
                 trend_window=args.trend_window,
+                include_regression=args.include_regression,
                 json_output=args.json_output,
             )
             sys.exit(exit_code)

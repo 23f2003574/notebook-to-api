@@ -14,6 +14,9 @@ from .deployment_governance_audit_history import (
 from .deployment_governance_audit_history_service import (
     GovernanceIntegrityAuditHistoryResult,
 )
+from .deployment_governance_audit_regression import (
+    GovernanceIntegrityRegressionSnapshot,
+)
 from .deployment_governance_audit_trends import (
     GovernanceIntegrityAuditTrendSnapshot,
 )
@@ -52,6 +55,8 @@ class GovernanceAuditHistoryOptions:
     include_trend: bool = False
 
     trend_window: int = 20
+
+    include_regression: bool = False
 
     json_output: bool = False
 
@@ -115,6 +120,7 @@ def run_deployment_governance_audit_history(
     limit: int = 20,
     include_trend: bool = False,
     trend_window: int = 20,
+    include_regression: bool = False,
     json_output: bool = False,
     stdout: TextIO = sys.stdout,
     stderr: TextIO = sys.stderr,
@@ -136,6 +142,7 @@ def run_deployment_governance_audit_history(
             limit=limit,
             include_trend=include_trend,
             trend_window=trend_window,
+            include_regression=include_regression,
             json_output=json_output,
         )
 
@@ -165,6 +172,16 @@ def run_deployment_governance_audit_history(
             )
         )
 
+        regression = (
+            None
+            if not options.include_regression
+            else (
+                runtime
+                .build_integrity_regression_service()
+                .detect()
+            )
+        )
+
     except Exception as exc:
         _render_failure(
             exc,
@@ -175,10 +192,20 @@ def run_deployment_governance_audit_history(
         return int(GovernanceAuditHistoryExitCode.QUERY_FAILED)
 
     if json_output:
-        _render_json(result, trend=trend, stdout=stdout)
+        _render_json(
+            result,
+            trend=trend,
+            regression=regression,
+            stdout=stdout,
+        )
 
     else:
-        _render_human(result, trend=trend, stdout=stdout)
+        _render_human(
+            result,
+            trend=trend,
+            regression=regression,
+            stdout=stdout,
+        )
 
     return int(GovernanceAuditHistoryExitCode.SUCCESS)
 
@@ -187,21 +214,25 @@ def _render_json(
     result: GovernanceIntegrityAuditHistoryResult,
     *,
     trend: GovernanceIntegrityAuditTrendSnapshot | None,
+    regression: GovernanceIntegrityRegressionSnapshot | None,
     stdout: TextIO,
 ) -> None:
     """
     Render machine-readable audit history.
 
     Only JSON is written to stdout so `... | jq` style piping stays valid.
-    The "trend" key is only present when trend analysis was requested, so
+    The "trend" and "regression" keys are only present when requested, so
     the plain `audits --json` schema stays exactly as it was before trend
-    analysis existed.
+    and regression analysis existed.
     """
 
     payload = result.to_dict()
 
     if trend is not None:
         payload["trend"] = trend.to_dict()
+
+    if regression is not None:
+        payload["regression"] = regression.to_dict()
 
     json.dump(
         payload,
@@ -218,6 +249,7 @@ def _render_human(
     result: GovernanceIntegrityAuditHistoryResult,
     *,
     trend: GovernanceIntegrityAuditTrendSnapshot | None,
+    regression: GovernanceIntegrityRegressionSnapshot | None,
     stdout: TextIO,
 ) -> None:
     """
@@ -254,6 +286,9 @@ def _render_human(
         stdout.write("\n")
 
         _write_trend_section(trend, stdout=stdout)
+
+    if regression is not None:
+        _write_regression_section(regression, stdout=stdout)
 
 
 def _write_audit_records(
@@ -360,6 +395,62 @@ def _write_trend_section(
         )
         + "\n"
     )
+
+
+def _format_signed_integer(value: int | None) -> str:
+    if value is None:
+        return "not available"
+
+    if value > 0:
+        return f"+{value}"
+
+    return str(value)
+
+
+def _write_regression_section(
+    snapshot: GovernanceIntegrityRegressionSnapshot,
+    *,
+    stdout: TextIO,
+) -> None:
+    stdout.write("\nRegression Analysis\n")
+
+    stdout.write("-------------------\n")
+
+    stdout.write(f"Status: {snapshot.status.value.upper()}\n")
+
+    stdout.write(
+        "Regression detected: "
+        + ("yes" if snapshot.regression_detected else "no")
+        + "\n"
+    )
+
+    if snapshot.baseline_audit_id is not None:
+        stdout.write(f"Baseline audit: {snapshot.baseline_audit_id}\n")
+
+    if snapshot.current_audit_id is not None:
+        stdout.write(f"Current audit: {snapshot.current_audit_id}\n")
+
+    if snapshot.baseline_outcome is not None:
+        stdout.write(
+            f"Baseline outcome: {snapshot.baseline_outcome.value.upper()}\n"
+        )
+
+    if snapshot.current_outcome is not None:
+        stdout.write(
+            f"Current outcome: {snapshot.current_outcome.value.upper()}\n"
+        )
+
+    if snapshot.invalid_record_delta is not None:
+        stdout.write(
+            "Invalid record delta: "
+            f"{_format_signed_integer(snapshot.invalid_record_delta)}\n"
+        )
+
+    if snapshot.newly_introduced_failure_categories:
+        stdout.write("\nNew failure categories:\n")
+
+        for category in snapshot.newly_introduced_failure_categories:
+            stdout.write(f"  {category}\n")
 
 
 def _render_failure(
