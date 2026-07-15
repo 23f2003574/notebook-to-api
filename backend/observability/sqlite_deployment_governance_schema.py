@@ -13,6 +13,10 @@ DEPLOYMENT_GOVERNANCE_TRACE_TABLE: Final[
     str
 ] = "deployment_governance_traces"
 
+DEPLOYMENT_GOVERNANCE_INTEGRITY_AUDIT_TABLE: Final[
+    str
+] = "deployment_governance_integrity_audits"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -41,6 +45,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_trace_table_migration(),
             DeploymentGovernanceSQLiteSchema._create_query_indexes_migration(),
             DeploymentGovernanceSQLiteSchema._add_integrity_metadata_migration(),
+            DeploymentGovernanceSQLiteSchema._create_integrity_audit_history_migration(),
         )
 
     @staticmethod
@@ -282,6 +287,125 @@ class DeploymentGovernanceSQLiteSchema:
                     {DEPLOYMENT_GOVERNANCE_TRACE_TABLE}
                 ADD COLUMN
                     integrity_digest TEXT
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_integrity_audit_history_migration() -> SQLiteMigration:
+        """
+        Migration 4 creates durable storage for completed governance
+        integrity audits (backend/observability/deployment_governance_audit_history.py),
+        recording one compact aggregate summary per audit run rather than
+        every individual finding.
+        """
+
+        return SQLiteMigration(
+            version=4,
+            name="create governance integrity audit history table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_INTEGRITY_AUDIT_TABLE}
+                (
+                    audit_id TEXT NOT NULL
+                        PRIMARY KEY,
+
+                    backend TEXT NOT NULL,
+
+                    started_at TEXT NOT NULL,
+
+                    completed_at TEXT NOT NULL,
+
+                    outcome TEXT NOT NULL,
+
+                    total_records INTEGER NOT NULL,
+
+                    valid_records INTEGER NOT NULL,
+
+                    invalid_records INTEGER NOT NULL,
+
+                    integrity_mismatches INTEGER NOT NULL,
+
+                    missing_integrity_metadata INTEGER NOT NULL,
+
+                    invalid_integrity_metadata INTEGER NOT NULL,
+
+                    invalid_persisted_records INTEGER NOT NULL,
+
+                    CHECK (
+                        length(
+                            trim(audit_id)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(backend)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        outcome IN (
+                            'healthy',
+                            'unhealthy'
+                        )
+                    ),
+
+                    CHECK (
+                        completed_at >= started_at
+                    ),
+
+                    CHECK (total_records >= 0),
+                    CHECK (valid_records >= 0),
+                    CHECK (invalid_records >= 0),
+                    CHECK (integrity_mismatches >= 0),
+                    CHECK (missing_integrity_metadata >= 0),
+                    CHECK (invalid_integrity_metadata >= 0),
+                    CHECK (invalid_persisted_records >= 0),
+
+                    CHECK (
+                        valid_records + invalid_records
+                        = total_records
+                    ),
+
+                    CHECK (
+                        integrity_mismatches
+                        + missing_integrity_metadata
+                        + invalid_integrity_metadata
+                        + invalid_persisted_records
+                        = invalid_records
+                    )
+                )
+                """,
+
+                f"""
+                CREATE INDEX
+                idx_governance_integrity_audits_started_at
+                ON {DEPLOYMENT_GOVERNANCE_INTEGRITY_AUDIT_TABLE}
+                (
+                    started_at DESC
+                )
+                """,
+
+                f"""
+                CREATE INDEX
+                idx_governance_integrity_audits_outcome_started_at
+                ON {DEPLOYMENT_GOVERNANCE_INTEGRITY_AUDIT_TABLE}
+                (
+                    outcome,
+                    started_at DESC
+                )
+                """,
+
+                f"""
+                CREATE INDEX
+                idx_governance_integrity_audits_backend_started_at
+                ON {DEPLOYMENT_GOVERNANCE_INTEGRITY_AUDIT_TABLE}
+                (
+                    backend,
+                    started_at DESC
+                )
                 """,
             ),
         )
