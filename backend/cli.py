@@ -19,6 +19,12 @@ from backend.observability.deployment_governance_audit_history_cli import (
     parse_governance_audit_timestamp,
     run_deployment_governance_audit_history,
 )
+from backend.observability.deployment_governance_check import (
+    GovernanceIntegrityCheckPolicy,
+)
+from backend.observability.deployment_governance_check_cli import (
+    run_deployment_governance_check,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -181,6 +187,46 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    check_parser = governance_subparsers.add_parser(
+        "check",
+        help="Execute and enforce a governance integrity policy gate.",
+        description=(
+            "Execute a fresh deep integrity audit, persist it, and "
+            "compare it against the immediately preceding recorded audit "
+            "to enforce a governance policy.\n\n"
+            "Unlike `governance audits --regression` (read-only inspection "
+            "of existing history), this command always executes and "
+            "records a brand-new audit.\n\n"
+            "Exit codes: 0 policy passed, 2 check could not be executed, "
+            "3 policy failed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    check_parser.add_argument(
+        "--policy",
+        choices=["regression-only", "require-healthy"],
+        default="regression-only",
+        help=(
+            "regression-only (default) fails only when the latest audit "
+            "newly degraded from a healthy baseline. require-healthy "
+            "fails whenever the latest audit is unhealthy, even if the "
+            "failure is not new."
+        ),
+    )
+    check_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=500,
+        dest="batch_size",
+        help="Number of persisted records read per integrity-audit batch. Default: 500.",
+    )
+    check_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     args = parser.parse_args()
 
     if args.command == "compile":
@@ -228,6 +274,20 @@ def main():
                 include_trend=args.include_trend,
                 trend_window=args.trend_window,
                 include_regression=args.include_regression,
+                json_output=args.json_output,
+            )
+            sys.exit(exit_code)
+        elif args.governance_command == "check":
+            if args.batch_size <= 0:
+                parser.error("--batch-size must be greater than zero")
+            policy = (
+                GovernanceIntegrityCheckPolicy.REQUIRE_HEALTHY
+                if args.policy == "require-healthy"
+                else GovernanceIntegrityCheckPolicy.REGRESSION_ONLY
+            )
+            exit_code = run_deployment_governance_check(
+                policy=policy,
+                batch_size=args.batch_size,
                 json_output=args.json_output,
             )
             sys.exit(exit_code)
