@@ -10,6 +10,7 @@ from backend.observability.deployment_governance_audit_history import (
     InMemoryGovernanceIntegrityAuditHistoryRepository,
 )
 from backend.observability.deployment_governance_audit_retention import (
+    GovernanceIntegrityAuditAutomaticRetentionConfig,
     GovernanceIntegrityAuditRetentionPolicy,
     GovernanceIntegrityAuditRetentionService,
 )
@@ -344,6 +345,36 @@ def test_sqlite_audit_history_pruning_persists_after_runtime_recreation(
     )
 
     assert result.deleted_records == 3
+
+    recreated_runtime = build_deployment_governance_persistence(
+        DeploymentGovernancePersistenceConfig.sqlite(database_path)
+    )
+
+    assert recreated_runtime.audit_history_repository.count() == 2
+
+
+def test_sqlite_automatic_retention_persists_bounded_history(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "automatic-retention.db"
+
+    runtime = build_deployment_governance_persistence(
+        DeploymentGovernancePersistenceConfig.sqlite(database_path),
+        automatic_audit_retention=(
+            GovernanceIntegrityAuditAutomaticRetentionConfig(
+                enabled=True, max_records=2
+            )
+        ),
+    )
+
+    recording_service = (
+        runtime.build_integrity_audit_recording_service()
+    )
+
+    for _ in range(5):
+        recording_service.audit_and_record()
+
+    assert runtime.audit_history_repository.count() == 2
 
     recreated_runtime = build_deployment_governance_persistence(
         DeploymentGovernancePersistenceConfig.sqlite(database_path)

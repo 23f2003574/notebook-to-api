@@ -12,6 +12,13 @@ from backend.observability.deployment_governance_audit_recording import (
     GovernanceIntegrityAuditRecordMapper,
     GovernanceIntegrityAuditRecordingService,
 )
+from backend.observability.deployment_governance_audit_regression import (
+    GovernanceIntegrityRegressionService,
+)
+from backend.observability.deployment_governance_audit_retention import (
+    GovernanceIntegrityAuditAutomaticRetentionConfig,
+    GovernanceIntegrityAuditRetentionService,
+)
 from backend.observability.deployment_governance_integrity_audit import (
     GovernanceTraceIntegrityAuditFinding,
     GovernanceTraceIntegrityAuditReport,
@@ -123,6 +130,78 @@ class FailingHistoryRepository(
 ):
     def save(self, record):  # type: ignore[override]
         raise RuntimeError("simulated history persistence failure")
+
+
+def make_report_at(
+    started_at: datetime,
+    *,
+    invalid_records: int = 0,
+) -> GovernanceTraceIntegrityAuditReport:
+    status = (
+        GovernanceTraceIntegrityAuditStatus.VALID
+        if invalid_records == 0
+        else GovernanceTraceIntegrityAuditStatus.INTEGRITY_MISMATCH
+    )
+
+    findings = tuple(
+        GovernanceTraceIntegrityAuditFinding(
+            trace_id=f"trace-{index}",
+            status=status,
+        )
+        for index in range(max(invalid_records, 1))
+    )
+
+    return GovernanceTraceIntegrityAuditReport(
+        started_at=started_at,
+        completed_at=started_at + timedelta(seconds=2),
+        findings=findings,
+    )
+
+
+class SequentialAuditExecutor:
+    """
+    Returns a fresh report with a strictly increasing started_at on each
+    call, so successive audit_and_record() calls produce distinct,
+    deterministically ordered historical records instead of all sharing
+    one fixed timestamp.
+    """
+
+    def __init__(
+        self,
+        *,
+        invalid_records_sequence: tuple[int, ...] = (),
+    ) -> None:
+        self._invalid_records_sequence = invalid_records_sequence
+        self._call_count = 0
+        self.batch_sizes: list[int] = []
+
+    def audit(
+        self,
+        *,
+        batch_size: int = 500,
+    ) -> GovernanceTraceIntegrityAuditReport:
+        self.batch_sizes.append(batch_size)
+
+        invalid_records = (
+            self._invalid_records_sequence[self._call_count]
+            if self._call_count < len(self._invalid_records_sequence)
+            else 0
+        )
+
+        started_at = BASE_TIME + timedelta(
+            minutes=self._call_count * 10
+        )
+
+        self._call_count += 1
+
+        return make_report_at(
+            started_at, invalid_records=invalid_records
+        )
+
+
+class FailingRetentionService:
+    def prune(self, policy, *, apply: bool = False):
+        raise RuntimeError("retention failed")
 
 
 def fail_if_called() -> str:
@@ -357,3 +436,267 @@ def test_recording_service_rejects_invalid_batch_size() -> None:
         service.audit_and_record(batch_size=0)
 
     assert executor.batch_sizes == []
+
+
+def test_recording_service_rejects_enabled_retention_without_service() -> None:
+    with pytest.raises(
+        ValueError,
+        match="automatic retention requires a retention service",
+    ):
+        GovernanceIntegrityAuditRecordingService(
+            audit_executor=SequentialAuditExecutor(),
+            history_repository=(
+                InMemoryGovernanceIntegrityAuditHistoryRepository()
+            ),
+            record_mapper=GovernanceIntegrityAuditRecordMapper(
+                backend="sqlite"
+            ),
+            automatic_retention=(
+                GovernanceIntegrityAuditAutomaticRetentionConfig(
+                    enabled=True, max_records=2
+                )
+            ),
+        )
+
+
+def test_automatic_retention_bounds_history_after_recording() -> None:
+    repository = InMemoryGovernanceIntegrityAuditHistoryRepository()
+
+    retention_service = GovernanceIntegrityAuditRetentionService(
+        repository
+    )
+
+    recording_service = GovernanceIntegrityAuditRecordingService(
+        audit_executor=SequentialAuditExecutor(),
+        history_repository=repository,
+        record_mapper=GovernanceIntegrityAuditRecordMapper(
+            backend="sqlite"
+        ),
+        retention_service=retention_service,
+        automatic_retention=(
+            GovernanceIntegrityAuditAutomaticRetentionConfig(
+                enabled=True, max_records=3
+            )
+        ),
+    )
+
+    for _ in range(5):
+        result = recording_service.audit_and_record()
+
+        assert repository.count() <= 3
+        assert result.retention is not None
+        assert result.retention.applied is True
+
+    assert repository.count() == 3
+
+
+def test_automatic_retention_never_prunes_the_just_recorded_audit() -> None:
+    repository = InMemoryGovernanceIntegrityAuditHistoryRepository()
+
+    recording_service = GovernanceIntegrityAuditRecordingService(
+        audit_executor=SequentialAuditExecutor(),
+        history_repository=repository,
+        record_mapper=GovernanceIntegrityAuditRecordMapper(
+            backend="sqlite"
+        ),
+        retention_service=(
+            GovernanceIntegrityAuditRetentionService(repository)
+        ),
+        automatic_retention=(
+            GovernanceIntegrityAuditAutomaticRetentionConfig(
+                enabled=True, max_records=2
+            )
+        ),
+    )
+
+    result = None
+
+    for _ in range(5):
+        result = recording_service.audit_and_record()
+
+        remaining_ids = {
+            record.audit_id for record in repository.list()
+        }
+
+        assert result.audit_id in remaining_ids
+
+
+def test_disabled_automatic_retention_does_not_prune_history() -> None:
+    repository = InMemoryGovernanceIntegrityAuditHistoryRepository()
+
+    recording_service = GovernanceIntegrityAuditRecordingService(
+        audit_executor=SequentialAuditExecutor(),
+        history_repository=repository,
+        record_mapper=GovernanceIntegrityAuditRecordMapper(
+            backend="sqlite"
+        ),
+        retention_service=(
+            GovernanceIntegrityAuditRetentionService(repository)
+        ),
+        automatic_retention=(
+            GovernanceIntegrityAuditAutomaticRetentionConfig.disabled()
+        ),
+    )
+
+    for _ in range(5):
+        result = recording_service.audit_and_record()
+
+        assert result.retention is None
+
+    assert repository.count() == 5
+
+
+def test_recording_service_defaults_to_disabled_automatic_retention() -> None:
+    # No retention_service and no automatic_retention supplied at all:
+    # this must behave exactly as it did before automatic retention
+    # existed.
+    repository = InMemoryGovernanceIntegrityAuditHistoryRepository()
+
+    recording_service = GovernanceIntegrityAuditRecordingService(
+        audit_executor=SequentialAuditExecutor(),
+        history_repository=repository,
+        record_mapper=GovernanceIntegrityAuditRecordMapper(
+            backend="sqlite"
+        ),
+    )
+
+    for _ in range(3):
+        result = recording_service.audit_and_record()
+        assert result.retention is None
+
+    assert repository.count() == 3
+
+
+def test_automatic_retention_prunes_by_age() -> None:
+    repository = InMemoryGovernanceIntegrityAuditHistoryRepository()
+
+    now = BASE_TIME + timedelta(days=100)
+
+    # Pre-seed old history directly, bypassing the recording flow, so we
+    # can control ages precisely rather than relying on real time.
+    repository.save(
+        _make_retention_test_record(
+            audit_id="ancient",
+            started_at=now - timedelta(days=90),
+        )
+    )
+
+    repository.save(
+        _make_retention_test_record(
+            audit_id="old",
+            started_at=now - timedelta(days=40),
+        )
+    )
+
+    retention_service = GovernanceIntegrityAuditRetentionService(
+        repository, clock=lambda: now
+    )
+
+    class FixedTimeAuditExecutor:
+        def audit(self, *, batch_size: int = 500):
+            return make_report_at(now)
+
+    recording_service = GovernanceIntegrityAuditRecordingService(
+        audit_executor=FixedTimeAuditExecutor(),
+        history_repository=repository,
+        record_mapper=GovernanceIntegrityAuditRecordMapper(
+            backend="sqlite"
+        ),
+        retention_service=retention_service,
+        automatic_retention=(
+            GovernanceIntegrityAuditAutomaticRetentionConfig(
+                enabled=True, max_age_days=30
+            )
+        ),
+    )
+
+    result = recording_service.audit_and_record()
+
+    remaining_ids = {
+        record.audit_id for record in repository.list()
+    }
+
+    assert remaining_ids == {result.audit_id}
+    assert result.retention is not None
+    assert result.retention.deleted_records == 2
+
+
+def test_automatic_retention_failure_is_not_silently_ignored() -> None:
+    repository = InMemoryGovernanceIntegrityAuditHistoryRepository()
+
+    service = GovernanceIntegrityAuditRecordingService(
+        audit_executor=SequentialAuditExecutor(),
+        history_repository=repository,
+        record_mapper=GovernanceIntegrityAuditRecordMapper(
+            backend="sqlite"
+        ),
+        retention_service=FailingRetentionService(),
+        automatic_retention=(
+            GovernanceIntegrityAuditAutomaticRetentionConfig(
+                enabled=True, max_records=10
+            )
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="retention failed"):
+        service.audit_and_record()
+
+    # The audit itself was already persisted before retention failed: this
+    # is documented, non-atomic lifecycle behavior, not a bug.
+    assert repository.count() == 1
+
+
+def test_automatic_retention_preserves_history_required_for_regression_detection() -> None:
+    repository = InMemoryGovernanceIntegrityAuditHistoryRepository()
+
+    recording_service = GovernanceIntegrityAuditRecordingService(
+        audit_executor=SequentialAuditExecutor(
+            invalid_records_sequence=(0, 0, 2)
+        ),
+        history_repository=repository,
+        record_mapper=GovernanceIntegrityAuditRecordMapper(
+            backend="sqlite"
+        ),
+        retention_service=(
+            GovernanceIntegrityAuditRetentionService(repository)
+        ),
+        automatic_retention=(
+            GovernanceIntegrityAuditAutomaticRetentionConfig(
+                enabled=True, max_records=2
+            )
+        ),
+    )
+
+    recording_service.audit_and_record()  # A: healthy
+    recording_service.audit_and_record()  # B: healthy
+    recording_service.audit_and_record()  # C: unhealthy
+
+    assert repository.count() == 2
+
+    regression = GovernanceIntegrityRegressionService(
+        repository
+    ).detect()
+
+    assert regression.regression_detected is True
+
+
+def _make_retention_test_record(*, audit_id: str, started_at: datetime):
+    from backend.observability.deployment_governance_audit_history import (
+        GovernanceIntegrityAuditOutcome as _Outcome,
+        GovernanceIntegrityAuditRecord,
+    )
+
+    return GovernanceIntegrityAuditRecord(
+        audit_id=audit_id,
+        backend="sqlite",
+        started_at=started_at,
+        completed_at=started_at + timedelta(seconds=2),
+        outcome=_Outcome.HEALTHY,
+        total_records=10,
+        valid_records=10,
+        invalid_records=0,
+        integrity_mismatches=0,
+        missing_integrity_metadata=0,
+        invalid_integrity_metadata=0,
+        invalid_persisted_records=0,
+    )

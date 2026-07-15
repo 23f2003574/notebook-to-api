@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from io import StringIO
 
 from backend.observability.deployment_governance_audit_history import (
@@ -30,6 +31,7 @@ def make_check_result(
     passed: bool,
     regression_detected: bool = False,
     audit_healthy: bool | None = None,
+    retention=None,
 ) -> GovernanceIntegrityCheckResult:
     if regression_detected:
         status = GovernanceIntegrityCheckStatus.REGRESSION_DETECTED
@@ -76,6 +78,7 @@ def make_check_result(
         audit_id="audit-current",
         audit_healthy=resolved_audit_healthy,
         regression=regression,
+        retention=retention,
     )
 
 
@@ -120,6 +123,52 @@ def test_check_human_output_renders_unhealthy_failure() -> None:
     assert "Status: UNHEALTHY" in output
     assert "Audit healthy: no" in output
     assert "Passed: no" in output
+
+
+def test_check_human_output_omits_retention_section_by_default() -> None:
+    result = make_check_result(passed=True)
+
+    stdout = StringIO()
+
+    _render_check_human(result, stdout=stdout)
+
+    assert "Automatic Retention" not in stdout.getvalue()
+
+
+def test_check_human_output_renders_retention_section_when_present() -> None:
+    from backend.observability.deployment_governance_audit_retention import (
+        GovernanceIntegrityAuditPruningPlan,
+        GovernanceIntegrityAuditPruningResult,
+    )
+
+    plan = GovernanceIntegrityAuditPruningPlan(
+        evaluated_at=datetime.now(timezone.utc),
+        total_records=101,
+        retained_records=100,
+        prunable_records=1,
+        retained_audit_ids=tuple(f"audit-{i}" for i in range(100)),
+        prunable_audit_ids=("audit-oldest",),
+        oldest_retained_started_at=None,
+        newest_retained_started_at=None,
+    )
+
+    retention = GovernanceIntegrityAuditPruningResult(
+        plan=plan, applied=True, deleted_records=1
+    )
+
+    result = make_check_result(passed=True, retention=retention)
+
+    stdout = StringIO()
+
+    _render_check_human(result, stdout=stdout)
+
+    output = stdout.getvalue()
+
+    assert "Automatic Retention" in output
+    assert "Applied: yes" in output
+    assert "Prunable records: 1" in output
+    assert "Deleted records: 1" in output
+    assert "Records retained: 100" in output
 
 
 def test_check_json_output_is_valid_json() -> None:

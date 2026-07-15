@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Callable
+from typing import Callable, Mapping
 
 from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditHistoryRepository,
@@ -257,3 +258,177 @@ class GovernanceIntegrityAuditRetentionService:
             applied=True,
             deleted_records=deleted_records,
         )
+
+
+@dataclass(frozen=True)
+class GovernanceIntegrityAuditAutomaticRetentionConfig:
+    """
+    Optional automatic retention configuration for audit recording.
+
+    Disabled by default and permissive while disabled: limits are only
+    validated once enabled, so a dormant config with stray limit values
+    (e.g. left over from a previous deployment) never raises. Once
+    enabled, max_records is required to be at least 2 (unlike the manual
+    GovernanceIntegrityAuditRetentionPolicy, which allows max_records=1)
+    because automatic pruning must never destroy the immediate baseline
+    that regression detection depends on.
+    """
+
+    enabled: bool = False
+
+    max_records: int | None = None
+
+    max_age_days: int | None = None
+
+    preserve_latest: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.enabled:
+            return
+
+        if self.max_records is None and self.max_age_days is None:
+            raise ValueError(
+                "enabled automatic retention requires "
+                "at least one retention limit"
+            )
+
+        if self.max_records is not None and self.max_records < 2:
+            raise ValueError(
+                "automatic retention max_records must be at least 2 "
+                "to preserve regression-analysis history"
+            )
+
+        if self.max_age_days is not None and self.max_age_days <= 0:
+            raise ValueError(
+                "max_age_days must be greater than zero"
+            )
+
+    @classmethod
+    def disabled(
+        cls,
+    ) -> "GovernanceIntegrityAuditAutomaticRetentionConfig":
+        return cls(enabled=False)
+
+    def to_policy(self) -> GovernanceIntegrityAuditRetentionPolicy:
+        if not self.enabled:
+            raise ValueError(
+                "disabled automatic retention cannot produce "
+                "a retention policy"
+            )
+
+        return GovernanceIntegrityAuditRetentionPolicy(
+            max_records=self.max_records,
+            max_age_days=self.max_age_days,
+            preserve_latest=self.preserve_latest,
+        )
+
+
+def _parse_optional_boolean_environment_value(
+    value: str | None,
+    *,
+    default: bool,
+    variable_name: str,
+) -> bool:
+    if value is None:
+        return default
+
+    normalized = value.strip().lower()
+
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+
+    raise ValueError(
+        f"{variable_name} must be a boolean value"
+    )
+
+
+def _parse_optional_positive_integer_environment_value(
+    value: str | None,
+    *,
+    variable_name: str,
+) -> int | None:
+    if value is None:
+        return None
+
+    try:
+        parsed = int(value)
+
+    except ValueError as exc:
+        raise ValueError(
+            f"{variable_name} must be an integer"
+        ) from exc
+
+    if parsed <= 0:
+        raise ValueError(
+            f"{variable_name} must be greater than zero"
+        )
+
+    return parsed
+
+
+def governance_integrity_audit_automatic_retention_config_from_env(
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> GovernanceIntegrityAuditAutomaticRetentionConfig:
+    """
+    Build automatic audit-history retention configuration from environment
+    variables.
+
+    Supported variables:
+
+    NOTEBOOK2API_GOVERNANCE_AUDIT_RETENTION_ENABLED
+    NOTEBOOK2API_GOVERNANCE_AUDIT_RETENTION_MAX_RECORDS
+    NOTEBOOK2API_GOVERNANCE_AUDIT_RETENTION_MAX_AGE_DAYS
+    NOTEBOOK2API_GOVERNANCE_AUDIT_RETENTION_PRESERVE_LATEST
+
+    Disabled (the default) when
+    NOTEBOOK2API_GOVERNANCE_AUDIT_RETENTION_ENABLED is unset, preserving
+    existing deployment behavior.
+    """
+
+    if environ is None:
+        environ = os.environ
+
+    enabled = _parse_optional_boolean_environment_value(
+        environ.get("NOTEBOOK2API_GOVERNANCE_AUDIT_RETENTION_ENABLED"),
+        default=False,
+        variable_name="NOTEBOOK2API_GOVERNANCE_AUDIT_RETENTION_ENABLED",
+    )
+
+    max_records = _parse_optional_positive_integer_environment_value(
+        environ.get(
+            "NOTEBOOK2API_GOVERNANCE_AUDIT_RETENTION_MAX_RECORDS"
+        ),
+        variable_name=(
+            "NOTEBOOK2API_GOVERNANCE_AUDIT_RETENTION_MAX_RECORDS"
+        ),
+    )
+
+    max_age_days = _parse_optional_positive_integer_environment_value(
+        environ.get(
+            "NOTEBOOK2API_GOVERNANCE_AUDIT_RETENTION_MAX_AGE_DAYS"
+        ),
+        variable_name=(
+            "NOTEBOOK2API_GOVERNANCE_AUDIT_RETENTION_MAX_AGE_DAYS"
+        ),
+    )
+
+    preserve_latest = _parse_optional_boolean_environment_value(
+        environ.get(
+            "NOTEBOOK2API_GOVERNANCE_AUDIT_RETENTION_PRESERVE_LATEST"
+        ),
+        default=True,
+        variable_name=(
+            "NOTEBOOK2API_GOVERNANCE_AUDIT_RETENTION_PRESERVE_LATEST"
+        ),
+    )
+
+    return GovernanceIntegrityAuditAutomaticRetentionConfig(
+        enabled=enabled,
+        max_records=max_records,
+        max_age_days=max_age_days,
+        preserve_latest=preserve_latest,
+    )

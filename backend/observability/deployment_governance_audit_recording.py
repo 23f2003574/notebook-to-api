@@ -9,6 +9,11 @@ from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditOutcome,
     GovernanceIntegrityAuditRecord,
 )
+from .deployment_governance_audit_retention import (
+    GovernanceIntegrityAuditAutomaticRetentionConfig,
+    GovernanceIntegrityAuditPruningResult,
+    GovernanceIntegrityAuditRetentionPolicy,
+)
 from .deployment_governance_integrity_audit import (
     GovernanceTraceIntegrityAuditReport,
 )
@@ -26,6 +31,22 @@ class GovernanceIntegrityAuditExecutor(Protocol):
     ) -> GovernanceTraceIntegrityAuditReport:
         """
         Execute a complete governance trace integrity audit.
+        """
+
+
+class GovernanceIntegrityAuditRetentionExecutor(Protocol):
+    """
+    Minimal execution contract required for the automatic retention hook.
+    """
+
+    def prune(
+        self,
+        policy: GovernanceIntegrityAuditRetentionPolicy,
+        *,
+        apply: bool = False,
+    ) -> GovernanceIntegrityAuditPruningResult:
+        """
+        Evaluate (and optionally apply) one retention policy.
         """
 
 
@@ -49,6 +70,8 @@ class GovernanceIntegrityAuditRecordingResult:
     report: GovernanceTraceIntegrityAuditReport
 
     record: GovernanceIntegrityAuditRecord
+
+    retention: GovernanceIntegrityAuditPruningResult | None = None
 
     @property
     def audit_id(self) -> str:
@@ -140,11 +163,31 @@ class GovernanceIntegrityAuditRecordingService:
         audit_id_factory: GovernanceIntegrityAuditIdFactory = (
             generate_governance_integrity_audit_id
         ),
+        retention_service: (
+            GovernanceIntegrityAuditRetentionExecutor | None
+        ) = None,
+        automatic_retention: (
+            GovernanceIntegrityAuditAutomaticRetentionConfig | None
+        ) = None,
     ) -> None:
         self._audit_executor = audit_executor
         self._history_repository = history_repository
         self._record_mapper = record_mapper
         self._audit_id_factory = audit_id_factory
+        self._retention_service = retention_service
+
+        self._automatic_retention = (
+            automatic_retention
+            or GovernanceIntegrityAuditAutomaticRetentionConfig.disabled()
+        )
+
+        if (
+            self._automatic_retention.enabled
+            and self._retention_service is None
+        ):
+            raise ValueError(
+                "automatic retention requires a retention service"
+            )
 
     def audit_and_record(
         self,
@@ -178,9 +221,37 @@ class GovernanceIntegrityAuditRecordingService:
 
         persisted_record = self._history_repository.save(record)
 
+        # Retention runs only after the new audit is durably persisted, so
+        # a bounded history never drops below its configured limit and the
+        # audit just recorded is always the one preserve_latest protects.
+        retention_result = self._apply_automatic_retention()
+
         return GovernanceIntegrityAuditRecordingResult(
             report=report,
             record=persisted_record,
+            retention=retention_result,
+        )
+
+    def _apply_automatic_retention(
+        self,
+    ) -> GovernanceIntegrityAuditPruningResult | None:
+        if not self._automatic_retention.enabled:
+            return None
+
+        if self._retention_service is None:
+            raise RuntimeError(
+                "automatic retention is enabled "
+                "without a retention service"
+            )
+
+        # Fail-closed: if pruning raises, the exception propagates rather
+        # than being swallowed. The audit above is already persisted by
+        # this point (no shared transaction spans both operations), so a
+        # retention failure means the audit succeeded but the operator's
+        # bounded-history contract was not honored for this call.
+        return self._retention_service.prune(
+            self._automatic_retention.to_policy(),
+            apply=True,
         )
 
     def _generate_audit_id(self) -> str:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Mapping
@@ -14,6 +14,9 @@ from backend.persistence.sqlite_database import (
 from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditHistoryRepository,
     InMemoryGovernanceIntegrityAuditHistoryRepository,
+)
+from .deployment_governance_audit_retention import (
+    GovernanceIntegrityAuditAutomaticRetentionConfig,
 )
 from .deployment_governance_integrity_audit import (
     DeploymentGovernanceIntegrityAuditService,
@@ -239,6 +242,14 @@ class DeploymentGovernancePersistenceRuntime:
 
     database: SQLiteDatabase | None = None
 
+    automatic_audit_retention: (
+        GovernanceIntegrityAuditAutomaticRetentionConfig
+    ) = field(
+        default_factory=(
+            GovernanceIntegrityAuditAutomaticRetentionConfig.disabled
+        )
+    )
+
     @property
     def durable(
         self,
@@ -319,6 +330,10 @@ class DeploymentGovernancePersistenceRuntime:
             record_mapper=GovernanceIntegrityAuditRecordMapper(
                 backend=self.backend.value
             ),
+            retention_service=(
+                self.build_integrity_audit_retention_service()
+            ),
+            automatic_retention=self.automatic_audit_retention,
         )
 
     def build_integrity_audit_history_service(
@@ -441,6 +456,10 @@ class DeploymentGovernancePersistenceRuntime:
 def build_deployment_governance_persistence(
     config: DeploymentGovernancePersistenceConfig
     | None = None,
+    *,
+    automatic_audit_retention: (
+        GovernanceIntegrityAuditAutomaticRetentionConfig | None
+    ) = None,
 ) -> DeploymentGovernancePersistenceRuntime:
     """
     Build the configured deployment governance persistence runtime.
@@ -451,6 +470,9 @@ def build_deployment_governance_persistence(
     - a repository-backed DeploymentGovernanceTraceRegistry.
 
     SQLite mode additionally exposes the underlying SQLiteDatabase instance.
+
+    automatic_audit_retention defaults to disabled, preserving existing
+    behavior for callers that do not opt in.
     """
 
     if config is None:
@@ -458,12 +480,20 @@ def build_deployment_governance_persistence(
             DeploymentGovernancePersistenceConfig.memory()
         )
 
+    resolved_automatic_audit_retention = (
+        automatic_audit_retention
+        or GovernanceIntegrityAuditAutomaticRetentionConfig.disabled()
+    )
+
     if (
         config.backend
         is DeploymentGovernancePersistenceBackend.MEMORY
     ):
         return _build_memory_runtime(
-            config
+            config,
+            automatic_audit_retention=(
+                resolved_automatic_audit_retention
+            ),
         )
 
     if (
@@ -471,7 +501,10 @@ def build_deployment_governance_persistence(
         is DeploymentGovernancePersistenceBackend.SQLITE
     ):
         return _build_sqlite_runtime(
-            config
+            config,
+            automatic_audit_retention=(
+                resolved_automatic_audit_retention
+            ),
         )
 
     raise AssertionError(
@@ -482,6 +515,10 @@ def build_deployment_governance_persistence(
 
 def _build_memory_runtime(
     config: DeploymentGovernancePersistenceConfig,
+    *,
+    automatic_audit_retention: (
+        GovernanceIntegrityAuditAutomaticRetentionConfig
+    ),
 ) -> DeploymentGovernancePersistenceRuntime:
     """
     Build an ephemeral in-memory governance persistence runtime.
@@ -508,11 +545,16 @@ def _build_memory_runtime(
         registry=registry,
         audit_history_repository=audit_history_repository,
         database=None,
+        automatic_audit_retention=automatic_audit_retention,
     )
 
 
 def _build_sqlite_runtime(
     config: DeploymentGovernancePersistenceConfig,
+    *,
+    automatic_audit_retention: (
+        GovernanceIntegrityAuditAutomaticRetentionConfig
+    ),
 ) -> DeploymentGovernancePersistenceRuntime:
     """
     Build a durable SQLite governance persistence runtime.
@@ -566,6 +608,7 @@ def _build_sqlite_runtime(
         registry=registry,
         audit_history_repository=audit_history_repository,
         database=database,
+        automatic_audit_retention=automatic_audit_retention,
     )
 
 

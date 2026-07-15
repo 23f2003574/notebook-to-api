@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Protocol, TextIO
 
+from .deployment_governance_audit_retention import (
+    governance_integrity_audit_automatic_retention_config_from_env,
+)
 from .deployment_governance_persistence import (
     build_deployment_governance_persistence,
     deployment_governance_persistence_config_from_env,
@@ -774,7 +777,10 @@ def run_deployment_governance_doctor(
 
         runtime = (
             build_deployment_governance_persistence(
-                config
+                config,
+                automatic_audit_retention=(
+                    governance_integrity_audit_automatic_retention_config_from_env()
+                ),
             )
         )
 

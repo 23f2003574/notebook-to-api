@@ -10,6 +10,9 @@ from .deployment_governance_audit_regression import (
     GovernanceIntegrityRegressionService,
     GovernanceIntegrityRegressionSnapshot,
 )
+from .deployment_governance_audit_retention import (
+    GovernanceIntegrityAuditPruningResult,
+)
 
 
 class GovernanceIntegrityCheckPolicy(
@@ -58,6 +61,8 @@ class GovernanceIntegrityCheckResult:
 
     regression: GovernanceIntegrityRegressionSnapshot
 
+    retention: GovernanceIntegrityAuditPruningResult | None = None
+
     def __post_init__(self) -> None:
         expected_passed = (
             self.status is GovernanceIntegrityCheckStatus.PASSED
@@ -76,6 +81,11 @@ class GovernanceIntegrityCheckResult:
             "audit_id": self.audit_id,
             "audit_healthy": self.audit_healthy,
             "regression": self.regression.to_dict(),
+            "retention": (
+                None
+                if self.retention is None
+                else self.retention.to_dict()
+            ),
         }
 
 
@@ -136,6 +146,7 @@ class GovernanceIntegrityCheckService:
             audit_id=recording_result.audit_id,
             audit_healthy=audit_healthy,
             regression=regression,
+            retention=recording_result.retention,
         )
 
     @staticmethod

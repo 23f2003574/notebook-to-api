@@ -43,7 +43,13 @@ BASE_TIME = datetime(
 
 
 class StubRecordingService:
-    def __init__(self, *, healthy: bool, audit_id: str = "audit-check") -> None:
+    def __init__(
+        self,
+        *,
+        healthy: bool,
+        audit_id: str = "audit-check",
+        retention=None,
+    ) -> None:
         self.batch_sizes: list[int] = []
 
         if healthy:
@@ -92,6 +98,7 @@ class StubRecordingService:
         self._result = GovernanceIntegrityAuditRecordingResult(
             report=report,
             record=record,
+            retention=retention,
         )
 
     def audit_and_record(
@@ -352,3 +359,53 @@ def test_first_unhealthy_audit_fails_require_healthy_policy() -> None:
 
     assert result.status is GovernanceIntegrityCheckStatus.UNHEALTHY
     assert result.passed is False
+
+
+def test_integrity_check_exposes_automatic_retention_result() -> None:
+    from backend.observability.deployment_governance_audit_retention import (
+        GovernanceIntegrityAuditPruningPlan,
+        GovernanceIntegrityAuditPruningResult,
+    )
+
+    plan = GovernanceIntegrityAuditPruningPlan(
+        evaluated_at=BASE_TIME,
+        total_records=3,
+        retained_records=2,
+        prunable_records=1,
+        retained_audit_ids=("audit-check", "audit-older"),
+        prunable_audit_ids=("audit-oldest",),
+        oldest_retained_started_at=BASE_TIME,
+        newest_retained_started_at=BASE_TIME,
+    )
+
+    retention_result = GovernanceIntegrityAuditPruningResult(
+        plan=plan, applied=True, deleted_records=1
+    )
+
+    service = GovernanceIntegrityCheckService(
+        recording_service=StubRecordingService(
+            healthy=True, retention=retention_result
+        ),
+        regression_service=StubRegressionService(
+            regression_detected=False
+        ),
+    )
+
+    result = service.check()
+
+    assert result.retention is not None
+    assert result.retention.applied is True
+    assert result.retention.deleted_records == 1
+
+
+def test_integrity_check_has_no_retention_result_when_disabled() -> None:
+    service = GovernanceIntegrityCheckService(
+        recording_service=StubRecordingService(healthy=True),
+        regression_service=StubRegressionService(
+            regression_detected=False
+        ),
+    )
+
+    result = service.check()
+
+    assert result.retention is None
