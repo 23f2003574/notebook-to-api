@@ -274,3 +274,50 @@ def test_repository_counts_records_by_outcome(
         )
         == 1
     )
+
+
+def test_repository_deletes_records_by_id(
+    repository: GovernanceIntegrityAuditHistoryRepository,
+) -> None:
+    repository.save(make_record(audit_id="audit-1"))
+
+    repository.save(
+        make_record(audit_id="audit-2", offset_minutes=10)
+    )
+
+    deleted = repository.delete_by_ids(("audit-1",))
+
+    assert deleted == 1
+    assert repository.count() == 1
+
+    remaining = repository.list()
+
+    assert remaining[0].audit_id == "audit-2"
+
+
+def test_repository_ignores_unknown_ids_during_deletion(
+    repository: GovernanceIntegrityAuditHistoryRepository,
+) -> None:
+    repository.save(make_record(audit_id="audit-1"))
+
+    deleted = repository.delete_by_ids(("missing",))
+
+    assert deleted == 0
+    assert repository.count() == 1
+
+
+def test_repository_delete_count_uses_unique_records(
+    repository: GovernanceIntegrityAuditHistoryRepository,
+) -> None:
+    repository.save(make_record(audit_id="audit-1"))
+
+    deleted = repository.delete_by_ids(("audit-1", "audit-1"))
+
+    assert deleted == 1
+    assert repository.count() == 0
+
+
+def test_repository_delete_with_empty_ids_is_noop(
+    repository: GovernanceIntegrityAuditHistoryRepository,
+) -> None:
+    assert repository.delete_by_ids(()) == 0

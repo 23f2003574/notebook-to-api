@@ -25,6 +25,9 @@ from backend.observability.deployment_governance_check import (
 from backend.observability.deployment_governance_check_cli import (
     run_deployment_governance_check,
 )
+from backend.observability.deployment_governance_audit_prune_cli import (
+    run_deployment_governance_audit_prune,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -187,6 +190,60 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    audits_subparsers = audits_parser.add_subparsers(
+        dest="audits_command", required=False
+    )
+
+    prune_parser = audits_subparsers.add_parser(
+        "prune",
+        help="Preview or apply governance audit-history retention.",
+        description=(
+            "Preview (default) or apply an audit-history retention "
+            "policy. At least one of --max-records or --max-age-days is "
+            "required.\n\n"
+            "A dry-run finding prunable records is not a failure; only "
+            "invalid configuration or an execution error exits non-zero.\n\n"
+            "Exit codes: 0 evaluation or pruning succeeded, "
+            "2 invalid configuration or execution failure."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    prune_parser.add_argument(
+        "--max-records",
+        type=int,
+        default=None,
+        dest="max_records",
+        help="Retain at most this many most-recent audit records.",
+    )
+    prune_parser.add_argument(
+        "--max-age-days",
+        type=int,
+        default=None,
+        dest="max_age_days",
+        help="Retain only audit records started within this many days.",
+    )
+    prune_parser.add_argument(
+        "--no-preserve-latest",
+        action="store_false",
+        dest="preserve_latest",
+        default=True,
+        help=(
+            "Allow the single most recent audit record to be pruned too "
+            "(by default it is always retained)."
+        ),
+    )
+    prune_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually delete prunable records (default is a dry run).",
+    )
+    prune_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -254,6 +311,23 @@ def main():
             )
             sys.exit(exit_code)
         elif args.governance_command == "audits":
+            if getattr(args, "audits_command", None) == "prune":
+                if (
+                    args.max_records is None
+                    and args.max_age_days is None
+                ):
+                    parser.error(
+                        "at least one of --max-records or "
+                        "--max-age-days must be supplied"
+                    )
+                exit_code = run_deployment_governance_audit_prune(
+                    max_records=args.max_records,
+                    max_age_days=args.max_age_days,
+                    preserve_latest=args.preserve_latest,
+                    apply=args.apply,
+                    json_output=args.json_output,
+                )
+                sys.exit(exit_code)
             try:
                 since = parse_governance_audit_timestamp(args.since)
                 until = parse_governance_audit_timestamp(args.until)

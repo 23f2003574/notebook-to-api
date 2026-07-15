@@ -305,6 +305,40 @@ class SQLiteGovernanceIntegrityAuditHistoryRepository:
 
         return 0 if row is None else int(row["count"])
 
+    def delete_by_ids(
+        self,
+        audit_ids: tuple[str, ...],
+    ) -> int:
+        unique_audit_ids = tuple(dict.fromkeys(audit_ids))
+
+        if not unique_audit_ids:
+            return 0
+
+        placeholders = ", ".join("?" for _ in unique_audit_ids)
+
+        try:
+            with self._database.transaction(
+                immediate=True
+            ) as connection:
+                cursor = connection.execute(
+                    f"""
+                    DELETE FROM
+                        {DEPLOYMENT_GOVERNANCE_INTEGRITY_AUDIT_TABLE}
+                    WHERE
+                        audit_id IN ({placeholders})
+                    """,
+                    unique_audit_ids,
+                )
+
+                deleted = int(cursor.rowcount)
+
+        except sqlite3.Error as exc:
+            raise SQLitePersistenceError(
+                "failed to delete governance integrity audits"
+            ) from exc
+
+        return deleted
+
     def _build_filters(
         self,
         query: GovernanceIntegrityAuditHistoryQuery,

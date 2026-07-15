@@ -291,6 +291,19 @@ class GovernanceIntegrityAuditHistoryRepository(
         Return the number of persisted audit records with the given outcome.
         """
 
+    def delete_by_ids(
+        self,
+        audit_ids: tuple[str, ...],
+    ) -> int:
+        """
+        Delete audit records by identifier.
+
+        Unknown IDs are ignored and duplicate IDs are not double-counted.
+        Return the number of records actually deleted. The repository does
+        not decide which IDs are prunable; that is retention policy, owned
+        by GovernanceIntegrityAuditRetentionService.
+        """
+
 
 class InMemoryGovernanceIntegrityAuditHistoryRepository:
     """
@@ -443,6 +456,25 @@ class InMemoryGovernanceIntegrityAuditHistoryRepository:
                 for record in self._records.values()
                 if record.outcome is outcome
             )
+
+    def delete_by_ids(
+        self,
+        audit_ids: tuple[str, ...],
+    ) -> int:
+        unique_audit_ids = tuple(dict.fromkeys(audit_ids))
+
+        if not unique_audit_ids:
+            return 0
+
+        deleted = 0
+
+        with self._lock:
+            for audit_id in unique_audit_ids:
+                if audit_id in self._records:
+                    del self._records[audit_id]
+                    deleted += 1
+
+        return deleted
 
     @staticmethod
     def _matches_query(
