@@ -444,6 +444,16 @@ def test_diagnostics_snapshot_serializes_to_json_compatible_dict(
     )
 
     assert (
+        payload["audit_history"]["total_audits"]
+        == 1
+    )
+
+    assert (
+        payload["audit_history"]["current_audit_recorded"]
+        is True
+    )
+
+    assert (
         payload["operationally_healthy"]
         is True
     )
@@ -460,6 +470,250 @@ def test_diagnostics_snapshot_serializes_to_json_compatible_dict(
     assert isinstance(
         serialized,
         str,
+    )
+
+
+def test_fast_diagnostics_do_not_record_audit_history() -> None:
+    runtime = (
+        build_deployment_governance_persistence(
+            DeploymentGovernancePersistenceConfig.memory()
+        )
+    )
+
+    snapshot = (
+        runtime
+        .build_diagnostics_service()
+        .capture()
+    )
+
+    assert (
+        snapshot.integrity.executed
+        is False
+    )
+
+    assert (
+        snapshot.audit_history.total_audits
+        == 0
+    )
+
+    assert (
+        snapshot.audit_history.current_audit_recorded
+        is False
+    )
+
+    assert (
+        snapshot.audit_history.current_audit_id
+        is None
+    )
+
+    assert (
+        runtime.audit_history_repository.count()
+        == 0
+    )
+
+
+def test_deep_diagnostics_record_integrity_audit_history(
+    tmp_path: Path,
+) -> None:
+    # Memory-backed runs cannot exercise this: the in-memory trace
+    # repository does not implement integrity auditing (see
+    # test_memory_runtime_does_not_support_integrity_audit in
+    # test_deployment_governance_persistence.py), so recording a deep audit
+    # requires the SQLite backend.
+    runtime = (
+        build_deployment_governance_persistence(
+            DeploymentGovernancePersistenceConfig.sqlite(
+                tmp_path
+                / "deep-diagnostics-history.db"
+            )
+        )
+    )
+
+    snapshot = (
+        runtime
+        .build_diagnostics_service()
+        .capture(
+            include_integrity_audit=True
+        )
+    )
+
+    assert (
+        snapshot.integrity.executed
+        is True
+    )
+
+    assert (
+        snapshot.audit_history.total_audits
+        == 1
+    )
+
+    assert (
+        snapshot.audit_history.healthy_audits
+        == 1
+    )
+
+    assert (
+        snapshot.audit_history.unhealthy_audits
+        == 0
+    )
+
+    assert (
+        snapshot.audit_history.current_audit_recorded
+        is True
+    )
+
+    assert (
+        snapshot.audit_history.current_audit_id
+        is not None
+    )
+
+    assert (
+        snapshot.audit_history.latest_audit_id
+        == snapshot.audit_history.current_audit_id
+    )
+
+
+def test_repeated_deep_diagnostics_accumulate_audit_history(
+    tmp_path: Path,
+) -> None:
+    runtime = (
+        build_deployment_governance_persistence(
+            DeploymentGovernancePersistenceConfig.sqlite(
+                tmp_path
+                / "repeated-deep-diagnostics.db"
+            )
+        )
+    )
+
+    service = runtime.build_diagnostics_service()
+
+    first = service.capture(
+        include_integrity_audit=True
+    )
+
+    second = service.capture(
+        include_integrity_audit=True
+    )
+
+    assert (
+        first.audit_history.total_audits
+        == 1
+    )
+
+    assert (
+        second.audit_history.total_audits
+        == 2
+    )
+
+    assert (
+        first.audit_history.current_audit_id
+        != second.audit_history.current_audit_id
+    )
+
+    assert (
+        second.audit_history.latest_audit_id
+        == second.audit_history.current_audit_id
+    )
+
+
+def test_fast_diagnostics_report_existing_audit_history(
+    tmp_path: Path,
+) -> None:
+    runtime = (
+        build_deployment_governance_persistence(
+            DeploymentGovernancePersistenceConfig.sqlite(
+                tmp_path
+                / "fast-diagnostics-existing-history.db"
+            )
+        )
+    )
+
+    service = runtime.build_diagnostics_service()
+
+    deep_snapshot = service.capture(
+        include_integrity_audit=True
+    )
+
+    fast_snapshot = service.capture()
+
+    assert (
+        fast_snapshot.integrity.executed
+        is False
+    )
+
+    assert (
+        fast_snapshot.audit_history.total_audits
+        == 1
+    )
+
+    assert (
+        fast_snapshot.audit_history.latest_audit_id
+        == deep_snapshot.audit_history.current_audit_id
+    )
+
+    assert (
+        fast_snapshot.audit_history.current_audit_recorded
+        is False
+    )
+
+
+def test_deep_diagnostics_audit_history_survives_runtime_recreation(
+    tmp_path: Path,
+) -> None:
+    database_path = (
+        tmp_path
+        / "diagnostics-history.db"
+    )
+
+    first_runtime = (
+        build_deployment_governance_persistence(
+            DeploymentGovernancePersistenceConfig.sqlite(
+                database_path
+            )
+        )
+    )
+
+    first_snapshot = (
+        first_runtime
+        .build_diagnostics_service()
+        .capture(
+            include_integrity_audit=True
+        )
+    )
+
+    recorded_audit_id = (
+        first_snapshot.audit_history.current_audit_id
+    )
+
+    assert recorded_audit_id is not None
+
+    second_runtime = (
+        build_deployment_governance_persistence(
+            DeploymentGovernancePersistenceConfig.sqlite(
+                database_path
+            )
+        )
+    )
+
+    second_snapshot = (
+        second_runtime
+        .build_diagnostics_service()
+        .capture()
+    )
+
+    assert (
+        second_snapshot.audit_history.total_audits
+        == 1
+    )
+
+    assert (
+        second_snapshot.audit_history.latest_audit_id
+        == recorded_audit_id
+    )
+
+    assert (
+        second_snapshot.audit_history.current_audit_recorded
+        is False
     )
 
 

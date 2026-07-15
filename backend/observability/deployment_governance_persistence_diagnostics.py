@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from .deployment_governance_audit_history import (
+    GovernanceIntegrityAuditOutcome,
+)
 from .deployment_governance_integrity_audit import (
     GovernanceTraceIntegrityAuditReport,
 )
@@ -152,6 +155,124 @@ class GovernancePersistenceIntegrityDiagnostics:
 
 
 @dataclass(frozen=True)
+class GovernancePersistenceAuditHistoryDiagnostics:
+    """
+    Historical integrity-audit information exposed through diagnostics.
+
+    latest_audit_id reflects the most recently recorded audit regardless of
+    which diagnostics capture created it. current_audit_id reflects the
+    audit (if any) executed and recorded by this specific capture() call.
+    They coincide immediately after a deep capture but diverge once a later
+    fast capture reads the same history.
+    """
+
+    supported: bool
+
+    total_audits: int
+
+    healthy_audits: int
+
+    unhealthy_audits: int
+
+    latest_audit_id: str | None
+
+    latest_audit_started_at: datetime | None
+
+    latest_audit_completed_at: datetime | None
+
+    latest_audit_healthy: bool | None
+
+    latest_audit_invalid_records: int | None
+
+    current_audit_recorded: bool
+
+    current_audit_id: str | None
+
+    def __post_init__(
+        self,
+    ) -> None:
+        counters = {
+            "total_audits": self.total_audits,
+            "healthy_audits": self.healthy_audits,
+            "unhealthy_audits": self.unhealthy_audits,
+        }
+
+        for name, value in counters.items():
+            if value < 0:
+                raise ValueError(
+                    f"{name} must not be negative"
+                )
+
+        if (
+            self.healthy_audits + self.unhealthy_audits
+            != self.total_audits
+        ):
+            raise ValueError(
+                "healthy_audits + unhealthy_audits "
+                "must equal total_audits"
+            )
+
+        if (
+            self.current_audit_recorded
+            and self.current_audit_id is None
+        ):
+            raise ValueError(
+                "current_audit_id is required when "
+                "current_audit_recorded is true"
+            )
+
+        if (
+            not self.current_audit_recorded
+            and self.current_audit_id is not None
+        ):
+            raise ValueError(
+                "current_audit_id must be absent when "
+                "current_audit_recorded is false"
+            )
+
+    @property
+    def has_history(
+        self,
+    ) -> bool:
+        return self.total_audits > 0
+
+    @property
+    def has_unhealthy_history(
+        self,
+    ) -> bool:
+        return self.unhealthy_audits > 0
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+        return {
+            "supported": self.supported,
+            "total_audits": self.total_audits,
+            "healthy_audits": self.healthy_audits,
+            "unhealthy_audits": self.unhealthy_audits,
+            "has_history": self.has_history,
+            "has_unhealthy_history": self.has_unhealthy_history,
+            "latest_audit_id": self.latest_audit_id,
+            "latest_audit_started_at": (
+                None
+                if self.latest_audit_started_at is None
+                else self.latest_audit_started_at.isoformat()
+            ),
+            "latest_audit_completed_at": (
+                None
+                if self.latest_audit_completed_at is None
+                else self.latest_audit_completed_at.isoformat()
+            ),
+            "latest_audit_healthy": self.latest_audit_healthy,
+            "latest_audit_invalid_records": (
+                self.latest_audit_invalid_records
+            ),
+            "current_audit_recorded": self.current_audit_recorded,
+            "current_audit_id": self.current_audit_id,
+        }
+
+
+@dataclass(frozen=True)
 class GovernancePersistenceDiagnosticsSnapshot:
     """
     Immutable operational snapshot of deployment governance persistence.
@@ -170,6 +291,8 @@ class GovernancePersistenceDiagnosticsSnapshot:
     repository: GovernancePersistenceRepositoryDiagnostics
 
     integrity: GovernancePersistenceIntegrityDiagnostics
+
+    audit_history: GovernancePersistenceAuditHistoryDiagnostics
 
     @property
     def operationally_healthy(
@@ -314,6 +437,9 @@ class GovernancePersistenceDiagnosticsSnapshot:
                     )
                 ),
             },
+            "audit_history": (
+                self.audit_history.to_dict()
+            ),
             "operationally_healthy": (
                 self.operationally_healthy
             ),
@@ -357,7 +483,7 @@ class DeploymentGovernancePersistenceDiagnosticsService:
             self._capture_schema_diagnostics()
         )
 
-        integrity_diagnostics = (
+        integrity_diagnostics, current_audit_id = (
             self._capture_integrity_diagnostics(
                 include_integrity_audit=(
                     include_integrity_audit
@@ -365,6 +491,12 @@ class DeploymentGovernancePersistenceDiagnosticsService:
                 batch_size=(
                     integrity_audit_batch_size
                 ),
+            )
+        )
+
+        audit_history_diagnostics = (
+            self._capture_audit_history_diagnostics(
+                current_audit_id=current_audit_id,
             )
         )
 
@@ -378,6 +510,7 @@ class DeploymentGovernancePersistenceDiagnosticsService:
             schema=schema_diagnostics,
             repository=repository_diagnostics,
             integrity=integrity_diagnostics,
+            audit_history=audit_history_diagnostics,
         )
 
     def _capture_repository_diagnostics(
@@ -449,27 +582,38 @@ class DeploymentGovernancePersistenceDiagnosticsService:
         *,
         include_integrity_audit: bool,
         batch_size: int,
-    ) -> GovernancePersistenceIntegrityDiagnostics:
+    ) -> tuple[
+        GovernancePersistenceIntegrityDiagnostics,
+        str | None,
+    ]:
         """
-        Capture integrity capability metadata and optionally execute an audit.
+        Capture integrity capability metadata and optionally execute an
+        audit, recording it into durable audit history.
+
+        Returns the integrity diagnostics alongside the audit ID recorded by
+        this specific capture (None when no audit was executed), so the
+        audit-history snapshot can distinguish "the audit this call just
+        recorded" from "the most recent audit in history".
         """
 
         if not self._runtime.supports_integrity_audit:
             return (
                 GovernancePersistenceIntegrityDiagnostics
-                .unsupported()
+                .unsupported(),
+                None,
             )
 
         if not include_integrity_audit:
             return (
                 GovernancePersistenceIntegrityDiagnostics
-                .supported_not_executed()
+                .supported_not_executed(),
+                None,
             )
 
-        report = (
+        recording_result = (
             self._runtime
-            .build_integrity_audit_service()
-            .audit(
+            .build_integrity_audit_recording_service()
+            .audit_and_record(
                 batch_size=batch_size
             )
         )
@@ -477,8 +621,60 @@ class DeploymentGovernancePersistenceDiagnosticsService:
         return (
             GovernancePersistenceIntegrityDiagnostics
             .from_report(
-                report
-            )
+                recording_result.report
+            ),
+            recording_result.audit_id,
+        )
+
+    def _capture_audit_history_diagnostics(
+        self,
+        *,
+        current_audit_id: str | None,
+    ) -> GovernancePersistenceAuditHistoryDiagnostics:
+        """
+        Capture aggregate audit-history state from the runtime's durable
+        audit-history repository.
+
+        Called after _capture_integrity_diagnostics so a deep capture's own
+        audit is already persisted and reflected in these counters.
+        """
+
+        repository = self._runtime.audit_history_repository
+
+        latest = repository.latest()
+
+        total_audits = repository.count()
+
+        healthy_audits = repository.count_by_outcome(
+            GovernanceIntegrityAuditOutcome.HEALTHY
+        )
+
+        unhealthy_audits = repository.count_by_outcome(
+            GovernanceIntegrityAuditOutcome.UNHEALTHY
+        )
+
+        return GovernancePersistenceAuditHistoryDiagnostics(
+            supported=True,
+            total_audits=total_audits,
+            healthy_audits=healthy_audits,
+            unhealthy_audits=unhealthy_audits,
+            latest_audit_id=(
+                None if latest is None else latest.audit_id
+            ),
+            latest_audit_started_at=(
+                None if latest is None else latest.started_at
+            ),
+            latest_audit_completed_at=(
+                None if latest is None else latest.completed_at
+            ),
+            latest_audit_healthy=(
+                None if latest is None else latest.healthy
+            ),
+            latest_audit_invalid_records=(
+                None if latest is None else latest.invalid_records
+            ),
+            current_audit_recorded=current_audit_id is not None,
+            current_audit_id=current_audit_id,
         )
 
     def _database_path(

@@ -572,6 +572,91 @@ class DeploymentGovernanceDoctor:
                 "not applicable",
             )
 
+        stdout.write(
+            "\n"
+        )
+
+        cls._write_section(
+            stdout,
+            "Audit History",
+        )
+
+        cls._write_field(
+            stdout,
+            "Recorded audits",
+            str(
+                snapshot.audit_history.total_audits
+            ),
+        )
+
+        cls._write_field(
+            stdout,
+            "Healthy audits",
+            str(
+                snapshot.audit_history.healthy_audits
+            ),
+        )
+
+        cls._write_field(
+            stdout,
+            "Unhealthy audits",
+            str(
+                snapshot.audit_history.unhealthy_audits
+            ),
+        )
+
+        if snapshot.audit_history.has_history:
+            cls._write_field(
+                stdout,
+                "Latest audit ID",
+                (
+                    snapshot
+                    .audit_history
+                    .latest_audit_id
+                    or "not available"
+                ),
+            )
+
+            cls._write_field(
+                stdout,
+                "Latest audit status",
+                (
+                    "HEALTHY"
+                    if snapshot
+                    .audit_history
+                    .latest_audit_healthy
+                    else "UNHEALTHY"
+                ),
+            )
+
+            cls._write_field(
+                stdout,
+                "Latest invalid records",
+                cls._format_optional_int(
+                    snapshot
+                    .audit_history
+                    .latest_audit_invalid_records
+                ),
+            )
+
+        if snapshot.audit_history.current_audit_recorded:
+            cls._write_field(
+                stdout,
+                "Current audit recorded",
+                "yes",
+            )
+
+            cls._write_field(
+                stdout,
+                "Current audit ID",
+                (
+                    snapshot
+                    .audit_history
+                    .current_audit_id
+                    or "not available"
+                ),
+            )
+
     @staticmethod
     def _write_heading(
         stream: TextIO,

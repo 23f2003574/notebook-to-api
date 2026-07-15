@@ -137,6 +137,16 @@ def test_doctor_renders_human_readable_output() -> None:
     )
 
     assert (
+        "Audit History"
+        in output
+    )
+
+    assert (
+        "Recorded audits: 0"
+        in output
+    )
+
+    assert (
         stderr.getvalue()
         == ""
     )
@@ -232,6 +242,62 @@ def test_doctor_runs_deep_sqlite_integrity_audit(
     assert (
         result.snapshot.integrity_verified
         is True
+    )
+
+    assert (
+        result.snapshot.audit_history.current_audit_recorded
+        is True
+    )
+
+    assert (
+        result.snapshot.audit_history.total_audits
+        == 1
+    )
+
+
+def test_doctor_renders_audit_history_in_deep_human_output(
+    tmp_path: Path,
+) -> None:
+    runtime = (
+        build_deployment_governance_persistence(
+            DeploymentGovernancePersistenceConfig.sqlite(
+                tmp_path
+                / "doctor-deep-human.db"
+            )
+        )
+    )
+
+    doctor = DeploymentGovernanceDoctor(
+        runtime
+    )
+
+    stdout = StringIO()
+
+    stderr = StringIO()
+
+    doctor.execute(
+        GovernanceDoctorOptions(
+            deep=True
+        ),
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    output = stdout.getvalue()
+
+    assert (
+        "Current audit recorded: yes"
+        in output
+    )
+
+    assert (
+        "Current audit ID:"
+        in output
+    )
+
+    assert (
+        "Latest audit status: HEALTHY"
+        in output
     )
 
 

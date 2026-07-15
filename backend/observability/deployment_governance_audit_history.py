@@ -283,6 +283,14 @@ class GovernanceIntegrityAuditHistoryRepository(
         Return the number of persisted audit records.
         """
 
+    def count_by_outcome(
+        self,
+        outcome: GovernanceIntegrityAuditOutcome,
+    ) -> int:
+        """
+        Return the number of persisted audit records with the given outcome.
+        """
+
 
 class InMemoryGovernanceIntegrityAuditHistoryRepository:
     """
@@ -423,6 +431,17 @@ class InMemoryGovernanceIntegrityAuditHistoryRepository:
         with self._lock:
             return len(
                 self._records
+            )
+
+    def count_by_outcome(
+        self,
+        outcome: GovernanceIntegrityAuditOutcome,
+    ) -> int:
+        with self._lock:
+            return sum(
+                1
+                for record in self._records.values()
+                if record.outcome is outcome
             )
 
     @staticmethod

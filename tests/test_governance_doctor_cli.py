@@ -131,6 +131,16 @@ def test_governance_doctor_cli_sqlite_deep_json(
         is True
     )
 
+    assert (
+        payload["audit_history"]["current_audit_recorded"]
+        is True
+    )
+
+    assert (
+        payload["audit_history"]["total_audits"]
+        == 1
+    )
+
 
 def test_governance_doctor_cli_accepts_batch_size(
     tmp_path: Path,

@@ -78,6 +78,9 @@ def main():
             "Inspect deployment governance persistence health.\n\n"
             "By default, performs lightweight diagnostics. Use --deep to "
             "verify the integrity of every persisted governance trace.\n\n"
+            "--deep persists its result as a durable audit-history record; "
+            "running without --deep only reads existing audit history and "
+            "does not create a new record.\n\n"
             "Exit codes: 0 healthy, 1 unhealthy, 2 diagnostics could not "
             "be completed."
         ),

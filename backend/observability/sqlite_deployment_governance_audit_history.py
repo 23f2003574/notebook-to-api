@@ -281,6 +281,30 @@ class SQLiteGovernanceIntegrityAuditHistoryRepository:
 
         return 0 if row is None else int(row["count"])
 
+    def count_by_outcome(
+        self,
+        outcome: GovernanceIntegrityAuditOutcome,
+    ) -> int:
+        try:
+            row = self._database.query_one(
+                f"""
+                SELECT
+                    COUNT(*) AS count
+                FROM
+                    {DEPLOYMENT_GOVERNANCE_INTEGRITY_AUDIT_TABLE}
+                WHERE
+                    outcome = ?
+                """,
+                (outcome.value,),
+            )
+
+        except sqlite3.Error as exc:
+            raise SQLitePersistenceError(
+                "failed to count governance integrity audits by outcome"
+            ) from exc
+
+        return 0 if row is None else int(row["count"])
+
     def _build_filters(
         self,
         query: GovernanceIntegrityAuditHistoryQuery,

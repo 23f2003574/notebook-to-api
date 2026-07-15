@@ -236,3 +236,41 @@ def test_count_reflects_saved_records(
         )
 
     assert repository.count() == 3
+
+
+def test_repository_counts_records_by_outcome(
+    repository: GovernanceIntegrityAuditHistoryRepository,
+) -> None:
+    repository.save(
+        make_record(audit_id="healthy-1", invalid_records=0)
+    )
+
+    repository.save(
+        make_record(
+            audit_id="healthy-2",
+            offset_minutes=10,
+            invalid_records=0,
+        )
+    )
+
+    repository.save(
+        make_record(
+            audit_id="unhealthy-1",
+            offset_minutes=20,
+            invalid_records=1,
+        )
+    )
+
+    assert (
+        repository.count_by_outcome(
+            GovernanceIntegrityAuditOutcome.HEALTHY
+        )
+        == 2
+    )
+
+    assert (
+        repository.count_by_outcome(
+            GovernanceIntegrityAuditOutcome.UNHEALTHY
+        )
+        == 1
+    )
