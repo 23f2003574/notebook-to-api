@@ -12,6 +12,13 @@ from backend.serve import serve_notebook
 from backend.observability.deployment_governance_doctor import (
     run_deployment_governance_doctor,
 )
+from backend.observability.deployment_governance_audit_history import (
+    GovernanceIntegrityAuditOutcome,
+)
+from backend.observability.deployment_governance_audit_history_cli import (
+    parse_governance_audit_timestamp,
+    run_deployment_governance_audit_history,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -105,6 +112,53 @@ def main():
         help="Number of persisted records read per integrity-audit batch. Default: 500.",
     )
 
+    audits_parser = governance_subparsers.add_parser(
+        "audits",
+        help="Inspect recorded deployment governance integrity audit history.",
+        description=(
+            "Inspect recorded deployment governance integrity audit "
+            "history.\n\n"
+            "This command is read-only: it never executes a new audit. "
+            "Run `governance doctor --deep` to record a new audit.\n\n"
+            "Exit codes: 0 query completed (even with zero matches), "
+            "2 query could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    audits_parser.add_argument(
+        "--backend",
+        default=None,
+        help="Filter audits by persistence backend.",
+    )
+    audits_parser.add_argument(
+        "--outcome",
+        choices=[outcome.value for outcome in GovernanceIntegrityAuditOutcome],
+        default=None,
+        help="Filter by healthy or unhealthy outcome.",
+    )
+    audits_parser.add_argument(
+        "--since",
+        default=None,
+        help="Include audits started at or after this ISO-8601 timestamp.",
+    )
+    audits_parser.add_argument(
+        "--until",
+        default=None,
+        help="Include audits started at or before this ISO-8601 timestamp.",
+    )
+    audits_parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Maximum number of audit records to return. Default: 20.",
+    )
+    audits_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     args = parser.parse_args()
 
     if args.command == "compile":
@@ -129,6 +183,27 @@ def main():
                 deep=args.deep,
                 json_output=args.json_output,
                 integrity_audit_batch_size=args.batch_size,
+            )
+            sys.exit(exit_code)
+        elif args.governance_command == "audits":
+            try:
+                since = parse_governance_audit_timestamp(args.since)
+                until = parse_governance_audit_timestamp(args.until)
+            except ValueError as exc:
+                parser.error(str(exc))
+                return
+            outcome = (
+                None
+                if args.outcome is None
+                else GovernanceIntegrityAuditOutcome(args.outcome)
+            )
+            exit_code = run_deployment_governance_audit_history(
+                backend=args.backend,
+                outcome=outcome,
+                started_at_or_after=since,
+                started_at_or_before=until,
+                limit=args.limit,
+                json_output=args.json_output,
             )
             sys.exit(exit_code)
     elif args.command == "deploy":

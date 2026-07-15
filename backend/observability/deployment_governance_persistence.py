@@ -39,6 +39,9 @@ from .sqlite_deployment_governance_trace_repository import (
 )
 
 if TYPE_CHECKING:
+    from .deployment_governance_audit_history_service import (
+        GovernanceIntegrityAuditHistoryService,
+    )
     from .deployment_governance_audit_recording import (
         GovernanceIntegrityAuditRecordingService,
     )
@@ -304,6 +307,24 @@ class DeploymentGovernancePersistenceRuntime:
             record_mapper=GovernanceIntegrityAuditRecordMapper(
                 backend=self.backend.value
             ),
+        )
+
+    def build_integrity_audit_history_service(
+        self,
+    ) -> "GovernanceIntegrityAuditHistoryService":
+        """
+        Build the read-only integrity audit-history query service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_audit_history_service import (
+            GovernanceIntegrityAuditHistoryService,
+        )
+
+        return GovernanceIntegrityAuditHistoryService(
+            self.audit_history_repository
         )
 
     def build_diagnostics_service(
