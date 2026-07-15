@@ -253,13 +253,13 @@ def test_export_writes_utf8_json_file(tmp_path) -> None:
 
     output_path = tmp_path / "evidence.json"
 
-    bundle = service.export_to_file(output_path)
+    result = service.export_to_file(output_path)
 
     assert output_path.exists()
 
     payload = json.loads(output_path.read_text(encoding="utf-8"))
 
-    assert payload["record_count"] == bundle.record_count
+    assert payload["record_count"] == result.bundle.record_count
     assert len(payload["records"]) == 1
     assert "summary" in payload
     assert "trend" in payload
@@ -295,6 +295,59 @@ def test_export_can_overwrite_when_explicitly_enabled(tmp_path) -> None:
     assert payload["schema_version"] == 1
 
 
+def test_export_creates_evidence_and_manifest_files_by_default(
+    tmp_path,
+) -> None:
+    from backend.observability.deployment_governance_audit_evidence_integrity import (
+        verify_governance_audit_evidence,
+    )
+
+    repository = InMemoryGovernanceIntegrityAuditHistoryRepository()
+
+    repository.save(make_record(audit_id="audit-1"))
+
+    service = make_export_service(repository)
+
+    output_path = tmp_path / "evidence.json"
+
+    result = service.export_to_file(output_path)
+
+    assert result.evidence_path.exists()
+    assert result.manifest is not None
+    assert result.manifest_path is not None
+    assert result.manifest_path.exists()
+    assert (
+        result.manifest_path.name
+        == "evidence.json.manifest.json"
+    )
+
+    verification = verify_governance_audit_evidence(
+        evidence_path=result.evidence_path,
+        manifest=result.manifest,
+    )
+
+    assert verification.verified is True
+
+
+def test_export_can_disable_manifest_creation(tmp_path) -> None:
+    repository = InMemoryGovernanceIntegrityAuditHistoryRepository()
+
+    service = make_export_service(repository)
+
+    output_path = tmp_path / "evidence.json"
+
+    result = service.export_to_file(
+        output_path,
+        options=GovernanceIntegrityAuditExportOptions(
+            create_manifest=False
+        ),
+    )
+
+    assert result.manifest is None
+    assert result.manifest_path is None
+    assert not (tmp_path / "evidence.json.manifest.json").exists()
+
+
 def test_sqlite_audit_history_can_be_exported_as_portable_json(
     tmp_path,
 ) -> None:
@@ -312,13 +365,13 @@ def test_sqlite_audit_history_can_be_exported_as_portable_json(
     recording_service.audit_and_record()
     recording_service.audit_and_record()
 
-    bundle = (
+    result = (
         runtime.build_integrity_audit_export_service().export_to_file(
             output_path
         )
     )
 
-    assert bundle.record_count == 2
+    assert result.bundle.record_count == 2
 
     payload = json.loads(output_path.read_text(encoding="utf-8"))
 
@@ -326,3 +379,20 @@ def test_sqlite_audit_history_can_be_exported_as_portable_json(
     assert "summary" in payload
     assert "trend" in payload
     assert "regression" in payload
+
+    from backend.observability.deployment_governance_audit_evidence_integrity import (
+        load_governance_audit_evidence_manifest,
+        verify_governance_audit_evidence,
+    )
+
+    assert result.manifest_path is not None
+
+    loaded_manifest = load_governance_audit_evidence_manifest(
+        result.manifest_path
+    )
+
+    verification = verify_governance_audit_evidence(
+        evidence_path=output_path, manifest=loaded_manifest
+    )
+
+    assert verification.verified is True

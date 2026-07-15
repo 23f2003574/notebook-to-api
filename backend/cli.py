@@ -31,6 +31,9 @@ from backend.observability.deployment_governance_audit_prune_cli import (
 from backend.observability.deployment_governance_audit_export_cli import (
     run_deployment_governance_audit_export,
 )
+from backend.observability.deployment_governance_audit_verify_cli import (
+    run_deployment_governance_audit_verify,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -310,6 +313,19 @@ def main():
         help="Number of most recent exported records to analyze for trends. Default: 20.",
     )
     export_parser.add_argument(
+        "--manifest",
+        action="store_true",
+        dest="create_manifest",
+        default=True,
+        help="Write a SHA-256 tamper-evidence manifest alongside the evidence file (default).",
+    )
+    export_parser.add_argument(
+        "--no-manifest",
+        action="store_false",
+        dest="create_manifest",
+        help="Do not write a tamper-evidence manifest.",
+    )
+    export_parser.add_argument(
         "--compact",
         action="store_true",
         dest="compact",
@@ -319,7 +335,37 @@ def main():
         "--force",
         action="store_true",
         dest="force",
-        help="Overwrite the output file if it already exists.",
+        help="Overwrite the output and manifest files if they already exist.",
+    )
+
+    verify_parser = audits_subparsers.add_parser(
+        "verify",
+        help="Verify an exported evidence file against its manifest.",
+        description=(
+            "Verify a previously exported governance audit evidence file "
+            "against its SHA-256 tamper-evidence manifest. This is a "
+            "pure file-based operation: it does not bootstrap a "
+            "persistence runtime, so it works even after the "
+            "originating database is gone.\n\n"
+            "If --manifest is omitted, it is derived from --evidence "
+            "as <evidence>.manifest.json.\n\n"
+            "Exit codes: 0 verified, 2 the manifest could not be "
+            "loaded (missing/malformed/unsupported schema version), "
+            "3 the evidence file does not match its manifest."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    verify_parser.add_argument(
+        "--evidence",
+        required=True,
+        dest="evidence",
+        help="Path to the evidence JSON file to verify.",
+    )
+    verify_parser.add_argument(
+        "--manifest",
+        default=None,
+        dest="manifest",
+        help="Path to the manifest file. Default: <evidence>.manifest.json.",
     )
 
     check_parser = governance_subparsers.add_parser(
@@ -413,8 +459,15 @@ def main():
                     include_trend=args.include_trend,
                     include_regression=args.include_regression,
                     trend_window=args.trend_window,
+                    create_manifest=args.create_manifest,
                     pretty=not args.compact,
                     force=args.force,
+                )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "verify":
+                exit_code = run_deployment_governance_audit_verify(
+                    evidence_path=args.evidence,
+                    manifest_path=args.manifest,
                 )
                 sys.exit(exit_code)
             try:

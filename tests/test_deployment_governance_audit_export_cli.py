@@ -4,8 +4,12 @@ from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 
+from backend.observability.deployment_governance_audit_evidence_integrity import (
+    GovernanceIntegrityAuditEvidenceManifest,
+)
 from backend.observability.deployment_governance_audit_export import (
     GovernanceIntegrityAuditEvidenceBundle,
+    GovernanceIntegrityAuditEvidenceExportResult,
     GovernanceIntegrityAuditExportSummary,
 )
 from backend.observability.deployment_governance_audit_export_cli import (
@@ -23,12 +27,13 @@ from backend.observability.deployment_governance_audit_history import (
 BASE_TIME = datetime(2026, 7, 15, 21, 0, 0, tzinfo=timezone.utc)
 
 
-def make_bundle(
+def make_export_result(
     *,
     record_count: int = 0,
     include_trend: bool = True,
     include_regression: bool = True,
-) -> GovernanceIntegrityAuditEvidenceBundle:
+    include_manifest: bool = True,
+) -> GovernanceIntegrityAuditEvidenceExportResult:
     from backend.observability.deployment_governance_audit_regression import (
         detect_governance_integrity_regression,
     )
@@ -54,7 +59,7 @@ def make_bundle(
         for index in range(record_count)
     )
 
-    return GovernanceIntegrityAuditEvidenceBundle(
+    bundle = GovernanceIntegrityAuditEvidenceBundle(
         schema_version=1,
         exported_at=BASE_TIME,
         record_count=record_count,
@@ -82,46 +87,78 @@ def make_bundle(
         ),
     )
 
+    manifest = (
+        GovernanceIntegrityAuditEvidenceManifest(
+            schema_version=1,
+            evidence_filename="evidence.json",
+            hash_algorithm="sha256",
+            sha256="a" * 64,
+            byte_size=123,
+            record_count=record_count,
+            exported_at=BASE_TIME,
+        )
+        if include_manifest
+        else None
+    )
+
+    return GovernanceIntegrityAuditEvidenceExportResult(
+        bundle=bundle,
+        evidence_path=Path("evidence.json"),
+        manifest=manifest,
+        manifest_path=(
+            Path("evidence.json.manifest.json")
+            if include_manifest
+            else None
+        ),
+    )
+
 
 def test_render_export_human_success() -> None:
-    bundle = make_bundle(record_count=42)
+    result = make_export_result(record_count=42)
 
     stdout = StringIO()
 
-    _render_export_human(
-        bundle,
-        output_path=Path("evidence.json"),
-        stdout=stdout,
-    )
+    _render_export_human(result, stdout=stdout)
 
     output = stdout.getvalue()
 
     assert "Governance Audit Evidence Export" in output
-    assert "Output: evidence.json" in output
+    assert "Evidence: evidence.json" in output
+    assert "Manifest: evidence.json.manifest.json" in output
     assert "Schema version: 1" in output
     assert "Records exported: 42" in output
     assert "Trend included: yes" in output
     assert "Regression included: yes" in output
+    assert "SHA-256: " + "a" * 64 in output
 
 
 def test_render_export_human_omitted_analysis() -> None:
-    bundle = make_bundle(
+    result = make_export_result(
         record_count=0, include_trend=False, include_regression=False
     )
 
     stdout = StringIO()
 
-    _render_export_human(
-        bundle,
-        output_path=Path("evidence.json"),
-        stdout=stdout,
-    )
+    _render_export_human(result, stdout=stdout)
 
     output = stdout.getvalue()
 
     assert "Records exported: 0" in output
     assert "Trend included: no" in output
     assert "Regression included: no" in output
+
+
+def test_render_export_human_disabled_manifest() -> None:
+    result = make_export_result(record_count=1, include_manifest=False)
+
+    stdout = StringIO()
+
+    _render_export_human(result, stdout=stdout)
+
+    output = stdout.getvalue()
+
+    assert "Manifest: disabled" in output
+    assert "SHA-256:" not in output
 
 
 def test_render_export_failure() -> None:
@@ -157,6 +194,10 @@ def test_runner_writes_evidence_file(monkeypatch, tmp_path) -> None:
     assert exit_code == 0
     assert output_path.exists()
     assert "Records exported: 0" in stdout.getvalue()
+
+    manifest_path = tmp_path / "evidence.json.manifest.json"
+    assert manifest_path.exists()
+    assert "SHA-256:" in stdout.getvalue()
 
 
 def test_runner_refuses_to_overwrite_by_default(

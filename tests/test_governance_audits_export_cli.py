@@ -54,6 +54,81 @@ def test_governance_audit_export_writes_evidence_file(
 
     assert payload["schema_version"] == 1
 
+    manifest_path = tmp_path / "evidence.json.manifest.json"
+    assert manifest_path.exists()
+    assert "SHA-256:" in result.stdout
+
+
+def test_governance_audit_export_no_manifest_flag_skips_manifest(
+    tmp_path: Path,
+) -> None:
+    env = make_env(tmp_path, "export-no-manifest.db")
+    output_path = tmp_path / "evidence.json"
+
+    result = run_cli(
+        "governance",
+        "audits",
+        "export",
+        "--output",
+        str(output_path),
+        "--no-manifest",
+        env=env,
+    )
+
+    assert result.returncode == 0
+    assert output_path.exists()
+    assert not (tmp_path / "evidence.json.manifest.json").exists()
+    assert "Manifest: disabled" in result.stdout
+
+
+def test_governance_audit_export_then_verify_round_trip(
+    tmp_path: Path,
+) -> None:
+    env = make_env(tmp_path, "export-then-verify.db")
+    output_path = tmp_path / "evidence.json"
+
+    export_result = run_cli(
+        "governance",
+        "audits",
+        "export",
+        "--output",
+        str(output_path),
+        env=env,
+    )
+
+    assert export_result.returncode == 0
+
+    verify_result = run_cli(
+        "governance",
+        "audits",
+        "verify",
+        "--evidence",
+        str(output_path),
+        env=env,
+    )
+
+    assert verify_result.returncode == 0
+    assert "Status: VERIFIED" in verify_result.stdout
+
+    output_path.write_text(
+        output_path.read_text(encoding="utf-8") + " ",
+        encoding="utf-8",
+    )
+
+    tampered_result = run_cli(
+        "governance",
+        "audits",
+        "verify",
+        "--evidence",
+        str(output_path),
+        env=env,
+    )
+
+    assert tampered_result.returncode == 3
+    assert (
+        "verification failed" in tampered_result.stdout.lower()
+    )
+
 
 def test_governance_audit_export_requires_force_to_overwrite(
     tmp_path: Path,

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TextIO
 
 from .deployment_governance_audit_export import (
-    GovernanceIntegrityAuditEvidenceBundle,
+    GovernanceIntegrityAuditEvidenceExportResult,
     GovernanceIntegrityAuditExportOptions,
 )
 from .deployment_governance_persistence import (
@@ -32,6 +32,7 @@ def run_deployment_governance_audit_export(
     include_trend: bool = True,
     include_regression: bool = True,
     trend_window: int = 20,
+    create_manifest: bool = True,
     pretty: bool = True,
     force: bool = False,
     stdout: TextIO = sys.stdout,
@@ -39,7 +40,7 @@ def run_deployment_governance_audit_export(
 ) -> int:
     """
     Bootstrap persistence and export a portable governance audit evidence
-    bundle to a file.
+    bundle (plus, by default, a SHA-256 tamper-evidence manifest) to disk.
 
     This is the composition boundary: it reads environment configuration,
     builds the persistence runtime, and runs its export service. It never
@@ -57,13 +58,14 @@ def run_deployment_governance_audit_export(
             include_trend=include_trend,
             include_regression=include_regression,
             trend_window=trend_window,
+            create_manifest=create_manifest,
         )
 
         runtime = build_deployment_governance_persistence(
             deployment_governance_persistence_config_from_env()
         )
 
-        bundle = (
+        result = (
             runtime
             .build_integrity_audit_export_service()
             .export_to_file(
@@ -79,26 +81,35 @@ def run_deployment_governance_audit_export(
 
         return int(GovernanceAuditExportExitCode.EXECUTION_FAILED)
 
-    _render_export_human(
-        bundle,
-        output_path=Path(output_path),
-        stdout=stdout,
-    )
+    _render_export_human(result, stdout=stdout)
 
     return int(GovernanceAuditExportExitCode.SUCCESS)
 
 
 def _render_export_human(
-    bundle: GovernanceIntegrityAuditEvidenceBundle,
+    result: GovernanceIntegrityAuditEvidenceExportResult,
     *,
-    output_path: Path,
     stdout: TextIO,
 ) -> None:
+    bundle = result.bundle
+
     stdout.write("Governance Audit Evidence Export\n")
 
     stdout.write("================================\n\n")
 
-    stdout.write(f"Output: {output_path}\n")
+    stdout.write(f"Evidence: {result.evidence_path}\n")
+
+    stdout.write(
+        "Manifest: "
+        + (
+            str(result.manifest_path)
+            if result.manifest_path is not None
+            else "disabled"
+        )
+        + "\n"
+    )
+
+    stdout.write("\n")
 
     stdout.write(f"Schema version: {bundle.schema_version}\n")
 
@@ -115,6 +126,9 @@ def _render_export_human(
         + ("yes" if bundle.regression is not None else "no")
         + "\n"
     )
+
+    if result.manifest is not None:
+        stdout.write(f"SHA-256: {result.manifest.sha256}\n")
 
 
 def _render_export_failure(

@@ -6,6 +6,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from .deployment_governance_audit_evidence_integrity import (
+    GovernanceIntegrityAuditEvidenceManifest,
+    build_governance_audit_evidence_manifest,
+    default_governance_audit_evidence_manifest_path,
+    write_governance_audit_evidence_manifest,
+)
 from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditHistoryRepository,
     GovernanceIntegrityAuditRecord,
@@ -36,6 +42,8 @@ class GovernanceIntegrityAuditExportOptions:
     include_regression: bool = True
 
     trend_window: int = 20
+
+    create_manifest: bool = True
 
     def __post_init__(self) -> None:
         if self.limit is not None and self.limit <= 0:
@@ -180,6 +188,28 @@ def serialize_governance_integrity_audit_evidence(
     )
 
 
+@dataclass(frozen=True)
+class GovernanceIntegrityAuditEvidenceExportResult:
+    """
+    Result of exporting governance evidence to disk.
+    """
+
+    bundle: GovernanceIntegrityAuditEvidenceBundle
+
+    evidence_path: Path
+
+    manifest: GovernanceIntegrityAuditEvidenceManifest | None
+
+    manifest_path: Path | None
+
+    def __post_init__(self) -> None:
+        if (self.manifest is None) != (self.manifest_path is None):
+            raise ValueError(
+                "manifest and manifest_path must either both be "
+                "present or both be absent"
+            )
+
+
 class GovernanceIntegrityAuditExportService:
     """
     Builds portable evidence bundles from audit history.
@@ -256,12 +286,31 @@ class GovernanceIntegrityAuditExportService:
         options: GovernanceIntegrityAuditExportOptions | None = None,
         pretty: bool = True,
         overwrite: bool = False,
-    ) -> GovernanceIntegrityAuditEvidenceBundle:
+    ) -> GovernanceIntegrityAuditEvidenceExportResult:
+        options = options or GovernanceIntegrityAuditExportOptions()
+
         path = Path(output_path)
 
+        manifest_path = (
+            default_governance_audit_evidence_manifest_path(path)
+        )
+
+        # Preflight both destinations before writing anything: failing
+        # after the evidence file is already written (because only the
+        # manifest path collided) would leave a partially completed
+        # export.
         if path.exists() and not overwrite:
             raise FileExistsError(
                 f"output file already exists: {path}"
+            )
+
+        if (
+            options.create_manifest
+            and manifest_path.exists()
+            and not overwrite
+        ):
+            raise FileExistsError(
+                f"manifest file already exists: {manifest_path}"
             )
 
         bundle = self.build_bundle(options)
@@ -274,4 +323,28 @@ class GovernanceIntegrityAuditExportService:
 
         path.write_text(payload + "\n", encoding="utf-8")
 
-        return bundle
+        manifest = None
+        written_manifest_path = None
+
+        if options.create_manifest:
+            manifest = build_governance_audit_evidence_manifest(
+                evidence_path=path,
+                record_count=bundle.record_count,
+                exported_at=bundle.exported_at,
+            )
+
+            written_manifest_path = (
+                write_governance_audit_evidence_manifest(
+                    manifest,
+                    manifest_path,
+                    pretty=pretty,
+                    overwrite=overwrite,
+                )
+            )
+
+        return GovernanceIntegrityAuditEvidenceExportResult(
+            bundle=bundle,
+            evidence_path=path,
+            manifest=manifest,
+            manifest_path=written_manifest_path,
+        )
