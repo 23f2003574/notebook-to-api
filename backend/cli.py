@@ -153,6 +153,19 @@ def main():
         help="Maximum number of audit records to return. Default: 20.",
     )
     audits_parser.add_argument(
+        "--trend",
+        action="store_true",
+        dest="include_trend",
+        help="Include recent trend analysis (direction, streak, rates).",
+    )
+    audits_parser.add_argument(
+        "--trend-window",
+        type=int,
+        default=20,
+        dest="trend_window",
+        help="Number of most recent audits to analyze for trends. Default: 20.",
+    )
+    audits_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -203,6 +216,8 @@ def main():
                 started_at_or_after=since,
                 started_at_or_before=until,
                 limit=args.limit,
+                include_trend=args.include_trend,
+                trend_window=args.trend_window,
                 json_output=args.json_output,
             )
             sys.exit(exit_code)

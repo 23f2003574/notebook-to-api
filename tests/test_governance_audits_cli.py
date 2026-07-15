@@ -93,6 +93,91 @@ def test_governance_audits_rejects_invalid_timestamp(
     assert result.returncode != 0
 
 
+def test_governance_audits_can_render_trend_analysis() -> None:
+    result = run_cli(
+        "governance",
+        "audits",
+        "--trend",
+    )
+
+    assert result.returncode == 0
+
+    assert "Trend Analysis" in result.stdout
+    assert "Direction:" in result.stdout
+
+
+def test_governance_audits_can_emit_trend_json() -> None:
+    result = run_cli(
+        "governance",
+        "audits",
+        "--trend",
+        "--json",
+    )
+
+    assert result.returncode == 0
+
+    payload = json.loads(result.stdout)
+
+    assert "trend" in payload
+    assert "direction" in payload["trend"]
+
+
+def test_governance_audits_json_without_trend_omits_trend_key() -> None:
+    result = run_cli(
+        "governance",
+        "audits",
+        "--json",
+    )
+
+    assert result.returncode == 0
+
+    payload = json.loads(result.stdout)
+
+    assert "trend" not in payload
+
+
+def test_governance_audits_rejects_non_positive_trend_window() -> None:
+    result = run_cli(
+        "governance",
+        "audits",
+        "--trend",
+        "--trend-window",
+        "0",
+    )
+
+    assert result.returncode != 0
+
+
+def test_governance_doctor_deep_then_audits_reports_trend(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "audits-cli-trend.db"
+
+    env = dict(os.environ)
+
+    env["NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND"] = "sqlite"
+    env["NOTEBOOK2API_GOVERNANCE_DATABASE_PATH"] = str(database_path)
+
+    run_cli("governance", "doctor", "--deep", env=env)
+    run_cli("governance", "doctor", "--deep", env=env)
+
+    result = run_cli(
+        "governance",
+        "audits",
+        "--trend",
+        "--json",
+        env=env,
+    )
+
+    assert result.returncode == 0
+
+    payload = json.loads(result.stdout)
+
+    assert payload["trend"]["sample_size"] == 2
+    assert payload["trend"]["direction"] == "stable"
+    assert payload["trend"]["current_streak"] == 2
+
+
 def test_governance_doctor_deep_then_audits_lists_recorded_audit(
     tmp_path: Path,
 ) -> None:

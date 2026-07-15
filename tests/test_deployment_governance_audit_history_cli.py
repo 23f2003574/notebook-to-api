@@ -21,6 +21,10 @@ from backend.observability.deployment_governance_audit_history_service import (
     GovernanceIntegrityAuditHistoryResult,
     GovernanceIntegrityAuditHistorySummary,
 )
+from backend.observability.deployment_governance_audit_trends import (
+    GovernanceIntegrityAuditTrendDirection,
+    GovernanceIntegrityAuditTrendSnapshot,
+)
 
 
 BASE_TIME = datetime(
@@ -78,7 +82,7 @@ def test_audit_history_human_output_contains_records() -> None:
 
     stdout = StringIO()
 
-    _render_human(result, stdout=stdout)
+    _render_human(result, trend=None, stdout=stdout)
 
     output = stdout.getvalue()
 
@@ -102,7 +106,7 @@ def test_audit_history_human_output_shows_failure_breakdown() -> None:
 
     stdout = StringIO()
 
-    _render_human(result, stdout=stdout)
+    _render_human(result, trend=None, stdout=stdout)
 
     output = stdout.getvalue()
 
@@ -124,7 +128,7 @@ def test_audit_history_human_output_handles_no_matches() -> None:
 
     stdout = StringIO()
 
-    _render_human(result, stdout=stdout)
+    _render_human(result, trend=None, stdout=stdout)
 
     assert (
         "No matching integrity audits found."
@@ -137,12 +141,118 @@ def test_audit_history_json_output_is_valid_json() -> None:
 
     stdout = StringIO()
 
-    _render_json(result, stdout=stdout)
+    _render_json(result, trend=None, stdout=stdout)
 
     payload = json.loads(stdout.getvalue())
 
     assert "summary" in payload
     assert "records" in payload
+    assert "trend" not in payload
+
+
+def make_trend_snapshot() -> GovernanceIntegrityAuditTrendSnapshot:
+    return GovernanceIntegrityAuditTrendSnapshot(
+        sample_size=4,
+        healthy_audits=3,
+        unhealthy_audits=1,
+        health_rate=0.75,
+        failure_rate=0.25,
+        current_outcome=GovernanceIntegrityAuditOutcome.UNHEALTHY,
+        previous_outcome=GovernanceIntegrityAuditOutcome.HEALTHY,
+        current_streak=1,
+        direction=GovernanceIntegrityAuditTrendDirection.DEGRADING,
+    )
+
+
+def test_audit_history_human_output_renders_trend_section() -> None:
+    result = make_history_result()
+
+    stdout = StringIO()
+
+    _render_human(result, trend=make_trend_snapshot(), stdout=stdout)
+
+    output = stdout.getvalue()
+
+    assert "Trend Analysis" in output
+    assert "Direction: DEGRADING" in output
+    assert "Current streak: 1" in output
+    assert "Health rate: 75.00%" in output
+    assert "Failure rate: 25.00%" in output
+
+
+def test_audit_history_human_output_renders_trend_for_empty_results() -> None:
+    result = GovernanceIntegrityAuditHistoryResult(
+        summary=GovernanceIntegrityAuditHistorySummary(
+            total_audits=4,
+            healthy_audits=3,
+            unhealthy_audits=1,
+            latest_audit=None,
+        ),
+        records=(),
+    )
+
+    stdout = StringIO()
+
+    _render_human(result, trend=make_trend_snapshot(), stdout=stdout)
+
+    output = stdout.getvalue()
+
+    assert "No matching integrity audits found." in output
+    assert "Trend Analysis" in output
+
+
+def test_audit_history_human_output_omits_trend_section_by_default() -> None:
+    result = make_history_result()
+
+    stdout = StringIO()
+
+    _render_human(result, trend=None, stdout=stdout)
+
+    assert "Trend Analysis" not in stdout.getvalue()
+
+
+def test_audit_history_json_output_includes_trend_when_requested() -> None:
+    result = make_history_result()
+
+    stdout = StringIO()
+
+    _render_json(result, trend=make_trend_snapshot(), stdout=stdout)
+
+    payload = json.loads(stdout.getvalue())
+
+    assert "trend" in payload
+    assert payload["trend"]["direction"] == "degrading"
+    assert "summary" in payload
+    assert "records" in payload
+
+
+def test_audit_history_human_output_insufficient_data_trend() -> None:
+    result = make_history_result()
+
+    trend = GovernanceIntegrityAuditTrendSnapshot(
+        sample_size=0,
+        healthy_audits=0,
+        unhealthy_audits=0,
+        health_rate=None,
+        failure_rate=None,
+        current_outcome=None,
+        previous_outcome=None,
+        current_streak=0,
+        direction=(
+            GovernanceIntegrityAuditTrendDirection.INSUFFICIENT_DATA
+        ),
+    )
+
+    stdout = StringIO()
+
+    _render_human(result, trend=trend, stdout=stdout)
+
+    output = stdout.getvalue()
+
+    assert "Direction: INSUFFICIENT_DATA" in output
+    assert "Current outcome: not available" in output
+    assert "Health rate: not available" in output
+    assert "Failure rate: not available" in output
 
 
 def test_render_failure_human() -> None:
@@ -223,3 +333,10 @@ def test_options_reject_empty_backend() -> None:
         ValueError, match="backend must not be empty"
     ):
         GovernanceAuditHistoryOptions(backend="   ")
+
+
+def test_options_reject_non_positive_trend_window() -> None:
+    with pytest.raises(
+        ValueError, match="trend_window must be greater than zero"
+    ):
+        GovernanceAuditHistoryOptions(trend_window=0)

@@ -9,9 +9,13 @@ from typing import TextIO
 
 from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditOutcome,
+    GovernanceIntegrityAuditRecord,
 )
 from .deployment_governance_audit_history_service import (
     GovernanceIntegrityAuditHistoryResult,
+)
+from .deployment_governance_audit_trends import (
+    GovernanceIntegrityAuditTrendSnapshot,
 )
 from .deployment_governance_persistence import (
     build_deployment_governance_persistence,
@@ -45,6 +49,10 @@ class GovernanceAuditHistoryOptions:
 
     limit: int = 20
 
+    include_trend: bool = False
+
+    trend_window: int = 20
+
     json_output: bool = False
 
     def __post_init__(self) -> None:
@@ -56,6 +64,11 @@ class GovernanceAuditHistoryOptions:
         if self.limit <= 0:
             raise ValueError(
                 "limit must be greater than zero"
+            )
+
+        if self.trend_window <= 0:
+            raise ValueError(
+                "trend_window must be greater than zero"
             )
 
         if (
@@ -100,6 +113,8 @@ def run_deployment_governance_audit_history(
     started_at_or_after: datetime | None = None,
     started_at_or_before: datetime | None = None,
     limit: int = 20,
+    include_trend: bool = False,
+    trend_window: int = 20,
     json_output: bool = False,
     stdout: TextIO = sys.stdout,
     stderr: TextIO = sys.stderr,
@@ -119,6 +134,8 @@ def run_deployment_governance_audit_history(
             started_at_or_after=started_at_or_after,
             started_at_or_before=started_at_or_before,
             limit=limit,
+            include_trend=include_trend,
+            trend_window=trend_window,
             json_output=json_output,
         )
 
@@ -138,6 +155,16 @@ def run_deployment_governance_audit_history(
             )
         )
 
+        trend = (
+            None
+            if not options.include_trend
+            else (
+                runtime
+                .build_integrity_audit_trend_service()
+                .analyze(window=options.trend_window)
+            )
+        )
+
     except Exception as exc:
         _render_failure(
             exc,
@@ -148,10 +175,10 @@ def run_deployment_governance_audit_history(
         return int(GovernanceAuditHistoryExitCode.QUERY_FAILED)
 
     if json_output:
-        _render_json(result, stdout=stdout)
+        _render_json(result, trend=trend, stdout=stdout)
 
     else:
-        _render_human(result, stdout=stdout)
+        _render_human(result, trend=trend, stdout=stdout)
 
     return int(GovernanceAuditHistoryExitCode.SUCCESS)
 
@@ -159,16 +186,25 @@ def run_deployment_governance_audit_history(
 def _render_json(
     result: GovernanceIntegrityAuditHistoryResult,
     *,
+    trend: GovernanceIntegrityAuditTrendSnapshot | None,
     stdout: TextIO,
 ) -> None:
     """
     Render machine-readable audit history.
 
     Only JSON is written to stdout so `... | jq` style piping stays valid.
+    The "trend" key is only present when trend analysis was requested, so
+    the plain `audits --json` schema stays exactly as it was before trend
+    analysis existed.
     """
 
+    payload = result.to_dict()
+
+    if trend is not None:
+        payload["trend"] = trend.to_dict()
+
     json.dump(
-        result.to_dict(),
+        payload,
         stdout,
         ensure_ascii=False,
         indent=2,
@@ -181,6 +217,7 @@ def _render_json(
 def _render_human(
     result: GovernanceIntegrityAuditHistoryResult,
     *,
+    trend: GovernanceIntegrityAuditTrendSnapshot | None,
     stdout: TextIO,
 ) -> None:
     """
@@ -208,11 +245,23 @@ def _render_human(
     if not result.records:
         stdout.write("\nNo matching integrity audits found.\n")
 
-        return
+    else:
+        stdout.write("\n")
 
-    stdout.write("\n")
+        _write_audit_records(result.records, stdout=stdout)
 
-    for index, record in enumerate(result.records, start=1):
+    if trend is not None:
+        stdout.write("\n")
+
+        _write_trend_section(trend, stdout=stdout)
+
+
+def _write_audit_records(
+    records: tuple[GovernanceIntegrityAuditRecord, ...],
+    *,
+    stdout: TextIO,
+) -> None:
+    for index, record in enumerate(records, start=1):
         stdout.write(f"Audit {index}\n")
 
         stdout.write("-------\n")
@@ -258,8 +307,59 @@ def _render_human(
                 f"{record.invalid_persisted_records}\n"
             )
 
-        if index < len(result.records):
+        if index < len(records):
             stdout.write("\n")
+
+
+def _write_trend_section(
+    trend: GovernanceIntegrityAuditTrendSnapshot,
+    *,
+    stdout: TextIO,
+) -> None:
+    stdout.write("Trend Analysis\n")
+
+    stdout.write("--------------\n")
+
+    stdout.write(f"Sample size: {trend.sample_size}\n")
+
+    stdout.write(f"Direction: {trend.direction.value.upper()}\n")
+
+    stdout.write(
+        "Current outcome: "
+        + (
+            "not available"
+            if trend.current_outcome is None
+            else trend.current_outcome.value.upper()
+        )
+        + "\n"
+    )
+
+    if trend.previous_outcome is not None:
+        stdout.write(
+            f"Previous outcome: {trend.previous_outcome.value.upper()}\n"
+        )
+
+    stdout.write(f"Current streak: {trend.current_streak}\n")
+
+    stdout.write(
+        "Health rate: "
+        + (
+            "not available"
+            if trend.health_rate is None
+            else f"{trend.health_rate * 100:.2f}%"
+        )
+        + "\n"
+    )
+
+    stdout.write(
+        "Failure rate: "
+        + (
+            "not available"
+            if trend.failure_rate is None
+            else f"{trend.failure_rate * 100:.2f}%"
+        )
+        + "\n"
+    )
 
 
 def _render_failure(
