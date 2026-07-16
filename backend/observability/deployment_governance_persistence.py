@@ -35,6 +35,10 @@ from .deployment_governance_audit_report_schedule import (
     GovernanceIntegrityAuditReportScheduleRepository,
     InMemoryGovernanceIntegrityAuditReportScheduleRepository,
 )
+from .deployment_governance_audit_execution_queue import (
+    GovernanceIntegrityAuditExecutionQueueRepository,
+    InMemoryGovernanceIntegrityAuditExecutionQueueRepository,
+)
 from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditHistoryRepository,
     InMemoryGovernanceIntegrityAuditHistoryRepository,
@@ -140,6 +144,9 @@ if TYPE_CHECKING:
     )
     from .deployment_governance_audit_report_schedule import (
         GovernanceIntegrityAuditReportScheduleService,
+    )
+    from .deployment_governance_audit_execution_queue import (
+        GovernanceIntegrityAuditExecutionQueueService,
     )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
@@ -338,6 +345,10 @@ class DeploymentGovernancePersistenceRuntime:
 
     report_schedule_repository: (
         GovernanceIntegrityAuditReportScheduleRepository
+    )
+
+    execution_queue_repository: (
+        GovernanceIntegrityAuditExecutionQueueRepository
     )
 
     database: SQLiteDatabase | None = None
@@ -795,6 +806,25 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_audit_report_template_service(),
         )
 
+    def build_integrity_audit_execution_queue_service(
+        self,
+    ) -> "GovernanceIntegrityAuditExecutionQueueService":
+        """
+        Build the governance audit execution queue service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_audit_execution_queue import (
+            GovernanceIntegrityAuditExecutionQueueService,
+        )
+
+        return GovernanceIntegrityAuditExecutionQueueService(
+            self.execution_queue_repository,
+            self.build_integrity_audit_report_schedule_service(),
+        )
+
     def build_diagnostics_service(
         self,
     ) -> "DeploymentGovernancePersistenceDiagnosticsService":
@@ -927,6 +957,10 @@ def _build_memory_runtime(
         InMemoryGovernanceIntegrityAuditReportScheduleRepository()
     )
 
+    execution_queue_repository = (
+        InMemoryGovernanceIntegrityAuditExecutionQueueRepository()
+    )
+
     return DeploymentGovernancePersistenceRuntime(
         config=config,
         repository=repository,
@@ -938,6 +972,7 @@ def _build_memory_runtime(
         collection_repository=collection_repository,
         report_template_repository=report_template_repository,
         report_schedule_repository=report_schedule_repository,
+        execution_queue_repository=execution_queue_repository,
         database=None,
         automatic_audit_retention=automatic_audit_retention,
     )
@@ -1043,6 +1078,13 @@ def _build_sqlite_runtime(
         )
     )
 
+    # SQLite persistence for the execution queue is intentionally
+    # deferred (see deployment_governance_audit_execution_queue.py):
+    # it stays in-process memory regardless of the configured backend.
+    execution_queue_repository = (
+        InMemoryGovernanceIntegrityAuditExecutionQueueRepository()
+    )
+
     trace_engine = DeploymentGovernanceTraceEngine()
 
     registry = DeploymentGovernanceTraceRegistry(
@@ -1061,6 +1103,7 @@ def _build_sqlite_runtime(
         collection_repository=collection_repository,
         report_template_repository=report_template_repository,
         report_schedule_repository=report_schedule_repository,
+        execution_queue_repository=execution_queue_repository,
         database=database,
         automatic_audit_retention=automatic_audit_retention,
     )

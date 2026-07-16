@@ -105,6 +105,14 @@ from backend.observability.deployment_governance_audit_report_schedule_cli impor
     run_deployment_governance_audit_report_schedule_list,
     run_deployment_governance_audit_report_schedule_show,
 )
+from backend.observability.deployment_governance_audit_execution_queue_cli import (
+    run_deployment_governance_audit_queue_clear,
+    run_deployment_governance_audit_queue_delete,
+    run_deployment_governance_audit_queue_enqueue,
+    run_deployment_governance_audit_queue_enqueue_due,
+    run_deployment_governance_audit_queue_list,
+    run_deployment_governance_audit_queue_show,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -1450,6 +1458,108 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    queue_parser = audits_subparsers.add_parser(
+        "queue",
+        help="Convert enabled report schedules into runnable execution jobs.",
+        description=(
+            "Convert enabled governance audit report schedules into "
+            "runnable execution jobs, ready for a future worker to "
+            "pick up.\n\n"
+            "No background execution happens in this command; it only "
+            "prepares the queue.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    queue_subparsers = queue_parser.add_subparsers(
+        dest="queue_command", required=True
+    )
+
+    queue_enqueue_parser = queue_subparsers.add_parser(
+        "enqueue",
+        help="Queue one schedule as a pending job.",
+    )
+    queue_enqueue_parser.add_argument(
+        "--schedule",
+        required=True,
+        dest="schedule",
+        help="Name of the schedule to queue.",
+    )
+    queue_enqueue_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    queue_enqueue_due_parser = queue_subparsers.add_parser(
+        "enqueue-due",
+        help="Queue every currently enabled schedule.",
+    )
+    queue_enqueue_due_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    queue_list_parser = queue_subparsers.add_parser(
+        "list",
+        help="List every queued job.",
+    )
+    queue_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    queue_show_parser = queue_subparsers.add_parser(
+        "show",
+        help="Show one queued job.",
+    )
+    queue_show_parser.add_argument(
+        "--job-id",
+        required=True,
+        dest="job_id",
+        help="Identifier of the job to show.",
+    )
+    queue_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    queue_delete_parser = queue_subparsers.add_parser(
+        "delete",
+        help="Remove one job from the queue.",
+    )
+    queue_delete_parser.add_argument(
+        "--job-id",
+        required=True,
+        dest="job_id",
+        help="Identifier of the job to remove.",
+    )
+    queue_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    queue_clear_parser = queue_subparsers.add_parser(
+        "clear",
+        help="Remove every job from the queue.",
+    )
+    queue_clear_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -1836,6 +1946,35 @@ def main():
                 else:
                     exit_code = run_deployment_governance_audit_report_schedule_delete(
                         name=args.name,
+                        json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "queue":
+                if args.queue_command == "enqueue":
+                    exit_code = run_deployment_governance_audit_queue_enqueue(
+                        schedule_name=args.schedule,
+                        json_output=args.json_output,
+                    )
+                elif args.queue_command == "enqueue-due":
+                    exit_code = run_deployment_governance_audit_queue_enqueue_due(
+                        json_output=args.json_output,
+                    )
+                elif args.queue_command == "list":
+                    exit_code = run_deployment_governance_audit_queue_list(
+                        json_output=args.json_output,
+                    )
+                elif args.queue_command == "show":
+                    exit_code = run_deployment_governance_audit_queue_show(
+                        job_id=args.job_id,
+                        json_output=args.json_output,
+                    )
+                elif args.queue_command == "delete":
+                    exit_code = run_deployment_governance_audit_queue_delete(
+                        job_id=args.job_id,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_audit_queue_clear(
                         json_output=args.json_output,
                     )
                 sys.exit(exit_code)
