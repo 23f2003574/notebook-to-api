@@ -31,6 +31,10 @@ from .deployment_governance_audit_report_templates import (
     GovernanceIntegrityAuditReportTemplateRepository,
     InMemoryGovernanceIntegrityAuditReportTemplateRepository,
 )
+from .deployment_governance_audit_report_schedule import (
+    GovernanceIntegrityAuditReportScheduleRepository,
+    InMemoryGovernanceIntegrityAuditReportScheduleRepository,
+)
 from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditHistoryRepository,
     InMemoryGovernanceIntegrityAuditHistoryRepository,
@@ -68,6 +72,9 @@ from .sqlite_deployment_governance_audit_collections import (
 )
 from .sqlite_deployment_governance_audit_report_templates import (
     SQLiteGovernanceIntegrityAuditReportTemplateRepository,
+)
+from .sqlite_deployment_governance_audit_report_schedule import (
+    SQLiteGovernanceIntegrityAuditReportScheduleRepository,
 )
 from .sqlite_deployment_governance_audit_history import (
     SQLiteGovernanceIntegrityAuditHistoryRepository,
@@ -130,6 +137,9 @@ if TYPE_CHECKING:
     )
     from .deployment_governance_audit_report_templates import (
         GovernanceIntegrityAuditReportTemplateService,
+    )
+    from .deployment_governance_audit_report_schedule import (
+        GovernanceIntegrityAuditReportScheduleService,
     )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
@@ -324,6 +334,10 @@ class DeploymentGovernancePersistenceRuntime:
 
     report_template_repository: (
         GovernanceIntegrityAuditReportTemplateRepository
+    )
+
+    report_schedule_repository: (
+        GovernanceIntegrityAuditReportScheduleRepository
     )
 
     database: SQLiteDatabase | None = None
@@ -762,6 +776,25 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_saved_audit_query_service(),
         )
 
+    def build_integrity_audit_report_schedule_service(
+        self,
+    ) -> "GovernanceIntegrityAuditReportScheduleService":
+        """
+        Build the governance audit report schedule service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_audit_report_schedule import (
+            GovernanceIntegrityAuditReportScheduleService,
+        )
+
+        return GovernanceIntegrityAuditReportScheduleService(
+            self.report_schedule_repository,
+            self.build_integrity_audit_report_template_service(),
+        )
+
     def build_diagnostics_service(
         self,
     ) -> "DeploymentGovernancePersistenceDiagnosticsService":
@@ -890,6 +923,10 @@ def _build_memory_runtime(
         InMemoryGovernanceIntegrityAuditReportTemplateRepository()
     )
 
+    report_schedule_repository = (
+        InMemoryGovernanceIntegrityAuditReportScheduleRepository()
+    )
+
     return DeploymentGovernancePersistenceRuntime(
         config=config,
         repository=repository,
@@ -900,6 +937,7 @@ def _build_memory_runtime(
         saved_query_repository=saved_query_repository,
         collection_repository=collection_repository,
         report_template_repository=report_template_repository,
+        report_schedule_repository=report_schedule_repository,
         database=None,
         automatic_audit_retention=automatic_audit_retention,
     )
@@ -996,6 +1034,15 @@ def _build_sqlite_runtime(
         )
     )
 
+    report_schedule_repository = (
+        SQLiteGovernanceIntegrityAuditReportScheduleRepository(
+            database,
+            initialize_schema=(
+                config.initialize_schema
+            ),
+        )
+    )
+
     trace_engine = DeploymentGovernanceTraceEngine()
 
     registry = DeploymentGovernanceTraceRegistry(
@@ -1013,6 +1060,7 @@ def _build_sqlite_runtime(
         saved_query_repository=saved_query_repository,
         collection_repository=collection_repository,
         report_template_repository=report_template_repository,
+        report_schedule_repository=report_schedule_repository,
         database=database,
         automatic_audit_retention=automatic_audit_retention,
     )

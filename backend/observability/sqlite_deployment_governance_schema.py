@@ -41,6 +41,10 @@ DEPLOYMENT_GOVERNANCE_AUDIT_REPORT_TEMPLATE_TABLE: Final[
     str
 ] = "audit_report_templates"
 
+DEPLOYMENT_GOVERNANCE_AUDIT_REPORT_SCHEDULE_TABLE: Final[
+    str
+] = "audit_report_schedules"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -75,6 +79,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_saved_audit_queries_migration(),
             DeploymentGovernanceSQLiteSchema._create_audit_collections_migration(),
             DeploymentGovernanceSQLiteSchema._create_audit_report_templates_migration(),
+            DeploymentGovernanceSQLiteSchema._create_audit_report_schedules_migration(),
         )
 
     @staticmethod
@@ -728,6 +733,63 @@ class DeploymentGovernanceSQLiteSchema:
                         output_format IN (
                             'json',
                             'markdown'
+                        )
+                    )
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_audit_report_schedules_migration() -> SQLiteMigration:
+        """
+        Migration 10 creates storage for named execution plans for
+        report templates
+        (backend/observability/deployment_governance_audit_report_schedule.py).
+
+        This layer only manages schedule and execution metadata; no
+        background worker consumes it yet.
+        """
+
+        return SQLiteMigration(
+            version=10,
+            name="create governance audit report schedules table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_AUDIT_REPORT_SCHEDULE_TABLE}
+                (
+                    name TEXT NOT NULL
+                        PRIMARY KEY,
+
+                    template_name TEXT NOT NULL,
+
+                    frequency TEXT NOT NULL,
+
+                    enabled INTEGER NOT NULL
+                        CHECK (
+                            enabled IN (0, 1)
+                        ),
+
+                    created_at TEXT NOT NULL,
+
+                    CHECK (
+                        length(
+                            trim(name)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(template_name)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        frequency IN (
+                            'daily',
+                            'weekly',
+                            'monthly'
                         )
                     )
                 )

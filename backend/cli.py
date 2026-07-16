@@ -94,6 +94,17 @@ from backend.observability.deployment_governance_audit_report_templates_cli impo
     run_deployment_governance_audit_report_template_list,
     run_deployment_governance_audit_report_template_show,
 )
+from backend.observability.deployment_governance_audit_report_schedule import (
+    GovernanceIntegrityReportScheduleFrequency,
+)
+from backend.observability.deployment_governance_audit_report_schedule_cli import (
+    run_deployment_governance_audit_report_schedule_create,
+    run_deployment_governance_audit_report_schedule_delete,
+    run_deployment_governance_audit_report_schedule_disable,
+    run_deployment_governance_audit_report_schedule_enable,
+    run_deployment_governance_audit_report_schedule_list,
+    run_deployment_governance_audit_report_schedule_show,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -1313,6 +1324,132 @@ def main():
         help="Path to write the report to. Default: stdout.",
     )
 
+    schedules_parser = audits_subparsers.add_parser(
+        "schedules",
+        help="Manage execution plans for governance audit report templates.",
+        description=(
+            "Create and manage named execution plans (schedules) for "
+            "report templates.\n\n"
+            "This layer only manages schedules and execution metadata "
+            "-- no background worker executes a schedule yet.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    schedules_subparsers = schedules_parser.add_subparsers(
+        dest="schedules_command", required=True
+    )
+
+    schedule_create_parser = schedules_subparsers.add_parser(
+        "create",
+        help="Create a new report schedule.",
+    )
+    schedule_create_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name for the new schedule.",
+    )
+    schedule_create_parser.add_argument(
+        "--template",
+        required=True,
+        dest="template",
+        help="Name of the report template to schedule.",
+    )
+    schedule_create_parser.add_argument(
+        "--frequency",
+        required=True,
+        choices=["daily", "weekly", "monthly"],
+        dest="frequency",
+        help="How often the schedule is intended to run.",
+    )
+    schedule_create_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    schedule_list_parser = schedules_subparsers.add_parser(
+        "list",
+        help="List every report schedule.",
+    )
+    schedule_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    schedule_show_parser = schedules_subparsers.add_parser(
+        "show",
+        help="Show one report schedule.",
+    )
+    schedule_show_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the schedule to show.",
+    )
+    schedule_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    schedule_enable_parser = schedules_subparsers.add_parser(
+        "enable",
+        help="Enable a report schedule.",
+    )
+    schedule_enable_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the schedule to enable.",
+    )
+    schedule_enable_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    schedule_disable_parser = schedules_subparsers.add_parser(
+        "disable",
+        help="Disable a report schedule.",
+    )
+    schedule_disable_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the schedule to disable.",
+    )
+    schedule_disable_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    schedule_delete_parser = schedules_subparsers.add_parser(
+        "delete",
+        help="Delete one report schedule.",
+    )
+    schedule_delete_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the schedule to delete.",
+    )
+    schedule_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -1665,6 +1802,41 @@ def main():
                     exit_code = run_deployment_governance_audit_report_template_generate(
                         name=args.name,
                         output_path=args.output,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "schedules":
+                if args.schedules_command == "create":
+                    exit_code = run_deployment_governance_audit_report_schedule_create(
+                        name=args.name,
+                        template_name=args.template,
+                        frequency=GovernanceIntegrityReportScheduleFrequency(
+                            args.frequency
+                        ),
+                        json_output=args.json_output,
+                    )
+                elif args.schedules_command == "list":
+                    exit_code = run_deployment_governance_audit_report_schedule_list(
+                        json_output=args.json_output,
+                    )
+                elif args.schedules_command == "show":
+                    exit_code = run_deployment_governance_audit_report_schedule_show(
+                        name=args.name,
+                        json_output=args.json_output,
+                    )
+                elif args.schedules_command == "enable":
+                    exit_code = run_deployment_governance_audit_report_schedule_enable(
+                        name=args.name,
+                        json_output=args.json_output,
+                    )
+                elif args.schedules_command == "disable":
+                    exit_code = run_deployment_governance_audit_report_schedule_disable(
+                        name=args.name,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_audit_report_schedule_delete(
+                        name=args.name,
+                        json_output=args.json_output,
                     )
                 sys.exit(exit_code)
             try:
