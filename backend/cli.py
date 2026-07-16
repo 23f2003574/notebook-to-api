@@ -55,6 +55,13 @@ from backend.observability.deployment_governance_audit_bookmarks_cli import (
     run_deployment_governance_audit_bookmark_list,
     run_deployment_governance_audit_bookmark_show,
 )
+from backend.observability.deployment_governance_audit_labels_cli import (
+    run_deployment_governance_audit_label_add,
+    run_deployment_governance_audit_label_list,
+    run_deployment_governance_audit_label_remove,
+    run_deployment_governance_audit_label_search,
+    run_deployment_governance_audit_label_show,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -648,6 +655,116 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    labels_parser = audits_subparsers.add_parser(
+        "labels",
+        help="Manage many-to-many labels on governance integrity audits.",
+        description=(
+            "Apply, remove, and query many-to-many labels on recorded "
+            "governance integrity audits, for search, filtering, and "
+            "organization. Unlike a bookmark (a unique name per audit), "
+            "the same label may apply to many audits and the same audit "
+            "may carry many labels.\n\n"
+            "Labels are independent of audit history itself.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    labels_subparsers = labels_parser.add_subparsers(
+        dest="labels_command", required=True
+    )
+
+    label_add_parser = labels_subparsers.add_parser(
+        "add",
+        help="Apply a label to an audit.",
+    )
+    label_add_parser.add_argument(
+        "--audit-id",
+        required=True,
+        dest="audit_id",
+        help="Identifier of the audit to label.",
+    )
+    label_add_parser.add_argument(
+        "--label",
+        required=True,
+        dest="label",
+        help="Label to apply.",
+    )
+    label_add_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    label_remove_parser = labels_subparsers.add_parser(
+        "remove",
+        help="Remove a label from an audit.",
+    )
+    label_remove_parser.add_argument(
+        "--audit-id",
+        required=True,
+        dest="audit_id",
+        help="Identifier of the audit to unlabel.",
+    )
+    label_remove_parser.add_argument(
+        "--label",
+        required=True,
+        dest="label",
+        help="Label to remove.",
+    )
+    label_remove_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    label_show_parser = labels_subparsers.add_parser(
+        "show",
+        help="Show every label applied to one audit.",
+    )
+    label_show_parser.add_argument(
+        "--audit-id",
+        required=True,
+        dest="audit_id",
+        help="Identifier of the audit to show labels for.",
+    )
+    label_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    label_search_parser = labels_subparsers.add_parser(
+        "search",
+        help="Search for every audit carrying a label.",
+    )
+    label_search_parser.add_argument(
+        "--label",
+        required=True,
+        dest="label",
+        help="Label to search for.",
+    )
+    label_search_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    label_list_parser = labels_subparsers.add_parser(
+        "list",
+        help="List every governance audit label.",
+    )
+    label_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -811,6 +928,34 @@ def main():
                 else:
                     exit_code = run_deployment_governance_audit_bookmark_delete(
                         name=args.name,
+                        json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "labels":
+                if args.labels_command == "add":
+                    exit_code = run_deployment_governance_audit_label_add(
+                        audit_id=args.audit_id,
+                        label=args.label,
+                        json_output=args.json_output,
+                    )
+                elif args.labels_command == "remove":
+                    exit_code = run_deployment_governance_audit_label_remove(
+                        audit_id=args.audit_id,
+                        label=args.label,
+                        json_output=args.json_output,
+                    )
+                elif args.labels_command == "show":
+                    exit_code = run_deployment_governance_audit_label_show(
+                        audit_id=args.audit_id,
+                        json_output=args.json_output,
+                    )
+                elif args.labels_command == "search":
+                    exit_code = run_deployment_governance_audit_label_search(
+                        label=args.label,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_audit_label_list(
                         json_output=args.json_output,
                     )
                 sys.exit(exit_code)

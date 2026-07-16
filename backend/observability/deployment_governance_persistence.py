@@ -15,6 +15,10 @@ from .deployment_governance_audit_bookmarks import (
     GovernanceIntegrityAuditBookmarkRepository,
     InMemoryGovernanceIntegrityAuditBookmarkRepository,
 )
+from .deployment_governance_audit_labels import (
+    GovernanceIntegrityAuditLabelRepository,
+    InMemoryGovernanceIntegrityAuditLabelRepository,
+)
 from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditHistoryRepository,
     InMemoryGovernanceIntegrityAuditHistoryRepository,
@@ -40,6 +44,9 @@ from .in_memory_deployment_governance_trace_repository import (
 )
 from .sqlite_deployment_governance_audit_bookmarks import (
     SQLiteGovernanceIntegrityAuditBookmarkRepository,
+)
+from .sqlite_deployment_governance_audit_labels import (
+    SQLiteGovernanceIntegrityAuditLabelRepository,
 )
 from .sqlite_deployment_governance_audit_history import (
     SQLiteGovernanceIntegrityAuditHistoryRepository,
@@ -84,6 +91,9 @@ if TYPE_CHECKING:
     )
     from .deployment_governance_audit_bookmarks import (
         GovernanceIntegrityAuditBookmarkService,
+    )
+    from .deployment_governance_audit_labels import (
+        GovernanceIntegrityAuditLabelService,
     )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
@@ -269,6 +279,8 @@ class DeploymentGovernancePersistenceRuntime:
     audit_history_repository: GovernanceIntegrityAuditHistoryRepository
 
     bookmark_repository: GovernanceIntegrityAuditBookmarkRepository
+
+    label_repository: GovernanceIntegrityAuditLabelRepository
 
     database: SQLiteDatabase | None = None
 
@@ -588,6 +600,25 @@ class DeploymentGovernancePersistenceRuntime:
             self.audit_history_repository,
         )
 
+    def build_integrity_audit_label_service(
+        self,
+    ) -> "GovernanceIntegrityAuditLabelService":
+        """
+        Build the governance audit label service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_audit_labels import (
+            GovernanceIntegrityAuditLabelService,
+        )
+
+        return GovernanceIntegrityAuditLabelService(
+            self.label_repository,
+            self.audit_history_repository,
+        )
+
     def build_diagnostics_service(
         self,
     ) -> "DeploymentGovernancePersistenceDiagnosticsService":
@@ -700,12 +731,17 @@ def _build_memory_runtime(
         InMemoryGovernanceIntegrityAuditBookmarkRepository()
     )
 
+    label_repository = (
+        InMemoryGovernanceIntegrityAuditLabelRepository()
+    )
+
     return DeploymentGovernancePersistenceRuntime(
         config=config,
         repository=repository,
         registry=registry,
         audit_history_repository=audit_history_repository,
         bookmark_repository=bookmark_repository,
+        label_repository=label_repository,
         database=None,
         automatic_audit_retention=automatic_audit_retention,
     )
@@ -766,6 +802,15 @@ def _build_sqlite_runtime(
         )
     )
 
+    label_repository = (
+        SQLiteGovernanceIntegrityAuditLabelRepository(
+            database,
+            initialize_schema=(
+                config.initialize_schema
+            ),
+        )
+    )
+
     trace_engine = DeploymentGovernanceTraceEngine()
 
     registry = DeploymentGovernanceTraceRegistry(
@@ -779,6 +824,7 @@ def _build_sqlite_runtime(
         registry=registry,
         audit_history_repository=audit_history_repository,
         bookmark_repository=bookmark_repository,
+        label_repository=label_repository,
         database=database,
         automatic_audit_retention=automatic_audit_retention,
     )

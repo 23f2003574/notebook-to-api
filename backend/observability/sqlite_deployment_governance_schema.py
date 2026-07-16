@@ -21,6 +21,10 @@ DEPLOYMENT_GOVERNANCE_AUDIT_BOOKMARK_TABLE: Final[
     str
 ] = "audit_bookmarks"
 
+DEPLOYMENT_GOVERNANCE_AUDIT_LABEL_TABLE: Final[
+    str
+] = "audit_labels"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -51,6 +55,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._add_integrity_metadata_migration(),
             DeploymentGovernanceSQLiteSchema._create_integrity_audit_history_migration(),
             DeploymentGovernanceSQLiteSchema._create_audit_bookmarks_migration(),
+            DeploymentGovernanceSQLiteSchema._create_audit_labels_migration(),
         )
 
     @staticmethod
@@ -454,6 +459,64 @@ class DeploymentGovernanceSQLiteSchema:
                             trim(audit_id)
                         ) > 0
                     )
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_audit_labels_migration() -> SQLiteMigration:
+        """
+        Migration 6 creates storage for many-to-many labels applied to
+        recorded governance integrity audits
+        (backend/observability/deployment_governance_audit_labels.py).
+
+        Unlike a bookmark (one unique name per audit), the same label may
+        be applied to many audits and the same audit may carry many
+        labels, so the primary key is the (audit_id, label) pair rather
+        than a single column.
+        """
+
+        return SQLiteMigration(
+            version=6,
+            name="create governance audit labels table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_AUDIT_LABEL_TABLE}
+                (
+                    audit_id TEXT NOT NULL,
+
+                    label TEXT NOT NULL,
+
+                    created_at TEXT NOT NULL,
+
+                    PRIMARY KEY (
+                        audit_id,
+                        label
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(audit_id)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(label)
+                        ) > 0
+                    )
+                )
+                """,
+
+                f"""
+                CREATE INDEX
+                idx_governance_audit_labels_label
+                ON {DEPLOYMENT_GOVERNANCE_AUDIT_LABEL_TABLE}
+                (
+                    label,
+                    created_at DESC
                 )
                 """,
             ),
