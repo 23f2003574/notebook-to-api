@@ -80,6 +80,10 @@ from backend.observability.deployment_governance_audit_collections_cli import (
     run_deployment_governance_audit_collection_remove,
     run_deployment_governance_audit_collection_show,
 )
+from backend.observability.deployment_governance_audit_reports_cli import (
+    run_deployment_governance_audit_report_audits,
+    run_deployment_governance_audit_report_collection,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -1094,6 +1098,90 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    report_parser = audits_subparsers.add_parser(
+        "report",
+        help="Generate a portable report from audits or a collection.",
+        description=(
+            "Generate a portable, point-in-time JSON or Markdown "
+            "report summarizing one or more governance integrity "
+            "audits.\n\n"
+            "This is read-only: it never executes a new audit and "
+            "never mutates audit history or collections. If --output "
+            "is omitted, the report is written to stdout.\n\n"
+            "Exit codes: 0 the report was generated, 2 the report "
+            "could not be generated (unknown audit or collection, or "
+            "invalid configuration)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    report_subparsers = report_parser.add_subparsers(
+        dest="report_command", required=True
+    )
+
+    report_collection_parser = report_subparsers.add_parser(
+        "collection",
+        help="Generate a report from every audit in a collection.",
+    )
+    report_collection_parser.add_argument(
+        "--collection",
+        required=True,
+        dest="collection",
+        help="Name of the collection to report on.",
+    )
+    report_collection_parser.add_argument(
+        "--title",
+        default=None,
+        dest="title",
+        help="Report title. Default: the collection's name.",
+    )
+    report_collection_parser.add_argument(
+        "--output",
+        default=None,
+        dest="output",
+        help="Path to write the report to. Default: stdout.",
+    )
+    report_collection_parser.add_argument(
+        "--format",
+        choices=["json", "md"],
+        default="json",
+        dest="report_format",
+        help="Report format. Default: json.",
+    )
+
+    report_audits_parser = report_subparsers.add_parser(
+        "audits",
+        help="Generate a report from an explicit list of audits.",
+    )
+    report_audits_parser.add_argument(
+        "--audit-id",
+        action="append",
+        dest="audit_ids",
+        default=None,
+        help=(
+            "Identifier of an audit to include. Repeatable; the "
+            "report preserves the order given."
+        ),
+    )
+    report_audits_parser.add_argument(
+        "--title",
+        required=True,
+        dest="title",
+        help="Report title.",
+    )
+    report_audits_parser.add_argument(
+        "--output",
+        default=None,
+        dest="output",
+        help="Path to write the report to. Default: stdout.",
+    )
+    report_audits_parser.add_argument(
+        "--format",
+        choices=["json", "md"],
+        default="json",
+        dest="report_format",
+        help="Report format. Default: json.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -1379,6 +1467,26 @@ def main():
                         name=args.name,
                         audit_id=args.audit_id,
                         json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "report":
+                if args.report_command == "collection":
+                    exit_code = run_deployment_governance_audit_report_collection(
+                        collection=args.collection,
+                        title=args.title,
+                        output_path=args.output,
+                        report_format=args.report_format,
+                    )
+                else:
+                    if not args.audit_ids:
+                        parser.error(
+                            "at least one --audit-id is required"
+                        )
+                    exit_code = run_deployment_governance_audit_report_audits(
+                        title=args.title,
+                        audit_ids=args.audit_ids,
+                        output_path=args.output,
+                        report_format=args.report_format,
                     )
                 sys.exit(exit_code)
             try:
