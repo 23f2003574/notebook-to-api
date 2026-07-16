@@ -23,6 +23,10 @@ from .deployment_governance_audit_saved_queries import (
     GovernanceIntegritySavedAuditQueryRepository,
     InMemoryGovernanceIntegritySavedAuditQueryRepository,
 )
+from .deployment_governance_audit_collections import (
+    GovernanceIntegrityAuditCollectionRepository,
+    InMemoryGovernanceIntegrityAuditCollectionRepository,
+)
 from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditHistoryRepository,
     InMemoryGovernanceIntegrityAuditHistoryRepository,
@@ -54,6 +58,9 @@ from .sqlite_deployment_governance_audit_labels import (
 )
 from .sqlite_deployment_governance_audit_saved_queries import (
     SQLiteGovernanceIntegritySavedAuditQueryRepository,
+)
+from .sqlite_deployment_governance_audit_collections import (
+    SQLiteGovernanceIntegrityAuditCollectionRepository,
 )
 from .sqlite_deployment_governance_audit_history import (
     SQLiteGovernanceIntegrityAuditHistoryRepository,
@@ -107,6 +114,9 @@ if TYPE_CHECKING:
     )
     from .deployment_governance_audit_saved_queries import (
         GovernanceIntegritySavedAuditQueryService,
+    )
+    from .deployment_governance_audit_collections import (
+        GovernanceIntegrityAuditCollectionService,
     )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
@@ -296,6 +306,8 @@ class DeploymentGovernancePersistenceRuntime:
     label_repository: GovernanceIntegrityAuditLabelRepository
 
     saved_query_repository: GovernanceIntegritySavedAuditQueryRepository
+
+    collection_repository: GovernanceIntegrityAuditCollectionRepository
 
     database: SQLiteDatabase | None = None
 
@@ -673,6 +685,25 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_audit_search_service(),
         )
 
+    def build_integrity_audit_collection_service(
+        self,
+    ) -> "GovernanceIntegrityAuditCollectionService":
+        """
+        Build the governance audit collection service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_audit_collections import (
+            GovernanceIntegrityAuditCollectionService,
+        )
+
+        return GovernanceIntegrityAuditCollectionService(
+            self.collection_repository,
+            self.audit_history_repository,
+        )
+
     def build_diagnostics_service(
         self,
     ) -> "DeploymentGovernancePersistenceDiagnosticsService":
@@ -793,6 +824,10 @@ def _build_memory_runtime(
         InMemoryGovernanceIntegritySavedAuditQueryRepository()
     )
 
+    collection_repository = (
+        InMemoryGovernanceIntegrityAuditCollectionRepository()
+    )
+
     return DeploymentGovernancePersistenceRuntime(
         config=config,
         repository=repository,
@@ -801,6 +836,7 @@ def _build_memory_runtime(
         bookmark_repository=bookmark_repository,
         label_repository=label_repository,
         saved_query_repository=saved_query_repository,
+        collection_repository=collection_repository,
         database=None,
         automatic_audit_retention=automatic_audit_retention,
     )
@@ -879,6 +915,15 @@ def _build_sqlite_runtime(
         )
     )
 
+    collection_repository = (
+        SQLiteGovernanceIntegrityAuditCollectionRepository(
+            database,
+            initialize_schema=(
+                config.initialize_schema
+            ),
+        )
+    )
+
     trace_engine = DeploymentGovernanceTraceEngine()
 
     registry = DeploymentGovernanceTraceRegistry(
@@ -894,6 +939,7 @@ def _build_sqlite_runtime(
         bookmark_repository=bookmark_repository,
         label_repository=label_repository,
         saved_query_repository=saved_query_repository,
+        collection_repository=collection_repository,
         database=database,
         automatic_audit_retention=automatic_audit_retention,
     )

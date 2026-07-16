@@ -72,6 +72,14 @@ from backend.observability.deployment_governance_audit_saved_queries_cli import 
     run_deployment_governance_audit_saved_query_save,
     run_deployment_governance_audit_saved_query_show,
 )
+from backend.observability.deployment_governance_audit_collections_cli import (
+    run_deployment_governance_audit_collection_add,
+    run_deployment_governance_audit_collection_create,
+    run_deployment_governance_audit_collection_delete,
+    run_deployment_governance_audit_collection_list,
+    run_deployment_governance_audit_collection_remove,
+    run_deployment_governance_audit_collection_show,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -952,6 +960,140 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    collections_parser = audits_subparsers.add_parser(
+        "collections",
+        help="Manage explicit groups of governance integrity audits.",
+        description=(
+            "Create and manage named, explicit groups of governance "
+            "integrity audits (e.g. a release, an incident, a "
+            "migration, an investigation).\n\n"
+            "Unlike a saved query (reusable filter criteria, "
+            "re-evaluated on every run), a collection stores explicit "
+            "membership decided by the operator. Collections are "
+            "independent metadata.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    collections_subparsers = collections_parser.add_subparsers(
+        dest="collections_command", required=True
+    )
+
+    collection_create_parser = collections_subparsers.add_parser(
+        "create",
+        help="Create a new collection.",
+    )
+    collection_create_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name for the new collection.",
+    )
+    collection_create_parser.add_argument(
+        "--description",
+        default=None,
+        dest="description",
+        help="Optional description for the collection.",
+    )
+    collection_create_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    collection_list_parser = collections_subparsers.add_parser(
+        "list",
+        help="List every collection.",
+    )
+    collection_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    collection_show_parser = collections_subparsers.add_parser(
+        "show",
+        help="Show one collection and its audits.",
+    )
+    collection_show_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the collection to show.",
+    )
+    collection_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    collection_delete_parser = collections_subparsers.add_parser(
+        "delete",
+        help="Delete one collection and all of its entries.",
+    )
+    collection_delete_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the collection to delete.",
+    )
+    collection_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    collection_add_parser = collections_subparsers.add_parser(
+        "add",
+        help="Add an audit to a collection.",
+    )
+    collection_add_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the collection to add the audit to.",
+    )
+    collection_add_parser.add_argument(
+        "--audit-id",
+        required=True,
+        dest="audit_id",
+        help="Identifier of the audit to add.",
+    )
+    collection_add_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    collection_remove_parser = collections_subparsers.add_parser(
+        "remove",
+        help="Remove an audit from a collection.",
+    )
+    collection_remove_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the collection to remove the audit from.",
+    )
+    collection_remove_parser.add_argument(
+        "--audit-id",
+        required=True,
+        dest="audit_id",
+        help="Identifier of the audit to remove.",
+    )
+    collection_remove_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -1202,6 +1344,40 @@ def main():
                 else:
                     exit_code = run_deployment_governance_audit_saved_query_delete(
                         name=args.name,
+                        json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "collections":
+                if args.collections_command == "create":
+                    exit_code = run_deployment_governance_audit_collection_create(
+                        name=args.name,
+                        description=args.description,
+                        json_output=args.json_output,
+                    )
+                elif args.collections_command == "list":
+                    exit_code = run_deployment_governance_audit_collection_list(
+                        json_output=args.json_output,
+                    )
+                elif args.collections_command == "show":
+                    exit_code = run_deployment_governance_audit_collection_show(
+                        name=args.name,
+                        json_output=args.json_output,
+                    )
+                elif args.collections_command == "delete":
+                    exit_code = run_deployment_governance_audit_collection_delete(
+                        name=args.name,
+                        json_output=args.json_output,
+                    )
+                elif args.collections_command == "add":
+                    exit_code = run_deployment_governance_audit_collection_add(
+                        name=args.name,
+                        audit_id=args.audit_id,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_audit_collection_remove(
+                        name=args.name,
+                        audit_id=args.audit_id,
                         json_output=args.json_output,
                     )
                 sys.exit(exit_code)

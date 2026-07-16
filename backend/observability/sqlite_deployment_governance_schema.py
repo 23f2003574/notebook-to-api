@@ -29,6 +29,14 @@ DEPLOYMENT_GOVERNANCE_SAVED_AUDIT_QUERY_TABLE: Final[
     str
 ] = "saved_audit_queries"
 
+DEPLOYMENT_GOVERNANCE_AUDIT_COLLECTION_TABLE: Final[
+    str
+] = "audit_collections"
+
+DEPLOYMENT_GOVERNANCE_AUDIT_COLLECTION_ENTRY_TABLE: Final[
+    str
+] = "audit_collection_entries"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -61,6 +69,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_audit_bookmarks_migration(),
             DeploymentGovernanceSQLiteSchema._create_audit_labels_migration(),
             DeploymentGovernanceSQLiteSchema._create_saved_audit_queries_migration(),
+            DeploymentGovernanceSQLiteSchema._create_audit_collections_migration(),
         )
 
     @staticmethod
@@ -566,6 +575,86 @@ class DeploymentGovernanceSQLiteSchema:
                             trim(query_json)
                         ) > 0
                     )
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_audit_collections_migration() -> SQLiteMigration:
+        """
+        Migration 8 creates storage for named, explicit groups of
+        governance integrity audits and their membership
+        (backend/observability/deployment_governance_audit_collections.py).
+
+        Unlike a saved query (reusable filter criteria, re-evaluated on
+        every run), a collection stores explicit membership decided by
+        the operator. Membership rows live in a separate entries table
+        rather than a foreign key with ON DELETE CASCADE, so that
+        cascade behavior (deleting a collection removes its entries)
+        stays owned by the repository/service layer rather than the
+        database engine.
+        """
+
+        return SQLiteMigration(
+            version=8,
+            name="create governance audit collections tables",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_AUDIT_COLLECTION_TABLE}
+                (
+                    name TEXT NOT NULL
+                        PRIMARY KEY,
+
+                    description TEXT,
+
+                    created_at TEXT NOT NULL,
+
+                    CHECK (
+                        length(
+                            trim(name)
+                        ) > 0
+                    )
+                )
+                """,
+
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_AUDIT_COLLECTION_ENTRY_TABLE}
+                (
+                    collection TEXT NOT NULL,
+
+                    audit_id TEXT NOT NULL,
+
+                    added_at TEXT NOT NULL,
+
+                    PRIMARY KEY (
+                        collection,
+                        audit_id
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(collection)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(audit_id)
+                        ) > 0
+                    )
+                )
+                """,
+
+                f"""
+                CREATE INDEX
+                idx_governance_audit_collection_entries_audit_id
+                ON {DEPLOYMENT_GOVERNANCE_AUDIT_COLLECTION_ENTRY_TABLE}
+                (
+                    audit_id,
+                    added_at DESC
                 )
                 """,
             ),
