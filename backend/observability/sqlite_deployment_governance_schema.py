@@ -25,6 +25,10 @@ DEPLOYMENT_GOVERNANCE_AUDIT_LABEL_TABLE: Final[
     str
 ] = "audit_labels"
 
+DEPLOYMENT_GOVERNANCE_SAVED_AUDIT_QUERY_TABLE: Final[
+    str
+] = "saved_audit_queries"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -56,6 +60,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_integrity_audit_history_migration(),
             DeploymentGovernanceSQLiteSchema._create_audit_bookmarks_migration(),
             DeploymentGovernanceSQLiteSchema._create_audit_labels_migration(),
+            DeploymentGovernanceSQLiteSchema._create_saved_audit_queries_migration(),
         )
 
     @staticmethod
@@ -517,6 +522,50 @@ class DeploymentGovernanceSQLiteSchema:
                 (
                     label,
                     created_at DESC
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_saved_audit_queries_migration() -> SQLiteMigration:
+        """
+        Migration 7 creates storage for named, reusable governance audit
+        search filters
+        (backend/observability/deployment_governance_audit_saved_queries.py).
+
+        The filter criteria (GovernanceIntegrityAuditSearchQuery) are
+        stored as a JSON payload in query_json rather than individual
+        columns, since the query shape is owned by the search module,
+        not this schema.
+        """
+
+        return SQLiteMigration(
+            version=7,
+            name="create saved governance audit queries table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_SAVED_AUDIT_QUERY_TABLE}
+                (
+                    name TEXT NOT NULL
+                        PRIMARY KEY,
+
+                    query_json TEXT NOT NULL,
+
+                    created_at TEXT NOT NULL,
+
+                    CHECK (
+                        length(
+                            trim(name)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(query_json)
+                        ) > 0
+                    )
                 )
                 """,
             ),

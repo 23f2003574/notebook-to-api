@@ -65,6 +65,13 @@ from backend.observability.deployment_governance_audit_labels_cli import (
 from backend.observability.deployment_governance_audit_search_cli import (
     run_deployment_governance_audit_search,
 )
+from backend.observability.deployment_governance_audit_saved_queries_cli import (
+    run_deployment_governance_audit_saved_query_delete,
+    run_deployment_governance_audit_saved_query_list,
+    run_deployment_governance_audit_saved_query_run,
+    run_deployment_governance_audit_saved_query_save,
+    run_deployment_governance_audit_saved_query_show,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -819,6 +826,132 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    query_parser = audits_subparsers.add_parser(
+        "query",
+        help="Save and reuse governance audit search filters.",
+        description=(
+            "Save a governance audit search filter under a name so it "
+            "can be executed again later without retyping its "
+            "filters.\n\n"
+            "Saved queries are independent metadata: saving one never "
+            "executes it and never mutates audit history, labels, or "
+            "bookmarks.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    query_subparsers = query_parser.add_subparsers(
+        dest="query_command", required=True
+    )
+
+    query_save_parser = query_subparsers.add_parser(
+        "save",
+        help="Save a search filter under a name.",
+    )
+    query_save_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name for the new saved query.",
+    )
+    query_save_parser.add_argument(
+        "--audit-id",
+        default=None,
+        dest="audit_id",
+        help="Filter by exact audit identifier.",
+    )
+    query_save_parser.add_argument(
+        "--healthy",
+        action="store_true",
+        help="Only include healthy audits.",
+    )
+    query_save_parser.add_argument(
+        "--unhealthy",
+        action="store_true",
+        help="Only include unhealthy audits.",
+    )
+    query_save_parser.add_argument(
+        "--label",
+        default=None,
+        dest="label",
+        help="Filter by applied label.",
+    )
+    query_save_parser.add_argument(
+        "--bookmark",
+        default=None,
+        dest="bookmark",
+        help="Filter by bookmark name.",
+    )
+    query_save_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    query_run_parser = query_subparsers.add_parser(
+        "run",
+        help="Execute a saved search filter.",
+    )
+    query_run_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the saved query to execute.",
+    )
+    query_run_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    query_list_parser = query_subparsers.add_parser(
+        "list",
+        help="List every saved search filter.",
+    )
+    query_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    query_show_parser = query_subparsers.add_parser(
+        "show",
+        help="Show one saved search filter.",
+    )
+    query_show_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the saved query to show.",
+    )
+    query_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    query_delete_parser = query_subparsers.add_parser(
+        "delete",
+        help="Delete one saved search filter.",
+    )
+    query_delete_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the saved query to delete.",
+    )
+    query_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -1031,6 +1164,46 @@ def main():
                     bookmark=args.bookmark,
                     json_output=args.json_output,
                 )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "query":
+                if args.query_command == "save":
+                    if args.healthy and args.unhealthy:
+                        parser.error(
+                            "--healthy and --unhealthy are mutually "
+                            "exclusive"
+                        )
+                    healthy = (
+                        True
+                        if args.healthy
+                        else (False if args.unhealthy else None)
+                    )
+                    exit_code = run_deployment_governance_audit_saved_query_save(
+                        name=args.name,
+                        audit_id=args.audit_id,
+                        healthy=healthy,
+                        label=args.label,
+                        bookmark=args.bookmark,
+                        json_output=args.json_output,
+                    )
+                elif args.query_command == "run":
+                    exit_code = run_deployment_governance_audit_saved_query_run(
+                        name=args.name,
+                        json_output=args.json_output,
+                    )
+                elif args.query_command == "list":
+                    exit_code = run_deployment_governance_audit_saved_query_list(
+                        json_output=args.json_output,
+                    )
+                elif args.query_command == "show":
+                    exit_code = run_deployment_governance_audit_saved_query_show(
+                        name=args.name,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_audit_saved_query_delete(
+                        name=args.name,
+                        json_output=args.json_output,
+                    )
                 sys.exit(exit_code)
             try:
                 since = parse_governance_audit_timestamp(args.since)

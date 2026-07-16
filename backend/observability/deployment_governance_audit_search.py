@@ -42,6 +42,26 @@ class GovernanceIntegrityAuditSearchQuery:
                 "at least one search filter must be specified"
             )
 
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "audit_id": self.audit_id,
+            "healthy": self.healthy,
+            "label": self.label,
+            "bookmark": self.bookmark,
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: dict[str, object],
+    ) -> "GovernanceIntegrityAuditSearchQuery":
+        return cls(
+            audit_id=data.get("audit_id"),
+            healthy=data.get("healthy"),
+            label=data.get("label"),
+            bookmark=data.get("bookmark"),
+        )
+
 
 class GovernanceIntegrityAuditSearchService:
     """
