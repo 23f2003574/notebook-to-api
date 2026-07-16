@@ -84,6 +84,16 @@ from backend.observability.deployment_governance_audit_reports_cli import (
     run_deployment_governance_audit_report_audits,
     run_deployment_governance_audit_report_collection,
 )
+from backend.observability.deployment_governance_audit_report_templates import (
+    GovernanceIntegrityAuditReportSource,
+)
+from backend.observability.deployment_governance_audit_report_templates_cli import (
+    run_deployment_governance_audit_report_template_create,
+    run_deployment_governance_audit_report_template_delete,
+    run_deployment_governance_audit_report_template_generate,
+    run_deployment_governance_audit_report_template_list,
+    run_deployment_governance_audit_report_template_show,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -1182,6 +1192,127 @@ def main():
         help="Report format. Default: json.",
     )
 
+    templates_parser = audits_subparsers.add_parser(
+        "templates",
+        help="Manage reusable governance audit report templates.",
+        description=(
+            "Create and manage named, reusable report configurations "
+            "that reference a collection or a saved query, plus an "
+            "output format, so a consistent report can be generated "
+            "again later without retyping its inputs.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    templates_subparsers = templates_parser.add_subparsers(
+        dest="templates_command", required=True
+    )
+
+    template_create_parser = templates_subparsers.add_parser(
+        "create",
+        help="Create a new report template.",
+    )
+    template_create_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name for the new template.",
+    )
+    template_create_parser.add_argument(
+        "--title",
+        required=True,
+        dest="title",
+        help="Title used for reports generated from this template.",
+    )
+    template_create_parser.add_argument(
+        "--collection",
+        default=None,
+        dest="collection",
+        help="Name of the collection to source audits from.",
+    )
+    template_create_parser.add_argument(
+        "--saved-query",
+        default=None,
+        dest="saved_query",
+        help="Name of the saved query to source audits from.",
+    )
+    template_create_parser.add_argument(
+        "--format",
+        choices=["json", "markdown"],
+        default="json",
+        dest="output_format",
+        help="Output format for generated reports. Default: json.",
+    )
+    template_create_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    template_list_parser = templates_subparsers.add_parser(
+        "list",
+        help="List every report template.",
+    )
+    template_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    template_show_parser = templates_subparsers.add_parser(
+        "show",
+        help="Show one report template.",
+    )
+    template_show_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the template to show.",
+    )
+    template_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    template_delete_parser = templates_subparsers.add_parser(
+        "delete",
+        help="Delete one report template.",
+    )
+    template_delete_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the template to delete.",
+    )
+    template_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    template_generate_parser = templates_subparsers.add_parser(
+        "generate",
+        help="Generate a report from a template.",
+    )
+    template_generate_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the template to generate a report from.",
+    )
+    template_generate_parser.add_argument(
+        "--output",
+        default=None,
+        dest="output",
+        help="Path to write the report to. Default: stdout.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -1487,6 +1618,53 @@ def main():
                         audit_ids=args.audit_ids,
                         output_path=args.output,
                         report_format=args.report_format,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "templates":
+                if args.templates_command == "create":
+                    if (args.collection is None) == (
+                        args.saved_query is None
+                    ):
+                        parser.error(
+                            "exactly one of --collection or "
+                            "--saved-query must be supplied"
+                        )
+                    if args.collection is not None:
+                        source = (
+                            GovernanceIntegrityAuditReportSource.COLLECTION
+                        )
+                        source_name = args.collection
+                    else:
+                        source = (
+                            GovernanceIntegrityAuditReportSource.SAVED_QUERY
+                        )
+                        source_name = args.saved_query
+                    exit_code = run_deployment_governance_audit_report_template_create(
+                        name=args.name,
+                        title=args.title,
+                        source=source,
+                        source_name=source_name,
+                        output_format=args.output_format,
+                        json_output=args.json_output,
+                    )
+                elif args.templates_command == "list":
+                    exit_code = run_deployment_governance_audit_report_template_list(
+                        json_output=args.json_output,
+                    )
+                elif args.templates_command == "show":
+                    exit_code = run_deployment_governance_audit_report_template_show(
+                        name=args.name,
+                        json_output=args.json_output,
+                    )
+                elif args.templates_command == "delete":
+                    exit_code = run_deployment_governance_audit_report_template_delete(
+                        name=args.name,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_audit_report_template_generate(
+                        name=args.name,
+                        output_path=args.output,
                     )
                 sys.exit(exit_code)
             try:

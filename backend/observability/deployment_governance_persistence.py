@@ -27,6 +27,10 @@ from .deployment_governance_audit_collections import (
     GovernanceIntegrityAuditCollectionRepository,
     InMemoryGovernanceIntegrityAuditCollectionRepository,
 )
+from .deployment_governance_audit_report_templates import (
+    GovernanceIntegrityAuditReportTemplateRepository,
+    InMemoryGovernanceIntegrityAuditReportTemplateRepository,
+)
 from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditHistoryRepository,
     InMemoryGovernanceIntegrityAuditHistoryRepository,
@@ -61,6 +65,9 @@ from .sqlite_deployment_governance_audit_saved_queries import (
 )
 from .sqlite_deployment_governance_audit_collections import (
     SQLiteGovernanceIntegrityAuditCollectionRepository,
+)
+from .sqlite_deployment_governance_audit_report_templates import (
+    SQLiteGovernanceIntegrityAuditReportTemplateRepository,
 )
 from .sqlite_deployment_governance_audit_history import (
     SQLiteGovernanceIntegrityAuditHistoryRepository,
@@ -120,6 +127,9 @@ if TYPE_CHECKING:
     )
     from .deployment_governance_audit_reports import (
         GovernanceIntegrityAuditReportService,
+    )
+    from .deployment_governance_audit_report_templates import (
+        GovernanceIntegrityAuditReportTemplateService,
     )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
@@ -311,6 +321,10 @@ class DeploymentGovernancePersistenceRuntime:
     saved_query_repository: GovernanceIntegritySavedAuditQueryRepository
 
     collection_repository: GovernanceIntegrityAuditCollectionRepository
+
+    report_template_repository: (
+        GovernanceIntegrityAuditReportTemplateRepository
+    )
 
     database: SQLiteDatabase | None = None
 
@@ -727,6 +741,27 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_audit_statistics_service(),
         )
 
+    def build_integrity_audit_report_template_service(
+        self,
+    ) -> "GovernanceIntegrityAuditReportTemplateService":
+        """
+        Build the governance audit report template service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_audit_report_templates import (
+            GovernanceIntegrityAuditReportTemplateService,
+        )
+
+        return GovernanceIntegrityAuditReportTemplateService(
+            self.report_template_repository,
+            self.build_integrity_audit_report_service(),
+            self.build_integrity_audit_collection_service(),
+            self.build_integrity_saved_audit_query_service(),
+        )
+
     def build_diagnostics_service(
         self,
     ) -> "DeploymentGovernancePersistenceDiagnosticsService":
@@ -851,6 +886,10 @@ def _build_memory_runtime(
         InMemoryGovernanceIntegrityAuditCollectionRepository()
     )
 
+    report_template_repository = (
+        InMemoryGovernanceIntegrityAuditReportTemplateRepository()
+    )
+
     return DeploymentGovernancePersistenceRuntime(
         config=config,
         repository=repository,
@@ -860,6 +899,7 @@ def _build_memory_runtime(
         label_repository=label_repository,
         saved_query_repository=saved_query_repository,
         collection_repository=collection_repository,
+        report_template_repository=report_template_repository,
         database=None,
         automatic_audit_retention=automatic_audit_retention,
     )
@@ -947,6 +987,15 @@ def _build_sqlite_runtime(
         )
     )
 
+    report_template_repository = (
+        SQLiteGovernanceIntegrityAuditReportTemplateRepository(
+            database,
+            initialize_schema=(
+                config.initialize_schema
+            ),
+        )
+    )
+
     trace_engine = DeploymentGovernanceTraceEngine()
 
     registry = DeploymentGovernanceTraceRegistry(
@@ -963,6 +1012,7 @@ def _build_sqlite_runtime(
         label_repository=label_repository,
         saved_query_repository=saved_query_repository,
         collection_repository=collection_repository,
+        report_template_repository=report_template_repository,
         database=database,
         automatic_audit_retention=automatic_audit_retention,
     )

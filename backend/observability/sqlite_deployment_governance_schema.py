@@ -37,6 +37,10 @@ DEPLOYMENT_GOVERNANCE_AUDIT_COLLECTION_ENTRY_TABLE: Final[
     str
 ] = "audit_collection_entries"
 
+DEPLOYMENT_GOVERNANCE_AUDIT_REPORT_TEMPLATE_TABLE: Final[
+    str
+] = "audit_report_templates"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -70,6 +74,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_audit_labels_migration(),
             DeploymentGovernanceSQLiteSchema._create_saved_audit_queries_migration(),
             DeploymentGovernanceSQLiteSchema._create_audit_collections_migration(),
+            DeploymentGovernanceSQLiteSchema._create_audit_report_templates_migration(),
         )
 
     @staticmethod
@@ -655,6 +660,76 @@ class DeploymentGovernanceSQLiteSchema:
                 (
                     audit_id,
                     added_at DESC
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_audit_report_templates_migration() -> SQLiteMigration:
+        """
+        Migration 9 creates storage for named, reusable governance audit
+        report configurations
+        (backend/observability/deployment_governance_audit_report_templates.py).
+
+        A template references a collection or saved query by name
+        rather than embedding its own copy of the selection criteria,
+        so a template always reflects that source's current state when
+        generated.
+        """
+
+        return SQLiteMigration(
+            version=9,
+            name="create governance audit report templates table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_AUDIT_REPORT_TEMPLATE_TABLE}
+                (
+                    name TEXT NOT NULL
+                        PRIMARY KEY,
+
+                    title TEXT NOT NULL,
+
+                    source TEXT NOT NULL,
+
+                    source_name TEXT NOT NULL,
+
+                    output_format TEXT NOT NULL,
+
+                    created_at TEXT NOT NULL,
+
+                    CHECK (
+                        length(
+                            trim(name)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(title)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        source IN (
+                            'collection',
+                            'saved_query'
+                        )
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(source_name)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        output_format IN (
+                            'json',
+                            'markdown'
+                        )
+                    )
                 )
                 """,
             ),
