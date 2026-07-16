@@ -62,6 +62,9 @@ from backend.observability.deployment_governance_audit_labels_cli import (
     run_deployment_governance_audit_label_search,
     run_deployment_governance_audit_label_show,
 )
+from backend.observability.deployment_governance_audit_search_cli import (
+    run_deployment_governance_audit_search,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -765,6 +768,57 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    audit_search_parser = audits_subparsers.add_parser(
+        "search",
+        help="Search governance integrity audit history by filter.",
+        description=(
+            "Search recorded governance integrity audits by audit id, "
+            "health outcome, applied label, and/or bookmark. All "
+            "specified filters are combined with AND; none of them do "
+            "fuzzy matching. At least one filter is required.\n\n"
+            "This is read-only: it never executes a new audit and never "
+            "mutates audit history, labels, or bookmarks.\n\n"
+            "Exit codes: 0 the search completed (even with zero "
+            "matches), 2 the search could not be completed (no filter "
+            "supplied, or invalid configuration)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    audit_search_parser.add_argument(
+        "--audit-id",
+        default=None,
+        dest="audit_id",
+        help="Filter by exact audit identifier.",
+    )
+    audit_search_parser.add_argument(
+        "--healthy",
+        action="store_true",
+        help="Only include healthy audits.",
+    )
+    audit_search_parser.add_argument(
+        "--unhealthy",
+        action="store_true",
+        help="Only include unhealthy audits.",
+    )
+    audit_search_parser.add_argument(
+        "--label",
+        default=None,
+        dest="label",
+        help="Filter by applied label.",
+    )
+    audit_search_parser.add_argument(
+        "--bookmark",
+        default=None,
+        dest="bookmark",
+        help="Filter by bookmark name.",
+    )
+    audit_search_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -958,6 +1012,25 @@ def main():
                     exit_code = run_deployment_governance_audit_label_list(
                         json_output=args.json_output,
                     )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "search":
+                if args.healthy and args.unhealthy:
+                    parser.error(
+                        "--healthy and --unhealthy are mutually "
+                        "exclusive"
+                    )
+                healthy = (
+                    True
+                    if args.healthy
+                    else (False if args.unhealthy else None)
+                )
+                exit_code = run_deployment_governance_audit_search(
+                    audit_id=args.audit_id,
+                    healthy=healthy,
+                    label=args.label,
+                    bookmark=args.bookmark,
+                    json_output=args.json_output,
+                )
                 sys.exit(exit_code)
             try:
                 since = parse_governance_audit_timestamp(args.since)

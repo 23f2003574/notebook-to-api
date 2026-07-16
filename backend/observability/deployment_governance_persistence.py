@@ -95,6 +95,9 @@ if TYPE_CHECKING:
     from .deployment_governance_audit_labels import (
         GovernanceIntegrityAuditLabelService,
     )
+    from .deployment_governance_audit_search import (
+        GovernanceIntegrityAuditSearchService,
+    )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
     )
@@ -617,6 +620,26 @@ class DeploymentGovernancePersistenceRuntime:
         return GovernanceIntegrityAuditLabelService(
             self.label_repository,
             self.audit_history_repository,
+        )
+
+    def build_integrity_audit_search_service(
+        self,
+    ) -> "GovernanceIntegrityAuditSearchService":
+        """
+        Build the governance audit search service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_audit_search import (
+            GovernanceIntegrityAuditSearchService,
+        )
+
+        return GovernanceIntegrityAuditSearchService(
+            self.audit_history_repository,
+            self.label_repository,
+            self.bookmark_repository,
         )
 
     def build_diagnostics_service(
