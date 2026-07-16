@@ -43,6 +43,9 @@ from backend.observability.deployment_governance_audit_replay_cli import (
 from backend.observability.deployment_governance_audit_replay_diff_cli import (
     run_deployment_governance_audit_diff,
 )
+from backend.observability.deployment_governance_audit_timeline_cli import (
+    run_deployment_governance_audit_timeline,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -488,6 +491,35 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    timeline_parser = audits_subparsers.add_parser(
+        "timeline",
+        help="Show a chronological timeline of governance integrity audits.",
+        description=(
+            "Show recorded governance integrity audits as chronological "
+            "timeline events (identity, timestamps, state, and record "
+            "counts) for visualization -- no derived calculations.\n\n"
+            "This is read-only: it never executes a new audit. Run "
+            "`governance doctor --deep` or `governance check` to record "
+            "one.\n\n"
+            "Exit codes: 0 the timeline was produced (even for empty "
+            "history), 2 the timeline could not be produced."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    timeline_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        dest="limit",
+        help="Maximum number of timeline events to return. Default: all.",
+    )
+    timeline_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -616,6 +648,12 @@ def main():
                 exit_code = run_deployment_governance_audit_diff(
                     previous_audit_id=args.previous_audit_id,
                     current_audit_id=args.current_audit_id,
+                    json_output=args.json_output,
+                )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "timeline":
+                exit_code = run_deployment_governance_audit_timeline(
+                    limit=args.limit,
                     json_output=args.json_output,
                 )
                 sys.exit(exit_code)
