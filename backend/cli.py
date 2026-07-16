@@ -40,6 +40,9 @@ from backend.observability.deployment_governance_audit_statistics_cli import (
 from backend.observability.deployment_governance_audit_replay_cli import (
     run_deployment_governance_audit_replay,
 )
+from backend.observability.deployment_governance_audit_replay_diff_cli import (
+    run_deployment_governance_audit_diff,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -443,6 +446,48 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    diff_parser = audits_subparsers.add_parser(
+        "diff",
+        help="Compare two replayed governance integrity audits.",
+        description=(
+            "Compare two previously recorded governance integrity "
+            "audits by replaying both and diffing their operational "
+            "fields (audit_id and timestamps are excluded).\n\n"
+            "When --previous and --current are both omitted (the "
+            "default, equivalent to --latest), the two most recently "
+            "started audits are compared.\n\n"
+            "This is read-only: it never executes a new audit and never "
+            "changes persisted state.\n\n"
+            "Exit codes: 0 the diff succeeded, 2 the diff could not be "
+            "completed (unknown audit id, insufficient history, or "
+            "invalid configuration)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    diff_parser.add_argument(
+        "--previous",
+        default=None,
+        dest="previous_audit_id",
+        help="Identifier of the baseline audit to compare from.",
+    )
+    diff_parser.add_argument(
+        "--current",
+        default=None,
+        dest="current_audit_id",
+        help="Identifier of the audit to compare to.",
+    )
+    diff_parser.add_argument(
+        "--latest",
+        action="store_true",
+        help="Compare the two most recently started audits (the default).",
+    )
+    diff_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -555,6 +600,22 @@ def main():
                 exit_code = run_deployment_governance_audit_replay(
                     audit_id=args.audit_id,
                     limit=args.limit,
+                    json_output=args.json_output,
+                )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "diff":
+                if (
+                    args.previous_audit_id is None
+                ) != (
+                    args.current_audit_id is None
+                ):
+                    parser.error(
+                        "--previous and --current must be supplied "
+                        "together"
+                    )
+                exit_code = run_deployment_governance_audit_diff(
+                    previous_audit_id=args.previous_audit_id,
+                    current_audit_id=args.current_audit_id,
                     json_output=args.json_output,
                 )
                 sys.exit(exit_code)

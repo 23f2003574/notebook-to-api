@@ -66,6 +66,9 @@ if TYPE_CHECKING:
     from .deployment_governance_audit_replay import (
         GovernanceIntegrityAuditReplayService,
     )
+    from .deployment_governance_audit_replay_diff import (
+        GovernanceIntegrityAuditReplayDiffService,
+    )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
     )
@@ -492,6 +495,24 @@ class DeploymentGovernancePersistenceRuntime:
 
         return GovernanceIntegrityAuditReplayService(
             self.audit_history_repository
+        )
+
+    def build_integrity_audit_replay_diff_service(
+        self,
+    ) -> "GovernanceIntegrityAuditReplayDiffService":
+        """
+        Build the governance audit replay diff service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_audit_replay_diff import (
+            GovernanceIntegrityAuditReplayDiffService,
+        )
+
+        return GovernanceIntegrityAuditReplayDiffService(
+            self.build_integrity_audit_replay_service()
         )
 
     def build_diagnostics_service(
