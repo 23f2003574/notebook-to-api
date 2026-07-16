@@ -49,6 +49,12 @@ from backend.observability.deployment_governance_audit_timeline_cli import (
 from backend.observability.deployment_governance_audit_session_cli import (
     run_deployment_governance_audit_session,
 )
+from backend.observability.deployment_governance_audit_bookmarks_cli import (
+    run_deployment_governance_audit_bookmark_add,
+    run_deployment_governance_audit_bookmark_delete,
+    run_deployment_governance_audit_bookmark_list,
+    run_deployment_governance_audit_bookmark_show,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -552,6 +558,96 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    bookmark_parser = audits_subparsers.add_parser(
+        "bookmark",
+        help="Manage named bookmarks for governance integrity audits.",
+        description=(
+            "Create and manage named bookmarks pointing at recorded "
+            "governance integrity audits, for quick navigation.\n\n"
+            "Bookmarks are separate metadata layered on top of audit "
+            "history: read-only relative to audit history itself.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    bookmark_subparsers = bookmark_parser.add_subparsers(
+        dest="bookmark_command", required=True
+    )
+
+    bookmark_add_parser = bookmark_subparsers.add_parser(
+        "add",
+        help="Create a bookmark pointing at an audit.",
+    )
+    bookmark_add_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name for the new bookmark.",
+    )
+    bookmark_add_parser.add_argument(
+        "--audit-id",
+        default=None,
+        dest="audit_id",
+        help="Identifier of the audit to bookmark.",
+    )
+    bookmark_add_parser.add_argument(
+        "--latest",
+        action="store_true",
+        help="Bookmark the most recently started audit (the default).",
+    )
+    bookmark_add_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    bookmark_list_parser = bookmark_subparsers.add_parser(
+        "list",
+        help="List every governance audit bookmark.",
+    )
+    bookmark_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    bookmark_show_parser = bookmark_subparsers.add_parser(
+        "show",
+        help="Show one governance audit bookmark.",
+    )
+    bookmark_show_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the bookmark to show.",
+    )
+    bookmark_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    bookmark_delete_parser = bookmark_subparsers.add_parser(
+        "delete",
+        help="Delete one governance audit bookmark.",
+    )
+    bookmark_delete_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the bookmark to delete.",
+    )
+    bookmark_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -694,6 +790,29 @@ def main():
                     limit=args.limit,
                     json_output=args.json_output,
                 )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "bookmark":
+                if args.bookmark_command == "add":
+                    exit_code = run_deployment_governance_audit_bookmark_add(
+                        name=args.name,
+                        audit_id=args.audit_id,
+                        use_latest=args.latest,
+                        json_output=args.json_output,
+                    )
+                elif args.bookmark_command == "list":
+                    exit_code = run_deployment_governance_audit_bookmark_list(
+                        json_output=args.json_output,
+                    )
+                elif args.bookmark_command == "show":
+                    exit_code = run_deployment_governance_audit_bookmark_show(
+                        name=args.name,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_audit_bookmark_delete(
+                        name=args.name,
+                        json_output=args.json_output,
+                    )
                 sys.exit(exit_code)
             try:
                 since = parse_governance_audit_timestamp(args.since)

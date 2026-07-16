@@ -11,6 +11,10 @@ from backend.persistence.sqlite_database import (
     SQLiteDatabaseConfig,
 )
 
+from .deployment_governance_audit_bookmarks import (
+    GovernanceIntegrityAuditBookmarkRepository,
+    InMemoryGovernanceIntegrityAuditBookmarkRepository,
+)
 from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditHistoryRepository,
     InMemoryGovernanceIntegrityAuditHistoryRepository,
@@ -33,6 +37,9 @@ from .deployment_governance_trace_repository import (
 )
 from .in_memory_deployment_governance_trace_repository import (
     InMemoryDeploymentGovernanceTraceRepository,
+)
+from .sqlite_deployment_governance_audit_bookmarks import (
+    SQLiteGovernanceIntegrityAuditBookmarkRepository,
 )
 from .sqlite_deployment_governance_audit_history import (
     SQLiteGovernanceIntegrityAuditHistoryRepository,
@@ -74,6 +81,9 @@ if TYPE_CHECKING:
     )
     from .deployment_governance_audit_session import (
         GovernanceIntegrityAuditSessionService,
+    )
+    from .deployment_governance_audit_bookmarks import (
+        GovernanceIntegrityAuditBookmarkService,
     )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
@@ -257,6 +267,8 @@ class DeploymentGovernancePersistenceRuntime:
     registry: DeploymentGovernanceTraceRegistry
 
     audit_history_repository: GovernanceIntegrityAuditHistoryRepository
+
+    bookmark_repository: GovernanceIntegrityAuditBookmarkRepository
 
     database: SQLiteDatabase | None = None
 
@@ -557,6 +569,25 @@ class DeploymentGovernancePersistenceRuntime:
             self.audit_history_repository
         )
 
+    def build_integrity_audit_bookmark_service(
+        self,
+    ) -> "GovernanceIntegrityAuditBookmarkService":
+        """
+        Build the governance audit bookmark service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_audit_bookmarks import (
+            GovernanceIntegrityAuditBookmarkService,
+        )
+
+        return GovernanceIntegrityAuditBookmarkService(
+            self.bookmark_repository,
+            self.audit_history_repository,
+        )
+
     def build_diagnostics_service(
         self,
     ) -> "DeploymentGovernancePersistenceDiagnosticsService":
@@ -665,11 +696,16 @@ def _build_memory_runtime(
         InMemoryGovernanceIntegrityAuditHistoryRepository()
     )
 
+    bookmark_repository = (
+        InMemoryGovernanceIntegrityAuditBookmarkRepository()
+    )
+
     return DeploymentGovernancePersistenceRuntime(
         config=config,
         repository=repository,
         registry=registry,
         audit_history_repository=audit_history_repository,
+        bookmark_repository=bookmark_repository,
         database=None,
         automatic_audit_retention=automatic_audit_retention,
     )
@@ -721,6 +757,15 @@ def _build_sqlite_runtime(
         )
     )
 
+    bookmark_repository = (
+        SQLiteGovernanceIntegrityAuditBookmarkRepository(
+            database,
+            initialize_schema=(
+                config.initialize_schema
+            ),
+        )
+    )
+
     trace_engine = DeploymentGovernanceTraceEngine()
 
     registry = DeploymentGovernanceTraceRegistry(
@@ -733,6 +778,7 @@ def _build_sqlite_runtime(
         repository=repository,
         registry=registry,
         audit_history_repository=audit_history_repository,
+        bookmark_repository=bookmark_repository,
         database=database,
         automatic_audit_retention=automatic_audit_retention,
     )

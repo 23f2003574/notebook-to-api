@@ -17,6 +17,10 @@ DEPLOYMENT_GOVERNANCE_INTEGRITY_AUDIT_TABLE: Final[
     str
 ] = "deployment_governance_integrity_audits"
 
+DEPLOYMENT_GOVERNANCE_AUDIT_BOOKMARK_TABLE: Final[
+    str
+] = "audit_bookmarks"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -46,6 +50,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_query_indexes_migration(),
             DeploymentGovernanceSQLiteSchema._add_integrity_metadata_migration(),
             DeploymentGovernanceSQLiteSchema._create_integrity_audit_history_migration(),
+            DeploymentGovernanceSQLiteSchema._create_audit_bookmarks_migration(),
         )
 
     @staticmethod
@@ -405,6 +410,50 @@ class DeploymentGovernanceSQLiteSchema:
                 (
                     backend,
                     started_at DESC
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_audit_bookmarks_migration() -> SQLiteMigration:
+        """
+        Migration 5 creates storage for named bookmarks pointing at
+        recorded governance integrity audits
+        (backend/observability/deployment_governance_audit_bookmarks.py).
+
+        Bookmarks are separate metadata layered on top of audit history
+        for quick navigation; this table does not reference the audit
+        history table via a foreign key so a bookmark can still be
+        inspected even if retention later prunes the audit it points to.
+        """
+
+        return SQLiteMigration(
+            version=5,
+            name="create governance audit bookmarks table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_AUDIT_BOOKMARK_TABLE}
+                (
+                    name TEXT NOT NULL
+                        PRIMARY KEY,
+
+                    audit_id TEXT NOT NULL,
+
+                    created_at TEXT NOT NULL,
+
+                    CHECK (
+                        length(
+                            trim(name)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(audit_id)
+                        ) > 0
+                    )
                 )
                 """,
             ),
