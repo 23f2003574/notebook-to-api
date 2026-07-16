@@ -37,6 +37,9 @@ from backend.observability.deployment_governance_audit_verify_cli import (
 from backend.observability.deployment_governance_audit_statistics_cli import (
     run_deployment_governance_audit_stats,
 )
+from backend.observability.deployment_governance_audit_replay_cli import (
+    run_deployment_governance_audit_replay,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -400,6 +403,46 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    replay_parser = audits_subparsers.add_parser(
+        "replay",
+        help="Reconstruct the context of previously recorded governance integrity audits.",
+        description=(
+            "Reconstruct the context of one or more previously recorded "
+            "governance integrity audits from stored history: trend "
+            "analysis, regression comparison, and debugging.\n\n"
+            "This is read-only: it never executes a new audit and never "
+            "changes persisted state.\n\n"
+            "Exit codes: 0 the replay succeeded, 2 the replay could not "
+            "be completed (unknown audit id, empty history, or invalid "
+            "configuration)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    replay_parser.add_argument(
+        "--audit-id",
+        default=None,
+        dest="audit_id",
+        help="Replay one audit by its identifier.",
+    )
+    replay_parser.add_argument(
+        "--latest",
+        action="store_true",
+        help="Replay the most recently started audit (the default).",
+    )
+    replay_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        dest="limit",
+        help="Replay the N most recently started audits.",
+    )
+    replay_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -504,6 +547,13 @@ def main():
                 sys.exit(exit_code)
             if getattr(args, "audits_command", None) == "stats":
                 exit_code = run_deployment_governance_audit_stats(
+                    limit=args.limit,
+                    json_output=args.json_output,
+                )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "replay":
+                exit_code = run_deployment_governance_audit_replay(
+                    audit_id=args.audit_id,
                     limit=args.limit,
                     json_output=args.json_output,
                 )
