@@ -46,6 +46,9 @@ from backend.observability.deployment_governance_audit_replay_diff_cli import (
 from backend.observability.deployment_governance_audit_timeline_cli import (
     run_deployment_governance_audit_timeline,
 )
+from backend.observability.deployment_governance_audit_session_cli import (
+    run_deployment_governance_audit_session,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -520,6 +523,35 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    session_parser = audits_subparsers.add_parser(
+        "session",
+        help="Reconstruct an ordered session of recorded governance integrity audits.",
+        description=(
+            "Reconstruct an ordered session of recorded governance "
+            "integrity audits for navigation and analysis (newest to "
+            "oldest).\n\n"
+            "This is read-only: it never executes a new audit. Run "
+            "`governance doctor --deep` or `governance check` to record "
+            "one.\n\n"
+            "Exit codes: 0 the session was reconstructed (even for "
+            "empty history), 2 the session could not be reconstructed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    session_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        dest="limit",
+        help="Maximum number of audits to include. Default: all.",
+    )
+    session_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -653,6 +685,12 @@ def main():
                 sys.exit(exit_code)
             if getattr(args, "audits_command", None) == "timeline":
                 exit_code = run_deployment_governance_audit_timeline(
+                    limit=args.limit,
+                    json_output=args.json_output,
+                )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "session":
+                exit_code = run_deployment_governance_audit_session(
                     limit=args.limit,
                     json_output=args.json_output,
                 )

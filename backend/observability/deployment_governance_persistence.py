@@ -72,6 +72,9 @@ if TYPE_CHECKING:
     from .deployment_governance_audit_timeline import (
         GovernanceIntegrityAuditTimelineService,
     )
+    from .deployment_governance_audit_session import (
+        GovernanceIntegrityAuditSessionService,
+    )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
     )
@@ -533,6 +536,24 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return GovernanceIntegrityAuditTimelineService(
+            self.audit_history_repository
+        )
+
+    def build_integrity_audit_session_service(
+        self,
+    ) -> "GovernanceIntegrityAuditSessionService":
+        """
+        Build the governance audit session reconstruction service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_audit_session import (
+            GovernanceIntegrityAuditSessionService,
+        )
+
+        return GovernanceIntegrityAuditSessionService(
             self.audit_history_repository
         )
 
