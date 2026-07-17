@@ -47,6 +47,10 @@ from .deployment_governance_audit_retry import (
     GovernanceIntegrityRetryRepository,
     InMemoryGovernanceIntegrityRetryRepository,
 )
+from .deployment_governance_dead_letter_queue import (
+    GovernanceIntegrityDeadLetterRepository,
+    InMemoryGovernanceIntegrityDeadLetterRepository,
+)
 from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditHistoryRepository,
     InMemoryGovernanceIntegrityAuditHistoryRepository,
@@ -161,6 +165,9 @@ if TYPE_CHECKING:
     )
     from .deployment_governance_audit_retry import (
         GovernanceIntegrityAuditRetryService,
+    )
+    from .deployment_governance_dead_letter_queue import (
+        GovernanceIntegrityDeadLetterService,
     )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
@@ -371,6 +378,10 @@ class DeploymentGovernancePersistenceRuntime:
 
     retry_repository: (
         GovernanceIntegrityRetryRepository
+    )
+
+    dead_letter_repository: (
+        GovernanceIntegrityDeadLetterRepository
     )
 
     database: SQLiteDatabase | None = None
@@ -887,6 +898,25 @@ class DeploymentGovernancePersistenceRuntime:
             self.retry_repository,
         )
 
+    def build_integrity_dead_letter_service(
+        self,
+    ) -> "GovernanceIntegrityDeadLetterService":
+        """
+        Build the governance audit dead letter queue service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_dead_letter_queue import (
+            GovernanceIntegrityDeadLetterService,
+        )
+
+        return GovernanceIntegrityDeadLetterService(
+            self.execution_repository,
+            self.dead_letter_repository,
+        )
+
     def build_diagnostics_service(
         self,
     ) -> "DeploymentGovernancePersistenceDiagnosticsService":
@@ -1031,6 +1061,10 @@ def _build_memory_runtime(
         InMemoryGovernanceIntegrityRetryRepository()
     )
 
+    dead_letter_repository = (
+        InMemoryGovernanceIntegrityDeadLetterRepository()
+    )
+
     return DeploymentGovernancePersistenceRuntime(
         config=config,
         repository=repository,
@@ -1045,6 +1079,7 @@ def _build_memory_runtime(
         execution_queue_repository=execution_queue_repository,
         execution_repository=execution_repository,
         retry_repository=retry_repository,
+        dead_letter_repository=dead_letter_repository,
         database=None,
         automatic_audit_retention=automatic_audit_retention,
     )
@@ -1171,6 +1206,13 @@ def _build_sqlite_runtime(
         InMemoryGovernanceIntegrityRetryRepository()
     )
 
+    # SQLite persistence for dead letter records is intentionally
+    # deferred (see deployment_governance_dead_letter_queue.py): it
+    # stays in-process memory regardless of the configured backend.
+    dead_letter_repository = (
+        InMemoryGovernanceIntegrityDeadLetterRepository()
+    )
+
     trace_engine = DeploymentGovernanceTraceEngine()
 
     registry = DeploymentGovernanceTraceRegistry(
@@ -1192,6 +1234,7 @@ def _build_sqlite_runtime(
         execution_queue_repository=execution_queue_repository,
         execution_repository=execution_repository,
         retry_repository=retry_repository,
+        dead_letter_repository=dead_letter_repository,
         database=database,
         automatic_audit_retention=automatic_audit_retention,
     )

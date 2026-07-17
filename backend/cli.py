@@ -126,6 +126,13 @@ from backend.observability.deployment_governance_audit_retry_cli import (
     run_deployment_governance_audit_retry_run,
     run_deployment_governance_audit_retry_show,
 )
+from backend.observability.deployment_governance_dead_letter_queue_cli import (
+    run_deployment_governance_dead_letter_archive,
+    run_deployment_governance_dead_letter_clear,
+    run_deployment_governance_dead_letter_delete,
+    run_deployment_governance_dead_letter_list,
+    run_deployment_governance_dead_letter_show,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -1729,6 +1736,96 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    dlq_parser = audits_subparsers.add_parser(
+        "dlq",
+        help="Preserve permanently failed governance audit executions.",
+        description=(
+            "Archive permanently failed governance audit executions "
+            "into a dead letter queue for manual investigation.\n\n"
+            "No automatic recovery: archived records stay archived "
+            "until a human deletes them.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    dlq_subparsers = dlq_parser.add_subparsers(
+        dest="dlq_command", required=True
+    )
+
+    dlq_archive_parser = dlq_subparsers.add_parser(
+        "archive",
+        help="Archive one failed execution.",
+    )
+    dlq_archive_parser.add_argument(
+        "--job-id",
+        required=True,
+        dest="job_id",
+        help="Identifier of the failed execution job to archive.",
+    )
+    dlq_archive_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    dlq_list_parser = dlq_subparsers.add_parser(
+        "list",
+        help="List every dead letter record.",
+    )
+    dlq_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    dlq_show_parser = dlq_subparsers.add_parser(
+        "show",
+        help="Show one dead letter record.",
+    )
+    dlq_show_parser.add_argument(
+        "--job-id",
+        required=True,
+        dest="job_id",
+        help="Identifier of the dead letter record to show.",
+    )
+    dlq_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    dlq_delete_parser = dlq_subparsers.add_parser(
+        "delete",
+        help="Remove one dead letter record.",
+    )
+    dlq_delete_parser.add_argument(
+        "--job-id",
+        required=True,
+        dest="job_id",
+        help="Identifier of the dead letter record to remove.",
+    )
+    dlq_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    dlq_clear_parser = dlq_subparsers.add_parser(
+        "clear",
+        help="Remove every dead letter record.",
+    )
+    dlq_clear_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -2188,6 +2285,31 @@ def main():
                     )
                 else:
                     exit_code = run_deployment_governance_audit_retry_clear(
+                        json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "dlq":
+                if args.dlq_command == "archive":
+                    exit_code = run_deployment_governance_dead_letter_archive(
+                        job_id=args.job_id,
+                        json_output=args.json_output,
+                    )
+                elif args.dlq_command == "list":
+                    exit_code = run_deployment_governance_dead_letter_list(
+                        json_output=args.json_output,
+                    )
+                elif args.dlq_command == "show":
+                    exit_code = run_deployment_governance_dead_letter_show(
+                        job_id=args.job_id,
+                        json_output=args.json_output,
+                    )
+                elif args.dlq_command == "delete":
+                    exit_code = run_deployment_governance_dead_letter_delete(
+                        job_id=args.job_id,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_dead_letter_clear(
                         json_output=args.json_output,
                     )
                 sys.exit(exit_code)
