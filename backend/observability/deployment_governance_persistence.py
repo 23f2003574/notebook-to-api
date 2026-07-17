@@ -182,6 +182,9 @@ if TYPE_CHECKING:
     from .deployment_governance_execution_metrics import (
         GovernanceIntegrityExecutionMetricsService,
     )
+    from .deployment_governance_execution_alerts import (
+        GovernanceIntegrityExecutionAlertService,
+    )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
     )
@@ -968,6 +971,24 @@ class DeploymentGovernancePersistenceRuntime:
 
         return GovernanceIntegrityExecutionMetricsService(
             self.execution_repository,
+        )
+
+    def build_integrity_execution_alert_service(
+        self,
+    ) -> "GovernanceIntegrityExecutionAlertService":
+        """
+        Build the governance audit execution alert service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_execution_alerts import (
+            GovernanceIntegrityExecutionAlertService,
+        )
+
+        return GovernanceIntegrityExecutionAlertService(
+            self.build_integrity_execution_metrics_service(),
         )
 
     def build_diagnostics_service(

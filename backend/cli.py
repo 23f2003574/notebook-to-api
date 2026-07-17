@@ -147,6 +147,13 @@ from backend.observability.deployment_governance_execution_metrics_cli import (
     run_deployment_governance_execution_metrics,
     run_deployment_governance_execution_metrics_for_template,
 )
+from backend.observability.deployment_governance_execution_alerts_cli import (
+    DEFAULT_MAXIMUM_AVERAGE_DURATION_MS,
+    DEFAULT_MAXIMUM_FAILURE_RATE,
+    DEFAULT_MINIMUM_SUCCESS_RATE,
+    run_deployment_governance_execution_alerts,
+    run_deployment_governance_execution_alerts_for_template,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -2014,6 +2021,106 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    alerts_parser = audits_subparsers.add_parser(
+        "alerts",
+        help="Generate alerts from governance audit execution metrics.",
+        description=(
+            "Generate alerts when governance audit worker execution "
+            "metrics cross configured thresholds.\n\n"
+            "This command only produces alerts; no notifications are "
+            "sent.\n\n"
+            "Exit codes: 0 alerts were generated (even if none were "
+            "violated), 2 alerts could not be generated."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    alerts_parser.add_argument(
+        "--min-success",
+        type=float,
+        default=DEFAULT_MINIMUM_SUCCESS_RATE,
+        dest="minimum_success_rate",
+        help=(
+            "Minimum acceptable success rate percentage. "
+            f"Default: {DEFAULT_MINIMUM_SUCCESS_RATE}."
+        ),
+    )
+    alerts_parser.add_argument(
+        "--max-failure",
+        type=float,
+        default=DEFAULT_MAXIMUM_FAILURE_RATE,
+        dest="maximum_failure_rate",
+        help=(
+            "Maximum acceptable failure rate percentage. "
+            f"Default: {DEFAULT_MAXIMUM_FAILURE_RATE}."
+        ),
+    )
+    alerts_parser.add_argument(
+        "--max-duration",
+        type=float,
+        default=DEFAULT_MAXIMUM_AVERAGE_DURATION_MS,
+        dest="maximum_average_duration_ms",
+        help=(
+            "Maximum acceptable average runtime in milliseconds. "
+            f"Default: {DEFAULT_MAXIMUM_AVERAGE_DURATION_MS}."
+        ),
+    )
+    alerts_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+    alerts_subparsers = alerts_parser.add_subparsers(
+        dest="alerts_command", required=False
+    )
+
+    alerts_template_parser = alerts_subparsers.add_parser(
+        "template",
+        help="Generate alerts from one template's execution metrics.",
+    )
+    alerts_template_parser.add_argument(
+        "--template",
+        required=True,
+        dest="template",
+        help="Name of the template to generate alerts for.",
+    )
+    alerts_template_parser.add_argument(
+        "--min-success",
+        type=float,
+        default=DEFAULT_MINIMUM_SUCCESS_RATE,
+        dest="minimum_success_rate",
+        help=(
+            "Minimum acceptable success rate percentage. "
+            f"Default: {DEFAULT_MINIMUM_SUCCESS_RATE}."
+        ),
+    )
+    alerts_template_parser.add_argument(
+        "--max-failure",
+        type=float,
+        default=DEFAULT_MAXIMUM_FAILURE_RATE,
+        dest="maximum_failure_rate",
+        help=(
+            "Maximum acceptable failure rate percentage. "
+            f"Default: {DEFAULT_MAXIMUM_FAILURE_RATE}."
+        ),
+    )
+    alerts_template_parser.add_argument(
+        "--max-duration",
+        type=float,
+        default=DEFAULT_MAXIMUM_AVERAGE_DURATION_MS,
+        dest="maximum_average_duration_ms",
+        help=(
+            "Maximum acceptable average runtime in milliseconds. "
+            f"Default: {DEFAULT_MAXIMUM_AVERAGE_DURATION_MS}."
+        ),
+    )
+    alerts_template_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -2541,6 +2648,29 @@ def main():
                     )
                 else:
                     exit_code = run_deployment_governance_execution_metrics(
+                        json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "alerts":
+                if getattr(args, "alerts_command", None) == "template":
+                    exit_code = (
+                        run_deployment_governance_execution_alerts_for_template(
+                            template_name=args.template,
+                            minimum_success_rate=args.minimum_success_rate,
+                            maximum_failure_rate=args.maximum_failure_rate,
+                            maximum_average_duration_ms=(
+                                args.maximum_average_duration_ms
+                            ),
+                            json_output=args.json_output,
+                        )
+                    )
+                else:
+                    exit_code = run_deployment_governance_execution_alerts(
+                        minimum_success_rate=args.minimum_success_rate,
+                        maximum_failure_rate=args.maximum_failure_rate,
+                        maximum_average_duration_ms=(
+                            args.maximum_average_duration_ms
+                        ),
                         json_output=args.json_output,
                     )
                 sys.exit(exit_code)
