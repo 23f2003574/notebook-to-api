@@ -63,6 +63,10 @@ from .deployment_governance_notification_channels import (
     GovernanceIntegrityNotificationChannelRepository,
     InMemoryGovernanceIntegrityNotificationChannelRepository,
 )
+from .deployment_governance_notification_dispatcher import (
+    GovernanceIntegrityNotificationDispatchRepository,
+    InMemoryGovernanceIntegrityNotificationDispatchRepository,
+)
 from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditHistoryRepository,
     InMemoryGovernanceIntegrityAuditHistoryRepository,
@@ -112,6 +116,9 @@ from .sqlite_deployment_governance_notifications import (
 )
 from .sqlite_deployment_governance_notification_channels import (
     SQLiteGovernanceIntegrityNotificationChannelRepository,
+)
+from .sqlite_deployment_governance_notification_dispatcher import (
+    SQLiteGovernanceIntegrityNotificationDispatchRepository,
 )
 from .sqlite_deployment_governance_audit_history import (
     SQLiteGovernanceIntegrityAuditHistoryRepository,
@@ -204,6 +211,9 @@ if TYPE_CHECKING:
     )
     from .deployment_governance_notification_channels import (
         GovernanceIntegrityNotificationChannelService,
+    )
+    from .deployment_governance_notification_dispatcher import (
+        GovernanceIntegrityNotificationDispatcher,
     )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
@@ -430,6 +440,10 @@ class DeploymentGovernancePersistenceRuntime:
 
     notification_channel_repository: (
         GovernanceIntegrityNotificationChannelRepository
+    )
+
+    notification_dispatch_repository: (
+        GovernanceIntegrityNotificationDispatchRepository
     )
 
     database: SQLiteDatabase | None = None
@@ -1056,6 +1070,26 @@ class DeploymentGovernancePersistenceRuntime:
             self.notification_channel_repository,
         )
 
+    def build_integrity_notification_dispatcher(
+        self,
+    ) -> "GovernanceIntegrityNotificationDispatcher":
+        """
+        Build the governance audit notification dispatcher.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_notification_dispatcher import (
+            GovernanceIntegrityNotificationDispatcher,
+        )
+
+        return GovernanceIntegrityNotificationDispatcher(
+            self.notification_repository,
+            self.build_integrity_notification_channel_service(),
+            self.notification_dispatch_repository,
+        )
+
     def build_diagnostics_service(
         self,
     ) -> "DeploymentGovernancePersistenceDiagnosticsService":
@@ -1216,6 +1250,10 @@ def _build_memory_runtime(
         InMemoryGovernanceIntegrityNotificationChannelRepository()
     )
 
+    notification_dispatch_repository = (
+        InMemoryGovernanceIntegrityNotificationDispatchRepository()
+    )
+
     return DeploymentGovernancePersistenceRuntime(
         config=config,
         repository=repository,
@@ -1234,6 +1272,9 @@ def _build_memory_runtime(
         failure_policy_repository=failure_policy_repository,
         notification_repository=notification_repository,
         notification_channel_repository=notification_channel_repository,
+        notification_dispatch_repository=(
+            notification_dispatch_repository
+        ),
         database=None,
         automatic_audit_retention=automatic_audit_retention,
     )
@@ -1366,6 +1407,15 @@ def _build_sqlite_runtime(
         )
     )
 
+    notification_dispatch_repository = (
+        SQLiteGovernanceIntegrityNotificationDispatchRepository(
+            database,
+            initialize_schema=(
+                config.initialize_schema
+            ),
+        )
+    )
+
     # SQLite persistence for the execution queue is intentionally
     # deferred (see deployment_governance_audit_execution_queue.py):
     # it stays in-process memory regardless of the configured backend.
@@ -1419,6 +1469,9 @@ def _build_sqlite_runtime(
         failure_policy_repository=failure_policy_repository,
         notification_repository=notification_repository,
         notification_channel_repository=notification_channel_repository,
+        notification_dispatch_repository=(
+            notification_dispatch_repository
+        ),
         database=database,
         automatic_audit_retention=automatic_audit_retention,
     )

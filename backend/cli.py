@@ -173,6 +173,13 @@ from backend.observability.deployment_governance_notification_channels_cli impor
     run_deployment_governance_notification_channel_show,
     run_deployment_governance_notification_channel_update,
 )
+from backend.observability.deployment_governance_notification_dispatcher_cli import (
+    run_deployment_governance_notification_dispatch_clear,
+    run_deployment_governance_notification_dispatch_delete,
+    run_deployment_governance_notification_dispatch_list,
+    run_deployment_governance_notification_dispatch_run,
+    run_deployment_governance_notification_dispatch_show,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -2406,6 +2413,91 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    dispatch_parser = audits_subparsers.add_parser(
+        "dispatch",
+        help="Match pending governance audit notifications to channels.",
+        description=(
+            "Match pending governance audit notifications to enabled "
+            "delivery channels and record the resulting dispatch "
+            "attempts.\n\n"
+            "No external APIs are called in this command; it only "
+            "records that a notification was matched to a channel.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    dispatch_subparsers = dispatch_parser.add_subparsers(
+        dest="dispatch_command", required=True
+    )
+
+    dispatch_run_parser = dispatch_subparsers.add_parser(
+        "run",
+        help="Dispatch every pending notification to enabled channels.",
+    )
+    dispatch_run_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    dispatch_list_parser = dispatch_subparsers.add_parser(
+        "list",
+        help="List every dispatch record.",
+    )
+    dispatch_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    dispatch_show_parser = dispatch_subparsers.add_parser(
+        "show",
+        help="Show one dispatch record.",
+    )
+    dispatch_show_parser.add_argument(
+        "--dispatch-id",
+        required=True,
+        dest="dispatch_id",
+        help="Identifier of the dispatch record to show.",
+    )
+    dispatch_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    dispatch_delete_parser = dispatch_subparsers.add_parser(
+        "delete",
+        help="Remove one dispatch record.",
+    )
+    dispatch_delete_parser.add_argument(
+        "--dispatch-id",
+        required=True,
+        dest="dispatch_id",
+        help="Identifier of the dispatch record to remove.",
+    )
+    dispatch_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    dispatch_clear_parser = dispatch_subparsers.add_parser(
+        "clear",
+        help="Remove every dispatch record.",
+    )
+    dispatch_clear_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -3024,6 +3116,30 @@ def main():
                 else:
                     exit_code = run_deployment_governance_notification_channel_delete(
                         name=args.name,
+                        json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "dispatch":
+                if args.dispatch_command == "run":
+                    exit_code = run_deployment_governance_notification_dispatch_run(
+                        json_output=args.json_output,
+                    )
+                elif args.dispatch_command == "list":
+                    exit_code = run_deployment_governance_notification_dispatch_list(
+                        json_output=args.json_output,
+                    )
+                elif args.dispatch_command == "show":
+                    exit_code = run_deployment_governance_notification_dispatch_show(
+                        dispatch_id=args.dispatch_id,
+                        json_output=args.json_output,
+                    )
+                elif args.dispatch_command == "delete":
+                    exit_code = run_deployment_governance_notification_dispatch_delete(
+                        dispatch_id=args.dispatch_id,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_notification_dispatch_clear(
                         json_output=args.json_output,
                     )
                 sys.exit(exit_code)

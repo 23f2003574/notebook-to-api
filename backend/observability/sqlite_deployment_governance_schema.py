@@ -57,6 +57,10 @@ DEPLOYMENT_GOVERNANCE_NOTIFICATION_CHANNEL_TABLE: Final[
     str
 ] = "notification_channels"
 
+DEPLOYMENT_GOVERNANCE_NOTIFICATION_DISPATCH_TABLE: Final[
+    str
+] = "notification_dispatches"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -95,6 +99,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_failure_policies_migration(),
             DeploymentGovernanceSQLiteSchema._create_notifications_migration(),
             DeploymentGovernanceSQLiteSchema._create_notification_channels_migration(),
+            DeploymentGovernanceSQLiteSchema._create_notification_dispatches_migration(),
         )
 
     @staticmethod
@@ -993,6 +998,77 @@ class DeploymentGovernanceSQLiteSchema:
                             trim(destination)
                         ) > 0
                     )
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_notification_dispatches_migration() -> SQLiteMigration:
+        """
+        Migration 14 creates storage for governance audit notification
+        dispatch records
+        (backend/observability/deployment_governance_notification_dispatcher.py),
+        recording one delivery attempt per (notification, channel)
+        pair the dispatcher has matched.
+
+        No external delivery happens yet: a dispatch only records that
+        a notification was matched to a channel, not that it was
+        actually sent.
+        """
+
+        return SQLiteMigration(
+            version=14,
+            name="create governance audit notification dispatches table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_NOTIFICATION_DISPATCH_TABLE}
+                (
+                    dispatch_id TEXT NOT NULL
+                        PRIMARY KEY,
+
+                    notification_id TEXT NOT NULL,
+
+                    channel_name TEXT NOT NULL,
+
+                    status TEXT NOT NULL,
+
+                    created_at TEXT NOT NULL,
+
+                    CHECK (
+                        length(
+                            trim(dispatch_id)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(notification_id)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(channel_name)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        status IN (
+                            'queued'
+                        )
+                    )
+                )
+                """,
+
+                f"""
+                CREATE INDEX
+                idx_governance_notification_dispatches_pair
+                ON {DEPLOYMENT_GOVERNANCE_NOTIFICATION_DISPATCH_TABLE}
+                (
+                    notification_id,
+                    channel_name
                 )
                 """,
             ),
