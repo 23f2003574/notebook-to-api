@@ -415,6 +415,12 @@ def test_runtime_builds_working_history_service_over_sqlite(
         "ops@example.com",
     )
 
+    runtime.build_integrity_notification_preference_service().create(
+        "warning-and-up",
+        GovernanceIntegrityAlertSeverity.WARNING,
+        ("email",),
+    )
+
     dispatcher = runtime.build_integrity_notification_dispatcher()
     dispatches = dispatcher.dispatch_pending()
 

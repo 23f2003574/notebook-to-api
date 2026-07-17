@@ -166,6 +166,12 @@ def test_run_list_show_delete_roundtrip_within_process(
         "ops@example.com",
     )
 
+    runtime.build_integrity_notification_preference_service().create(
+        "warning-and-up",
+        GovernanceIntegrityAlertSeverity.WARNING,
+        ("email",),
+    )
+
     dispatches = (
         runtime.build_integrity_notification_dispatcher()
         .dispatch_pending()

@@ -108,6 +108,12 @@ def test_run_and_run_all_within_process(monkeypatch, tmp_path) -> None:
         "ops@example.com",
     )
 
+    runtime.build_integrity_notification_preference_service().create(
+        "warning-and-up",
+        GovernanceIntegrityAlertSeverity.WARNING,
+        ("email",),
+    )
+
     dispatches = (
         runtime.build_integrity_notification_dispatcher()
         .dispatch_pending()

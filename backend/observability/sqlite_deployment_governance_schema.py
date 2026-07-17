@@ -65,6 +65,10 @@ DEPLOYMENT_GOVERNANCE_DELIVERY_HISTORY_TABLE: Final[
     str
 ] = "delivery_history"
 
+DEPLOYMENT_GOVERNANCE_NOTIFICATION_PREFERENCE_TABLE: Final[
+    str
+] = "notification_preferences"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -105,6 +109,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_notification_channels_migration(),
             DeploymentGovernanceSQLiteSchema._create_notification_dispatches_migration(),
             DeploymentGovernanceSQLiteSchema._create_delivery_history_migration(),
+            DeploymentGovernanceSQLiteSchema._create_notification_preferences_migration(),
         )
 
     @staticmethod
@@ -1133,6 +1138,65 @@ class DeploymentGovernanceSQLiteSchema:
                             'success',
                             'failed'
                         )
+                    )
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_notification_preferences_migration() -> SQLiteMigration:
+        """
+        Migration 16 creates storage for named governance audit
+        notification routing preferences
+        (backend/observability/deployment_governance_notification_preferences.py).
+
+        The channel list is stored as a JSON array in the channels
+        column rather than a separate join table, since preferences
+        own their channel list outright (no independent lifecycle for
+        a preference/channel pairing).
+        """
+
+        return SQLiteMigration(
+            version=16,
+            name="create governance audit notification preferences table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_NOTIFICATION_PREFERENCE_TABLE}
+                (
+                    name TEXT NOT NULL
+                        PRIMARY KEY,
+
+                    minimum_severity TEXT NOT NULL,
+
+                    channels TEXT NOT NULL,
+
+                    enabled INTEGER NOT NULL
+                        CHECK (
+                            enabled IN (0, 1)
+                        ),
+
+                    created_at TEXT NOT NULL,
+
+                    CHECK (
+                        length(
+                            trim(name)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        minimum_severity IN (
+                            'info',
+                            'warning',
+                            'critical'
+                        )
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(channels)
+                        ) > 0
                     )
                 )
                 """,

@@ -167,7 +167,7 @@ def test_sqlite_lightweight_diagnostics_snapshot(
 
     assert (
         snapshot.schema.current_version
-        == 15
+        == 16
     )
 
     assert (
@@ -188,12 +188,13 @@ def test_sqlite_lightweight_diagnostics_snapshot(
             13,
             14,
             15,
+            16,
         )
     )
 
     assert (
         snapshot.schema.migration_count
-        == 15
+        == 16
     )
 
     assert (
@@ -431,7 +432,7 @@ def test_diagnostics_snapshot_serializes_to_json_compatible_dict(
 
     assert (
         payload["schema"]["current_version"]
-        == 15
+        == 16
     )
 
     assert (
@@ -452,6 +453,7 @@ def test_diagnostics_snapshot_serializes_to_json_compatible_dict(
             13,
             14,
             15,
+            16,
         ]
     )
 

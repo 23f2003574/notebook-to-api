@@ -189,6 +189,16 @@ from backend.observability.deployment_governance_delivery_history_cli import (
     run_deployment_governance_delivery_history_list,
     run_deployment_governance_delivery_history_show,
 )
+from backend.observability.deployment_governance_execution_alerts import (
+    GovernanceIntegrityAlertSeverity,
+)
+from backend.observability.deployment_governance_notification_preferences_cli import (
+    run_deployment_governance_notification_preference_create,
+    run_deployment_governance_notification_preference_delete,
+    run_deployment_governance_notification_preference_list,
+    run_deployment_governance_notification_preference_show,
+    run_deployment_governance_notification_preference_update,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -2614,6 +2624,140 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    preferences_parser = audits_subparsers.add_parser(
+        "preferences",
+        help="Manage governance audit notification routing preferences.",
+        description=(
+            "Create and manage named routing preferences: which "
+            "channels a notification should reach once its severity "
+            "meets a minimum threshold.\n\n"
+            "The notification dispatcher resolves channels through "
+            "these preferences instead of dispatching to every "
+            "enabled channel.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    preferences_subparsers = preferences_parser.add_subparsers(
+        dest="preferences_command", required=True
+    )
+
+    preferences_create_parser = preferences_subparsers.add_parser(
+        "create",
+        help="Create a new notification preference.",
+    )
+    preferences_create_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name for the new preference.",
+    )
+    preferences_create_parser.add_argument(
+        "--minimum-severity",
+        required=True,
+        dest="minimum_severity",
+        choices=[
+            severity.value
+            for severity in GovernanceIntegrityAlertSeverity
+        ],
+        help="Minimum alert severity this preference routes.",
+    )
+    preferences_create_parser.add_argument(
+        "--channel",
+        required=True,
+        action="append",
+        dest="channels",
+        help="Channel name to route to. Repeatable.",
+    )
+    preferences_create_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    preferences_list_parser = preferences_subparsers.add_parser(
+        "list",
+        help="List every notification preference.",
+    )
+    preferences_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    preferences_show_parser = preferences_subparsers.add_parser(
+        "show",
+        help="Show one notification preference.",
+    )
+    preferences_show_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the preference to show.",
+    )
+    preferences_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    preferences_update_parser = preferences_subparsers.add_parser(
+        "update",
+        help="Update an existing notification preference.",
+    )
+    preferences_update_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the preference to update.",
+    )
+    preferences_update_parser.add_argument(
+        "--minimum-severity",
+        required=False,
+        default=None,
+        dest="minimum_severity",
+        choices=[
+            severity.value
+            for severity in GovernanceIntegrityAlertSeverity
+        ],
+        help="New minimum alert severity this preference routes.",
+    )
+    preferences_update_parser.add_argument(
+        "--channel",
+        required=False,
+        default=None,
+        action="append",
+        dest="channels",
+        help="New channel name to route to. Repeatable.",
+    )
+    preferences_update_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    preferences_delete_parser = preferences_subparsers.add_parser(
+        "delete",
+        help="Delete one notification preference.",
+    )
+    preferences_delete_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the preference to delete.",
+    )
+    preferences_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -3285,6 +3429,36 @@ def main():
                     )
                 else:
                     exit_code = run_deployment_governance_delivery_history_clear(
+                        json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "preferences":
+                if args.preferences_command == "create":
+                    exit_code = run_deployment_governance_notification_preference_create(
+                        name=args.name,
+                        minimum_severity=args.minimum_severity,
+                        channels=args.channels,
+                        json_output=args.json_output,
+                    )
+                elif args.preferences_command == "list":
+                    exit_code = run_deployment_governance_notification_preference_list(
+                        json_output=args.json_output,
+                    )
+                elif args.preferences_command == "show":
+                    exit_code = run_deployment_governance_notification_preference_show(
+                        name=args.name,
+                        json_output=args.json_output,
+                    )
+                elif args.preferences_command == "update":
+                    exit_code = run_deployment_governance_notification_preference_update(
+                        name=args.name,
+                        minimum_severity=args.minimum_severity,
+                        channels=args.channels,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_notification_preference_delete(
+                        name=args.name,
                         json_output=args.json_output,
                     )
                 sys.exit(exit_code)

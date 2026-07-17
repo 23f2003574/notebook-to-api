@@ -7,8 +7,8 @@ from enum import Enum
 from threading import RLock
 from typing import Callable, Protocol, runtime_checkable
 
-from .deployment_governance_notification_channels import (
-    GovernanceIntegrityNotificationChannelService,
+from .deployment_governance_notification_preferences import (
+    GovernanceIntegrityNotificationPreferenceService,
 )
 from .deployment_governance_notifications import (
     GovernanceIntegrityNotificationRepository,
@@ -215,8 +215,9 @@ class InMemoryGovernanceIntegrityNotificationDispatchRepository:
 
 class GovernanceIntegrityNotificationDispatcher:
     """
-    Matches pending governance audit notifications to enabled
-    delivery channels and records the resulting dispatch attempts.
+    Matches pending governance audit notifications to the channels
+    their severity is routed to, and records the resulting dispatch
+    attempts.
 
     No external delivery happens in this commit: dispatch_pending()
     only records that a notification was matched to a channel.
@@ -227,7 +228,9 @@ class GovernanceIntegrityNotificationDispatcher:
         notification_repository: (
             GovernanceIntegrityNotificationRepository
         ),
-        channel_service: GovernanceIntegrityNotificationChannelService,
+        preference_service: (
+            GovernanceIntegrityNotificationPreferenceService
+        ),
         dispatch_repository: (
             GovernanceIntegrityNotificationDispatchRepository
         ),
@@ -237,7 +240,7 @@ class GovernanceIntegrityNotificationDispatcher:
     ) -> None:
         self._notification_repository = notification_repository
 
-        self._channel_service = channel_service
+        self._preference_service = preference_service
 
         self._dispatch_repository = dispatch_repository
 
@@ -256,14 +259,13 @@ class GovernanceIntegrityNotificationDispatcher:
         ...
     ]:
         """
-        Match every pending notification to every enabled channel and
-        persist one dispatch record per new (notification, channel)
-        pair.
+        Match every pending notification to the channels its severity
+        resolves to (per enabled routing preferences) and persist one
+        dispatch record per new (notification, channel) pair.
 
-        Disabled channels are ignored. A pair that already has a
-        dispatch record is skipped, so re-running this does not
-        create duplicates. Returns only the dispatch records created
-        by this call.
+        A pair that already has a dispatch record is skipped, so
+        re-running this does not create duplicates. Returns only the
+        dispatch records created by this call.
         """
 
         pending_notifications = tuple(
@@ -273,8 +275,6 @@ class GovernanceIntegrityNotificationDispatcher:
             is GovernanceIntegrityNotificationStatus.PENDING
         )
 
-        enabled_channels = self._channel_service.enabled_channels()
-
         existing_pairs = {
             (dispatch.notification_id, dispatch.channel_name)
             for dispatch in self._dispatch_repository.list()
@@ -283,7 +283,11 @@ class GovernanceIntegrityNotificationDispatcher:
         created: list[GovernanceIntegrityNotificationDispatch] = []
 
         for notification in pending_notifications:
-            for channel in enabled_channels:
+            matching_channels = self._preference_service.resolve(
+                notification.severity
+            )
+
+            for channel in matching_channels:
                 pair = (notification.notification_id, channel.name)
 
                 if pair in existing_pairs:

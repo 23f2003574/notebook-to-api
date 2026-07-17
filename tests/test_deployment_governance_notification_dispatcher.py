@@ -18,6 +18,10 @@ from backend.observability.deployment_governance_notification_dispatcher import 
     GovernanceIntegrityNotificationDispatcher,
     InMemoryGovernanceIntegrityNotificationDispatchRepository,
 )
+from backend.observability.deployment_governance_notification_preferences import (
+    GovernanceIntegrityNotificationPreferenceService,
+    InMemoryGovernanceIntegrityNotificationPreferenceRepository,
+)
 from backend.observability.deployment_governance_notifications import (
     GovernanceIntegrityNotification,
     GovernanceIntegrityNotificationStatus,
@@ -59,13 +63,23 @@ class Harness:
             self.channel_repository
         )
 
+        self.preference_repository = (
+            InMemoryGovernanceIntegrityNotificationPreferenceRepository()
+        )
+
+        self.preference_service = (
+            GovernanceIntegrityNotificationPreferenceService(
+                self.preference_repository, self.channel_service
+            )
+        )
+
         self.dispatch_repository = (
             InMemoryGovernanceIntegrityNotificationDispatchRepository()
         )
 
         self.dispatcher = GovernanceIntegrityNotificationDispatcher(
             self.notification_repository,
-            self.channel_service,
+            self.preference_service,
             self.dispatch_repository,
             clock=clock,
             uuid_factory=uuid_factory,
@@ -83,6 +97,17 @@ class Harness:
         channel_type: GovernanceIntegrityNotificationChannelType,
     ) -> None:
         self.channel_service.create(name, channel_type, f"dest-{name}")
+
+    def add_preference(
+        self,
+        name: str,
+        *,
+        minimum_severity: GovernanceIntegrityAlertSeverity,
+        channels: tuple[str, ...],
+    ) -> None:
+        self.preference_service.create(
+            name, minimum_severity, channels
+        )
 
 
 # --- Model -------------------------------------------------------------
@@ -159,7 +184,7 @@ def test_repository_clear_empties_store() -> None:
 # --- Service: dispatch_pending ---------------------------------------------
 
 
-def test_dispatch_matches_every_notification_to_every_channel() -> None:
+def test_dispatch_matches_every_notification_to_every_matched_channel() -> None:
     harness = Harness()
 
     harness.add_notifications("n1", "n2")
@@ -169,6 +194,12 @@ def test_dispatch_matches_every_notification_to_every_channel() -> None:
     )
     harness.add_channel(
         "slack", GovernanceIntegrityNotificationChannelType.SLACK
+    )
+
+    harness.add_preference(
+        "warning-and-up",
+        minimum_severity=GovernanceIntegrityAlertSeverity.WARNING,
+        channels=("email", "slack"),
     )
 
     dispatches = harness.dispatcher.dispatch_pending()
@@ -188,6 +219,12 @@ def test_disabled_channel_is_ignored() -> None:
         "slack", GovernanceIntegrityNotificationChannelType.SLACK
     )
 
+    harness.add_preference(
+        "warning-and-up",
+        minimum_severity=GovernanceIntegrityAlertSeverity.WARNING,
+        channels=("email", "slack"),
+    )
+
     harness.channel_service.disable("slack")
 
     dispatches = harness.dispatcher.dispatch_pending()
@@ -196,6 +233,44 @@ def test_disabled_channel_is_ignored() -> None:
     assert all(
         dispatch.channel_name == "email" for dispatch in dispatches
     )
+
+
+def test_preference_below_notification_severity_is_ignored() -> None:
+    harness = Harness()
+
+    harness.add_notifications("n1")
+
+    harness.add_channel(
+        "slack", GovernanceIntegrityNotificationChannelType.SLACK
+    )
+
+    harness.add_preference(
+        "critical-only",
+        minimum_severity=GovernanceIntegrityAlertSeverity.CRITICAL,
+        channels=("slack",),
+    )
+
+    assert harness.dispatcher.dispatch_pending() == ()
+
+
+def test_disabled_preference_is_ignored() -> None:
+    harness = Harness()
+
+    harness.add_notifications("n1")
+
+    harness.add_channel(
+        "email", GovernanceIntegrityNotificationChannelType.EMAIL
+    )
+
+    harness.add_preference(
+        "warning-and-up",
+        minimum_severity=GovernanceIntegrityAlertSeverity.WARNING,
+        channels=("email",),
+    )
+
+    harness.preference_service.update("warning-and-up", enabled=False)
+
+    assert harness.dispatcher.dispatch_pending() == ()
 
 
 def test_running_twice_does_not_duplicate() -> None:
@@ -208,6 +283,12 @@ def test_running_twice_does_not_duplicate() -> None:
     )
     harness.add_channel(
         "slack", GovernanceIntegrityNotificationChannelType.SLACK
+    )
+
+    harness.add_preference(
+        "warning-and-up",
+        minimum_severity=GovernanceIntegrityAlertSeverity.WARNING,
+        channels=("email", "slack"),
     )
 
     first = harness.dispatcher.dispatch_pending()
@@ -226,6 +307,12 @@ def test_dispatch_with_no_notifications_returns_empty_tuple() -> None:
         "email", GovernanceIntegrityNotificationChannelType.EMAIL
     )
 
+    harness.add_preference(
+        "warning-and-up",
+        minimum_severity=GovernanceIntegrityAlertSeverity.WARNING,
+        channels=("email",),
+    )
+
     assert harness.dispatcher.dispatch_pending() == ()
 
 
@@ -233,6 +320,12 @@ def test_dispatch_with_no_enabled_channels_returns_empty_tuple() -> None:
     harness = Harness()
 
     harness.add_notifications("n1")
+
+    harness.add_preference(
+        "warning-and-up",
+        minimum_severity=GovernanceIntegrityAlertSeverity.WARNING,
+        channels=("email",),
+    )
 
     assert harness.dispatcher.dispatch_pending() == ()
 
@@ -246,6 +339,12 @@ def test_dispatch_uses_injected_uuid_factory() -> None:
 
     harness.add_channel(
         "email", GovernanceIntegrityNotificationChannelType.EMAIL
+    )
+
+    harness.add_preference(
+        "warning-and-up",
+        minimum_severity=GovernanceIntegrityAlertSeverity.WARNING,
+        channels=("email",),
     )
 
     dispatches = harness.dispatcher.dispatch_pending()
@@ -264,6 +363,12 @@ def test_delete_removes_dispatch() -> None:
 
     harness.add_channel(
         "email", GovernanceIntegrityNotificationChannelType.EMAIL
+    )
+
+    harness.add_preference(
+        "warning-and-up",
+        minimum_severity=GovernanceIntegrityAlertSeverity.WARNING,
+        channels=("email",),
     )
 
     dispatches = harness.dispatcher.dispatch_pending()
@@ -289,6 +394,12 @@ def test_clear_empties_repository() -> None:
 
     harness.add_channel(
         "email", GovernanceIntegrityNotificationChannelType.EMAIL
+    )
+
+    harness.add_preference(
+        "warning-and-up",
+        minimum_severity=GovernanceIntegrityAlertSeverity.WARNING,
+        channels=("email",),
     )
 
     harness.dispatcher.dispatch_pending()
@@ -368,6 +479,16 @@ def test_runtime_builds_working_dispatcher_over_sqlite(tmp_path) -> None:
         "email",
         GovernanceIntegrityNotificationChannelType.EMAIL,
         "ops@example.com",
+    )
+
+    preference_service = (
+        runtime.build_integrity_notification_preference_service()
+    )
+
+    preference_service.create(
+        "warning-and-up",
+        GovernanceIntegrityAlertSeverity.WARNING,
+        ("email",),
     )
 
     dispatcher = runtime.build_integrity_notification_dispatcher()
