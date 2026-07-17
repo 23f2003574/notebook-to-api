@@ -179,6 +179,9 @@ if TYPE_CHECKING:
     from .deployment_governance_failure_policy import (
         GovernanceIntegrityFailurePolicyService,
     )
+    from .deployment_governance_execution_metrics import (
+        GovernanceIntegrityExecutionMetricsService,
+    )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
     )
@@ -947,6 +950,24 @@ class DeploymentGovernancePersistenceRuntime:
 
         return GovernanceIntegrityFailurePolicyService(
             self.failure_policy_repository,
+        )
+
+    def build_integrity_execution_metrics_service(
+        self,
+    ) -> "GovernanceIntegrityExecutionMetricsService":
+        """
+        Build the governance audit execution metrics service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_execution_metrics import (
+            GovernanceIntegrityExecutionMetricsService,
+        )
+
+        return GovernanceIntegrityExecutionMetricsService(
+            self.execution_repository,
         )
 
     def build_diagnostics_service(

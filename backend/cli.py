@@ -143,6 +143,10 @@ from backend.observability.deployment_governance_failure_policy_cli import (
     run_deployment_governance_failure_policy_show,
     run_deployment_governance_failure_policy_update,
 )
+from backend.observability.deployment_governance_execution_metrics_cli import (
+    run_deployment_governance_execution_metrics,
+    run_deployment_governance_execution_metrics_for_template,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -1969,6 +1973,47 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    metrics_parser = audits_subparsers.add_parser(
+        "metrics",
+        help="Track governance audit worker execution metrics.",
+        description=(
+            "Compute aggregate governance audit worker execution "
+            "metrics: run counts, success rate, and average "
+            "runtime.\n\n"
+            "This command only reports metrics; no dashboards or "
+            "alerts are produced.\n\n"
+            "Exit codes: 0 the metrics were computed, 2 the metrics "
+            "could not be computed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    metrics_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+    metrics_subparsers = metrics_parser.add_subparsers(
+        dest="metrics_command", required=False
+    )
+
+    metrics_template_parser = metrics_subparsers.add_parser(
+        "template",
+        help="Compute execution metrics for one template.",
+    )
+    metrics_template_parser.add_argument(
+        "--template",
+        required=True,
+        dest="template",
+        help="Name of the template to compute metrics for.",
+    )
+    metrics_template_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -2483,6 +2528,19 @@ def main():
                 else:
                     exit_code = run_deployment_governance_failure_policy_delete(
                         name=args.name,
+                        json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "metrics":
+                if getattr(args, "metrics_command", None) == "template":
+                    exit_code = (
+                        run_deployment_governance_execution_metrics_for_template(
+                            template_name=args.template,
+                            json_output=args.json_output,
+                        )
+                    )
+                else:
+                    exit_code = run_deployment_governance_execution_metrics(
                         json_output=args.json_output,
                     )
                 sys.exit(exit_code)
