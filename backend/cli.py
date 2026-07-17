@@ -161,6 +161,18 @@ from backend.observability.deployment_governance_notifications_cli import (
     run_deployment_governance_notifications_queue,
     run_deployment_governance_notifications_show,
 )
+from backend.observability.deployment_governance_notification_channels import (
+    GovernanceIntegrityNotificationChannelType,
+)
+from backend.observability.deployment_governance_notification_channels_cli import (
+    run_deployment_governance_notification_channel_create,
+    run_deployment_governance_notification_channel_delete,
+    run_deployment_governance_notification_channel_disable,
+    run_deployment_governance_notification_channel_enable,
+    run_deployment_governance_notification_channel_list,
+    run_deployment_governance_notification_channel_show,
+    run_deployment_governance_notification_channel_update,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -2242,6 +2254,158 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    channels_parser = audits_subparsers.add_parser(
+        "channels",
+        help="Manage governance audit notification delivery channels.",
+        description=(
+            "Create and manage named delivery channels for future "
+            "governance audit notification providers.\n\n"
+            "No actual sending happens in this command; it only "
+            "manages channel configuration.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    channels_subparsers = channels_parser.add_subparsers(
+        dest="channels_command", required=True
+    )
+
+    channels_create_parser = channels_subparsers.add_parser(
+        "create",
+        help="Create a new notification channel.",
+    )
+    channels_create_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name for the new channel.",
+    )
+    channels_create_parser.add_argument(
+        "--type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Kind of delivery target this channel points at.",
+    )
+    channels_create_parser.add_argument(
+        "--destination",
+        required=True,
+        dest="destination",
+        help="Delivery destination for this channel.",
+    )
+    channels_create_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    channels_list_parser = channels_subparsers.add_parser(
+        "list",
+        help="List every notification channel.",
+    )
+    channels_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    channels_show_parser = channels_subparsers.add_parser(
+        "show",
+        help="Show one notification channel.",
+    )
+    channels_show_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the channel to show.",
+    )
+    channels_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    channels_enable_parser = channels_subparsers.add_parser(
+        "enable",
+        help="Enable one notification channel.",
+    )
+    channels_enable_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the channel to enable.",
+    )
+    channels_enable_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    channels_disable_parser = channels_subparsers.add_parser(
+        "disable",
+        help="Disable one notification channel.",
+    )
+    channels_disable_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the channel to disable.",
+    )
+    channels_disable_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    channels_update_parser = channels_subparsers.add_parser(
+        "update",
+        help="Update a notification channel's destination.",
+    )
+    channels_update_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the channel to update.",
+    )
+    channels_update_parser.add_argument(
+        "--destination",
+        required=True,
+        dest="destination",
+        help="New delivery destination for this channel.",
+    )
+    channels_update_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    channels_delete_parser = channels_subparsers.add_parser(
+        "delete",
+        help="Delete one notification channel.",
+    )
+    channels_delete_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the channel to delete.",
+    )
+    channels_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -2821,6 +2985,45 @@ def main():
                     )
                 else:
                     exit_code = run_deployment_governance_notifications_clear(
+                        json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "channels":
+                if args.channels_command == "create":
+                    exit_code = run_deployment_governance_notification_channel_create(
+                        name=args.name,
+                        channel_type=args.channel_type,
+                        destination=args.destination,
+                        json_output=args.json_output,
+                    )
+                elif args.channels_command == "list":
+                    exit_code = run_deployment_governance_notification_channel_list(
+                        json_output=args.json_output,
+                    )
+                elif args.channels_command == "show":
+                    exit_code = run_deployment_governance_notification_channel_show(
+                        name=args.name,
+                        json_output=args.json_output,
+                    )
+                elif args.channels_command == "enable":
+                    exit_code = run_deployment_governance_notification_channel_enable(
+                        name=args.name,
+                        json_output=args.json_output,
+                    )
+                elif args.channels_command == "disable":
+                    exit_code = run_deployment_governance_notification_channel_disable(
+                        name=args.name,
+                        json_output=args.json_output,
+                    )
+                elif args.channels_command == "update":
+                    exit_code = run_deployment_governance_notification_channel_update(
+                        name=args.name,
+                        destination=args.destination,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_notification_channel_delete(
+                        name=args.name,
                         json_output=args.json_output,
                     )
                 sys.exit(exit_code)

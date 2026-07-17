@@ -53,6 +53,10 @@ DEPLOYMENT_GOVERNANCE_NOTIFICATION_TABLE: Final[
     str
 ] = "notifications"
 
+DEPLOYMENT_GOVERNANCE_NOTIFICATION_CHANNEL_TABLE: Final[
+    str
+] = "notification_channels"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -90,6 +94,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_audit_report_schedules_migration(),
             DeploymentGovernanceSQLiteSchema._create_failure_policies_migration(),
             DeploymentGovernanceSQLiteSchema._create_notifications_migration(),
+            DeploymentGovernanceSQLiteSchema._create_notification_channels_migration(),
         )
 
     @staticmethod
@@ -930,6 +935,64 @@ class DeploymentGovernanceSQLiteSchema:
                 ON {DEPLOYMENT_GOVERNANCE_NOTIFICATION_TABLE}
                 (
                     alert_id
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_notification_channels_migration() -> SQLiteMigration:
+        """
+        Migration 13 creates storage for named governance audit
+        notification delivery channels
+        (backend/observability/deployment_governance_notification_channels.py).
+
+        No delivery happens yet: a channel only records where a
+        future provider would send a notification, not how it is
+        sent.
+        """
+
+        return SQLiteMigration(
+            version=13,
+            name="create governance audit notification channels table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_NOTIFICATION_CHANNEL_TABLE}
+                (
+                    name TEXT NOT NULL
+                        PRIMARY KEY,
+
+                    channel_type TEXT NOT NULL,
+
+                    destination TEXT NOT NULL,
+
+                    enabled INTEGER NOT NULL
+                        CHECK (
+                            enabled IN (0, 1)
+                        ),
+
+                    created_at TEXT NOT NULL,
+
+                    CHECK (
+                        length(
+                            trim(name)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        channel_type IN (
+                            'email',
+                            'webhook',
+                            'slack'
+                        )
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(destination)
+                        ) > 0
+                    )
                 )
                 """,
             ),

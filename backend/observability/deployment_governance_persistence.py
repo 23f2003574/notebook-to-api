@@ -59,6 +59,10 @@ from .deployment_governance_notifications import (
     GovernanceIntegrityNotificationRepository,
     InMemoryGovernanceIntegrityNotificationRepository,
 )
+from .deployment_governance_notification_channels import (
+    GovernanceIntegrityNotificationChannelRepository,
+    InMemoryGovernanceIntegrityNotificationChannelRepository,
+)
 from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditHistoryRepository,
     InMemoryGovernanceIntegrityAuditHistoryRepository,
@@ -105,6 +109,9 @@ from .sqlite_deployment_governance_failure_policy import (
 )
 from .sqlite_deployment_governance_notifications import (
     SQLiteGovernanceIntegrityNotificationRepository,
+)
+from .sqlite_deployment_governance_notification_channels import (
+    SQLiteGovernanceIntegrityNotificationChannelRepository,
 )
 from .sqlite_deployment_governance_audit_history import (
     SQLiteGovernanceIntegrityAuditHistoryRepository,
@@ -194,6 +201,9 @@ if TYPE_CHECKING:
     )
     from .deployment_governance_notifications import (
         GovernanceIntegrityNotificationService,
+    )
+    from .deployment_governance_notification_channels import (
+        GovernanceIntegrityNotificationChannelService,
     )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
@@ -416,6 +426,10 @@ class DeploymentGovernancePersistenceRuntime:
 
     notification_repository: (
         GovernanceIntegrityNotificationRepository
+    )
+
+    notification_channel_repository: (
+        GovernanceIntegrityNotificationChannelRepository
     )
 
     database: SQLiteDatabase | None = None
@@ -1024,6 +1038,24 @@ class DeploymentGovernancePersistenceRuntime:
             self.notification_repository,
         )
 
+    def build_integrity_notification_channel_service(
+        self,
+    ) -> "GovernanceIntegrityNotificationChannelService":
+        """
+        Build the governance audit notification channel service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_notification_channels import (
+            GovernanceIntegrityNotificationChannelService,
+        )
+
+        return GovernanceIntegrityNotificationChannelService(
+            self.notification_channel_repository,
+        )
+
     def build_diagnostics_service(
         self,
     ) -> "DeploymentGovernancePersistenceDiagnosticsService":
@@ -1180,6 +1212,10 @@ def _build_memory_runtime(
         InMemoryGovernanceIntegrityNotificationRepository()
     )
 
+    notification_channel_repository = (
+        InMemoryGovernanceIntegrityNotificationChannelRepository()
+    )
+
     return DeploymentGovernancePersistenceRuntime(
         config=config,
         repository=repository,
@@ -1197,6 +1233,7 @@ def _build_memory_runtime(
         dead_letter_repository=dead_letter_repository,
         failure_policy_repository=failure_policy_repository,
         notification_repository=notification_repository,
+        notification_channel_repository=notification_channel_repository,
         database=None,
         automatic_audit_retention=automatic_audit_retention,
     )
@@ -1320,6 +1357,15 @@ def _build_sqlite_runtime(
         )
     )
 
+    notification_channel_repository = (
+        SQLiteGovernanceIntegrityNotificationChannelRepository(
+            database,
+            initialize_schema=(
+                config.initialize_schema
+            ),
+        )
+    )
+
     # SQLite persistence for the execution queue is intentionally
     # deferred (see deployment_governance_audit_execution_queue.py):
     # it stays in-process memory regardless of the configured backend.
@@ -1372,6 +1418,7 @@ def _build_sqlite_runtime(
         dead_letter_repository=dead_letter_repository,
         failure_policy_repository=failure_policy_repository,
         notification_repository=notification_repository,
+        notification_channel_repository=notification_channel_repository,
         database=database,
         automatic_audit_retention=automatic_audit_retention,
     )

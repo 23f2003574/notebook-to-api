@@ -78,14 +78,14 @@ def test_sqlite_schema_includes_audit_history_migration(
 
     SQLiteGovernanceIntegrityAuditHistoryRepository(database)
 
-    assert database.current_schema_version() == 12
+    assert database.current_schema_version() == 13
 
     applied_versions = tuple(
         migration.version
         for migration in database.applied_migrations()
     )
 
-    assert applied_versions == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+    assert applied_versions == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
 
 
 def test_sqlite_audit_history_round_trip(
