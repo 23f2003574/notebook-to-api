@@ -67,6 +67,10 @@ from .deployment_governance_notification_dispatcher import (
     GovernanceIntegrityNotificationDispatchRepository,
     InMemoryGovernanceIntegrityNotificationDispatchRepository,
 )
+from .deployment_governance_delivery_history import (
+    GovernanceIntegrityDeliveryHistoryRepository,
+    InMemoryGovernanceIntegrityDeliveryHistoryRepository,
+)
 from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditHistoryRepository,
     InMemoryGovernanceIntegrityAuditHistoryRepository,
@@ -119,6 +123,9 @@ from .sqlite_deployment_governance_notification_channels import (
 )
 from .sqlite_deployment_governance_notification_dispatcher import (
     SQLiteGovernanceIntegrityNotificationDispatchRepository,
+)
+from .sqlite_deployment_governance_delivery_history import (
+    SQLiteGovernanceIntegrityDeliveryHistoryRepository,
 )
 from .sqlite_deployment_governance_audit_history import (
     SQLiteGovernanceIntegrityAuditHistoryRepository,
@@ -217,6 +224,9 @@ if TYPE_CHECKING:
     )
     from .deployment_governance_delivery_engine import (
         GovernanceIntegrityDeliveryEngine,
+    )
+    from .deployment_governance_delivery_history import (
+        GovernanceIntegrityDeliveryHistoryService,
     )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
@@ -447,6 +457,10 @@ class DeploymentGovernancePersistenceRuntime:
 
     notification_dispatch_repository: (
         GovernanceIntegrityNotificationDispatchRepository
+    )
+
+    delivery_history_repository: (
+        GovernanceIntegrityDeliveryHistoryRepository
     )
 
     database: SQLiteDatabase | None = None
@@ -1132,6 +1146,25 @@ class DeploymentGovernancePersistenceRuntime:
             provider_registry,
         )
 
+    def build_integrity_delivery_history_service(
+        self,
+    ) -> "GovernanceIntegrityDeliveryHistoryService":
+        """
+        Build the governance audit delivery history service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_delivery_history import (
+            GovernanceIntegrityDeliveryHistoryService,
+        )
+
+        return GovernanceIntegrityDeliveryHistoryService(
+            self.build_integrity_delivery_engine(),
+            self.delivery_history_repository,
+        )
+
     def build_diagnostics_service(
         self,
     ) -> "DeploymentGovernancePersistenceDiagnosticsService":
@@ -1296,6 +1329,10 @@ def _build_memory_runtime(
         InMemoryGovernanceIntegrityNotificationDispatchRepository()
     )
 
+    delivery_history_repository = (
+        InMemoryGovernanceIntegrityDeliveryHistoryRepository()
+    )
+
     return DeploymentGovernancePersistenceRuntime(
         config=config,
         repository=repository,
@@ -1317,6 +1354,7 @@ def _build_memory_runtime(
         notification_dispatch_repository=(
             notification_dispatch_repository
         ),
+        delivery_history_repository=delivery_history_repository,
         database=None,
         automatic_audit_retention=automatic_audit_retention,
     )
@@ -1458,6 +1496,15 @@ def _build_sqlite_runtime(
         )
     )
 
+    delivery_history_repository = (
+        SQLiteGovernanceIntegrityDeliveryHistoryRepository(
+            database,
+            initialize_schema=(
+                config.initialize_schema
+            ),
+        )
+    )
+
     # SQLite persistence for the execution queue is intentionally
     # deferred (see deployment_governance_audit_execution_queue.py):
     # it stays in-process memory regardless of the configured backend.
@@ -1514,6 +1561,7 @@ def _build_sqlite_runtime(
         notification_dispatch_repository=(
             notification_dispatch_repository
         ),
+        delivery_history_repository=delivery_history_repository,
         database=database,
         automatic_audit_retention=automatic_audit_retention,
     )

@@ -184,6 +184,11 @@ from backend.observability.deployment_governance_delivery_engine_cli import (
     run_deployment_governance_delivery_run,
     run_deployment_governance_delivery_run_all,
 )
+from backend.observability.deployment_governance_delivery_history_cli import (
+    run_deployment_governance_delivery_history_clear,
+    run_deployment_governance_delivery_history_list,
+    run_deployment_governance_delivery_history_show,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -2547,6 +2552,68 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    delivery_history_parser = audits_subparsers.add_parser(
+        "delivery-history",
+        help="Inspect permanently recorded governance audit deliveries.",
+        description=(
+            "Inspect the immutable history of governance audit "
+            "notification delivery attempts.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    delivery_history_subparsers = (
+        delivery_history_parser.add_subparsers(
+            dest="delivery_history_command", required=True
+        )
+    )
+
+    delivery_history_list_parser = (
+        delivery_history_subparsers.add_parser(
+            "list",
+            help="List every delivery history record.",
+        )
+    )
+    delivery_history_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    delivery_history_show_parser = (
+        delivery_history_subparsers.add_parser(
+            "show",
+            help="Show one delivery history record.",
+        )
+    )
+    delivery_history_show_parser.add_argument(
+        "--delivery-id",
+        required=True,
+        dest="delivery_id",
+        help="Identifier of the delivery history record to show.",
+    )
+    delivery_history_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    delivery_history_clear_parser = (
+        delivery_history_subparsers.add_parser(
+            "clear",
+            help="Remove every delivery history record.",
+        )
+    )
+    delivery_history_clear_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -3200,6 +3267,24 @@ def main():
                     )
                 else:
                     exit_code = run_deployment_governance_delivery_run_all(
+                        json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if (
+                getattr(args, "audits_command", None)
+                == "delivery-history"
+            ):
+                if args.delivery_history_command == "list":
+                    exit_code = run_deployment_governance_delivery_history_list(
+                        json_output=args.json_output,
+                    )
+                elif args.delivery_history_command == "show":
+                    exit_code = run_deployment_governance_delivery_history_show(
+                        delivery_id=args.delivery_id,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_delivery_history_clear(
                         json_output=args.json_output,
                     )
                 sys.exit(exit_code)

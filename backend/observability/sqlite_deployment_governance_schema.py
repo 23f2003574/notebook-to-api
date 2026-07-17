@@ -61,6 +61,10 @@ DEPLOYMENT_GOVERNANCE_NOTIFICATION_DISPATCH_TABLE: Final[
     str
 ] = "notification_dispatches"
 
+DEPLOYMENT_GOVERNANCE_DELIVERY_HISTORY_TABLE: Final[
+    str
+] = "delivery_history"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -100,6 +104,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_notifications_migration(),
             DeploymentGovernanceSQLiteSchema._create_notification_channels_migration(),
             DeploymentGovernanceSQLiteSchema._create_notification_dispatches_migration(),
+            DeploymentGovernanceSQLiteSchema._create_delivery_history_migration(),
         )
 
     @staticmethod
@@ -1069,6 +1074,66 @@ class DeploymentGovernanceSQLiteSchema:
                 (
                     notification_id,
                     channel_name
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_delivery_history_migration() -> SQLiteMigration:
+        """
+        Migration 15 creates immutable storage for governance audit
+        notification delivery outcomes
+        (backend/observability/deployment_governance_delivery_history.py),
+        recording one permanent record per delivered dispatch for
+        auditing.
+        """
+
+        return SQLiteMigration(
+            version=15,
+            name="create governance audit delivery history table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_DELIVERY_HISTORY_TABLE}
+                (
+                    delivery_id TEXT NOT NULL
+                        PRIMARY KEY,
+
+                    dispatch_id TEXT NOT NULL,
+
+                    channel_name TEXT NOT NULL,
+
+                    status TEXT NOT NULL,
+
+                    delivered_at TEXT NOT NULL,
+
+                    error TEXT,
+
+                    CHECK (
+                        length(
+                            trim(delivery_id)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(dispatch_id)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(channel_name)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        status IN (
+                            'success',
+                            'failed'
+                        )
+                    )
                 )
                 """,
             ),
