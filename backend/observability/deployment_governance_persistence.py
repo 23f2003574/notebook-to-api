@@ -55,6 +55,10 @@ from .deployment_governance_failure_policy import (
     GovernanceIntegrityFailurePolicyRepository,
     InMemoryGovernanceIntegrityFailurePolicyRepository,
 )
+from .deployment_governance_notifications import (
+    GovernanceIntegrityNotificationRepository,
+    InMemoryGovernanceIntegrityNotificationRepository,
+)
 from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditHistoryRepository,
     InMemoryGovernanceIntegrityAuditHistoryRepository,
@@ -98,6 +102,9 @@ from .sqlite_deployment_governance_audit_report_schedule import (
 )
 from .sqlite_deployment_governance_failure_policy import (
     SQLiteGovernanceIntegrityFailurePolicyRepository,
+)
+from .sqlite_deployment_governance_notifications import (
+    SQLiteGovernanceIntegrityNotificationRepository,
 )
 from .sqlite_deployment_governance_audit_history import (
     SQLiteGovernanceIntegrityAuditHistoryRepository,
@@ -184,6 +191,9 @@ if TYPE_CHECKING:
     )
     from .deployment_governance_execution_alerts import (
         GovernanceIntegrityExecutionAlertService,
+    )
+    from .deployment_governance_notifications import (
+        GovernanceIntegrityNotificationService,
     )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
@@ -402,6 +412,10 @@ class DeploymentGovernancePersistenceRuntime:
 
     failure_policy_repository: (
         GovernanceIntegrityFailurePolicyRepository
+    )
+
+    notification_repository: (
+        GovernanceIntegrityNotificationRepository
     )
 
     database: SQLiteDatabase | None = None
@@ -991,6 +1005,25 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_execution_metrics_service(),
         )
 
+    def build_integrity_notification_service(
+        self,
+    ) -> "GovernanceIntegrityNotificationService":
+        """
+        Build the governance audit notification pipeline service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_notifications import (
+            GovernanceIntegrityNotificationService,
+        )
+
+        return GovernanceIntegrityNotificationService(
+            self.build_integrity_execution_alert_service(),
+            self.notification_repository,
+        )
+
     def build_diagnostics_service(
         self,
     ) -> "DeploymentGovernancePersistenceDiagnosticsService":
@@ -1143,6 +1176,10 @@ def _build_memory_runtime(
         InMemoryGovernanceIntegrityFailurePolicyRepository()
     )
 
+    notification_repository = (
+        InMemoryGovernanceIntegrityNotificationRepository()
+    )
+
     return DeploymentGovernancePersistenceRuntime(
         config=config,
         repository=repository,
@@ -1159,6 +1196,7 @@ def _build_memory_runtime(
         retry_repository=retry_repository,
         dead_letter_repository=dead_letter_repository,
         failure_policy_repository=failure_policy_repository,
+        notification_repository=notification_repository,
         database=None,
         automatic_audit_retention=automatic_audit_retention,
     )
@@ -1273,6 +1311,15 @@ def _build_sqlite_runtime(
         )
     )
 
+    notification_repository = (
+        SQLiteGovernanceIntegrityNotificationRepository(
+            database,
+            initialize_schema=(
+                config.initialize_schema
+            ),
+        )
+    )
+
     # SQLite persistence for the execution queue is intentionally
     # deferred (see deployment_governance_audit_execution_queue.py):
     # it stays in-process memory regardless of the configured backend.
@@ -1324,6 +1371,7 @@ def _build_sqlite_runtime(
         retry_repository=retry_repository,
         dead_letter_repository=dead_letter_repository,
         failure_policy_repository=failure_policy_repository,
+        notification_repository=notification_repository,
         database=database,
         automatic_audit_retention=automatic_audit_retention,
     )

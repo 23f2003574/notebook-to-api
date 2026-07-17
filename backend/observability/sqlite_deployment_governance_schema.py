@@ -49,6 +49,10 @@ DEPLOYMENT_GOVERNANCE_FAILURE_POLICY_TABLE: Final[
     str
 ] = "failure_policies"
 
+DEPLOYMENT_GOVERNANCE_NOTIFICATION_TABLE: Final[
+    str
+] = "notifications"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -85,6 +89,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_audit_report_templates_migration(),
             DeploymentGovernanceSQLiteSchema._create_audit_report_schedules_migration(),
             DeploymentGovernanceSQLiteSchema._create_failure_policies_migration(),
+            DeploymentGovernanceSQLiteSchema._create_notifications_migration(),
         )
 
     @staticmethod
@@ -845,6 +850,86 @@ class DeploymentGovernanceSQLiteSchema:
                     ),
 
                     CHECK (max_retry_attempts >= 0)
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_notifications_migration() -> SQLiteMigration:
+        """
+        Migration 12 creates storage for queued governance audit
+        notifications
+        (backend/observability/deployment_governance_notifications.py).
+
+        A notification records the alert it was created from
+        (alert_id) so the notification pipeline can recognize and
+        skip an alert it has already queued a notification for, but
+        it has no foreign key relationship to any alert store since
+        alerts are generated on demand and never persisted themselves.
+        """
+
+        return SQLiteMigration(
+            version=12,
+            name="create governance audit notifications table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_NOTIFICATION_TABLE}
+                (
+                    notification_id TEXT NOT NULL
+                        PRIMARY KEY,
+
+                    alert_id TEXT NOT NULL,
+
+                    severity TEXT NOT NULL,
+
+                    message TEXT NOT NULL,
+
+                    status TEXT NOT NULL,
+
+                    created_at TEXT NOT NULL,
+
+                    CHECK (
+                        length(
+                            trim(notification_id)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(alert_id)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        severity IN (
+                            'info',
+                            'warning',
+                            'critical'
+                        )
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(message)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        status IN (
+                            'pending'
+                        )
+                    )
+                )
+                """,
+
+                f"""
+                CREATE INDEX
+                idx_governance_notifications_alert_id
+                ON {DEPLOYMENT_GOVERNANCE_NOTIFICATION_TABLE}
+                (
+                    alert_id
                 )
                 """,
             ),

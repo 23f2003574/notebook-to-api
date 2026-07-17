@@ -154,6 +154,13 @@ from backend.observability.deployment_governance_execution_alerts_cli import (
     run_deployment_governance_execution_alerts,
     run_deployment_governance_execution_alerts_for_template,
 )
+from backend.observability.deployment_governance_notifications_cli import (
+    run_deployment_governance_notifications_clear,
+    run_deployment_governance_notifications_delete,
+    run_deployment_governance_notifications_list,
+    run_deployment_governance_notifications_queue,
+    run_deployment_governance_notifications_show,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -2121,6 +2128,120 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    notifications_parser = audits_subparsers.add_parser(
+        "notifications",
+        help="Manage the governance audit notification pipeline.",
+        description=(
+            "Convert generated governance audit execution alerts "
+            "into queued delivery requests.\n\n"
+            "Actual delivery providers come later; this command only "
+            "queues notifications.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    notifications_subparsers = notifications_parser.add_subparsers(
+        dest="notifications_command", required=True
+    )
+
+    notifications_queue_parser = notifications_subparsers.add_parser(
+        "queue",
+        help="Generate alerts and queue new notifications.",
+    )
+    notifications_queue_parser.add_argument(
+        "--min-success",
+        type=float,
+        default=DEFAULT_MINIMUM_SUCCESS_RATE,
+        dest="minimum_success_rate",
+        help=(
+            "Minimum acceptable success rate percentage. "
+            f"Default: {DEFAULT_MINIMUM_SUCCESS_RATE}."
+        ),
+    )
+    notifications_queue_parser.add_argument(
+        "--max-failure",
+        type=float,
+        default=DEFAULT_MAXIMUM_FAILURE_RATE,
+        dest="maximum_failure_rate",
+        help=(
+            "Maximum acceptable failure rate percentage. "
+            f"Default: {DEFAULT_MAXIMUM_FAILURE_RATE}."
+        ),
+    )
+    notifications_queue_parser.add_argument(
+        "--max-duration",
+        type=float,
+        default=DEFAULT_MAXIMUM_AVERAGE_DURATION_MS,
+        dest="maximum_average_duration_ms",
+        help=(
+            "Maximum acceptable average runtime in milliseconds. "
+            f"Default: {DEFAULT_MAXIMUM_AVERAGE_DURATION_MS}."
+        ),
+    )
+    notifications_queue_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    notifications_list_parser = notifications_subparsers.add_parser(
+        "list",
+        help="List every queued notification.",
+    )
+    notifications_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    notifications_show_parser = notifications_subparsers.add_parser(
+        "show",
+        help="Show one queued notification.",
+    )
+    notifications_show_parser.add_argument(
+        "--notification-id",
+        required=True,
+        dest="notification_id",
+        help="Identifier of the notification to show.",
+    )
+    notifications_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    notifications_delete_parser = notifications_subparsers.add_parser(
+        "delete",
+        help="Remove one queued notification.",
+    )
+    notifications_delete_parser.add_argument(
+        "--notification-id",
+        required=True,
+        dest="notification_id",
+        help="Identifier of the notification to remove.",
+    )
+    notifications_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    notifications_clear_parser = notifications_subparsers.add_parser(
+        "clear",
+        help="Remove every queued notification.",
+    )
+    notifications_clear_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -2671,6 +2792,35 @@ def main():
                         maximum_average_duration_ms=(
                             args.maximum_average_duration_ms
                         ),
+                        json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "notifications":
+                if args.notifications_command == "queue":
+                    exit_code = run_deployment_governance_notifications_queue(
+                        minimum_success_rate=args.minimum_success_rate,
+                        maximum_failure_rate=args.maximum_failure_rate,
+                        maximum_average_duration_ms=(
+                            args.maximum_average_duration_ms
+                        ),
+                        json_output=args.json_output,
+                    )
+                elif args.notifications_command == "list":
+                    exit_code = run_deployment_governance_notifications_list(
+                        json_output=args.json_output,
+                    )
+                elif args.notifications_command == "show":
+                    exit_code = run_deployment_governance_notifications_show(
+                        notification_id=args.notification_id,
+                        json_output=args.json_output,
+                    )
+                elif args.notifications_command == "delete":
+                    exit_code = run_deployment_governance_notifications_delete(
+                        notification_id=args.notification_id,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_notifications_clear(
                         json_output=args.json_output,
                     )
                 sys.exit(exit_code)

@@ -78,7 +78,7 @@ def test_sqlite_config_builds_durable_runtime(
 
     assert (
         runtime.database.current_schema_version()
-        == 11
+        == 12
     )
 
 
