@@ -113,6 +113,13 @@ from backend.observability.deployment_governance_audit_execution_queue_cli impor
     run_deployment_governance_audit_queue_list,
     run_deployment_governance_audit_queue_show,
 )
+from backend.observability.deployment_governance_audit_worker_cli import (
+    run_deployment_governance_audit_worker_clear,
+    run_deployment_governance_audit_worker_history,
+    run_deployment_governance_audit_worker_run,
+    run_deployment_governance_audit_worker_run_all,
+    run_deployment_governance_audit_worker_show,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -1560,6 +1567,89 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    worker_parser = audits_subparsers.add_parser(
+        "worker",
+        help="Execute queued governance audit execution jobs into reports.",
+        description=(
+            "Synchronously process queued governance audit execution "
+            "jobs into generated reports.\n\n"
+            "Single-threaded only: jobs run one at a time, in-process.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    worker_subparsers = worker_parser.add_subparsers(
+        dest="worker_command", required=True
+    )
+
+    worker_run_parser = worker_subparsers.add_parser(
+        "run",
+        help="Run one queued job.",
+    )
+    worker_run_parser.add_argument(
+        "--job-id",
+        required=True,
+        dest="job_id",
+        help="Identifier of the job to run.",
+    )
+    worker_run_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    worker_run_all_parser = worker_subparsers.add_parser(
+        "run-all",
+        help="Run every currently queued job.",
+    )
+    worker_run_all_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    worker_history_parser = worker_subparsers.add_parser(
+        "history",
+        help="List every stored execution record.",
+    )
+    worker_history_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    worker_show_parser = worker_subparsers.add_parser(
+        "show",
+        help="Show one stored execution record.",
+    )
+    worker_show_parser.add_argument(
+        "--job-id",
+        required=True,
+        dest="job_id",
+        help="Identifier of the execution record to show.",
+    )
+    worker_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    worker_clear_parser = worker_subparsers.add_parser(
+        "clear",
+        help="Remove every stored execution record.",
+    )
+    worker_clear_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -1975,6 +2065,30 @@ def main():
                     )
                 else:
                     exit_code = run_deployment_governance_audit_queue_clear(
+                        json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "worker":
+                if args.worker_command == "run":
+                    exit_code = run_deployment_governance_audit_worker_run(
+                        job_id=args.job_id,
+                        json_output=args.json_output,
+                    )
+                elif args.worker_command == "run-all":
+                    exit_code = run_deployment_governance_audit_worker_run_all(
+                        json_output=args.json_output,
+                    )
+                elif args.worker_command == "history":
+                    exit_code = run_deployment_governance_audit_worker_history(
+                        json_output=args.json_output,
+                    )
+                elif args.worker_command == "show":
+                    exit_code = run_deployment_governance_audit_worker_show(
+                        job_id=args.job_id,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_audit_worker_clear(
                         json_output=args.json_output,
                     )
                 sys.exit(exit_code)
