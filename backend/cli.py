@@ -133,6 +133,16 @@ from backend.observability.deployment_governance_dead_letter_queue_cli import (
     run_deployment_governance_dead_letter_list,
     run_deployment_governance_dead_letter_show,
 )
+from backend.observability.deployment_governance_failure_policy import (
+    GovernanceIntegrityFailureAction,
+)
+from backend.observability.deployment_governance_failure_policy_cli import (
+    run_deployment_governance_failure_policy_create,
+    run_deployment_governance_failure_policy_delete,
+    run_deployment_governance_failure_policy_list,
+    run_deployment_governance_failure_policy_show,
+    run_deployment_governance_failure_policy_update,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -1826,6 +1836,139 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    policy_parser = audits_subparsers.add_parser(
+        "policy",
+        help="Manage governance audit failure-handling policies.",
+        description=(
+            "Create and manage named governance audit failure "
+            "policies: how many times a failed execution may be "
+            "retried before falling back to a configured action.\n\n"
+            "This command only manages policy configuration; no "
+            "retries are executed automatically.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    policy_subparsers = policy_parser.add_subparsers(
+        dest="policy_command", required=True
+    )
+
+    policy_create_parser = policy_subparsers.add_parser(
+        "create",
+        help="Create a new failure policy.",
+    )
+    policy_create_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name for the new policy.",
+    )
+    policy_create_parser.add_argument(
+        "--action",
+        required=True,
+        dest="action",
+        choices=[
+            action.value
+            for action in GovernanceIntegrityFailureAction
+        ],
+        help="Action to take once the retry budget is exhausted.",
+    )
+    policy_create_parser.add_argument(
+        "--max-retries",
+        required=True,
+        type=int,
+        dest="max_retry_attempts",
+        help="Number of retry attempts allowed before the action applies.",
+    )
+    policy_create_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    policy_list_parser = policy_subparsers.add_parser(
+        "list",
+        help="List every failure policy.",
+    )
+    policy_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    policy_show_parser = policy_subparsers.add_parser(
+        "show",
+        help="Show one failure policy.",
+    )
+    policy_show_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the policy to show.",
+    )
+    policy_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    policy_update_parser = policy_subparsers.add_parser(
+        "update",
+        help="Update an existing failure policy.",
+    )
+    policy_update_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the policy to update.",
+    )
+    policy_update_parser.add_argument(
+        "--action",
+        required=False,
+        default=None,
+        dest="action",
+        choices=[
+            action.value
+            for action in GovernanceIntegrityFailureAction
+        ],
+        help="New action to take once the retry budget is exhausted.",
+    )
+    policy_update_parser.add_argument(
+        "--max-retries",
+        required=False,
+        default=None,
+        type=int,
+        dest="max_retry_attempts",
+        help="New number of retry attempts allowed before the action applies.",
+    )
+    policy_update_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    policy_delete_parser = policy_subparsers.add_parser(
+        "delete",
+        help="Delete one failure policy.",
+    )
+    policy_delete_parser.add_argument(
+        "--name",
+        required=True,
+        dest="name",
+        help="Name of the policy to delete.",
+    )
+    policy_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -2310,6 +2453,36 @@ def main():
                     )
                 else:
                     exit_code = run_deployment_governance_dead_letter_clear(
+                        json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "policy":
+                if args.policy_command == "create":
+                    exit_code = run_deployment_governance_failure_policy_create(
+                        name=args.name,
+                        action=args.action,
+                        max_retry_attempts=args.max_retry_attempts,
+                        json_output=args.json_output,
+                    )
+                elif args.policy_command == "list":
+                    exit_code = run_deployment_governance_failure_policy_list(
+                        json_output=args.json_output,
+                    )
+                elif args.policy_command == "show":
+                    exit_code = run_deployment_governance_failure_policy_show(
+                        name=args.name,
+                        json_output=args.json_output,
+                    )
+                elif args.policy_command == "update":
+                    exit_code = run_deployment_governance_failure_policy_update(
+                        name=args.name,
+                        action=args.action,
+                        max_retry_attempts=args.max_retry_attempts,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_failure_policy_delete(
+                        name=args.name,
                         json_output=args.json_output,
                     )
                 sys.exit(exit_code)

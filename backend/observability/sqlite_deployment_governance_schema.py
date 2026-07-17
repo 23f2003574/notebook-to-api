@@ -45,6 +45,10 @@ DEPLOYMENT_GOVERNANCE_AUDIT_REPORT_SCHEDULE_TABLE: Final[
     str
 ] = "audit_report_schedules"
 
+DEPLOYMENT_GOVERNANCE_FAILURE_POLICY_TABLE: Final[
+    str
+] = "failure_policies"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -80,6 +84,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_audit_collections_migration(),
             DeploymentGovernanceSQLiteSchema._create_audit_report_templates_migration(),
             DeploymentGovernanceSQLiteSchema._create_audit_report_schedules_migration(),
+            DeploymentGovernanceSQLiteSchema._create_failure_policies_migration(),
         )
 
     @staticmethod
@@ -792,6 +797,54 @@ class DeploymentGovernanceSQLiteSchema:
                             'monthly'
                         )
                     )
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_failure_policies_migration() -> SQLiteMigration:
+        """
+        Migration 11 creates storage for named governance audit
+        failure policies
+        (backend/observability/deployment_governance_failure_policy.py).
+
+        A policy only records the configured action and retry budget;
+        it does not reference any particular execution job, so it has
+        no foreign key relationship to the (in-memory only) execution
+        or retry tables.
+        """
+
+        return SQLiteMigration(
+            version=11,
+            name="create governance audit failure policies table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_FAILURE_POLICY_TABLE}
+                (
+                    name TEXT NOT NULL
+                        PRIMARY KEY,
+
+                    action TEXT NOT NULL,
+
+                    max_retry_attempts INTEGER NOT NULL,
+
+                    CHECK (
+                        length(
+                            trim(name)
+                        ) > 0
+                    ),
+
+                    CHECK (
+                        action IN (
+                            'ignore',
+                            'retry',
+                            'dead_letter'
+                        )
+                    ),
+
+                    CHECK (max_retry_attempts >= 0)
                 )
                 """,
             ),
