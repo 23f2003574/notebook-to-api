@@ -69,6 +69,10 @@ DEPLOYMENT_GOVERNANCE_NOTIFICATION_PREFERENCE_TABLE: Final[
     str
 ] = "notification_preferences"
 
+DEPLOYMENT_GOVERNANCE_DELIVERY_POLICY_TABLE: Final[
+    str
+] = "delivery_policies"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -110,6 +114,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_notification_dispatches_migration(),
             DeploymentGovernanceSQLiteSchema._create_delivery_history_migration(),
             DeploymentGovernanceSQLiteSchema._create_notification_preferences_migration(),
+            DeploymentGovernanceSQLiteSchema._create_delivery_policies_migration(),
         )
 
     @staticmethod
@@ -1196,6 +1201,54 @@ class DeploymentGovernanceSQLiteSchema:
                     CHECK (
                         length(
                             trim(channels)
+                        ) > 0
+                    )
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_delivery_policies_migration() -> SQLiteMigration:
+        """
+        Migration 17 creates storage for per-channel governance audit
+        delivery policies
+        (backend/observability/deployment_governance_delivery_policies.py):
+        retry, timeout, and rate-limit configuration exposed to
+        delivery providers.
+
+        This commit configures delivery behavior only; current stub
+        providers may ignore these values.
+        """
+
+        return SQLiteMigration(
+            version=17,
+            name="create governance audit delivery policies table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_DELIVERY_POLICY_TABLE}
+                (
+                    channel_name TEXT NOT NULL
+                        PRIMARY KEY,
+
+                    retry_limit INTEGER NOT NULL
+                        CHECK (retry_limit >= 0),
+
+                    timeout_seconds INTEGER NOT NULL
+                        CHECK (timeout_seconds > 0),
+
+                    rate_limit_per_minute INTEGER NOT NULL
+                        CHECK (rate_limit_per_minute > 0),
+
+                    enabled INTEGER NOT NULL
+                        CHECK (
+                            enabled IN (0, 1)
+                        ),
+
+                    CHECK (
+                        length(
+                            trim(channel_name)
                         ) > 0
                     )
                 )

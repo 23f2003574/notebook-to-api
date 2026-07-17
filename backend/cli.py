@@ -199,6 +199,13 @@ from backend.observability.deployment_governance_notification_preferences_cli im
     run_deployment_governance_notification_preference_show,
     run_deployment_governance_notification_preference_update,
 )
+from backend.observability.deployment_governance_delivery_policies_cli import (
+    run_deployment_governance_delivery_policy_create,
+    run_deployment_governance_delivery_policy_delete,
+    run_deployment_governance_delivery_policy_list,
+    run_deployment_governance_delivery_policy_show,
+    run_deployment_governance_delivery_policy_update,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -2758,6 +2765,160 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    delivery_policy_parser = audits_subparsers.add_parser(
+        "delivery-policy",
+        help="Manage per-channel governance audit delivery policies.",
+        description=(
+            "Create and manage per-channel governance audit delivery "
+            "policies: retry, timeout, and rate-limit configuration "
+            "that future providers can honor.\n\n"
+            "This command configures delivery behavior only; current "
+            "stub providers may ignore these values.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    delivery_policy_subparsers = (
+        delivery_policy_parser.add_subparsers(
+            dest="delivery_policy_command", required=True
+        )
+    )
+
+    delivery_policy_create_parser = (
+        delivery_policy_subparsers.add_parser(
+            "create",
+            help="Create a new delivery policy for a channel.",
+        )
+    )
+    delivery_policy_create_parser.add_argument(
+        "--channel",
+        required=True,
+        dest="channel_name",
+        help="Name of the channel this policy applies to.",
+    )
+    delivery_policy_create_parser.add_argument(
+        "--retry-limit",
+        required=True,
+        type=int,
+        dest="retry_limit",
+        help="Maximum number of delivery retries.",
+    )
+    delivery_policy_create_parser.add_argument(
+        "--timeout",
+        required=True,
+        type=int,
+        dest="timeout_seconds",
+        help="Delivery timeout in seconds.",
+    )
+    delivery_policy_create_parser.add_argument(
+        "--rate-limit",
+        required=True,
+        type=int,
+        dest="rate_limit_per_minute",
+        help="Maximum deliveries per minute.",
+    )
+    delivery_policy_create_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    delivery_policy_list_parser = (
+        delivery_policy_subparsers.add_parser(
+            "list",
+            help="List every delivery policy.",
+        )
+    )
+    delivery_policy_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    delivery_policy_show_parser = (
+        delivery_policy_subparsers.add_parser(
+            "show",
+            help="Show one delivery policy.",
+        )
+    )
+    delivery_policy_show_parser.add_argument(
+        "--channel",
+        required=True,
+        dest="channel_name",
+        help="Name of the channel to show the policy for.",
+    )
+    delivery_policy_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    delivery_policy_update_parser = (
+        delivery_policy_subparsers.add_parser(
+            "update",
+            help="Update an existing delivery policy.",
+        )
+    )
+    delivery_policy_update_parser.add_argument(
+        "--channel",
+        required=True,
+        dest="channel_name",
+        help="Name of the channel to update the policy for.",
+    )
+    delivery_policy_update_parser.add_argument(
+        "--retry-limit",
+        required=False,
+        default=None,
+        type=int,
+        dest="retry_limit",
+        help="New maximum number of delivery retries.",
+    )
+    delivery_policy_update_parser.add_argument(
+        "--timeout",
+        required=False,
+        default=None,
+        type=int,
+        dest="timeout_seconds",
+        help="New delivery timeout in seconds.",
+    )
+    delivery_policy_update_parser.add_argument(
+        "--rate-limit",
+        required=False,
+        default=None,
+        type=int,
+        dest="rate_limit_per_minute",
+        help="New maximum deliveries per minute.",
+    )
+    delivery_policy_update_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    delivery_policy_delete_parser = (
+        delivery_policy_subparsers.add_parser(
+            "delete",
+            help="Delete one delivery policy.",
+        )
+    )
+    delivery_policy_delete_parser.add_argument(
+        "--channel",
+        required=True,
+        dest="channel_name",
+        help="Name of the channel to delete the policy for.",
+    )
+    delivery_policy_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -3459,6 +3620,41 @@ def main():
                 else:
                     exit_code = run_deployment_governance_notification_preference_delete(
                         name=args.name,
+                        json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if (
+                getattr(args, "audits_command", None)
+                == "delivery-policy"
+            ):
+                if args.delivery_policy_command == "create":
+                    exit_code = run_deployment_governance_delivery_policy_create(
+                        channel_name=args.channel_name,
+                        retry_limit=args.retry_limit,
+                        timeout_seconds=args.timeout_seconds,
+                        rate_limit_per_minute=args.rate_limit_per_minute,
+                        json_output=args.json_output,
+                    )
+                elif args.delivery_policy_command == "list":
+                    exit_code = run_deployment_governance_delivery_policy_list(
+                        json_output=args.json_output,
+                    )
+                elif args.delivery_policy_command == "show":
+                    exit_code = run_deployment_governance_delivery_policy_show(
+                        channel_name=args.channel_name,
+                        json_output=args.json_output,
+                    )
+                elif args.delivery_policy_command == "update":
+                    exit_code = run_deployment_governance_delivery_policy_update(
+                        channel_name=args.channel_name,
+                        retry_limit=args.retry_limit,
+                        timeout_seconds=args.timeout_seconds,
+                        rate_limit_per_minute=args.rate_limit_per_minute,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_delivery_policy_delete(
+                        channel_name=args.channel_name,
                         json_output=args.json_output,
                     )
                 sys.exit(exit_code)

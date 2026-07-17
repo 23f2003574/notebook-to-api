@@ -5,6 +5,10 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Callable, Mapping, Protocol, runtime_checkable
 
+from .deployment_governance_delivery_policies import (
+    GovernanceIntegrityDeliveryPolicy,
+    GovernanceIntegrityDeliveryPolicyService,
+)
 from .deployment_governance_notification_channels import (
     GovernanceIntegrityNotificationChannel,
     GovernanceIntegrityNotificationChannelRepository,
@@ -100,19 +104,23 @@ class GovernanceIntegrityNotificationProvider(Protocol):
         dispatch: GovernanceIntegrityNotificationDispatch,
         notification: GovernanceIntegrityNotification,
         channel: GovernanceIntegrityNotificationChannel,
+        policy: GovernanceIntegrityDeliveryPolicy | None,
     ) -> None:
         """
         Deliver one notification through this provider's channel.
 
-        Raises on failure. A stub provider that does not perform
-        external I/O simply returns.
+        policy is the channel's configured delivery policy (retry,
+        timeout, rate limit), or None if no policy has been
+        configured. Raises on failure. A stub provider that does not
+        perform external I/O simply returns, and may ignore policy
+        values entirely.
         """
 
 
 class EmailProvider:
     """
     Local stub email provider: performs no external I/O and always
-    succeeds.
+    succeeds. Ignores the resolved delivery policy.
     """
 
     def deliver(
@@ -120,6 +128,7 @@ class EmailProvider:
         dispatch: GovernanceIntegrityNotificationDispatch,
         notification: GovernanceIntegrityNotification,
         channel: GovernanceIntegrityNotificationChannel,
+        policy: GovernanceIntegrityDeliveryPolicy | None,
     ) -> None:
         return
 
@@ -127,7 +136,7 @@ class EmailProvider:
 class SlackProvider:
     """
     Local stub Slack provider: performs no external I/O and always
-    succeeds.
+    succeeds. Ignores the resolved delivery policy.
     """
 
     def deliver(
@@ -135,6 +144,7 @@ class SlackProvider:
         dispatch: GovernanceIntegrityNotificationDispatch,
         notification: GovernanceIntegrityNotification,
         channel: GovernanceIntegrityNotificationChannel,
+        policy: GovernanceIntegrityDeliveryPolicy | None,
     ) -> None:
         return
 
@@ -142,7 +152,7 @@ class SlackProvider:
 class WebhookProvider:
     """
     Local stub webhook provider: performs no external I/O and always
-    succeeds.
+    succeeds. Ignores the resolved delivery policy.
     """
 
     def deliver(
@@ -150,6 +160,7 @@ class WebhookProvider:
         dispatch: GovernanceIntegrityNotificationDispatch,
         notification: GovernanceIntegrityNotification,
         channel: GovernanceIntegrityNotificationChannel,
+        policy: GovernanceIntegrityDeliveryPolicy | None,
     ) -> None:
         return
 
@@ -178,6 +189,7 @@ class GovernanceIntegrityDeliveryEngine:
             GovernanceIntegrityNotificationChannelType,
             GovernanceIntegrityNotificationProvider,
         ],
+        policy_service: GovernanceIntegrityDeliveryPolicyService,
         *,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -188,6 +200,8 @@ class GovernanceIntegrityDeliveryEngine:
         self._channel_repository = channel_repository
 
         self._provider_registry = provider_registry
+
+        self._policy_service = policy_service
 
         self._clock = clock or (
             lambda: datetime.now(timezone.utc)
@@ -245,7 +259,13 @@ class GovernanceIntegrityDeliveryEngine:
                     f"type '{channel.channel_type.value}'"
                 )
 
-            provider.deliver(dispatch, notification, channel)
+            try:
+                policy = self._policy_service.resolve(channel.name)
+
+            except LookupError:
+                policy = None
+
+            provider.deliver(dispatch, notification, channel, policy)
 
         except Exception as exc:
             return GovernanceIntegrityDeliveryResult(

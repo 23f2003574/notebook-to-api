@@ -75,6 +75,10 @@ from .deployment_governance_notification_preferences import (
     GovernanceIntegrityNotificationPreferenceRepository,
     InMemoryGovernanceIntegrityNotificationPreferenceRepository,
 )
+from .deployment_governance_delivery_policies import (
+    GovernanceIntegrityDeliveryPolicyRepository,
+    InMemoryGovernanceIntegrityDeliveryPolicyRepository,
+)
 from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditHistoryRepository,
     InMemoryGovernanceIntegrityAuditHistoryRepository,
@@ -133,6 +137,9 @@ from .sqlite_deployment_governance_delivery_history import (
 )
 from .sqlite_deployment_governance_notification_preferences import (
     SQLiteGovernanceIntegrityNotificationPreferenceRepository,
+)
+from .sqlite_deployment_governance_delivery_policies import (
+    SQLiteGovernanceIntegrityDeliveryPolicyRepository,
 )
 from .sqlite_deployment_governance_audit_history import (
     SQLiteGovernanceIntegrityAuditHistoryRepository,
@@ -237,6 +244,9 @@ if TYPE_CHECKING:
     )
     from .deployment_governance_notification_preferences import (
         GovernanceIntegrityNotificationPreferenceService,
+    )
+    from .deployment_governance_delivery_policies import (
+        GovernanceIntegrityDeliveryPolicyService,
     )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
@@ -475,6 +485,10 @@ class DeploymentGovernancePersistenceRuntime:
 
     notification_preference_repository: (
         GovernanceIntegrityNotificationPreferenceRepository
+    )
+
+    delivery_policy_repository: (
+        GovernanceIntegrityDeliveryPolicyRepository
     )
 
     database: SQLiteDatabase | None = None
@@ -1140,6 +1154,25 @@ class DeploymentGovernancePersistenceRuntime:
             self.notification_dispatch_repository,
         )
 
+    def build_integrity_delivery_policy_service(
+        self,
+    ) -> "GovernanceIntegrityDeliveryPolicyService":
+        """
+        Build the governance audit delivery policy service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_delivery_policies import (
+            GovernanceIntegrityDeliveryPolicyService,
+        )
+
+        return GovernanceIntegrityDeliveryPolicyService(
+            self.delivery_policy_repository,
+            self.build_integrity_notification_channel_service(),
+        )
+
     def build_integrity_delivery_engine(
         self,
     ) -> "GovernanceIntegrityDeliveryEngine":
@@ -1177,6 +1210,7 @@ class DeploymentGovernancePersistenceRuntime:
             self.notification_repository,
             self.notification_channel_repository,
             provider_registry,
+            self.build_integrity_delivery_policy_service(),
         )
 
     def build_integrity_delivery_history_service(
@@ -1370,6 +1404,10 @@ def _build_memory_runtime(
         InMemoryGovernanceIntegrityNotificationPreferenceRepository()
     )
 
+    delivery_policy_repository = (
+        InMemoryGovernanceIntegrityDeliveryPolicyRepository()
+    )
+
     return DeploymentGovernancePersistenceRuntime(
         config=config,
         repository=repository,
@@ -1395,6 +1433,7 @@ def _build_memory_runtime(
         notification_preference_repository=(
             notification_preference_repository
         ),
+        delivery_policy_repository=delivery_policy_repository,
         database=None,
         automatic_audit_retention=automatic_audit_retention,
     )
@@ -1554,6 +1593,15 @@ def _build_sqlite_runtime(
         )
     )
 
+    delivery_policy_repository = (
+        SQLiteGovernanceIntegrityDeliveryPolicyRepository(
+            database,
+            initialize_schema=(
+                config.initialize_schema
+            ),
+        )
+    )
+
     # SQLite persistence for the execution queue is intentionally
     # deferred (see deployment_governance_audit_execution_queue.py):
     # it stays in-process memory regardless of the configured backend.
@@ -1614,6 +1662,7 @@ def _build_sqlite_runtime(
         notification_preference_repository=(
             notification_preference_repository
         ),
+        delivery_policy_repository=delivery_policy_repository,
         database=database,
         automatic_audit_retention=automatic_audit_retention,
     )

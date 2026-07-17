@@ -12,11 +12,16 @@ from backend.observability.deployment_governance_delivery_engine import (
     SlackProvider,
     WebhookProvider,
 )
+from backend.observability.deployment_governance_delivery_policies import (
+    GovernanceIntegrityDeliveryPolicyService,
+    InMemoryGovernanceIntegrityDeliveryPolicyRepository,
+)
 from backend.observability.deployment_governance_execution_alerts import (
     GovernanceIntegrityAlertSeverity,
 )
 from backend.observability.deployment_governance_notification_channels import (
     GovernanceIntegrityNotificationChannel,
+    GovernanceIntegrityNotificationChannelService,
     GovernanceIntegrityNotificationChannelType,
     InMemoryGovernanceIntegrityNotificationChannelRepository,
 )
@@ -58,6 +63,18 @@ class Harness:
             InMemoryGovernanceIntegrityNotificationChannelRepository()
         )
 
+        self.channel_service = GovernanceIntegrityNotificationChannelService(
+            self.channel_repository
+        )
+
+        self.policy_repository = (
+            InMemoryGovernanceIntegrityDeliveryPolicyRepository()
+        )
+
+        self.policy_service = GovernanceIntegrityDeliveryPolicyService(
+            self.policy_repository, self.channel_service
+        )
+
         self.engine = GovernanceIntegrityDeliveryEngine(
             self.dispatch_repository,
             self.notification_repository,
@@ -67,6 +84,7 @@ class Harness:
                 if provider_registry is None
                 else provider_registry
             ),
+            self.policy_service,
             clock=clock,
         )
 
@@ -204,7 +222,9 @@ def test_stub_providers_deliver_without_raising(provider_class) -> None:
         created_at=BASE_TIME,
     )
 
-    assert provider.deliver(dispatch, notification, channel) is None
+    assert (
+        provider.deliver(dispatch, notification, channel, None) is None
+    )
 
 
 # --- Service: deliver ----------------------------------------------------
@@ -225,6 +245,28 @@ def test_deliver_succeeds_with_registered_provider() -> None:
 
     assert result.status is GovernanceIntegrityDeliveryStatus.SUCCESS
     assert result.error is None
+
+
+def test_deliver_succeeds_without_configured_policy() -> None:
+    """
+    A channel with no delivery policy configured should still deliver
+    successfully: policy is optional context passed to the provider,
+    not a delivery precondition.
+    """
+
+    harness = Harness()
+
+    harness.add_notification("n1")
+    harness.add_channel(
+        "email", GovernanceIntegrityNotificationChannelType.EMAIL
+    )
+    harness.add_dispatch(
+        "d1", notification_id="n1", channel_name="email"
+    )
+
+    result = harness.engine.deliver("d1")
+
+    assert result.status is GovernanceIntegrityDeliveryStatus.SUCCESS
 
 
 def test_deliver_fails_when_provider_missing() -> None:
@@ -277,6 +319,87 @@ def test_deliver_raises_for_missing_dispatch() -> None:
 
     with pytest.raises(KeyError):
         harness.engine.deliver("missing")
+
+
+class RecordingProvider:
+    """
+    Test double that records the policy it was invoked with, in
+    place of a real stub provider.
+    """
+
+    def __init__(self) -> None:
+        self.received_policies: list[object] = []
+
+    def deliver(self, dispatch, notification, channel, policy):
+        self.received_policies.append(policy)
+
+
+def test_deliver_supplies_resolved_policy_to_provider() -> None:
+    harness = Harness()
+
+    harness.add_notification("n1")
+    harness.add_channel(
+        "email", GovernanceIntegrityNotificationChannelType.EMAIL
+    )
+    harness.add_dispatch(
+        "d1", notification_id="n1", channel_name="email"
+    )
+
+    policy = harness.policy_service.create(
+        "email",
+        retry_limit=3,
+        timeout_seconds=30,
+        rate_limit_per_minute=60,
+    )
+
+    recording_provider = RecordingProvider()
+
+    engine = GovernanceIntegrityDeliveryEngine(
+        harness.dispatch_repository,
+        harness.notification_repository,
+        harness.channel_repository,
+        {
+            GovernanceIntegrityNotificationChannelType.EMAIL: (
+                recording_provider
+            ),
+        },
+        harness.policy_service,
+    )
+
+    result = engine.deliver("d1")
+
+    assert result.status is GovernanceIntegrityDeliveryStatus.SUCCESS
+    assert recording_provider.received_policies == [policy]
+
+
+def test_deliver_supplies_none_policy_when_unconfigured() -> None:
+    harness = Harness()
+
+    harness.add_notification("n1")
+    harness.add_channel(
+        "email", GovernanceIntegrityNotificationChannelType.EMAIL
+    )
+    harness.add_dispatch(
+        "d1", notification_id="n1", channel_name="email"
+    )
+
+    recording_provider = RecordingProvider()
+
+    engine = GovernanceIntegrityDeliveryEngine(
+        harness.dispatch_repository,
+        harness.notification_repository,
+        harness.channel_repository,
+        {
+            GovernanceIntegrityNotificationChannelType.EMAIL: (
+                recording_provider
+            ),
+        },
+        harness.policy_service,
+    )
+
+    engine.deliver("d1")
+
+    assert recording_provider.received_policies == [None]
 
 
 # --- Service: deliver_all ---------------------------------------------
@@ -350,6 +473,13 @@ def test_runtime_builds_working_delivery_engine(tmp_path) -> None:
         "warning-and-up",
         GovernanceIntegrityAlertSeverity.WARNING,
         ("email",),
+    )
+
+    runtime.build_integrity_delivery_policy_service().create(
+        "email",
+        retry_limit=3,
+        timeout_seconds=30,
+        rate_limit_per_minute=60,
     )
 
     dispatcher = runtime.build_integrity_notification_dispatcher()

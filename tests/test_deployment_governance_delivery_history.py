@@ -15,11 +15,16 @@ from backend.observability.deployment_governance_delivery_history import (
     GovernanceIntegrityDeliveryHistoryService,
     InMemoryGovernanceIntegrityDeliveryHistoryRepository,
 )
+from backend.observability.deployment_governance_delivery_policies import (
+    GovernanceIntegrityDeliveryPolicyService,
+    InMemoryGovernanceIntegrityDeliveryPolicyRepository,
+)
 from backend.observability.deployment_governance_execution_alerts import (
     GovernanceIntegrityAlertSeverity,
 )
 from backend.observability.deployment_governance_notification_channels import (
     GovernanceIntegrityNotificationChannel,
+    GovernanceIntegrityNotificationChannelService,
     GovernanceIntegrityNotificationChannelType,
     InMemoryGovernanceIntegrityNotificationChannelRepository,
 )
@@ -58,6 +63,18 @@ class Harness:
             InMemoryGovernanceIntegrityNotificationChannelRepository()
         )
 
+        self.channel_service = GovernanceIntegrityNotificationChannelService(
+            self.channel_repository
+        )
+
+        self.policy_repository = (
+            InMemoryGovernanceIntegrityDeliveryPolicyRepository()
+        )
+
+        self.policy_service = GovernanceIntegrityDeliveryPolicyService(
+            self.policy_repository, self.channel_service
+        )
+
         self.engine = GovernanceIntegrityDeliveryEngine(
             self.dispatch_repository,
             self.notification_repository,
@@ -67,6 +84,7 @@ class Harness:
                     EmailProvider()
                 ),
             },
+            self.policy_service,
         )
 
         self.history_repository = (
