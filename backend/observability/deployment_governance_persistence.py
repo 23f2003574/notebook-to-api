@@ -215,6 +215,9 @@ if TYPE_CHECKING:
     from .deployment_governance_notification_dispatcher import (
         GovernanceIntegrityNotificationDispatcher,
     )
+    from .deployment_governance_delivery_engine import (
+        GovernanceIntegrityDeliveryEngine,
+    )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
     )
@@ -1088,6 +1091,45 @@ class DeploymentGovernancePersistenceRuntime:
             self.notification_repository,
             self.build_integrity_notification_channel_service(),
             self.notification_dispatch_repository,
+        )
+
+    def build_integrity_delivery_engine(
+        self,
+    ) -> "GovernanceIntegrityDeliveryEngine":
+        """
+        Build the governance audit notification delivery engine.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_delivery_engine import (
+            EmailProvider,
+            GovernanceIntegrityDeliveryEngine,
+            SlackProvider,
+            WebhookProvider,
+        )
+        from .deployment_governance_notification_channels import (
+            GovernanceIntegrityNotificationChannelType,
+        )
+
+        provider_registry = {
+            GovernanceIntegrityNotificationChannelType.EMAIL: (
+                EmailProvider()
+            ),
+            GovernanceIntegrityNotificationChannelType.SLACK: (
+                SlackProvider()
+            ),
+            GovernanceIntegrityNotificationChannelType.WEBHOOK: (
+                WebhookProvider()
+            ),
+        }
+
+        return GovernanceIntegrityDeliveryEngine(
+            self.notification_dispatch_repository,
+            self.notification_repository,
+            self.notification_channel_repository,
+            provider_registry,
         )
 
     def build_diagnostics_service(

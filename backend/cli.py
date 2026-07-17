@@ -180,6 +180,10 @@ from backend.observability.deployment_governance_notification_dispatcher_cli imp
     run_deployment_governance_notification_dispatch_run,
     run_deployment_governance_notification_dispatch_show,
 )
+from backend.observability.deployment_governance_delivery_engine_cli import (
+    run_deployment_governance_delivery_run,
+    run_deployment_governance_delivery_run_all,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -2498,6 +2502,51 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    deliver_parser = audits_subparsers.add_parser(
+        "deliver",
+        help="Execute queued governance audit notification dispatches.",
+        description=(
+            "Execute queued governance audit notification dispatches "
+            "through pluggable, per-channel-type providers.\n\n"
+            "Providers are local stubs in this command: no external "
+            "I/O is performed.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    deliver_subparsers = deliver_parser.add_subparsers(
+        dest="deliver_command", required=True
+    )
+
+    deliver_run_parser = deliver_subparsers.add_parser(
+        "run",
+        help="Deliver one queued dispatch.",
+    )
+    deliver_run_parser.add_argument(
+        "--dispatch-id",
+        required=True,
+        dest="dispatch_id",
+        help="Identifier of the dispatch to deliver.",
+    )
+    deliver_run_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    deliver_run_all_parser = deliver_subparsers.add_parser(
+        "run-all",
+        help="Deliver every currently queued dispatch.",
+    )
+    deliver_run_all_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -3140,6 +3189,17 @@ def main():
                     )
                 else:
                     exit_code = run_deployment_governance_notification_dispatch_clear(
+                        json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "deliver":
+                if args.deliver_command == "run":
+                    exit_code = run_deployment_governance_delivery_run(
+                        dispatch_id=args.dispatch_id,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_delivery_run_all(
                         json_output=args.json_output,
                     )
                 sys.exit(exit_code)
