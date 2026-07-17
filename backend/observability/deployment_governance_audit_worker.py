@@ -40,6 +40,8 @@ class GovernanceIntegrityAuditExecutionRecord:
 
     job_id: str
 
+    schedule_name: str
+
     template_name: str
 
     result: GovernanceIntegrityExecutionResult
@@ -56,6 +58,11 @@ class GovernanceIntegrityAuditExecutionRecord:
         if not self.job_id.strip():
             raise ValueError(
                 "job_id must not be empty"
+            )
+
+        if not self.schedule_name.strip():
+            raise ValueError(
+                "schedule_name must not be empty"
             )
 
         if not self.template_name.strip():
@@ -103,6 +110,7 @@ class GovernanceIntegrityAuditExecutionRecord:
     def to_dict(self) -> dict[str, object]:
         return {
             "job_id": self.job_id,
+            "schedule_name": self.schedule_name,
             "template_name": self.template_name,
             "result": self.result.value,
             "report": (
@@ -283,6 +291,7 @@ class GovernanceIntegrityAuditWorker:
         except Exception as exc:
             record = GovernanceIntegrityAuditExecutionRecord(
                 job_id=job.job_id,
+                schedule_name=job.schedule_name,
                 template_name=job.template_name,
                 result=GovernanceIntegrityExecutionResult.FAILED,
                 report=None,
@@ -294,6 +303,7 @@ class GovernanceIntegrityAuditWorker:
         else:
             record = GovernanceIntegrityAuditExecutionRecord(
                 job_id=job.job_id,
+                schedule_name=job.schedule_name,
                 template_name=job.template_name,
                 result=GovernanceIntegrityExecutionResult.SUCCESS,
                 report=report,

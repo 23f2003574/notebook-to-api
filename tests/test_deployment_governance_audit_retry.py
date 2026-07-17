@@ -34,6 +34,11 @@ from backend.observability.deployment_governance_audit_report_templates import (
 from backend.observability.deployment_governance_audit_reports import (
     GovernanceIntegrityAuditReportService,
 )
+from backend.observability.deployment_governance_audit_retry import (
+    GovernanceIntegrityAuditRetryService,
+    GovernanceIntegrityRetryRecord,
+    InMemoryGovernanceIntegrityRetryRepository,
+)
 from backend.observability.deployment_governance_audit_saved_queries import (
     GovernanceIntegritySavedAuditQueryService,
     InMemoryGovernanceIntegritySavedAuditQueryRepository,
@@ -45,9 +50,7 @@ from backend.observability.deployment_governance_audit_statistics import (
     GovernanceIntegrityAuditStatisticsService,
 )
 from backend.observability.deployment_governance_audit_worker import (
-    GovernanceIntegrityAuditExecutionRecord,
     GovernanceIntegrityAuditWorker,
-    GovernanceIntegrityExecutionResult,
     InMemoryGovernanceIntegrityAuditExecutionRepository,
 )
 from backend.observability.deployment_governance_persistence import (
@@ -60,7 +63,7 @@ BASE_TIME = datetime(2026, 7, 15, 23, 0, 0, tzinfo=timezone.utc)
 
 
 class Harness:
-    def __init__(self, *, clock=None) -> None:
+    def __init__(self, *, clock=None, uuid_factory=None) -> None:
         self.history_repository = (
             InMemoryGovernanceIntegrityAuditHistoryRepository()
         )
@@ -87,6 +90,9 @@ class Harness:
         )
         self.execution_repository = (
             InMemoryGovernanceIntegrityAuditExecutionRepository()
+        )
+        self.retry_repository = (
+            InMemoryGovernanceIntegrityRetryRepository()
         )
 
         self.collection_service = GovernanceIntegrityAuditCollectionService(
@@ -132,7 +138,14 @@ class Harness:
             self.queue_service,
             self.template_service,
             self.execution_repository,
+        )
+
+        self.service = GovernanceIntegrityAuditRetryService(
+            self.queue_service,
+            self.execution_repository,
+            self.retry_repository,
             clock=clock,
+            uuid_factory=uuid_factory,
         )
 
     def create_schedule(
@@ -150,86 +163,59 @@ class Harness:
         )
         self.schedule_service.create(name, name, frequency)
 
+    def run_failed_job(self, schedule_name: str) -> str:
+        """
+        Queue and run a job that fails because its template was
+        deleted before execution. Returns the failed job's id.
+        """
+
+        self.create_schedule(schedule_name)
+
+        job = self.queue_service.enqueue_schedule(schedule_name)
+
+        self.template_service.delete(schedule_name)
+
+        record = self.worker.run_job(job.job_id)
+
+        assert record.result.value == "failed"
+
+        return job.job_id
+
 
 # --- Model -------------------------------------------------------------
 
 
-def test_record_rejects_empty_job_id() -> None:
-    with pytest.raises(ValueError, match="job_id must not be empty"):
-        GovernanceIntegrityAuditExecutionRecord(
-            job_id="  ",
-            schedule_name="release",
-            template_name="release",
-            result=GovernanceIntegrityExecutionResult.FAILED,
-            report=None,
-            error="boom",
-            started_at=BASE_TIME,
-            finished_at=BASE_TIME,
+def test_record_rejects_empty_retry_id() -> None:
+    with pytest.raises(ValueError, match="retry_id must not be empty"):
+        GovernanceIntegrityRetryRecord(
+            retry_id="  ",
+            original_job_id="job-1",
+            new_job_id="job-2",
+            created_at=BASE_TIME,
         )
 
 
-def test_record_rejects_naive_started_at() -> None:
+def test_record_rejects_empty_original_job_id() -> None:
     with pytest.raises(
-        ValueError, match="started_at must be timezone-aware"
+        ValueError, match="original_job_id must not be empty"
     ):
-        GovernanceIntegrityAuditExecutionRecord(
-            job_id="job-1",
-            schedule_name="release",
-            template_name="release",
-            result=GovernanceIntegrityExecutionResult.FAILED,
-            report=None,
-            error="boom",
-            started_at=datetime(2026, 7, 15, 23, 0, 0),
-            finished_at=BASE_TIME,
+        GovernanceIntegrityRetryRecord(
+            retry_id="retry-1",
+            original_job_id="  ",
+            new_job_id="job-2",
+            created_at=BASE_TIME,
         )
 
 
-def test_record_rejects_finished_before_started() -> None:
+def test_record_rejects_naive_created_at() -> None:
     with pytest.raises(
-        ValueError,
-        match="finished_at must not be earlier than started_at",
+        ValueError, match="created_at must be timezone-aware"
     ):
-        GovernanceIntegrityAuditExecutionRecord(
-            job_id="job-1",
-            schedule_name="release",
-            template_name="release",
-            result=GovernanceIntegrityExecutionResult.FAILED,
-            report=None,
-            error="boom",
-            started_at=BASE_TIME,
-            finished_at=BASE_TIME - timedelta(minutes=1),
-        )
-
-
-def test_record_rejects_success_without_report() -> None:
-    with pytest.raises(
-        ValueError, match="report must be set when result is SUCCESS"
-    ):
-        GovernanceIntegrityAuditExecutionRecord(
-            job_id="job-1",
-            schedule_name="release",
-            template_name="release",
-            result=GovernanceIntegrityExecutionResult.SUCCESS,
-            report=None,
-            error=None,
-            started_at=BASE_TIME,
-            finished_at=BASE_TIME,
-        )
-
-
-def test_record_rejects_failed_without_error() -> None:
-    with pytest.raises(
-        ValueError, match="error must be set when result is FAILED"
-    ):
-        GovernanceIntegrityAuditExecutionRecord(
-            job_id="job-1",
-            schedule_name="release",
-            template_name="release",
-            result=GovernanceIntegrityExecutionResult.FAILED,
-            report=None,
-            error=None,
-            started_at=BASE_TIME,
-            finished_at=BASE_TIME,
+        GovernanceIntegrityRetryRecord(
+            retry_id="retry-1",
+            original_job_id="job-1",
+            new_job_id="job-2",
+            created_at=datetime(2026, 7, 15, 23, 0, 0),
         )
 
 
@@ -237,17 +223,13 @@ def test_record_rejects_failed_without_error() -> None:
 
 
 def test_repository_save_and_get() -> None:
-    repository = InMemoryGovernanceIntegrityAuditExecutionRepository()
+    repository = InMemoryGovernanceIntegrityRetryRepository()
 
-    record = GovernanceIntegrityAuditExecutionRecord(
-        job_id="job-1",
-        schedule_name="release",
-        template_name="release",
-        result=GovernanceIntegrityExecutionResult.FAILED,
-        report=None,
-        error="boom",
-        started_at=BASE_TIME,
-        finished_at=BASE_TIME,
+    record = GovernanceIntegrityRetryRecord(
+        retry_id="retry-1",
+        original_job_id="job-1",
+        new_job_id="job-2",
+        created_at=BASE_TIME,
     )
 
     repository.save(record)
@@ -256,33 +238,25 @@ def test_repository_save_and_get() -> None:
 
 
 def test_repository_get_missing_returns_none() -> None:
-    repository = InMemoryGovernanceIntegrityAuditExecutionRepository()
+    repository = InMemoryGovernanceIntegrityRetryRepository()
 
     assert repository.get("missing") is None
 
 
 def test_repository_list_returns_newest_first() -> None:
-    repository = InMemoryGovernanceIntegrityAuditExecutionRepository()
+    repository = InMemoryGovernanceIntegrityRetryRepository()
 
-    first = GovernanceIntegrityAuditExecutionRecord(
-        job_id="job-1",
-        schedule_name="release",
-        template_name="release",
-        result=GovernanceIntegrityExecutionResult.FAILED,
-        report=None,
-        error="boom",
-        started_at=BASE_TIME,
-        finished_at=BASE_TIME,
+    first = GovernanceIntegrityRetryRecord(
+        retry_id="retry-1",
+        original_job_id="job-1",
+        new_job_id="job-2",
+        created_at=BASE_TIME,
     )
-    second = GovernanceIntegrityAuditExecutionRecord(
-        job_id="job-2",
-        schedule_name="release",
-        template_name="release",
-        result=GovernanceIntegrityExecutionResult.FAILED,
-        report=None,
-        error="boom",
-        started_at=BASE_TIME,
-        finished_at=BASE_TIME + timedelta(minutes=1),
+    second = GovernanceIntegrityRetryRecord(
+        retry_id="retry-2",
+        original_job_id="job-3",
+        new_job_id="job-4",
+        created_at=BASE_TIME + timedelta(minutes=1),
     )
 
     repository.save(first)
@@ -290,23 +264,19 @@ def test_repository_list_returns_newest_first() -> None:
 
     records = repository.list()
 
-    assert records[0].job_id == "job-2"
-    assert records[1].job_id == "job-1"
+    assert records[0].retry_id == "retry-2"
+    assert records[1].retry_id == "retry-1"
 
 
 def test_repository_clear_empties_store() -> None:
-    repository = InMemoryGovernanceIntegrityAuditExecutionRepository()
+    repository = InMemoryGovernanceIntegrityRetryRepository()
 
     repository.save(
-        GovernanceIntegrityAuditExecutionRecord(
-            job_id="job-1",
-            schedule_name="release",
-            template_name="release",
-            result=GovernanceIntegrityExecutionResult.FAILED,
-            report=None,
-            error="boom",
-            started_at=BASE_TIME,
-            finished_at=BASE_TIME,
+        GovernanceIntegrityRetryRecord(
+            retry_id="retry-1",
+            original_job_id="job-1",
+            new_job_id="job-2",
+            created_at=BASE_TIME,
         )
     )
 
@@ -315,10 +285,40 @@ def test_repository_clear_empties_store() -> None:
     assert repository.list() == ()
 
 
-# --- Worker: run_job -------------------------------------------------------
+# --- Service: retry ----------------------------------------------------
 
 
-def test_run_job_succeeds_and_generates_report() -> None:
+def test_retry_failed_job_queues_new_job() -> None:
+    harness = Harness()
+
+    failed_job_id = harness.run_failed_job("nightly")
+
+    retry = harness.service.retry(failed_job_id)
+
+    assert retry.original_job_id == failed_job_id
+    assert retry.new_job_id != retry.original_job_id
+
+    jobs = harness.queue_service.list()
+
+    assert len(jobs) == 1
+    assert jobs[0].job_id == retry.new_job_id
+
+
+def test_retry_original_execution_is_unchanged() -> None:
+    harness = Harness()
+
+    failed_job_id = harness.run_failed_job("nightly")
+
+    original_before = harness.execution_repository.get(failed_job_id)
+
+    harness.service.retry(failed_job_id)
+
+    original_after = harness.execution_repository.get(failed_job_id)
+
+    assert original_before == original_after
+
+
+def test_retry_success_raises_value_error() -> None:
     harness = Harness()
 
     harness.create_schedule("nightly")
@@ -327,120 +327,69 @@ def test_run_job_succeeds_and_generates_report() -> None:
 
     record = harness.worker.run_job(job.job_id)
 
-    assert record.result is GovernanceIntegrityExecutionResult.SUCCESS
-    assert record.report is not None
-    assert record.error is None
-    assert harness.queue_service.list() == ()
+    assert record.result.value == "success"
+
+    with pytest.raises(ValueError):
+        harness.service.retry(job.job_id)
 
 
-def test_run_job_stores_execution_record() -> None:
+def test_retry_missing_execution_raises_lookup_error() -> None:
     harness = Harness()
 
-    harness.create_schedule("nightly")
-
-    job = harness.queue_service.enqueue_schedule("nightly")
-
-    record = harness.worker.run_job(job.job_id)
-
-    assert harness.worker.get(job.job_id) == record
+    with pytest.raises(LookupError):
+        harness.service.retry("missing")
 
 
-def test_run_job_fails_for_missing_template() -> None:
+def test_retry_uses_injected_uuid_factory() -> None:
+    ids = iter(["fixed-retry-id"])
+
+    harness = Harness(uuid_factory=lambda: next(ids))
+
+    failed_job_id = harness.run_failed_job("nightly")
+
+    retry = harness.service.retry(failed_job_id)
+
+    assert retry.retry_id == "fixed-retry-id"
+
+
+# --- Service: history/get/clear ---------------------------------------
+
+
+def test_history_returns_retry_records() -> None:
     harness = Harness()
 
-    harness.create_schedule("nightly")
+    failed_job_id = harness.run_failed_job("nightly")
 
-    job = harness.queue_service.enqueue_schedule("nightly")
+    retry = harness.service.retry(failed_job_id)
 
-    harness.template_service.delete("nightly")
-
-    record = harness.worker.run_job(job.job_id)
-
-    assert record.result is GovernanceIntegrityExecutionResult.FAILED
-    assert record.error is not None
-    assert record.report is None
-    assert harness.queue_service.list() == ()
-
-
-def test_run_job_raises_for_missing_job() -> None:
-    harness = Harness()
-
-    with pytest.raises(KeyError):
-        harness.worker.run_job("missing")
-
-
-# --- Worker: run_all -------------------------------------------------------
-
-
-def test_run_all_runs_every_queued_job() -> None:
-    harness = Harness()
-
-    harness.create_schedule("job1")
-    harness.create_schedule("job2")
-    harness.create_schedule("job3")
-
-    harness.queue_service.enqueue_schedule("job1")
-    harness.queue_service.enqueue_schedule("job2")
-    harness.queue_service.enqueue_schedule("job3")
-
-    records = harness.worker.run_all()
-
-    assert len(records) == 3
-    assert all(
-        record.result is GovernanceIntegrityExecutionResult.SUCCESS
-        for record in records
-    )
-    assert harness.queue_service.list() == ()
-
-
-def test_run_all_returns_empty_when_queue_is_empty() -> None:
-    harness = Harness()
-
-    assert harness.worker.run_all() == ()
-
-
-# --- Worker: history/get/clear_history --------------------------------------
-
-
-def test_history_returns_stored_records() -> None:
-    harness = Harness()
-
-    harness.create_schedule("nightly")
-
-    job = harness.queue_service.enqueue_schedule("nightly")
-
-    record = harness.worker.run_job(job.job_id)
-
-    assert harness.worker.history() == (record,)
+    assert harness.service.history() == (retry,)
 
 
 def test_get_returns_none_for_missing_record() -> None:
     harness = Harness()
 
-    assert harness.worker.get("missing") is None
+    assert harness.service.get("missing") is None
 
 
-def test_clear_history_empties_repository() -> None:
+def test_clear_empties_repository() -> None:
     harness = Harness()
 
-    harness.create_schedule("nightly")
+    failed_job_id = harness.run_failed_job("nightly")
 
-    job = harness.queue_service.enqueue_schedule("nightly")
+    harness.service.retry(failed_job_id)
 
-    harness.worker.run_job(job.job_id)
+    harness.service.clear()
 
-    harness.worker.clear_history()
-
-    assert harness.worker.history() == ()
+    assert harness.service.history() == ()
 
 
 # --- Runtime ---------------------------------------------------------------
 
 
-def test_runtime_builds_working_worker(tmp_path) -> None:
+def test_runtime_builds_working_retry_service(tmp_path) -> None:
     runtime = build_deployment_governance_persistence(
         DeploymentGovernancePersistenceConfig.sqlite(
-            tmp_path / "worker-runtime.db"
+            tmp_path / "retry-runtime.db"
         )
     )
 
@@ -463,8 +412,16 @@ def test_runtime_builds_working_worker(tmp_path) -> None:
     queue_service = runtime.build_integrity_audit_execution_queue_service()
     job = queue_service.enqueue_schedule("nightly")
 
-    worker = runtime.build_integrity_audit_worker()
+    template_service.delete("release")
 
+    worker = runtime.build_integrity_audit_worker()
     record = worker.run_job(job.job_id)
 
-    assert record.result is GovernanceIntegrityExecutionResult.SUCCESS
+    assert record.result.value == "failed"
+
+    retry_service = runtime.build_integrity_audit_retry_service()
+
+    retry = retry_service.retry(job.job_id)
+
+    assert retry.original_job_id == job.job_id
+    assert retry.new_job_id != job.job_id

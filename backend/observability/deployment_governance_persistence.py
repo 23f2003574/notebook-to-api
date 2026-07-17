@@ -43,6 +43,10 @@ from .deployment_governance_audit_worker import (
     GovernanceIntegrityAuditExecutionRepository,
     InMemoryGovernanceIntegrityAuditExecutionRepository,
 )
+from .deployment_governance_audit_retry import (
+    GovernanceIntegrityRetryRepository,
+    InMemoryGovernanceIntegrityRetryRepository,
+)
 from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditHistoryRepository,
     InMemoryGovernanceIntegrityAuditHistoryRepository,
@@ -154,6 +158,9 @@ if TYPE_CHECKING:
     )
     from .deployment_governance_audit_worker import (
         GovernanceIntegrityAuditWorker,
+    )
+    from .deployment_governance_audit_retry import (
+        GovernanceIntegrityAuditRetryService,
     )
     from .deployment_governance_check import (
         GovernanceIntegrityCheckService,
@@ -360,6 +367,10 @@ class DeploymentGovernancePersistenceRuntime:
 
     execution_repository: (
         GovernanceIntegrityAuditExecutionRepository
+    )
+
+    retry_repository: (
+        GovernanceIntegrityRetryRepository
     )
 
     database: SQLiteDatabase | None = None
@@ -856,6 +867,26 @@ class DeploymentGovernancePersistenceRuntime:
             self.execution_repository,
         )
 
+    def build_integrity_audit_retry_service(
+        self,
+    ) -> "GovernanceIntegrityAuditRetryService":
+        """
+        Build the governance audit retry service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_audit_retry import (
+            GovernanceIntegrityAuditRetryService,
+        )
+
+        return GovernanceIntegrityAuditRetryService(
+            self.build_integrity_audit_execution_queue_service(),
+            self.execution_repository,
+            self.retry_repository,
+        )
+
     def build_diagnostics_service(
         self,
     ) -> "DeploymentGovernancePersistenceDiagnosticsService":
@@ -996,6 +1027,10 @@ def _build_memory_runtime(
         InMemoryGovernanceIntegrityAuditExecutionRepository()
     )
 
+    retry_repository = (
+        InMemoryGovernanceIntegrityRetryRepository()
+    )
+
     return DeploymentGovernancePersistenceRuntime(
         config=config,
         repository=repository,
@@ -1009,6 +1044,7 @@ def _build_memory_runtime(
         report_schedule_repository=report_schedule_repository,
         execution_queue_repository=execution_queue_repository,
         execution_repository=execution_repository,
+        retry_repository=retry_repository,
         database=None,
         automatic_audit_retention=automatic_audit_retention,
     )
@@ -1128,6 +1164,13 @@ def _build_sqlite_runtime(
         InMemoryGovernanceIntegrityAuditExecutionRepository()
     )
 
+    # SQLite persistence for retry records is intentionally deferred
+    # (see deployment_governance_audit_retry.py): it stays in-process
+    # memory regardless of the configured backend.
+    retry_repository = (
+        InMemoryGovernanceIntegrityRetryRepository()
+    )
+
     trace_engine = DeploymentGovernanceTraceEngine()
 
     registry = DeploymentGovernanceTraceRegistry(
@@ -1148,6 +1191,7 @@ def _build_sqlite_runtime(
         report_schedule_repository=report_schedule_repository,
         execution_queue_repository=execution_queue_repository,
         execution_repository=execution_repository,
+        retry_repository=retry_repository,
         database=database,
         automatic_audit_retention=automatic_audit_retention,
     )

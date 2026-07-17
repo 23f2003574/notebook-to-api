@@ -120,6 +120,12 @@ from backend.observability.deployment_governance_audit_worker_cli import (
     run_deployment_governance_audit_worker_run_all,
     run_deployment_governance_audit_worker_show,
 )
+from backend.observability.deployment_governance_audit_retry_cli import (
+    run_deployment_governance_audit_retry_clear,
+    run_deployment_governance_audit_retry_history,
+    run_deployment_governance_audit_retry_run,
+    run_deployment_governance_audit_retry_show,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -1650,6 +1656,79 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    retry_parser = audits_subparsers.add_parser(
+        "retry",
+        help="Recover failed governance audit execution jobs.",
+        description=(
+            "Retry a failed governance audit execution job by "
+            "queuing a fresh job for the same schedule.\n\n"
+            "The original failed execution record is never modified; "
+            "only SUCCESS executions cannot be retried.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    retry_subparsers = retry_parser.add_subparsers(
+        dest="retry_command", required=True
+    )
+
+    retry_run_parser = retry_subparsers.add_parser(
+        "run",
+        help="Retry one failed execution job.",
+    )
+    retry_run_parser.add_argument(
+        "--job-id",
+        required=True,
+        dest="job_id",
+        help="Identifier of the failed execution job to retry.",
+    )
+    retry_run_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    retry_history_parser = retry_subparsers.add_parser(
+        "history",
+        help="List every stored retry record.",
+    )
+    retry_history_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    retry_show_parser = retry_subparsers.add_parser(
+        "show",
+        help="Show one stored retry record.",
+    )
+    retry_show_parser.add_argument(
+        "--job-id",
+        required=True,
+        dest="job_id",
+        help="Identifier of the original job to show the retry for.",
+    )
+    retry_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    retry_clear_parser = retry_subparsers.add_parser(
+        "clear",
+        help="Remove every stored retry record.",
+    )
+    retry_clear_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -2089,6 +2168,26 @@ def main():
                     )
                 else:
                     exit_code = run_deployment_governance_audit_worker_clear(
+                        json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "retry":
+                if args.retry_command == "run":
+                    exit_code = run_deployment_governance_audit_retry_run(
+                        job_id=args.job_id,
+                        json_output=args.json_output,
+                    )
+                elif args.retry_command == "history":
+                    exit_code = run_deployment_governance_audit_retry_history(
+                        json_output=args.json_output,
+                    )
+                elif args.retry_command == "show":
+                    exit_code = run_deployment_governance_audit_retry_show(
+                        job_id=args.job_id,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_audit_retry_clear(
                         json_output=args.json_output,
                     )
                 sys.exit(exit_code)
