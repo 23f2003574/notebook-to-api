@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Callable, Mapping, Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable
 
 from .deployment_governance_delivery_policies import (
     GovernanceIntegrityDeliveryPolicy,
@@ -12,7 +12,6 @@ from .deployment_governance_delivery_policies import (
 from .deployment_governance_notification_channels import (
     GovernanceIntegrityNotificationChannel,
     GovernanceIntegrityNotificationChannelRepository,
-    GovernanceIntegrityNotificationChannelType,
 )
 from .deployment_governance_notification_dispatcher import (
     GovernanceIntegrityNotificationDispatch,
@@ -21,6 +20,9 @@ from .deployment_governance_notification_dispatcher import (
 from .deployment_governance_notifications import (
     GovernanceIntegrityNotification,
     GovernanceIntegrityNotificationRepository,
+)
+from .deployment_governance_provider_registry import (
+    GovernanceIntegrityProviderRegistry,
 )
 
 
@@ -185,10 +187,7 @@ class GovernanceIntegrityDeliveryEngine:
         channel_repository: (
             GovernanceIntegrityNotificationChannelRepository
         ),
-        provider_registry: Mapping[
-            GovernanceIntegrityNotificationChannelType,
-            GovernanceIntegrityNotificationProvider,
-        ],
+        provider_registry: GovernanceIntegrityProviderRegistry,
         policy_service: GovernanceIntegrityDeliveryPolicyService,
         *,
         clock: Callable[[], datetime] | None = None,
@@ -249,15 +248,9 @@ class GovernanceIntegrityDeliveryEngine:
                     "was not found"
                 )
 
-            provider = self._provider_registry.get(
+            provider = self._provider_registry.resolve(
                 channel.channel_type
             )
-
-            if provider is None:
-                raise LookupError(
-                    "no delivery provider registered for channel "
-                    f"type '{channel.channel_type.value}'"
-                )
 
             try:
                 policy = self._policy_service.resolve(channel.name)

@@ -39,14 +39,36 @@ from backend.observability.deployment_governance_persistence import (
     DeploymentGovernancePersistenceConfig,
     build_deployment_governance_persistence,
 )
+from backend.observability.deployment_governance_provider_registry import (
+    GovernanceIntegrityProviderRegistry,
+)
 
 BASE_TIME = datetime(2026, 7, 15, 23, 0, 0, tzinfo=timezone.utc)
 
-DEFAULT_PROVIDER_REGISTRY = {
-    GovernanceIntegrityNotificationChannelType.EMAIL: EmailProvider(),
-    GovernanceIntegrityNotificationChannelType.SLACK: SlackProvider(),
-    GovernanceIntegrityNotificationChannelType.WEBHOOK: WebhookProvider(),
-}
+
+def _build_provider_registry(providers) -> GovernanceIntegrityProviderRegistry:
+    registry = GovernanceIntegrityProviderRegistry()
+
+    for channel_type, provider in providers.items():
+        registry.register(channel_type, provider)
+
+    return registry
+
+
+def _default_provider_registry() -> GovernanceIntegrityProviderRegistry:
+    return _build_provider_registry(
+        {
+            GovernanceIntegrityNotificationChannelType.EMAIL: (
+                EmailProvider()
+            ),
+            GovernanceIntegrityNotificationChannelType.SLACK: (
+                SlackProvider()
+            ),
+            GovernanceIntegrityNotificationChannelType.WEBHOOK: (
+                WebhookProvider()
+            ),
+        }
+    )
 
 
 class Harness:
@@ -80,7 +102,7 @@ class Harness:
             self.notification_repository,
             self.channel_repository,
             (
-                DEFAULT_PROVIDER_REGISTRY
+                _default_provider_registry()
                 if provider_registry is None
                 else provider_registry
             ),
@@ -227,6 +249,55 @@ def test_stub_providers_deliver_without_raising(provider_class) -> None:
     )
 
 
+# --- Provider registry integration --------------------------------------
+
+
+class SpyProviderRegistry:
+    """
+    Test double recording every channel type resolved through it, in
+    place of a real GovernanceIntegrityProviderRegistry.
+    """
+
+    def __init__(self, provider) -> None:
+        self._provider = provider
+        self.resolved_channel_types: list[
+            GovernanceIntegrityNotificationChannelType
+        ] = []
+
+    def resolve(self, channel_type):
+        self.resolved_channel_types.append(channel_type)
+        return self._provider
+
+
+def test_deliver_requests_provider_through_registry() -> None:
+    harness = Harness()
+
+    harness.add_notification("n1")
+    harness.add_channel(
+        "email", GovernanceIntegrityNotificationChannelType.EMAIL
+    )
+    harness.add_dispatch(
+        "d1", notification_id="n1", channel_name="email"
+    )
+
+    spy_registry = SpyProviderRegistry(EmailProvider())
+
+    engine = GovernanceIntegrityDeliveryEngine(
+        harness.dispatch_repository,
+        harness.notification_repository,
+        harness.channel_repository,
+        spy_registry,
+        harness.policy_service,
+    )
+
+    result = engine.deliver("d1")
+
+    assert result.status is GovernanceIntegrityDeliveryStatus.SUCCESS
+    assert spy_registry.resolved_channel_types == [
+        GovernanceIntegrityNotificationChannelType.EMAIL
+    ]
+
+
 # --- Service: deliver ----------------------------------------------------
 
 
@@ -270,7 +341,9 @@ def test_deliver_succeeds_without_configured_policy() -> None:
 
 
 def test_deliver_fails_when_provider_missing() -> None:
-    harness = Harness(provider_registry={})
+    harness = Harness(
+        provider_registry=GovernanceIntegrityProviderRegistry()
+    )
 
     harness.add_notification("n1")
     harness.add_channel(
@@ -358,11 +431,13 @@ def test_deliver_supplies_resolved_policy_to_provider() -> None:
         harness.dispatch_repository,
         harness.notification_repository,
         harness.channel_repository,
-        {
-            GovernanceIntegrityNotificationChannelType.EMAIL: (
-                recording_provider
-            ),
-        },
+        _build_provider_registry(
+            {
+                GovernanceIntegrityNotificationChannelType.EMAIL: (
+                    recording_provider
+                ),
+            }
+        ),
         harness.policy_service,
     )
 
@@ -389,11 +464,13 @@ def test_deliver_supplies_none_policy_when_unconfigured() -> None:
         harness.dispatch_repository,
         harness.notification_repository,
         harness.channel_repository,
-        {
-            GovernanceIntegrityNotificationChannelType.EMAIL: (
-                recording_provider
-            ),
-        },
+        _build_provider_registry(
+            {
+                GovernanceIntegrityNotificationChannelType.EMAIL: (
+                    recording_provider
+                ),
+            }
+        ),
         harness.policy_service,
     )
 

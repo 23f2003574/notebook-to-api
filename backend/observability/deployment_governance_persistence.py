@@ -239,6 +239,9 @@ if TYPE_CHECKING:
     from .deployment_governance_delivery_engine import (
         GovernanceIntegrityDeliveryEngine,
     )
+    from .deployment_governance_provider_registry import (
+        GovernanceIntegrityProviderRegistry,
+    )
     from .deployment_governance_delivery_history import (
         GovernanceIntegrityDeliveryHistoryService,
     )
@@ -1173,6 +1176,48 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_notification_channel_service(),
         )
 
+    def build_integrity_provider_registry(
+        self,
+    ) -> "GovernanceIntegrityProviderRegistry":
+        """
+        Build a governance audit delivery provider registry with every
+        built-in provider registered.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_delivery_engine import (
+            EmailProvider,
+            SlackProvider,
+            WebhookProvider,
+        )
+        from .deployment_governance_notification_channels import (
+            GovernanceIntegrityNotificationChannelType,
+        )
+        from .deployment_governance_provider_registry import (
+            GovernanceIntegrityProviderRegistry,
+        )
+
+        registry = GovernanceIntegrityProviderRegistry()
+
+        registry.register(
+            GovernanceIntegrityNotificationChannelType.EMAIL,
+            EmailProvider(),
+        )
+
+        registry.register(
+            GovernanceIntegrityNotificationChannelType.SLACK,
+            SlackProvider(),
+        )
+
+        registry.register(
+            GovernanceIntegrityNotificationChannelType.WEBHOOK,
+            WebhookProvider(),
+        )
+
+        return registry
+
     def build_integrity_delivery_engine(
         self,
     ) -> "GovernanceIntegrityDeliveryEngine":
@@ -1184,32 +1229,14 @@ class DeploymentGovernancePersistenceRuntime:
         """
 
         from .deployment_governance_delivery_engine import (
-            EmailProvider,
             GovernanceIntegrityDeliveryEngine,
-            SlackProvider,
-            WebhookProvider,
         )
-        from .deployment_governance_notification_channels import (
-            GovernanceIntegrityNotificationChannelType,
-        )
-
-        provider_registry = {
-            GovernanceIntegrityNotificationChannelType.EMAIL: (
-                EmailProvider()
-            ),
-            GovernanceIntegrityNotificationChannelType.SLACK: (
-                SlackProvider()
-            ),
-            GovernanceIntegrityNotificationChannelType.WEBHOOK: (
-                WebhookProvider()
-            ),
-        }
 
         return GovernanceIntegrityDeliveryEngine(
             self.notification_dispatch_repository,
             self.notification_repository,
             self.notification_channel_repository,
-            provider_registry,
+            self.build_integrity_provider_registry(),
             self.build_integrity_delivery_policy_service(),
         )
 

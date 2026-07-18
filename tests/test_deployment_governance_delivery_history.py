@@ -42,6 +42,9 @@ from backend.observability.deployment_governance_persistence import (
     DeploymentGovernancePersistenceConfig,
     build_deployment_governance_persistence,
 )
+from backend.observability.deployment_governance_provider_registry import (
+    GovernanceIntegrityProviderRegistry,
+)
 from backend.observability.sqlite_deployment_governance_delivery_history import (
     SQLiteGovernanceIntegrityDeliveryHistoryRepository,
 )
@@ -75,15 +78,18 @@ class Harness:
             self.policy_repository, self.channel_service
         )
 
+        self.provider_registry = GovernanceIntegrityProviderRegistry()
+
+        self.provider_registry.register(
+            GovernanceIntegrityNotificationChannelType.EMAIL,
+            EmailProvider(),
+        )
+
         self.engine = GovernanceIntegrityDeliveryEngine(
             self.dispatch_repository,
             self.notification_repository,
             self.channel_repository,
-            {
-                GovernanceIntegrityNotificationChannelType.EMAIL: (
-                    EmailProvider()
-                ),
-            },
+            self.provider_registry,
             self.policy_service,
         )
 

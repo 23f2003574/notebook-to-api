@@ -206,6 +206,10 @@ from backend.observability.deployment_governance_delivery_policies_cli import (
     run_deployment_governance_delivery_policy_show,
     run_deployment_governance_delivery_policy_update,
 )
+from backend.observability.deployment_governance_provider_registry_cli import (
+    run_deployment_governance_provider_list,
+    run_deployment_governance_provider_show,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -2919,6 +2923,55 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    providers_parser = audits_subparsers.add_parser(
+        "providers",
+        help="Inspect registered governance audit delivery providers.",
+        description=(
+            "Inspect the delivery providers registered for each "
+            "governance audit notification channel type.\n\n"
+            "Providers are registered automatically at runtime "
+            "construction; this command is read-only.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    providers_subparsers = providers_parser.add_subparsers(
+        dest="providers_command", required=True
+    )
+
+    providers_list_parser = providers_subparsers.add_parser(
+        "list",
+        help="List every registered delivery provider.",
+    )
+    providers_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    providers_show_parser = providers_subparsers.add_parser(
+        "show",
+        help="Show the provider registered for one channel type.",
+    )
+    providers_show_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to show the registered provider for.",
+    )
+    providers_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -3655,6 +3708,17 @@ def main():
                 else:
                     exit_code = run_deployment_governance_delivery_policy_delete(
                         channel_name=args.channel_name,
+                        json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "providers":
+                if args.providers_command == "list":
+                    exit_code = run_deployment_governance_provider_list(
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_provider_show(
+                        channel_type=args.channel_type,
                         json_output=args.json_output,
                     )
                 sys.exit(exit_code)
