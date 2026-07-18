@@ -287,6 +287,9 @@ if TYPE_CHECKING:
     from .deployment_governance_delivery_scheduler import (
         GovernanceIntegrityDeliveryScheduler,
     )
+    from .deployment_governance_delivery_worker import (
+        GovernanceIntegrityDeliveryWorker,
+    )
     from .deployment_governance_delivery_history import (
         GovernanceIntegrityDeliveryHistoryService,
     )
@@ -1448,6 +1451,26 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_provider_response_service(),
             self.build_integrity_retry_orchestrator(),
             scheduler=self.build_integrity_delivery_scheduler(),
+        )
+
+    def build_integrity_delivery_worker(
+        self,
+    ) -> "GovernanceIntegrityDeliveryWorker":
+        """
+        Build the governance audit delivery worker.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_delivery_worker import (
+            GovernanceIntegrityDeliveryWorker,
+        )
+
+        return GovernanceIntegrityDeliveryWorker(
+            self.build_integrity_delivery_scheduler(),
+            self.build_integrity_delivery_engine(),
+            self.build_integrity_retry_orchestrator(),
         )
 
     def build_integrity_delivery_history_service(

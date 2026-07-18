@@ -254,6 +254,10 @@ from backend.observability.deployment_governance_delivery_scheduler_cli import (
     run_deployment_governance_scheduler_ready,
     run_deployment_governance_scheduler_show,
 )
+from backend.observability.deployment_governance_delivery_worker_cli import (
+    run_deployment_governance_delivery_worker_run,
+    run_deployment_governance_delivery_worker_summary,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -3757,6 +3761,55 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    delivery_worker_parser = audits_subparsers.add_parser(
+        "delivery-worker",
+        help="Run the governance audit delivery worker.",
+        description=(
+            "Continuously consume the delivery scheduler's ready "
+            "queue, executing each dispatch through the delivery "
+            "engine and coordinating retries.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    delivery_worker_subparsers = delivery_worker_parser.add_subparsers(
+        dest="delivery_worker_command", required=True
+    )
+
+    delivery_worker_run_parser = delivery_worker_subparsers.add_parser(
+        "run",
+        help="Run a single pass over the ready dispatch queue.",
+    )
+    delivery_worker_run_parser.add_argument(
+        "--once",
+        action="store_true",
+        help=(
+            "Explicit no-op flag: a single pass is always run. "
+            "Accepted for compatibility with the documented CLI "
+            "shape."
+        ),
+    )
+    delivery_worker_run_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    delivery_worker_summary_parser = (
+        delivery_worker_subparsers.add_parser(
+            "summary",
+            help="Show the most recent delivery worker run summary.",
+        )
+    )
+    delivery_worker_summary_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -4704,6 +4757,23 @@ def main():
                     exit_code = run_deployment_governance_scheduler_cancel(
                         dispatch_id=args.dispatch_id,
                         json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if (
+                getattr(args, "audits_command", None)
+                == "delivery-worker"
+            ):
+                if args.delivery_worker_command == "run":
+                    exit_code = (
+                        run_deployment_governance_delivery_worker_run(
+                            json_output=args.json_output,
+                        )
+                    )
+                else:
+                    exit_code = (
+                        run_deployment_governance_delivery_worker_summary(
+                            json_output=args.json_output,
+                        )
                     )
                 sys.exit(exit_code)
             try:

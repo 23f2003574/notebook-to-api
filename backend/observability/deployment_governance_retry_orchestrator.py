@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Callable
+from typing import Callable, TYPE_CHECKING
 
 from .deployment_governance_delivery_policies import (
     GovernanceIntegrityDeliveryPolicy,
@@ -12,7 +12,14 @@ from .deployment_governance_provider_responses import (
     GovernanceIntegrityProviderResponseOutcome,
 )
 
+if TYPE_CHECKING:
+    from .deployment_governance_delivery_engine import (
+        GovernanceIntegrityDeliveryResult,
+    )
+
 DEFAULT_BASE_DELAY_SECONDS = 30
+
+DEFAULT_MAX_WORKER_ATTEMPTS = 3
 
 
 class GovernanceIntegrityRetryStrategy(
@@ -157,6 +164,55 @@ class GovernanceIntegrityRetryOrchestrator:
             )
 
         if attempt >= policy.retry_limit:
+            return GovernanceIntegrityRetryDecision(
+                should_retry=False,
+                retry_attempt=attempt,
+                next_retry_at=None,
+                delay_seconds=None,
+                reason="maximum retry attempts reached",
+            )
+
+        delay_seconds = self._compute_delay_seconds(attempt)
+
+        return GovernanceIntegrityRetryDecision(
+            should_retry=True,
+            retry_attempt=attempt + 1,
+            next_retry_at=(
+                self._clock() + timedelta(seconds=delay_seconds)
+            ),
+            delay_seconds=delay_seconds,
+            reason=None,
+        )
+
+    def evaluate_delivery_result(
+        self,
+        delivery_result: "GovernanceIntegrityDeliveryResult",
+        attempt: int,
+        *,
+        max_attempts: int = DEFAULT_MAX_WORKER_ATTEMPTS,
+    ) -> GovernanceIntegrityRetryDecision:
+        """
+        Decide whether a failed delivery worker result should be
+        retried.
+
+        Unlike evaluate(), this does not require resolving a
+        channel's delivery policy: it is used by the delivery worker,
+        which only has access to the engine's already-final
+        GovernanceIntegrityDeliveryResult, not the raw provider
+        outcome. max_attempts is a worker-wide default retry ceiling,
+        independent of any per-channel policy retry_limit.
+        """
+
+        if delivery_result.status == "success":
+            return GovernanceIntegrityRetryDecision(
+                should_retry=False,
+                retry_attempt=attempt,
+                next_retry_at=None,
+                delay_seconds=None,
+                reason=None,
+            )
+
+        if attempt >= max_attempts:
             return GovernanceIntegrityRetryDecision(
                 should_retry=False,
                 retry_attempt=attempt,
