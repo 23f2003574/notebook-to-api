@@ -236,6 +236,10 @@ from backend.observability.deployment_governance_provider_authentication_cli imp
     run_deployment_governance_provider_auth_show,
     run_deployment_governance_provider_auth_validate,
 )
+from backend.observability.deployment_governance_provider_requests_cli import (
+    run_deployment_governance_provider_request_show,
+    run_deployment_governance_provider_request_validate,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -3485,6 +3489,79 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    request_parser = providers_subparsers.add_parser(
+        "request",
+        help="Build and inspect governance audit provider requests.",
+        description=(
+            "Build the provider-ready request for delivering one "
+            "notification through one channel type: resolves "
+            "configuration, authentication, and delivery policy, "
+            "then delegates the request shape to the provider.\n\n"
+            "Header values are always redacted, since they may "
+            "contain authentication credentials.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    request_subparsers = request_parser.add_subparsers(
+        dest="request_command", required=True
+    )
+
+    request_show_parser = request_subparsers.add_parser(
+        "show",
+        help="Show the redacted request built for one notification and channel type.",
+    )
+    request_show_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to build the request for.",
+    )
+    request_show_parser.add_argument(
+        "--notification-id",
+        required=True,
+        dest="notification_id",
+        help="Identifier of the notification to build the request for.",
+    )
+    request_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    request_validate_parser = request_subparsers.add_parser(
+        "validate",
+        help="Validate that a request can be built for one notification and channel type.",
+    )
+    request_validate_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to validate the request for.",
+    )
+    request_validate_parser.add_argument(
+        "--notification-id",
+        required=True,
+        dest="notification_id",
+        help="Identifier of the notification to validate the request for.",
+    )
+    request_validate_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -4353,7 +4430,7 @@ def main():
                                 json_output=args.json_output,
                             )
                         )
-                else:
+                elif args.providers_command == "auth":
                     if args.auth_command == "show":
                         exit_code = (
                             run_deployment_governance_provider_auth_show(
@@ -4365,6 +4442,23 @@ def main():
                         exit_code = (
                             run_deployment_governance_provider_auth_validate(
                                 channel_type=args.channel_type,
+                                json_output=args.json_output,
+                            )
+                        )
+                else:
+                    if args.request_command == "show":
+                        exit_code = (
+                            run_deployment_governance_provider_request_show(
+                                channel_type=args.channel_type,
+                                notification_id=args.notification_id,
+                                json_output=args.json_output,
+                            )
+                        )
+                    else:
+                        exit_code = (
+                            run_deployment_governance_provider_request_validate(
+                                channel_type=args.channel_type,
+                                notification_id=args.notification_id,
                                 json_output=args.json_output,
                             )
                         )

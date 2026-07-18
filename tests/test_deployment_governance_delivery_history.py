@@ -52,6 +52,9 @@ from backend.observability.deployment_governance_provider_authentication import 
 from backend.observability.deployment_governance_provider_registry import (
     GovernanceIntegrityProviderRegistry,
 )
+from backend.observability.deployment_governance_provider_requests import (
+    GovernanceIntegrityProviderRequestService,
+)
 from backend.observability.deployment_governance_provider_secrets import (
     GovernanceIntegrityProviderSecretsService,
     InMemoryGovernanceIntegrityProviderSecretsRepository,
@@ -116,14 +119,20 @@ class Harness:
             )
         )
 
+        self.request_service = GovernanceIntegrityProviderRequestService(
+            self.authentication_service,
+            self.configuration_service,
+            self.policy_service,
+            self.provider_registry,
+        )
+
         self.engine = GovernanceIntegrityDeliveryEngine(
             self.dispatch_repository,
             self.notification_repository,
             self.channel_repository,
             self.provider_registry,
             self.policy_service,
-            self.configuration_service,
-            self.authentication_service,
+            self.request_service,
         )
 
         self.history_repository = (

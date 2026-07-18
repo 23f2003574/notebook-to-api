@@ -29,7 +29,6 @@ from .deployment_governance_provider_capabilities import (
 from .deployment_governance_provider_authentication import (
     GovernanceIntegrityAuthenticationContext,
     GovernanceIntegrityAuthenticationType,
-    GovernanceIntegrityProviderAuthenticationService,
 )
 from .deployment_governance_provider_health import (
     GovernanceIntegrityProviderHealth,
@@ -37,13 +36,16 @@ from .deployment_governance_provider_health import (
 )
 from .deployment_governance_provider_configuration import (
     GovernanceIntegrityProviderConfiguration,
-    GovernanceIntegrityProviderConfigurationService,
 )
 from .deployment_governance_provider_lifecycle import (
     GovernanceIntegrityProviderState,
 )
 from .deployment_governance_provider_registry import (
     GovernanceIntegrityProviderRegistry,
+)
+from .deployment_governance_provider_requests import (
+    GovernanceIntegrityProviderRequest,
+    GovernanceIntegrityProviderRequestService,
 )
 
 
@@ -124,26 +126,38 @@ class GovernanceIntegrityNotificationProvider(Protocol):
 
     def deliver(
         self,
-        dispatch: GovernanceIntegrityNotificationDispatch,
-        notification: GovernanceIntegrityNotification,
-        channel: GovernanceIntegrityNotificationChannel,
-        policy: GovernanceIntegrityDeliveryPolicy | None,
-        configuration: GovernanceIntegrityProviderConfiguration,
-        authentication: GovernanceIntegrityAuthenticationContext,
+        request: GovernanceIntegrityProviderRequest,
     ) -> None:
         """
-        Deliver one notification through this provider's channel.
+        Deliver one already-built provider request.
 
-        policy is the channel's configured delivery policy (retry,
-        timeout, rate limit), or None if no policy has been
-        configured. configuration is this provider's typed runtime
-        settings, or an empty configuration if none have been stored.
+        The request pipeline resolves configuration, authentication,
+        and delivery policy, and builds the complete request through
+        build_request() before this is ever called: a provider never
+        assembles its own inputs. Raises on failure. A stub provider
+        that does not perform external I/O simply returns, and may
+        ignore the request's values entirely.
+        """
+
+    def build_request(
+        self,
+        notification: GovernanceIntegrityNotification,
+        channel: GovernanceIntegrityNotificationChannel,
+        configuration: GovernanceIntegrityProviderConfiguration,
+        authentication: GovernanceIntegrityAuthenticationContext,
+        policy: GovernanceIntegrityDeliveryPolicy | None,
+    ) -> GovernanceIntegrityProviderRequest:
+        """
+        Build the request this provider expects for delivering one
+        notification through one channel.
+
+        configuration is this provider's typed runtime settings, or
+        an empty configuration if none have been stored.
         authentication is the provider-ready authentication context
         built from this provider's authentication type, resolved
-        configuration, and resolved secrets: secrets themselves are
-        never passed here. Raises on failure. A stub provider that
-        does not perform external I/O simply returns, and may ignore
-        policy, configuration, and authentication values entirely.
+        configuration, and resolved secrets. policy is the channel's
+        configured delivery policy (retry, timeout, rate limit), or
+        None if no policy has been configured.
         """
 
     def capabilities(self) -> GovernanceIntegrityProviderCapabilities:
@@ -165,22 +179,59 @@ class GovernanceIntegrityNotificationProvider(Protocol):
         """
 
 
+def _build_stub_request(
+    notification: GovernanceIntegrityNotification,
+    channel: GovernanceIntegrityNotificationChannel,
+    authentication: GovernanceIntegrityAuthenticationContext,
+    policy: GovernanceIntegrityDeliveryPolicy | None,
+) -> GovernanceIntegrityProviderRequest:
+    """
+    Shared stub request builder for the local, no-external-I/O
+    built-in providers: merges authentication headers and derives
+    the timeout from the resolved delivery policy, defaulting to 30
+    seconds when none is configured.
+    """
+
+    headers = dict(authentication.headers)
+
+    headers.setdefault("Content-Type", "application/json")
+
+    return GovernanceIntegrityProviderRequest(
+        method="POST",
+        endpoint=channel.destination,
+        headers=headers,
+        body={
+            "notification_id": notification.notification_id,
+            "severity": notification.severity.value,
+            "message": notification.message,
+        },
+        timeout_seconds=(
+            policy.timeout_seconds if policy is not None else 30
+        ),
+    )
+
+
 class EmailProvider:
     """
     Local stub email provider: performs no external I/O and always
-    succeeds. Ignores the resolved delivery policy, configuration, and authentication.
+    succeeds. Ignores the built request.
     """
 
     def deliver(
         self,
-        dispatch: GovernanceIntegrityNotificationDispatch,
-        notification: GovernanceIntegrityNotification,
-        channel: GovernanceIntegrityNotificationChannel,
-        policy: GovernanceIntegrityDeliveryPolicy | None,
-        configuration: GovernanceIntegrityProviderConfiguration,
-        authentication: GovernanceIntegrityAuthenticationContext,
+        request: GovernanceIntegrityProviderRequest,
     ) -> None:
         return
+
+    def build_request(
+        self,
+        notification: GovernanceIntegrityNotification,
+        channel: GovernanceIntegrityNotificationChannel,
+        configuration: GovernanceIntegrityProviderConfiguration,
+        authentication: GovernanceIntegrityAuthenticationContext,
+        policy: GovernanceIntegrityDeliveryPolicy | None,
+    ) -> GovernanceIntegrityProviderRequest:
+        return _build_stub_request(notification, channel, authentication, policy)
 
     def capabilities(self) -> GovernanceIntegrityProviderCapabilities:
         return GovernanceIntegrityProviderCapabilities(
@@ -206,19 +257,24 @@ class EmailProvider:
 class SlackProvider:
     """
     Local stub Slack provider: performs no external I/O and always
-    succeeds. Ignores the resolved delivery policy, configuration, and authentication.
+    succeeds. Ignores the built request.
     """
 
     def deliver(
         self,
-        dispatch: GovernanceIntegrityNotificationDispatch,
-        notification: GovernanceIntegrityNotification,
-        channel: GovernanceIntegrityNotificationChannel,
-        policy: GovernanceIntegrityDeliveryPolicy | None,
-        configuration: GovernanceIntegrityProviderConfiguration,
-        authentication: GovernanceIntegrityAuthenticationContext,
+        request: GovernanceIntegrityProviderRequest,
     ) -> None:
         return
+
+    def build_request(
+        self,
+        notification: GovernanceIntegrityNotification,
+        channel: GovernanceIntegrityNotificationChannel,
+        configuration: GovernanceIntegrityProviderConfiguration,
+        authentication: GovernanceIntegrityAuthenticationContext,
+        policy: GovernanceIntegrityDeliveryPolicy | None,
+    ) -> GovernanceIntegrityProviderRequest:
+        return _build_stub_request(notification, channel, authentication, policy)
 
     def capabilities(self) -> GovernanceIntegrityProviderCapabilities:
         return GovernanceIntegrityProviderCapabilities(
@@ -244,19 +300,24 @@ class SlackProvider:
 class WebhookProvider:
     """
     Local stub webhook provider: performs no external I/O and always
-    succeeds. Ignores the resolved delivery policy, configuration, and authentication.
+    succeeds. Ignores the built request.
     """
 
     def deliver(
         self,
-        dispatch: GovernanceIntegrityNotificationDispatch,
-        notification: GovernanceIntegrityNotification,
-        channel: GovernanceIntegrityNotificationChannel,
-        policy: GovernanceIntegrityDeliveryPolicy | None,
-        configuration: GovernanceIntegrityProviderConfiguration,
-        authentication: GovernanceIntegrityAuthenticationContext,
+        request: GovernanceIntegrityProviderRequest,
     ) -> None:
         return
+
+    def build_request(
+        self,
+        notification: GovernanceIntegrityNotification,
+        channel: GovernanceIntegrityNotificationChannel,
+        configuration: GovernanceIntegrityProviderConfiguration,
+        authentication: GovernanceIntegrityAuthenticationContext,
+        policy: GovernanceIntegrityDeliveryPolicy | None,
+    ) -> GovernanceIntegrityProviderRequest:
+        return _build_stub_request(notification, channel, authentication, policy)
 
     def capabilities(self) -> GovernanceIntegrityProviderCapabilities:
         return GovernanceIntegrityProviderCapabilities(
@@ -303,12 +364,7 @@ class GovernanceIntegrityDeliveryEngine:
         ),
         provider_registry: GovernanceIntegrityProviderRegistry,
         policy_service: GovernanceIntegrityDeliveryPolicyService,
-        configuration_service: (
-            GovernanceIntegrityProviderConfigurationService
-        ),
-        authentication_service: (
-            GovernanceIntegrityProviderAuthenticationService
-        ),
+        request_service: GovernanceIntegrityProviderRequestService,
         *,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -322,9 +378,7 @@ class GovernanceIntegrityDeliveryEngine:
 
         self._policy_service = policy_service
 
-        self._configuration_service = configuration_service
-
-        self._authentication_service = authentication_service
+        self._request_service = request_service
 
         self._clock = clock or (
             lambda: datetime.now(timezone.utc)
@@ -417,22 +471,11 @@ class GovernanceIntegrityDeliveryEngine:
                     policy, capabilities
                 )
 
-            configuration = self._configuration_service.resolve(
-                channel.channel_type
+            request = self._request_service.build(
+                notification, channel
             )
 
-            authentication = self._authentication_service.build(
-                channel.channel_type
-            )
-
-            provider.deliver(
-                dispatch,
-                notification,
-                channel,
-                policy,
-                configuration,
-                authentication,
-            )
+            provider.deliver(request)
 
         except Exception as exc:
             return GovernanceIntegrityDeliveryResult(

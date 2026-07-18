@@ -39,11 +39,14 @@ from backend.observability.deployment_governance_persistence import (
     DeploymentGovernancePersistenceConfig,
     build_deployment_governance_persistence,
 )
+from backend.observability.deployment_governance_provider_authentication import (
+    GovernanceIntegrityAuthenticationType,
+    GovernanceIntegrityProviderAuthenticationService,
+)
 from backend.observability.deployment_governance_provider_capabilities import (
     GovernanceIntegrityProviderCapabilities,
 )
 from backend.observability.deployment_governance_provider_configuration import (
-    GovernanceIntegrityProviderConfiguration,
     GovernanceIntegrityProviderConfigurationService,
     InMemoryGovernanceIntegrityProviderConfigurationRepository,
 )
@@ -55,13 +58,12 @@ from backend.observability.deployment_governance_provider_lifecycle import (
     GovernanceIntegrityProviderMetadata,
     GovernanceIntegrityProviderState,
 )
-from backend.observability.deployment_governance_provider_authentication import (
-    GovernanceIntegrityAuthenticationContext,
-    GovernanceIntegrityAuthenticationType,
-    GovernanceIntegrityProviderAuthenticationService,
-)
 from backend.observability.deployment_governance_provider_registry import (
     GovernanceIntegrityProviderRegistry,
+)
+from backend.observability.deployment_governance_provider_requests import (
+    GovernanceIntegrityProviderRequest,
+    GovernanceIntegrityProviderRequestService,
 )
 from backend.observability.deployment_governance_provider_secrets import (
     GovernanceIntegrityProviderSecretsService,
@@ -96,39 +98,26 @@ def _default_provider_registry() -> GovernanceIntegrityProviderRegistry:
     )
 
 
-def _default_configuration_service(
-    registry: GovernanceIntegrityProviderRegistry | None = None,
-) -> GovernanceIntegrityProviderConfigurationService:
-    return GovernanceIntegrityProviderConfigurationService(
-        InMemoryGovernanceIntegrityProviderConfigurationRepository(),
-        (
-            registry
-            if registry is not None
-            else GovernanceIntegrityProviderRegistry()
-        ),
-    )
-
-
-def _default_secrets_service(
-    registry: GovernanceIntegrityProviderRegistry | None = None,
-) -> GovernanceIntegrityProviderSecretsService:
-    return GovernanceIntegrityProviderSecretsService(
-        InMemoryGovernanceIntegrityProviderSecretsRepository(),
-        (
-            registry
-            if registry is not None
-            else GovernanceIntegrityProviderRegistry()
-        ),
-    )
-
-
-def _default_authentication_service(
+def _build_request_service(
     registry: GovernanceIntegrityProviderRegistry,
-    configuration_service: GovernanceIntegrityProviderConfigurationService,
-    secrets_service: GovernanceIntegrityProviderSecretsService,
-) -> GovernanceIntegrityProviderAuthenticationService:
-    return GovernanceIntegrityProviderAuthenticationService(
+    policy_service: GovernanceIntegrityDeliveryPolicyService,
+) -> GovernanceIntegrityProviderRequestService:
+    configuration_service = GovernanceIntegrityProviderConfigurationService(
+        InMemoryGovernanceIntegrityProviderConfigurationRepository(),
+        registry,
+    )
+
+    secrets_service = GovernanceIntegrityProviderSecretsService(
+        InMemoryGovernanceIntegrityProviderSecretsRepository(),
+        registry,
+    )
+
+    authentication_service = GovernanceIntegrityProviderAuthenticationService(
         configuration_service, secrets_service, registry
+    )
+
+    return GovernanceIntegrityProviderRequestService(
+        authentication_service, configuration_service, policy_service, registry
     )
 
 
@@ -137,9 +126,7 @@ class Harness:
         self,
         *,
         provider_registry=None,
-        configuration_service=None,
-        secrets_service=None,
-        authentication_service=None,
+        request_service=None,
         clock=None,
     ) -> None:
         self.dispatch_repository = (
@@ -172,26 +159,12 @@ class Harness:
             else provider_registry
         )
 
-        self.configuration_service = (
-            _default_configuration_service(self.provider_registry)
-            if configuration_service is None
-            else configuration_service
-        )
-
-        self.secrets_service = (
-            _default_secrets_service(self.provider_registry)
-            if secrets_service is None
-            else secrets_service
-        )
-
-        self.authentication_service = (
-            _default_authentication_service(
-                self.provider_registry,
-                self.configuration_service,
-                self.secrets_service,
+        self.request_service = (
+            _build_request_service(
+                self.provider_registry, self.policy_service
             )
-            if authentication_service is None
-            else authentication_service
+            if request_service is None
+            else request_service
         )
 
         self.engine = GovernanceIntegrityDeliveryEngine(
@@ -200,8 +173,7 @@ class Harness:
             self.channel_repository,
             self.provider_registry,
             self.policy_service,
-            self.configuration_service,
-            self.authentication_service,
+            self.request_service,
             clock=clock,
         )
 
@@ -309,6 +281,16 @@ def test_result_rejects_failed_without_error() -> None:
 # --- Stub providers --------------------------------------------------------
 
 
+def _stub_request() -> GovernanceIntegrityProviderRequest:
+    return GovernanceIntegrityProviderRequest(
+        method="POST",
+        endpoint="ops@example.com",
+        headers={},
+        body={},
+        timeout_seconds=30,
+    )
+
+
 @pytest.mark.parametrize(
     "provider_class",
     [EmailProvider, SlackProvider, WebhookProvider],
@@ -316,13 +298,23 @@ def test_result_rejects_failed_without_error() -> None:
 def test_stub_providers_deliver_without_raising(provider_class) -> None:
     provider = provider_class()
 
-    dispatch = GovernanceIntegrityNotificationDispatch(
-        dispatch_id="d1",
-        notification_id="n1",
-        channel_name="email",
-        status=GovernanceIntegrityDispatchStatus.QUEUED,
-        created_at=BASE_TIME,
+    assert provider.deliver(_stub_request()) is None
+
+
+@pytest.mark.parametrize(
+    "provider_class",
+    [EmailProvider, SlackProvider, WebhookProvider],
+)
+def test_stub_providers_build_post_request(provider_class) -> None:
+    from backend.observability.deployment_governance_provider_authentication import (
+        GovernanceIntegrityAuthenticationContext,
     )
+    from backend.observability.deployment_governance_provider_configuration import (
+        GovernanceIntegrityProviderConfiguration,
+    )
+
+    provider = provider_class()
+
     notification = GovernanceIntegrityNotification(
         notification_id="n1",
         alert_id="alert-1",
@@ -338,24 +330,23 @@ def test_stub_providers_deliver_without_raising(provider_class) -> None:
         enabled=True,
         created_at=BASE_TIME,
     )
-
     configuration = GovernanceIntegrityProviderConfiguration.empty(
         GovernanceIntegrityNotificationChannelType.EMAIL,
         checked_at=BASE_TIME,
     )
-
     authentication = GovernanceIntegrityAuthenticationContext(
         authentication_type=GovernanceIntegrityAuthenticationType.NONE,
         headers={},
         parameters={},
     )
 
-    assert (
-        provider.deliver(
-            dispatch, notification, channel, None, configuration, authentication
-        )
-        is None
+    request = provider.build_request(
+        notification, channel, configuration, authentication, None
     )
+
+    assert request.method == "POST"
+    assert request.endpoint == "ops@example.com"
+    assert request.timeout_seconds == 30
 
 
 # --- Provider registry integration --------------------------------------
@@ -413,8 +404,7 @@ def test_deliver_requests_provider_through_registry() -> None:
         harness.channel_repository,
         spy_registry,
         harness.policy_service,
-        harness.configuration_service,
-        harness.authentication_service,
+        harness.request_service,
     )
 
     result = engine.deliver("d1")
@@ -434,17 +424,16 @@ class UnhealthyEmailProvider:
     def __init__(self, message: str = "provider offline") -> None:
         self._message = message
 
-    def deliver(
-        self,
-        dispatch,
-        notification,
-        channel,
-        policy,
-        configuration,
-        authentication,
-    ):
+    def deliver(self, request):
         raise AssertionError(
             "deliver must not be called for an unhealthy provider"
+        )
+
+    def build_request(
+        self, notification, channel, configuration, authentication, policy
+    ):
+        raise AssertionError(
+            "build_request must not be called for an unhealthy provider"
         )
 
     def capabilities(self):
@@ -537,8 +526,8 @@ def test_deliver_succeeds_with_registered_provider() -> None:
 def test_deliver_succeeds_without_configured_policy() -> None:
     """
     A channel with no delivery policy configured should still deliver
-    successfully: policy is optional context passed to the provider,
-    not a delivery precondition.
+    successfully: policy is optional context passed through to the
+    request builder, not a delivery precondition.
     """
 
     harness = Harness()
@@ -612,32 +601,37 @@ def test_deliver_raises_for_missing_dispatch() -> None:
 
 class RecordingProvider:
     """
-    Test double that records the policy, configuration, and
-    authentication context it was invoked with, in place of a real
-    stub provider.
+    Test double that records every request it was asked to deliver,
+    in place of a real stub provider. build_request() delegates to
+    the shared stub builder so its output stays realistic.
     """
 
     def __init__(
         self,
         authentication_type=GovernanceIntegrityAuthenticationType.NONE,
     ) -> None:
-        self.received_policies: list[object] = []
-        self.received_configurations: list[object] = []
-        self.received_authentication: list[object] = []
+        self.received_requests: list[GovernanceIntegrityProviderRequest] = []
+        self.deliver_call_count = 0
         self._authentication_type = authentication_type
 
-    def deliver(
-        self,
-        dispatch,
-        notification,
-        channel,
-        policy,
-        configuration,
-        authentication,
+    def deliver(self, request):
+        self.deliver_call_count += 1
+        self.received_requests.append(request)
+
+    def build_request(
+        self, notification, channel, configuration, authentication, policy
     ):
-        self.received_policies.append(policy)
-        self.received_configurations.append(configuration)
-        self.received_authentication.append(authentication)
+        headers = dict(authentication.headers)
+
+        return GovernanceIntegrityProviderRequest(
+            method="POST",
+            endpoint=channel.destination,
+            headers=headers,
+            body={"notification_id": notification.notification_id},
+            timeout_seconds=(
+                policy.timeout_seconds if policy is not None else 30
+            ),
+        )
 
     def capabilities(self):
         return GovernanceIntegrityProviderCapabilities(
@@ -660,7 +654,15 @@ class RecordingProvider:
         return self._authentication_type
 
 
-def test_deliver_supplies_resolved_policy_to_provider() -> None:
+def test_deliver_calls_provider_deliver_with_built_request_exactly_once() -> (
+    None
+):
+    """
+    The delivery engine must call provider.deliver(request) exactly
+    once, passing the request the pipeline built rather than
+    assembling provider inputs itself.
+    """
+
     harness = Harness()
 
     harness.add_notification("n1")
@@ -674,255 +676,44 @@ def test_deliver_supplies_resolved_policy_to_provider() -> None:
     policy = harness.policy_service.create(
         "email",
         retry_limit=3,
-        timeout_seconds=30,
+        timeout_seconds=45,
         rate_limit_per_minute=60,
     )
 
     recording_provider = RecordingProvider()
 
+    custom_registry = _build_provider_registry(
+        {
+            GovernanceIntegrityNotificationChannelType.EMAIL: (
+                recording_provider
+            ),
+        }
+    )
+
     engine = GovernanceIntegrityDeliveryEngine(
         harness.dispatch_repository,
         harness.notification_repository,
         harness.channel_repository,
-        _build_provider_registry(
-            {
-                GovernanceIntegrityNotificationChannelType.EMAIL: (
-                    recording_provider
-                ),
-            }
-        ),
+        custom_registry,
         harness.policy_service,
-        harness.configuration_service,
-        harness.authentication_service,
+        _build_request_service(custom_registry, harness.policy_service),
     )
 
     result = engine.deliver("d1")
 
     assert result.status is GovernanceIntegrityDeliveryStatus.SUCCESS
-    assert recording_provider.received_policies == [policy]
+    assert recording_provider.deliver_call_count == 1
+    assert len(recording_provider.received_requests) == 1
+
+    request = recording_provider.received_requests[0]
+    assert isinstance(request, GovernanceIntegrityProviderRequest)
+    assert request.endpoint == "dest-email"
+    assert request.timeout_seconds == policy.timeout_seconds
 
 
-def test_deliver_supplies_none_policy_when_unconfigured() -> None:
-    harness = Harness()
-
-    harness.add_notification("n1")
-    harness.add_channel(
-        "email", GovernanceIntegrityNotificationChannelType.EMAIL
-    )
-    harness.add_dispatch(
-        "d1", notification_id="n1", channel_name="email"
-    )
-
-    recording_provider = RecordingProvider()
-
-    engine = GovernanceIntegrityDeliveryEngine(
-        harness.dispatch_repository,
-        harness.notification_repository,
-        harness.channel_repository,
-        _build_provider_registry(
-            {
-                GovernanceIntegrityNotificationChannelType.EMAIL: (
-                    recording_provider
-                ),
-            }
-        ),
-        harness.policy_service,
-        harness.configuration_service,
-        harness.authentication_service,
-    )
-
-    engine.deliver("d1")
-
-    assert recording_provider.received_policies == [None]
-
-
-def test_deliver_supplies_stored_configuration_to_provider() -> None:
-    harness = Harness()
-
-    harness.add_notification("n1")
-    harness.add_channel(
-        "email", GovernanceIntegrityNotificationChannelType.EMAIL
-    )
-    harness.add_dispatch(
-        "d1", notification_id="n1", channel_name="email"
-    )
-
-    harness.configuration_service.create(
-        GovernanceIntegrityNotificationChannelType.EMAIL,
-        {"timeout": "30", "sender": "noreply@example.com"},
-    )
-
-    recording_provider = RecordingProvider()
-
-    engine = GovernanceIntegrityDeliveryEngine(
-        harness.dispatch_repository,
-        harness.notification_repository,
-        harness.channel_repository,
-        _build_provider_registry(
-            {
-                GovernanceIntegrityNotificationChannelType.EMAIL: (
-                    recording_provider
-                ),
-            }
-        ),
-        harness.policy_service,
-        harness.configuration_service,
-        harness.authentication_service,
-    )
-
-    engine.deliver("d1")
-
-    assert len(recording_provider.received_configurations) == 1
-    configuration = recording_provider.received_configurations[0]
-    assert dict(configuration.values) == {
-        "timeout": "30",
-        "sender": "noreply@example.com",
-    }
-
-
-def test_deliver_supplies_empty_configuration_when_unconfigured() -> None:
-    harness = Harness()
-
-    harness.add_notification("n1")
-    harness.add_channel(
-        "email", GovernanceIntegrityNotificationChannelType.EMAIL
-    )
-    harness.add_dispatch(
-        "d1", notification_id="n1", channel_name="email"
-    )
-
-    recording_provider = RecordingProvider()
-
-    engine = GovernanceIntegrityDeliveryEngine(
-        harness.dispatch_repository,
-        harness.notification_repository,
-        harness.channel_repository,
-        _build_provider_registry(
-            {
-                GovernanceIntegrityNotificationChannelType.EMAIL: (
-                    recording_provider
-                ),
-            }
-        ),
-        harness.policy_service,
-        harness.configuration_service,
-        harness.authentication_service,
-    )
-
-    engine.deliver("d1")
-
-    configuration = recording_provider.received_configurations[0]
-    assert dict(configuration.values) == {}
-
-
-def test_deliver_supplies_authentication_context_instead_of_raw_secrets() -> (
+def test_deliver_does_not_call_provider_deliver_when_request_fails_to_build() -> (
     None
 ):
-    """
-    The delivery engine must build and pass an authentication
-    context, never the raw stored secrets, to the provider.
-    """
-
-    harness = Harness()
-
-    harness.add_notification("n1")
-    harness.add_channel(
-        "email", GovernanceIntegrityNotificationChannelType.EMAIL
-    )
-    harness.add_dispatch(
-        "d1", notification_id="n1", channel_name="email"
-    )
-
-    harness.secrets_service.create(
-        GovernanceIntegrityNotificationChannelType.EMAIL,
-        {"api_key": "abc123"},
-    )
-
-    recording_provider = RecordingProvider(
-        authentication_type=GovernanceIntegrityAuthenticationType.API_KEY
-    )
-
-    custom_registry = _build_provider_registry(
-        {
-            GovernanceIntegrityNotificationChannelType.EMAIL: (
-                recording_provider
-            ),
-        }
-    )
-
-    engine = GovernanceIntegrityDeliveryEngine(
-        harness.dispatch_repository,
-        harness.notification_repository,
-        harness.channel_repository,
-        custom_registry,
-        harness.policy_service,
-        harness.configuration_service,
-        _default_authentication_service(
-            custom_registry,
-            harness.configuration_service,
-            harness.secrets_service,
-        ),
-    )
-
-    result = engine.deliver("d1")
-
-    assert result.status is GovernanceIntegrityDeliveryStatus.SUCCESS
-    assert len(recording_provider.received_authentication) == 1
-
-    authentication = recording_provider.received_authentication[0]
-
-    assert isinstance(
-        authentication, GovernanceIntegrityAuthenticationContext
-    )
-    assert authentication.headers["X-API-Key"] == "abc123"
-
-
-def test_deliver_supplies_none_authentication_when_unconfigured() -> None:
-    harness = Harness()
-
-    harness.add_notification("n1")
-    harness.add_channel(
-        "email", GovernanceIntegrityNotificationChannelType.EMAIL
-    )
-    harness.add_dispatch(
-        "d1", notification_id="n1", channel_name="email"
-    )
-
-    recording_provider = RecordingProvider()
-
-    engine = GovernanceIntegrityDeliveryEngine(
-        harness.dispatch_repository,
-        harness.notification_repository,
-        harness.channel_repository,
-        _build_provider_registry(
-            {
-                GovernanceIntegrityNotificationChannelType.EMAIL: (
-                    recording_provider
-                ),
-            }
-        ),
-        harness.policy_service,
-        harness.configuration_service,
-        harness.authentication_service,
-    )
-
-    engine.deliver("d1")
-
-    authentication = recording_provider.received_authentication[0]
-    assert (
-        authentication.authentication_type
-        is GovernanceIntegrityAuthenticationType.NONE
-    )
-    assert dict(authentication.headers) == {}
-
-
-def test_deliver_fails_when_required_secret_is_missing() -> None:
-    """
-    A provider that declares API_KEY authentication but has no
-    stored 'api_key' secret should fail delivery, since the
-    authentication context cannot be built.
-    """
-
     harness = Harness()
 
     harness.add_notification("n1")
@@ -951,83 +742,14 @@ def test_deliver_fails_when_required_secret_is_missing() -> None:
         harness.channel_repository,
         custom_registry,
         harness.policy_service,
-        harness.configuration_service,
-        _default_authentication_service(
-            custom_registry,
-            harness.configuration_service,
-            harness.secrets_service,
-        ),
+        _build_request_service(custom_registry, harness.policy_service),
     )
 
     result = engine.deliver("d1")
 
     assert result.status is GovernanceIntegrityDeliveryStatus.FAILED
     assert "api_key" in result.error
-    assert not recording_provider.received_authentication
-
-
-def test_deliver_supplies_configuration_and_authentication_together() -> None:
-    """
-    Exercises the combined delivery-engine contract: a mock provider
-    should receive both its resolved configuration and its built
-    authentication context in the same deliver() call.
-    """
-
-    harness = Harness()
-
-    harness.add_notification("n1")
-    harness.add_channel(
-        "email", GovernanceIntegrityNotificationChannelType.EMAIL
-    )
-    harness.add_dispatch(
-        "d1", notification_id="n1", channel_name="email"
-    )
-
-    harness.configuration_service.create(
-        GovernanceIntegrityNotificationChannelType.EMAIL,
-        {"timeout": "30"},
-    )
-    harness.secrets_service.create(
-        GovernanceIntegrityNotificationChannelType.EMAIL,
-        {"api_key": "abc123"},
-    )
-
-    recording_provider = RecordingProvider(
-        authentication_type=GovernanceIntegrityAuthenticationType.API_KEY
-    )
-
-    custom_registry = _build_provider_registry(
-        {
-            GovernanceIntegrityNotificationChannelType.EMAIL: (
-                recording_provider
-            ),
-        }
-    )
-
-    engine = GovernanceIntegrityDeliveryEngine(
-        harness.dispatch_repository,
-        harness.notification_repository,
-        harness.channel_repository,
-        custom_registry,
-        harness.policy_service,
-        harness.configuration_service,
-        _default_authentication_service(
-            custom_registry,
-            harness.configuration_service,
-            harness.secrets_service,
-        ),
-    )
-
-    result = engine.deliver("d1")
-
-    assert result.status is GovernanceIntegrityDeliveryStatus.SUCCESS
-    assert dict(recording_provider.received_configurations[0].values) == {
-        "timeout": "30"
-    }
-    assert (
-        recording_provider.received_authentication[0].headers["X-API-Key"]
-        == "abc123"
-    )
+    assert recording_provider.deliver_call_count == 0
 
 
 # --- Service: deliver_all ---------------------------------------------
