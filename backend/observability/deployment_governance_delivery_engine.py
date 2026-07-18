@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Callable, Protocol, runtime_checkable
+from typing import Callable, Protocol, TYPE_CHECKING, runtime_checkable
 
 from .deployment_governance_delivery_policies import (
     GovernanceIntegrityDeliveryPolicy,
@@ -54,6 +54,11 @@ from .deployment_governance_provider_responses import (
 from .deployment_governance_retry_orchestrator import (
     GovernanceIntegrityRetryOrchestrator,
 )
+
+if TYPE_CHECKING:
+    from .deployment_governance_delivery_scheduler import (
+        GovernanceIntegrityDeliveryScheduler,
+    )
 
 
 class GovernanceIntegrityDeliveryStatus(
@@ -394,6 +399,7 @@ class GovernanceIntegrityDeliveryEngine:
         response_service: GovernanceIntegrityProviderResponseService,
         retry_orchestrator: GovernanceIntegrityRetryOrchestrator,
         *,
+        scheduler: "GovernanceIntegrityDeliveryScheduler | None" = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._dispatch_repository = dispatch_repository
@@ -411,6 +417,8 @@ class GovernanceIntegrityDeliveryEngine:
         self._response_service = response_service
 
         self._retry_orchestrator = retry_orchestrator
+
+        self._scheduler = scheduler
 
         self._clock = clock or (
             lambda: datetime.now(timezone.utc)
@@ -528,6 +536,11 @@ class GovernanceIntegrityDeliveryEngine:
                             f"scheduled in {decision.delay_seconds}s)"
                         )
 
+                        if self._scheduler is not None:
+                            self._schedule_retry_best_effort(
+                                dispatch.dispatch_id, decision
+                            )
+
                 raise RuntimeError(error_message)
 
         except Exception as exc:
@@ -546,6 +559,30 @@ class GovernanceIntegrityDeliveryEngine:
             delivered_at=self._clock(),
             error=None,
         )
+
+    def _schedule_retry_best_effort(
+        self,
+        dispatch_id: str,
+        decision,
+    ) -> None:
+        """
+        Delegate retry scheduling entirely to the scheduler. If this
+        dispatch was never scheduled through it (e.g. it was queued
+        directly by the notification dispatcher), scheduling is
+        skipped rather than failing the delivery attempt itself.
+        """
+
+        from uuid import UUID
+
+        try:
+            self._scheduler.schedule_retry(
+                UUID(dispatch_id),
+                attempt=decision.retry_attempt,
+                delay_seconds=decision.delay_seconds,
+            )
+
+        except (LookupError, ValueError):
+            pass
 
     def deliver_all(
         self,

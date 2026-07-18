@@ -87,6 +87,10 @@ from .deployment_governance_provider_secrets import (
     GovernanceIntegrityProviderSecretsRepository,
     InMemoryGovernanceIntegrityProviderSecretsRepository,
 )
+from .deployment_governance_delivery_scheduler import (
+    GovernanceIntegrityDeliveryScheduleRepository,
+    InMemoryGovernanceIntegrityDeliveryScheduleRepository,
+)
 from .deployment_governance_audit_history import (
     GovernanceIntegrityAuditHistoryRepository,
     InMemoryGovernanceIntegrityAuditHistoryRepository,
@@ -154,6 +158,9 @@ from .sqlite_deployment_governance_provider_configuration import (
 )
 from .sqlite_deployment_governance_provider_secrets import (
     SQLiteGovernanceIntegrityProviderSecretsRepository,
+)
+from .sqlite_deployment_governance_delivery_scheduler import (
+    SQLiteGovernanceIntegrityDeliveryScheduleRepository,
 )
 from .sqlite_deployment_governance_audit_history import (
     SQLiteGovernanceIntegrityAuditHistoryRepository,
@@ -276,6 +283,9 @@ if TYPE_CHECKING:
     )
     from .deployment_governance_retry_orchestrator import (
         GovernanceIntegrityRetryOrchestrator,
+    )
+    from .deployment_governance_delivery_scheduler import (
+        GovernanceIntegrityDeliveryScheduler,
     )
     from .deployment_governance_delivery_history import (
         GovernanceIntegrityDeliveryHistoryService,
@@ -535,6 +545,10 @@ class DeploymentGovernancePersistenceRuntime:
 
     provider_secrets_repository: (
         GovernanceIntegrityProviderSecretsRepository
+    )
+
+    delivery_schedule_repository: (
+        GovernanceIntegrityDeliveryScheduleRepository
     )
 
     database: SQLiteDatabase | None = None
@@ -1392,6 +1406,24 @@ class DeploymentGovernancePersistenceRuntime:
 
         return GovernanceIntegrityRetryOrchestrator()
 
+    def build_integrity_delivery_scheduler(
+        self,
+    ) -> "GovernanceIntegrityDeliveryScheduler":
+        """
+        Build the governance audit delivery scheduler.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_delivery_scheduler import (
+            GovernanceIntegrityDeliveryScheduler,
+        )
+
+        return GovernanceIntegrityDeliveryScheduler(
+            self.delivery_schedule_repository
+        )
+
     def build_integrity_delivery_engine(
         self,
     ) -> "GovernanceIntegrityDeliveryEngine":
@@ -1415,6 +1447,7 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_provider_request_service(),
             self.build_integrity_provider_response_service(),
             self.build_integrity_retry_orchestrator(),
+            scheduler=self.build_integrity_delivery_scheduler(),
         )
 
     def build_integrity_delivery_history_service(
@@ -1620,6 +1653,10 @@ def _build_memory_runtime(
         InMemoryGovernanceIntegrityProviderSecretsRepository()
     )
 
+    delivery_schedule_repository = (
+        InMemoryGovernanceIntegrityDeliveryScheduleRepository()
+    )
+
     return DeploymentGovernancePersistenceRuntime(
         config=config,
         repository=repository,
@@ -1650,6 +1687,7 @@ def _build_memory_runtime(
             provider_configuration_repository
         ),
         provider_secrets_repository=provider_secrets_repository,
+        delivery_schedule_repository=delivery_schedule_repository,
         database=None,
         automatic_audit_retention=automatic_audit_retention,
     )
@@ -1836,6 +1874,15 @@ def _build_sqlite_runtime(
         )
     )
 
+    delivery_schedule_repository = (
+        SQLiteGovernanceIntegrityDeliveryScheduleRepository(
+            database,
+            initialize_schema=(
+                config.initialize_schema
+            ),
+        )
+    )
+
     # SQLite persistence for the execution queue is intentionally
     # deferred (see deployment_governance_audit_execution_queue.py):
     # it stays in-process memory regardless of the configured backend.
@@ -1901,6 +1948,7 @@ def _build_sqlite_runtime(
             provider_configuration_repository
         ),
         provider_secrets_repository=provider_secrets_repository,
+        delivery_schedule_repository=delivery_schedule_repository,
         database=database,
         automatic_audit_retention=automatic_audit_retention,
     )

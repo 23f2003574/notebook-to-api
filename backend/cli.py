@@ -248,6 +248,12 @@ from backend.observability.deployment_governance_retry_orchestrator_cli import (
     run_deployment_governance_retries_evaluate,
     run_deployment_governance_retries_preview,
 )
+from backend.observability.deployment_governance_delivery_scheduler_cli import (
+    run_deployment_governance_scheduler_cancel,
+    run_deployment_governance_scheduler_pending,
+    run_deployment_governance_scheduler_ready,
+    run_deployment_governance_scheduler_show,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -3680,6 +3686,77 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    scheduler_parser = audits_subparsers.add_parser(
+        "scheduler",
+        help="Manage the governance audit delivery scheduler's queue.",
+        description=(
+            "Manage immediate, delayed, and retry dispatches through "
+            "the unified delivery scheduler queue.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    scheduler_subparsers = scheduler_parser.add_subparsers(
+        dest="scheduler_command", required=True
+    )
+
+    scheduler_pending_parser = scheduler_subparsers.add_parser(
+        "pending",
+        help="List every pending scheduled dispatch.",
+    )
+    scheduler_pending_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    scheduler_ready_parser = scheduler_subparsers.add_parser(
+        "ready",
+        help="List every scheduled dispatch ready to run right now.",
+    )
+    scheduler_ready_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    scheduler_show_parser = scheduler_subparsers.add_parser(
+        "show",
+        help="Show one scheduled dispatch.",
+    )
+    scheduler_show_parser.add_argument(
+        "--dispatch-id",
+        required=True,
+        dest="dispatch_id",
+        help="Identifier of the dispatch to show.",
+    )
+    scheduler_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    scheduler_cancel_parser = scheduler_subparsers.add_parser(
+        "cancel",
+        help="Cancel one scheduled dispatch.",
+    )
+    scheduler_cancel_parser.add_argument(
+        "--dispatch-id",
+        required=True,
+        dest="dispatch_id",
+        help="Identifier of the dispatch to cancel.",
+    )
+    scheduler_cancel_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -4605,6 +4682,26 @@ def main():
                     )
                 else:
                     exit_code = run_deployment_governance_retries_preview(
+                        dispatch_id=args.dispatch_id,
+                        json_output=args.json_output,
+                    )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "scheduler":
+                if args.scheduler_command == "pending":
+                    exit_code = run_deployment_governance_scheduler_pending(
+                        json_output=args.json_output,
+                    )
+                elif args.scheduler_command == "ready":
+                    exit_code = run_deployment_governance_scheduler_ready(
+                        json_output=args.json_output,
+                    )
+                elif args.scheduler_command == "show":
+                    exit_code = run_deployment_governance_scheduler_show(
+                        dispatch_id=args.dispatch_id,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_scheduler_cancel(
                         dispatch_id=args.dispatch_id,
                         json_output=args.json_output,
                     )

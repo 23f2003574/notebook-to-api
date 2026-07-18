@@ -81,6 +81,10 @@ DEPLOYMENT_GOVERNANCE_PROVIDER_SECRETS_TABLE: Final[
     str
 ] = "provider_secrets"
 
+DEPLOYMENT_GOVERNANCE_SCHEDULED_DISPATCH_TABLE: Final[
+    str
+] = "scheduled_dispatches"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -125,6 +129,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_delivery_policies_migration(),
             DeploymentGovernanceSQLiteSchema._create_provider_configurations_migration(),
             DeploymentGovernanceSQLiteSchema._create_provider_secrets_migration(),
+            DeploymentGovernanceSQLiteSchema._create_scheduled_dispatches_migration(),
         )
 
     @staticmethod
@@ -1355,6 +1360,56 @@ class DeploymentGovernanceSQLiteSchema:
                             trim(secrets_json)
                         ) > 0
                     )
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_scheduled_dispatches_migration() -> SQLiteMigration:
+        """
+        Migration 20 creates storage for the governance audit
+        delivery scheduler's unified queue
+        (backend/observability/deployment_governance_delivery_scheduler.py).
+        """
+
+        return SQLiteMigration(
+            version=20,
+            name="create governance audit scheduled dispatches table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_SCHEDULED_DISPATCH_TABLE}
+                (
+                    dispatch_id TEXT NOT NULL
+                        PRIMARY KEY,
+
+                    scheduled_at TEXT NOT NULL,
+
+                    state TEXT NOT NULL,
+
+                    attempt INTEGER NOT NULL
+                        CHECK (attempt >= 0),
+
+                    CHECK (
+                        state IN (
+                            'pending',
+                            'ready',
+                            'running',
+                            'completed',
+                            'cancelled'
+                        )
+                    )
+                )
+                """,
+
+                f"""
+                CREATE INDEX
+                idx_governance_scheduled_dispatches_state_scheduled_at
+                ON {DEPLOYMENT_GOVERNANCE_SCHEDULED_DISPATCH_TABLE}
+                (
+                    state,
+                    scheduled_at
                 )
                 """,
             ),
