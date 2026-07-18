@@ -12,9 +12,13 @@ from backend.observability.deployment_governance_persistence import (
 )
 from backend.observability.deployment_governance_provider_registry_cli import (
     run_deployment_governance_provider_capabilities,
+    run_deployment_governance_provider_disable,
+    run_deployment_governance_provider_enable,
     run_deployment_governance_provider_health,
     run_deployment_governance_provider_health_all,
     run_deployment_governance_provider_list,
+    run_deployment_governance_provider_metadata,
+    run_deployment_governance_provider_replace,
     run_deployment_governance_provider_show,
     run_deployment_governance_provider_validate,
 )
@@ -294,3 +298,94 @@ def test_health_all_json(monkeypatch, tmp_path) -> None:
     payload = json.loads(stdout.getvalue())
     assert len(payload) == 3
     assert all(record["status"] == "healthy" for record in payload)
+
+
+def test_metadata_human(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "providers-metadata.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_provider_metadata(
+        channel_type="email", stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    output = stdout.getvalue()
+    assert "Channel type: email" in output
+    assert "Provider: EmailProvider" in output
+    assert "State: enabled" in output
+
+
+def test_metadata_json(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "providers-metadata-json.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_provider_metadata(
+        channel_type="slack",
+        json_output=True,
+        stdout=stdout,
+        stderr=StringIO(),
+    )
+
+    assert exit_code == 0
+    payload = json.loads(stdout.getvalue())
+    assert payload["channel_type"] == "slack"
+    assert payload["provider_name"] == "SlackProvider"
+    assert payload["state"] == "enabled"
+
+
+def test_disable_then_metadata_reports_disabled(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "providers-disable.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_provider_disable(
+        channel_type="email", stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    assert "State: disabled" in stdout.getvalue()
+
+
+def test_enable_human(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "providers-enable.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_provider_enable(
+        channel_type="email", stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    assert "State: enabled" in stdout.getvalue()
+
+
+def test_replace_returns_same_provider_class(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "providers-replace.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_provider_replace(
+        channel_type="webhook", stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    output = stdout.getvalue()
+    assert "Channel type: webhook" in output
+    assert "Provider: WebhookProvider" in output
+
+
+def test_metadata_fails_for_invalid_channel_type(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "providers-metadata-invalid.db")
+
+    stderr = StringIO()
+
+    exit_code = run_deployment_governance_provider_metadata(
+        channel_type="not-a-real-channel-type",
+        stdout=StringIO(),
+        stderr=stderr,
+    )
+
+    assert exit_code == 2
+    assert "could not be completed" in stderr.getvalue()

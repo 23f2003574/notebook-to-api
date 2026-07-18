@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from threading import RLock
-from typing import TYPE_CHECKING
+from typing import Callable, TYPE_CHECKING
 
 from .deployment_governance_notification_channels import (
     GovernanceIntegrityNotificationChannelType,
+)
+from .deployment_governance_provider_lifecycle import (
+    GovernanceIntegrityProviderMetadata,
+    GovernanceIntegrityProviderState,
 )
 
 if TYPE_CHECKING:
@@ -48,7 +54,11 @@ class GovernanceIntegrityProviderRegistry:
     registry: it holds no provider-specific logic of its own.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self._providers: dict[
             GovernanceIntegrityNotificationChannelType,
             "GovernanceIntegrityNotificationProvider",
@@ -59,7 +69,16 @@ class GovernanceIntegrityProviderRegistry:
             GovernanceIntegrityProviderRegistration,
         ] = {}
 
+        self._metadata: dict[
+            GovernanceIntegrityNotificationChannelType,
+            GovernanceIntegrityProviderMetadata,
+        ] = {}
+
         self._lock = RLock()
+
+        self._clock = clock or (
+            lambda: datetime.now(timezone.utc)
+        )
 
     def register(
         self,
@@ -67,7 +86,7 @@ class GovernanceIntegrityProviderRegistry:
         provider: "GovernanceIntegrityNotificationProvider",
     ) -> GovernanceIntegrityProviderRegistration:
         """
-        Register a provider for a channel type.
+        Register a provider for a channel type, enabled by default.
 
         Raises ValueError if a provider is already registered for
         this channel type.
@@ -88,6 +107,15 @@ class GovernanceIntegrityProviderRegistry:
             self._providers[channel_type] = provider
 
             self._registrations[channel_type] = registration
+
+            self._metadata[channel_type] = (
+                GovernanceIntegrityProviderMetadata(
+                    channel_type=channel_type,
+                    provider_name=registration.provider_name,
+                    state=GovernanceIntegrityProviderState.ENABLED,
+                    registered_at=self._clock(),
+                )
+            )
 
             return registration
 
@@ -154,6 +182,123 @@ class GovernanceIntegrityProviderRegistry:
             for registration in self.list()
         )
 
+    def metadata(
+        self,
+        channel_type: GovernanceIntegrityNotificationChannelType,
+    ) -> GovernanceIntegrityProviderMetadata:
+        """
+        Return the lifecycle metadata of the provider registered for
+        a channel type.
+
+        Raises LookupError if no provider is registered for this
+        channel type.
+        """
+
+        with self._lock:
+            metadata = self._metadata.get(channel_type)
+
+            if metadata is None:
+                raise LookupError(
+                    "no delivery provider registered for channel "
+                    f"type '{channel_type.value}'"
+                )
+
+            return metadata
+
+    def enable(
+        self,
+        channel_type: GovernanceIntegrityNotificationChannelType,
+    ) -> GovernanceIntegrityProviderMetadata:
+        """
+        Enable the provider registered for a channel type.
+
+        Raises LookupError if no provider is registered for this
+        channel type.
+        """
+
+        return self._set_state(
+            channel_type, GovernanceIntegrityProviderState.ENABLED
+        )
+
+    def disable(
+        self,
+        channel_type: GovernanceIntegrityNotificationChannelType,
+    ) -> GovernanceIntegrityProviderMetadata:
+        """
+        Disable the provider registered for a channel type. A
+        disabled provider remains registered: it stays resolvable and
+        keeps its metadata, but the delivery engine refuses to
+        deliver through it.
+
+        Raises LookupError if no provider is registered for this
+        channel type.
+        """
+
+        return self._set_state(
+            channel_type, GovernanceIntegrityProviderState.DISABLED
+        )
+
+    def replace(
+        self,
+        channel_type: GovernanceIntegrityNotificationChannelType,
+        provider: "GovernanceIntegrityNotificationProvider",
+    ) -> GovernanceIntegrityProviderRegistration:
+        """
+        Replace the provider registered for a channel type with a
+        different provider instance, preserving its registration
+        timestamp and current lifecycle state.
+
+        Raises LookupError if no provider is registered for this
+        channel type.
+        """
+
+        with self._lock:
+            existing_metadata = self._metadata.get(channel_type)
+
+            if existing_metadata is None:
+                raise LookupError(
+                    "no delivery provider registered for channel "
+                    f"type '{channel_type.value}'"
+                )
+
+            registration = GovernanceIntegrityProviderRegistration(
+                channel_type=channel_type,
+                provider_name=type(provider).__name__,
+            )
+
+            self._providers[channel_type] = provider
+
+            self._registrations[channel_type] = registration
+
+            self._metadata[channel_type] = dataclasses.replace(
+                existing_metadata,
+                provider_name=registration.provider_name,
+            )
+
+            return registration
+
+    def _set_state(
+        self,
+        channel_type: GovernanceIntegrityNotificationChannelType,
+        state: GovernanceIntegrityProviderState,
+    ) -> GovernanceIntegrityProviderMetadata:
+        with self._lock:
+            existing_metadata = self._metadata.get(channel_type)
+
+            if existing_metadata is None:
+                raise LookupError(
+                    "no delivery provider registered for channel "
+                    f"type '{channel_type.value}'"
+                )
+
+            updated = dataclasses.replace(
+                existing_metadata, state=state
+            )
+
+            self._metadata[channel_type] = updated
+
+            return updated
+
     def unregister(
         self,
         channel_type: GovernanceIntegrityNotificationChannelType,
@@ -175,6 +320,8 @@ class GovernanceIntegrityProviderRegistry:
             del self._providers[channel_type]
 
             del self._registrations[channel_type]
+
+            del self._metadata[channel_type]
 
     def list(
         self,

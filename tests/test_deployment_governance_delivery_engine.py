@@ -46,6 +46,10 @@ from backend.observability.deployment_governance_provider_health import (
     GovernanceIntegrityProviderHealth,
     GovernanceIntegrityProviderHealthStatus,
 )
+from backend.observability.deployment_governance_provider_lifecycle import (
+    GovernanceIntegrityProviderMetadata,
+    GovernanceIntegrityProviderState,
+)
 from backend.observability.deployment_governance_provider_registry import (
     GovernanceIntegrityProviderRegistry,
 )
@@ -104,15 +108,17 @@ class Harness:
             self.policy_repository, self.channel_service
         )
 
+        self.provider_registry = (
+            _default_provider_registry()
+            if provider_registry is None
+            else provider_registry
+        )
+
         self.engine = GovernanceIntegrityDeliveryEngine(
             self.dispatch_repository,
             self.notification_repository,
             self.channel_repository,
-            (
-                _default_provider_registry()
-                if provider_registry is None
-                else provider_registry
-            ),
+            self.provider_registry,
             self.policy_service,
             clock=clock,
         )
@@ -283,6 +289,14 @@ class SpyProviderRegistry:
             message=None,
         )
 
+    def metadata(self, channel_type):
+        return GovernanceIntegrityProviderMetadata(
+            channel_type=channel_type,
+            provider_name=type(self._provider).__name__,
+            state=GovernanceIntegrityProviderState.ENABLED,
+            registered_at=BASE_TIME,
+        )
+
 
 def test_deliver_requests_provider_through_registry() -> None:
     harness = Harness()
@@ -368,6 +382,27 @@ def test_deliver_fails_when_provider_is_unhealthy() -> None:
 
     assert result.status is GovernanceIntegrityDeliveryStatus.FAILED
     assert "mailbox unreachable" in result.error
+
+
+def test_deliver_fails_when_provider_is_disabled() -> None:
+    harness = Harness()
+
+    harness.add_notification("n1")
+    harness.add_channel(
+        "email", GovernanceIntegrityNotificationChannelType.EMAIL
+    )
+    harness.add_dispatch(
+        "d1", notification_id="n1", channel_name="email"
+    )
+
+    harness.provider_registry.disable(
+        GovernanceIntegrityNotificationChannelType.EMAIL
+    )
+
+    result = harness.engine.deliver("d1")
+
+    assert result.status is GovernanceIntegrityDeliveryStatus.FAILED
+    assert result.error == "Provider is disabled."
 
 
 # --- Service: deliver ----------------------------------------------------

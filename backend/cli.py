@@ -208,9 +208,13 @@ from backend.observability.deployment_governance_delivery_policies_cli import (
 )
 from backend.observability.deployment_governance_provider_registry_cli import (
     run_deployment_governance_provider_capabilities,
+    run_deployment_governance_provider_disable,
+    run_deployment_governance_provider_enable,
     run_deployment_governance_provider_health,
     run_deployment_governance_provider_health_all,
     run_deployment_governance_provider_list,
+    run_deployment_governance_provider_metadata,
+    run_deployment_governance_provider_replace,
     run_deployment_governance_provider_show,
     run_deployment_governance_provider_validate,
 )
@@ -3053,6 +3057,93 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    providers_enable_parser = providers_subparsers.add_parser(
+        "enable",
+        help="Enable the provider registered for one channel type.",
+    )
+    providers_enable_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to enable the registered provider for.",
+    )
+    providers_enable_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    providers_disable_parser = providers_subparsers.add_parser(
+        "disable",
+        help="Disable the provider registered for one channel type.",
+    )
+    providers_disable_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to disable the registered provider for.",
+    )
+    providers_disable_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    providers_replace_parser = providers_subparsers.add_parser(
+        "replace",
+        help=(
+            "Replace the provider for one channel type with a fresh "
+            "instance of the same provider class (a reload)."
+        ),
+    )
+    providers_replace_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to replace the registered provider for.",
+    )
+    providers_replace_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    providers_metadata_parser = providers_subparsers.add_parser(
+        "metadata",
+        help="Show lifecycle metadata for one channel type's provider.",
+    )
+    providers_metadata_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to show the registered provider's metadata for.",
+    )
+    providers_metadata_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -3821,11 +3912,31 @@ def main():
                         channel_type=args.channel_type,
                         json_output=args.json_output,
                     )
-                else:
+                elif args.providers_command == "health-all":
                     exit_code = (
                         run_deployment_governance_provider_health_all(
                             json_output=args.json_output,
                         )
+                    )
+                elif args.providers_command == "enable":
+                    exit_code = run_deployment_governance_provider_enable(
+                        channel_type=args.channel_type,
+                        json_output=args.json_output,
+                    )
+                elif args.providers_command == "disable":
+                    exit_code = run_deployment_governance_provider_disable(
+                        channel_type=args.channel_type,
+                        json_output=args.json_output,
+                    )
+                elif args.providers_command == "replace":
+                    exit_code = run_deployment_governance_provider_replace(
+                        channel_type=args.channel_type,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_provider_metadata(
+                        channel_type=args.channel_type,
+                        json_output=args.json_output,
                     )
                 sys.exit(exit_code)
             try:

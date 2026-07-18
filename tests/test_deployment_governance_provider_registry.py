@@ -13,6 +13,9 @@ from backend.observability.deployment_governance_notification_channels import (
 from backend.observability.deployment_governance_persistence import (
     build_deployment_governance_persistence,
 )
+from backend.observability.deployment_governance_provider_lifecycle import (
+    GovernanceIntegrityProviderState,
+)
 from backend.observability.deployment_governance_provider_registry import (
     GovernanceIntegrityProviderRegistration,
     GovernanceIntegrityProviderRegistry,
@@ -123,6 +126,38 @@ def test_health_all_returns_every_registered_provider() -> None:
     ]
 
 
+# --- Lifecycle -------------------------------------------------------------
+
+
+def test_disable_reflects_in_metadata() -> None:
+    registry = GovernanceIntegrityProviderRegistry()
+
+    registry.register(EMAIL, EmailProvider())
+    registry.disable(EMAIL)
+
+    assert registry.metadata(EMAIL).state is (
+        GovernanceIntegrityProviderState.DISABLED
+    )
+
+
+def test_replace_returns_resolvable_replacement() -> None:
+    registry = GovernanceIntegrityProviderRegistry()
+
+    registry.register(EMAIL, EmailProvider())
+
+    replacement = EmailProvider()
+    registry.replace(EMAIL, replacement)
+
+    assert registry.resolve(EMAIL) is replacement
+
+
+def test_metadata_raises_for_unregistered_channel_type() -> None:
+    registry = GovernanceIntegrityProviderRegistry()
+
+    with pytest.raises(LookupError):
+        registry.metadata(WEBHOOK)
+
+
 # --- Resolve -----------------------------------------------------------
 
 
@@ -227,3 +262,7 @@ def test_runtime_registers_every_default_provider() -> None:
         assert caps.supports_rate_limit
 
         assert registry.health(channel_type).status.value == "healthy"
+
+        assert registry.metadata(channel_type).state is (
+            GovernanceIntegrityProviderState.ENABLED
+        )

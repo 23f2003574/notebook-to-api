@@ -30,6 +30,9 @@ from .deployment_governance_provider_health import (
     GovernanceIntegrityProviderHealth,
     GovernanceIntegrityProviderHealthStatus,
 )
+from .deployment_governance_provider_lifecycle import (
+    GovernanceIntegrityProviderState,
+)
 from .deployment_governance_provider_registry import (
     GovernanceIntegrityProviderRegistry,
 )
@@ -321,6 +324,16 @@ class GovernanceIntegrityDeliveryEngine:
                     f"notification channel '{dispatch.channel_name}' "
                     "was not found"
                 )
+
+            metadata = self._provider_registry.metadata(
+                channel.channel_type
+            )
+
+            if (
+                metadata.state
+                is GovernanceIntegrityProviderState.DISABLED
+            ):
+                raise RuntimeError("Provider is disabled.")
 
             provider = self._provider_registry.resolve(
                 channel.channel_type

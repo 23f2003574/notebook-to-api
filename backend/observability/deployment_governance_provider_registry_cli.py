@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import TextIO
+from typing import Callable, TYPE_CHECKING, TextIO
 
 from .deployment_governance_notification_channels import (
     GovernanceIntegrityNotificationChannelType,
 )
+
+if TYPE_CHECKING:
+    from .deployment_governance_provider_registry import (
+        GovernanceIntegrityProviderRegistry,
+    )
 from .deployment_governance_persistence import (
     build_deployment_governance_persistence,
     deployment_governance_persistence_config_from_env,
@@ -17,6 +22,9 @@ from .deployment_governance_provider_capabilities import (
 )
 from .deployment_governance_provider_health import (
     GovernanceIntegrityProviderHealth,
+)
+from .deployment_governance_provider_lifecycle import (
+    GovernanceIntegrityProviderMetadata,
 )
 from .deployment_governance_provider_registry import (
     GovernanceIntegrityProviderRegistration,
@@ -462,6 +470,251 @@ def _render_health_json(
 ) -> None:
     json.dump(
         health.to_dict(),
+        stdout,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+
+    stdout.write("\n")
+
+
+def run_deployment_governance_provider_enable(
+    *,
+    channel_type: str,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and enable the provider registered for one
+    channel type.
+
+    The provider registry is rebuilt fresh on every invocation (it is
+    not durably persisted), so this only affects delivery attempted
+    later within the same process.
+
+    Exit codes: 0 the provider was enabled, 2 it could not be enabled
+    (unknown channel type, or no provider registered).
+    """
+
+    return _run_lifecycle_transition(
+        channel_type=channel_type,
+        transition=lambda registry, resolved: registry.enable(
+            resolved
+        ),
+        verb="enabled",
+        json_output=json_output,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+
+def run_deployment_governance_provider_disable(
+    *,
+    channel_type: str,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and disable the provider registered for one
+    channel type.
+
+    A disabled provider remains registered, but the delivery engine
+    refuses to deliver through it. The provider registry is rebuilt
+    fresh on every invocation (it is not durably persisted), so this
+    only affects delivery attempted later within the same process.
+
+    Exit codes: 0 the provider was disabled, 2 it could not be
+    disabled (unknown channel type, or no provider registered).
+    """
+
+    return _run_lifecycle_transition(
+        channel_type=channel_type,
+        transition=lambda registry, resolved: registry.disable(
+            resolved
+        ),
+        verb="disabled",
+        json_output=json_output,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+
+def _run_lifecycle_transition(
+    *,
+    channel_type: str,
+    transition: Callable[
+        [
+            "GovernanceIntegrityProviderRegistry",
+            GovernanceIntegrityNotificationChannelType,
+        ],
+        GovernanceIntegrityProviderMetadata,
+    ],
+    verb: str,
+    json_output: bool,
+    stdout: TextIO,
+    stderr: TextIO,
+) -> int:
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        resolved_channel_type = (
+            GovernanceIntegrityNotificationChannelType(channel_type)
+        )
+
+        registry = runtime.build_integrity_provider_registry()
+
+        metadata = transition(registry, resolved_channel_type)
+
+    except Exception as exc:
+        _render_provider_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        _render_metadata_json(metadata, stdout=stdout)
+
+    else:
+        stdout.write(f"Provider {verb}\n\n")
+
+        _write_metadata_fields(metadata, stdout=stdout)
+
+    return 0
+
+
+def run_deployment_governance_provider_replace(
+    *,
+    channel_type: str,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and replace the provider registered for one
+    channel type with a fresh instance of the same provider class (a
+    reload), preserving its registration timestamp and lifecycle
+    state.
+
+    The provider registry is rebuilt fresh on every invocation (it is
+    not durably persisted), so this only affects delivery attempted
+    later within the same process.
+
+    Exit codes: 0 the provider was replaced, 2 it could not be
+    replaced (unknown channel type, or no provider registered).
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        resolved_channel_type = (
+            GovernanceIntegrityNotificationChannelType(channel_type)
+        )
+
+        registry = runtime.build_integrity_provider_registry()
+
+        current_provider = registry.resolve(resolved_channel_type)
+
+        registry.replace(
+            resolved_channel_type, type(current_provider)()
+        )
+
+        metadata = registry.metadata(resolved_channel_type)
+
+    except Exception as exc:
+        _render_provider_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        _render_metadata_json(metadata, stdout=stdout)
+
+    else:
+        stdout.write("Provider replaced\n\n")
+
+        _write_metadata_fields(metadata, stdout=stdout)
+
+    return 0
+
+
+def run_deployment_governance_provider_metadata(
+    *,
+    channel_type: str,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and show the lifecycle metadata of the
+    provider registered for one channel type.
+
+    Exit codes: 0 the metadata was found, 2 it could not be found or
+    shown (unknown channel type, or no provider registered).
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        resolved_channel_type = (
+            GovernanceIntegrityNotificationChannelType(channel_type)
+        )
+
+        metadata = (
+            runtime
+            .build_integrity_provider_registry()
+            .metadata(resolved_channel_type)
+        )
+
+    except Exception as exc:
+        _render_provider_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        _render_metadata_json(metadata, stdout=stdout)
+
+    else:
+        stdout.write("Provider Metadata\n\n")
+
+        _write_metadata_fields(metadata, stdout=stdout)
+
+    return 0
+
+
+def _write_metadata_fields(
+    metadata: GovernanceIntegrityProviderMetadata,
+    *,
+    stdout: TextIO,
+) -> None:
+    stdout.write(f"Channel type: {metadata.channel_type.value}\n")
+
+    stdout.write(f"Provider: {metadata.provider_name}\n")
+
+    stdout.write(f"State: {metadata.state.value}\n")
+
+    stdout.write(f"Registered at: {metadata.registered_at.isoformat()}\n")
+
+
+def _render_metadata_json(
+    metadata: GovernanceIntegrityProviderMetadata,
+    *,
+    stdout: TextIO,
+) -> None:
+    json.dump(
+        metadata.to_dict(),
         stdout,
         ensure_ascii=False,
         indent=2,
