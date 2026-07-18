@@ -42,6 +42,10 @@ from backend.observability.deployment_governance_persistence import (
     DeploymentGovernancePersistenceConfig,
     build_deployment_governance_persistence,
 )
+from backend.observability.deployment_governance_provider_configuration import (
+    GovernanceIntegrityProviderConfigurationService,
+    InMemoryGovernanceIntegrityProviderConfigurationRepository,
+)
 from backend.observability.deployment_governance_provider_registry import (
     GovernanceIntegrityProviderRegistry,
 )
@@ -85,12 +89,20 @@ class Harness:
             EmailProvider(),
         )
 
+        self.configuration_service = (
+            GovernanceIntegrityProviderConfigurationService(
+                InMemoryGovernanceIntegrityProviderConfigurationRepository(),
+                self.provider_registry,
+            )
+        )
+
         self.engine = GovernanceIntegrityDeliveryEngine(
             self.dispatch_repository,
             self.notification_repository,
             self.channel_repository,
             self.provider_registry,
             self.policy_service,
+            self.configuration_service,
         )
 
         self.history_repository = (

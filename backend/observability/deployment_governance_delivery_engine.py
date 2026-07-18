@@ -30,6 +30,10 @@ from .deployment_governance_provider_health import (
     GovernanceIntegrityProviderHealth,
     GovernanceIntegrityProviderHealthStatus,
 )
+from .deployment_governance_provider_configuration import (
+    GovernanceIntegrityProviderConfiguration,
+    GovernanceIntegrityProviderConfigurationService,
+)
 from .deployment_governance_provider_lifecycle import (
     GovernanceIntegrityProviderState,
 )
@@ -119,15 +123,18 @@ class GovernanceIntegrityNotificationProvider(Protocol):
         notification: GovernanceIntegrityNotification,
         channel: GovernanceIntegrityNotificationChannel,
         policy: GovernanceIntegrityDeliveryPolicy | None,
+        configuration: GovernanceIntegrityProviderConfiguration,
     ) -> None:
         """
         Deliver one notification through this provider's channel.
 
         policy is the channel's configured delivery policy (retry,
         timeout, rate limit), or None if no policy has been
-        configured. Raises on failure. A stub provider that does not
-        perform external I/O simply returns, and may ignore policy
-        values entirely.
+        configured. configuration is this provider's typed runtime
+        settings, or an empty configuration if none have been stored.
+        Raises on failure. A stub provider that does not perform
+        external I/O simply returns, and may ignore policy and
+        configuration values entirely.
         """
 
     def capabilities(self) -> GovernanceIntegrityProviderCapabilities:
@@ -146,7 +153,7 @@ class GovernanceIntegrityNotificationProvider(Protocol):
 class EmailProvider:
     """
     Local stub email provider: performs no external I/O and always
-    succeeds. Ignores the resolved delivery policy.
+    succeeds. Ignores the resolved delivery policy and configuration.
     """
 
     def deliver(
@@ -155,6 +162,7 @@ class EmailProvider:
         notification: GovernanceIntegrityNotification,
         channel: GovernanceIntegrityNotificationChannel,
         policy: GovernanceIntegrityDeliveryPolicy | None,
+        configuration: GovernanceIntegrityProviderConfiguration,
     ) -> None:
         return
 
@@ -179,7 +187,7 @@ class EmailProvider:
 class SlackProvider:
     """
     Local stub Slack provider: performs no external I/O and always
-    succeeds. Ignores the resolved delivery policy.
+    succeeds. Ignores the resolved delivery policy and configuration.
     """
 
     def deliver(
@@ -188,6 +196,7 @@ class SlackProvider:
         notification: GovernanceIntegrityNotification,
         channel: GovernanceIntegrityNotificationChannel,
         policy: GovernanceIntegrityDeliveryPolicy | None,
+        configuration: GovernanceIntegrityProviderConfiguration,
     ) -> None:
         return
 
@@ -212,7 +221,7 @@ class SlackProvider:
 class WebhookProvider:
     """
     Local stub webhook provider: performs no external I/O and always
-    succeeds. Ignores the resolved delivery policy.
+    succeeds. Ignores the resolved delivery policy and configuration.
     """
 
     def deliver(
@@ -221,6 +230,7 @@ class WebhookProvider:
         notification: GovernanceIntegrityNotification,
         channel: GovernanceIntegrityNotificationChannel,
         policy: GovernanceIntegrityDeliveryPolicy | None,
+        configuration: GovernanceIntegrityProviderConfiguration,
     ) -> None:
         return
 
@@ -266,6 +276,9 @@ class GovernanceIntegrityDeliveryEngine:
         ),
         provider_registry: GovernanceIntegrityProviderRegistry,
         policy_service: GovernanceIntegrityDeliveryPolicyService,
+        configuration_service: (
+            GovernanceIntegrityProviderConfigurationService
+        ),
         *,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -278,6 +291,8 @@ class GovernanceIntegrityDeliveryEngine:
         self._provider_registry = provider_registry
 
         self._policy_service = policy_service
+
+        self._configuration_service = configuration_service
 
         self._clock = clock or (
             lambda: datetime.now(timezone.utc)
@@ -370,7 +385,13 @@ class GovernanceIntegrityDeliveryEngine:
                     policy, capabilities
                 )
 
-            provider.deliver(dispatch, notification, channel, policy)
+            configuration = self._configuration_service.resolve(
+                channel.channel_type
+            )
+
+            provider.deliver(
+                dispatch, notification, channel, policy, configuration
+            )
 
         except Exception as exc:
             return GovernanceIntegrityDeliveryResult(

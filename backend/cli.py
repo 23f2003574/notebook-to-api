@@ -218,6 +218,13 @@ from backend.observability.deployment_governance_provider_registry_cli import (
     run_deployment_governance_provider_show,
     run_deployment_governance_provider_validate,
 )
+from backend.observability.deployment_governance_provider_configuration_cli import (
+    run_deployment_governance_provider_config_create,
+    run_deployment_governance_provider_config_delete,
+    run_deployment_governance_provider_config_list,
+    run_deployment_governance_provider_config_show,
+    run_deployment_governance_provider_config_update,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -3144,6 +3151,136 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    config_parser = providers_subparsers.add_parser(
+        "config",
+        help="Manage typed runtime settings for governance audit providers.",
+        description=(
+            "Create and manage typed runtime settings for governance "
+            "audit delivery providers, without modifying the "
+            "provider implementation itself.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    config_subparsers = config_parser.add_subparsers(
+        dest="config_command", required=True
+    )
+
+    config_create_parser = config_subparsers.add_parser(
+        "create",
+        help="Create a new provider configuration.",
+    )
+    config_create_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to create the configuration for.",
+    )
+    config_create_parser.add_argument(
+        "--set",
+        action="append",
+        dest="values",
+        default=None,
+        metavar="KEY=VALUE",
+        help="Configuration key=value pair. Repeatable.",
+    )
+    config_create_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    config_list_parser = config_subparsers.add_parser(
+        "list",
+        help="List every stored provider configuration.",
+    )
+    config_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    config_show_parser = config_subparsers.add_parser(
+        "show",
+        help="Show one stored provider configuration.",
+    )
+    config_show_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to show the configuration for.",
+    )
+    config_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    config_update_parser = config_subparsers.add_parser(
+        "update",
+        help="Replace an existing provider configuration's values.",
+    )
+    config_update_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to update the configuration for.",
+    )
+    config_update_parser.add_argument(
+        "--set",
+        action="append",
+        dest="values",
+        default=None,
+        metavar="KEY=VALUE",
+        help=(
+            "Configuration key=value pair. Repeatable. Replaces the "
+            "complete set of stored values."
+        ),
+    )
+    config_update_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    config_delete_parser = config_subparsers.add_parser(
+        "delete",
+        help="Delete one stored provider configuration.",
+    )
+    config_delete_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to delete the configuration for.",
+    )
+    config_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -3933,11 +4070,48 @@ def main():
                         channel_type=args.channel_type,
                         json_output=args.json_output,
                     )
-                else:
+                elif args.providers_command == "metadata":
                     exit_code = run_deployment_governance_provider_metadata(
                         channel_type=args.channel_type,
                         json_output=args.json_output,
                     )
+                else:
+                    if args.config_command == "create":
+                        exit_code = (
+                            run_deployment_governance_provider_config_create(
+                                channel_type=args.channel_type,
+                                values=args.values,
+                                json_output=args.json_output,
+                            )
+                        )
+                    elif args.config_command == "list":
+                        exit_code = (
+                            run_deployment_governance_provider_config_list(
+                                json_output=args.json_output,
+                            )
+                        )
+                    elif args.config_command == "show":
+                        exit_code = (
+                            run_deployment_governance_provider_config_show(
+                                channel_type=args.channel_type,
+                                json_output=args.json_output,
+                            )
+                        )
+                    elif args.config_command == "update":
+                        exit_code = (
+                            run_deployment_governance_provider_config_update(
+                                channel_type=args.channel_type,
+                                values=args.values,
+                                json_output=args.json_output,
+                            )
+                        )
+                    else:
+                        exit_code = (
+                            run_deployment_governance_provider_config_delete(
+                                channel_type=args.channel_type,
+                                json_output=args.json_output,
+                            )
+                        )
                 sys.exit(exit_code)
             try:
                 since = parse_governance_audit_timestamp(args.since)

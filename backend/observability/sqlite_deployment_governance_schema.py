@@ -73,6 +73,10 @@ DEPLOYMENT_GOVERNANCE_DELIVERY_POLICY_TABLE: Final[
     str
 ] = "delivery_policies"
 
+DEPLOYMENT_GOVERNANCE_PROVIDER_CONFIGURATION_TABLE: Final[
+    str
+] = "provider_configurations"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -115,6 +119,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_delivery_history_migration(),
             DeploymentGovernanceSQLiteSchema._create_notification_preferences_migration(),
             DeploymentGovernanceSQLiteSchema._create_delivery_policies_migration(),
+            DeploymentGovernanceSQLiteSchema._create_provider_configurations_migration(),
         )
 
     @staticmethod
@@ -1249,6 +1254,51 @@ class DeploymentGovernanceSQLiteSchema:
                     CHECK (
                         length(
                             trim(channel_name)
+                        ) > 0
+                    )
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_provider_configurations_migration() -> SQLiteMigration:
+        """
+        Migration 18 creates storage for typed runtime settings of
+        governance audit delivery providers
+        (backend/observability/deployment_governance_provider_configuration.py).
+
+        The settings themselves are stored as a JSON object in
+        configuration_json rather than individual columns, since each
+        provider defines its own configuration keys.
+        """
+
+        return SQLiteMigration(
+            version=18,
+            name="create governance audit provider configurations table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_PROVIDER_CONFIGURATION_TABLE}
+                (
+                    channel_type TEXT NOT NULL
+                        PRIMARY KEY,
+
+                    configuration_json TEXT NOT NULL,
+
+                    updated_at TEXT NOT NULL,
+
+                    CHECK (
+                        channel_type IN (
+                            'email',
+                            'webhook',
+                            'slack'
+                        )
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(configuration_json)
                         ) > 0
                     )
                 )
