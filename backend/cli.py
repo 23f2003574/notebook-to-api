@@ -232,6 +232,10 @@ from backend.observability.deployment_governance_provider_secrets_cli import (
     run_deployment_governance_provider_secrets_show,
     run_deployment_governance_provider_secrets_update,
 )
+from backend.observability.deployment_governance_provider_authentication_cli import (
+    run_deployment_governance_provider_auth_show,
+    run_deployment_governance_provider_auth_validate,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -3421,6 +3425,66 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    auth_parser = providers_subparsers.add_parser(
+        "auth",
+        help="Build and inspect governance audit provider authentication.",
+        description=(
+            "Build the provider-ready authentication context for a "
+            "channel type from its resolved configuration and "
+            "secrets.\n\n"
+            "Secret values are never printed: header and parameter "
+            "values are always redacted.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    auth_subparsers = auth_parser.add_subparsers(
+        dest="auth_command", required=True
+    )
+
+    auth_show_parser = auth_subparsers.add_parser(
+        "show",
+        help="Show the redacted authentication context for one channel type.",
+    )
+    auth_show_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to show the authentication context for.",
+    )
+    auth_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    auth_validate_parser = auth_subparsers.add_parser(
+        "validate",
+        help="Validate that authentication can be built for one channel type.",
+    )
+    auth_validate_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to validate authentication for.",
+    )
+    auth_validate_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -4252,7 +4316,7 @@ def main():
                                 json_output=args.json_output,
                             )
                         )
-                else:
+                elif args.providers_command == "secrets":
                     if args.secrets_command == "create":
                         exit_code = (
                             run_deployment_governance_provider_secrets_create(
@@ -4285,6 +4349,21 @@ def main():
                     else:
                         exit_code = (
                             run_deployment_governance_provider_secrets_delete(
+                                channel_type=args.channel_type,
+                                json_output=args.json_output,
+                            )
+                        )
+                else:
+                    if args.auth_command == "show":
+                        exit_code = (
+                            run_deployment_governance_provider_auth_show(
+                                channel_type=args.channel_type,
+                                json_output=args.json_output,
+                            )
+                        )
+                    else:
+                        exit_code = (
+                            run_deployment_governance_provider_auth_validate(
                                 channel_type=args.channel_type,
                                 json_output=args.json_output,
                             )
