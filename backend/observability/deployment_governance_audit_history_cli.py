@@ -24,6 +24,12 @@ from .deployment_governance_persistence import (
     build_deployment_governance_persistence,
     deployment_governance_persistence_config_from_env,
 )
+from .deployment_governance_delivery_runtime import (
+    GovernanceIntegrityRuntimeState,
+    GovernanceIntegrityRuntimeStatus,
+    GovernanceIntegrityDeliveryRuntime,
+    build_integrity_delivery_runtime,
+)
 
 
 class GovernanceAuditHistoryExitCode(IntEnum):
@@ -484,6 +490,363 @@ def _render_failure(
 
     stderr.write(
         "Governance integrity audit history could not be inspected.\n"
+    )
+
+    stderr.write(f"Reason: {error}\n")
+
+
+class GovernanceDeliveryRuntimeExitCode(IntEnum):
+    """
+    Exit codes produced by the governance delivery runtime commands.
+    """
+
+    SUCCESS = 0
+
+    RUNTIME_ERROR = 1
+
+    INVALID_STATE = 2
+
+
+def run_delivery_runtime_start(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Start the governance delivery runtime.
+    """
+
+    try:
+
+        from .deployment_governance_delivery_worker import (
+            GovernanceIntegrityDeliveryWorker,
+        )
+        from .deployment_governance_delivery_scheduler import (
+            GovernanceIntegrityDeliveryScheduler,
+        )
+        from .deployment_governance_provider_registry import (
+            GovernanceIntegrityProviderRegistry,
+        )
+
+        scheduler = GovernanceIntegrityDeliveryScheduler()
+        provider_registry = GovernanceIntegrityProviderRegistry()
+
+        worker = GovernanceIntegrityDeliveryWorker(
+            scheduler=scheduler,
+            delivery_engine=None,
+            retry_orchestrator=None,
+        )
+
+        runtime = build_integrity_delivery_runtime(
+
+            worker=
+                worker,
+
+            scheduler=
+                scheduler,
+
+            provider_registry=
+                provider_registry
+        )
+
+        runtime.start()
+
+        status = runtime.status()
+
+    except Exception as exc:
+        _render_runtime_failure(
+            exc,
+            json_output=json_output,
+            stderr=stderr,
+        )
+
+        return int(GovernanceDeliveryRuntimeExitCode.RUNTIME_ERROR)
+
+    if json_output:
+        _render_runtime_status_json(status, stdout=stdout)
+    else:
+        _render_runtime_status_human(status, stdout=stdout)
+
+    return int(GovernanceDeliveryRuntimeExitCode.SUCCESS)
+
+
+def run_delivery_runtime_stop(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Stop the governance delivery runtime.
+    """
+
+    try:
+
+        from .deployment_governance_delivery_worker import (
+            GovernanceIntegrityDeliveryWorker,
+        )
+        from .deployment_governance_delivery_scheduler import (
+            GovernanceIntegrityDeliveryScheduler,
+        )
+        from .deployment_governance_provider_registry import (
+            GovernanceIntegrityProviderRegistry,
+        )
+
+        scheduler = GovernanceIntegrityDeliveryScheduler()
+        provider_registry = GovernanceIntegrityProviderRegistry()
+
+        worker = GovernanceIntegrityDeliveryWorker(
+            scheduler=scheduler,
+            delivery_engine=None,
+            retry_orchestrator=None,
+        )
+
+        runtime = build_integrity_delivery_runtime(
+
+            worker=
+                worker,
+
+            scheduler=
+                scheduler,
+
+            provider_registry=
+                provider_registry
+        )
+
+        runtime.stop()
+
+        status = runtime.status()
+
+    except Exception as exc:
+        _render_runtime_failure(
+            exc,
+            json_output=json_output,
+            stderr=stderr,
+        )
+
+        return int(GovernanceDeliveryRuntimeExitCode.RUNTIME_ERROR)
+
+    if json_output:
+        _render_runtime_status_json(status, stdout=stdout)
+    else:
+        _render_runtime_status_human(status, stdout=stdout)
+
+    return int(GovernanceDeliveryRuntimeExitCode.SUCCESS)
+
+
+def run_delivery_runtime_status(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Get the current status of the governance delivery runtime.
+    """
+
+    try:
+
+        from .deployment_governance_delivery_worker import (
+            GovernanceIntegrityDeliveryWorker,
+        )
+        from .deployment_governance_delivery_scheduler import (
+            GovernanceIntegrityDeliveryScheduler,
+        )
+        from .deployment_governance_provider_registry import (
+            GovernanceIntegrityProviderRegistry,
+        )
+
+        scheduler = GovernanceIntegrityDeliveryScheduler()
+        provider_registry = GovernanceIntegrityProviderRegistry()
+
+        worker = GovernanceIntegrityDeliveryWorker(
+            scheduler=scheduler,
+            delivery_engine=None,
+            retry_orchestrator=None,
+        )
+
+        runtime = build_integrity_delivery_runtime(
+
+            worker=
+                worker,
+
+            scheduler=
+                scheduler,
+
+            provider_registry=
+                provider_registry
+        )
+
+        status = runtime.status()
+
+    except Exception as exc:
+        _render_runtime_failure(
+            exc,
+            json_output=json_output,
+            stderr=stderr,
+        )
+
+        return int(GovernanceDeliveryRuntimeExitCode.RUNTIME_ERROR)
+
+    if json_output:
+        _render_runtime_status_json(status, stdout=stdout)
+    else:
+        _render_runtime_status_human(status, stdout=stdout)
+
+    return int(GovernanceDeliveryRuntimeExitCode.SUCCESS)
+
+
+def run_delivery_runtime_run_once(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Run a single iteration of the governance delivery runtime.
+    """
+
+    try:
+
+        from .deployment_governance_delivery_worker import (
+            GovernanceIntegrityDeliveryWorker,
+        )
+        from .deployment_governance_delivery_scheduler import (
+            GovernanceIntegrityDeliveryScheduler,
+        )
+        from .deployment_governance_provider_registry import (
+            GovernanceIntegrityProviderRegistry,
+        )
+
+        scheduler = GovernanceIntegrityDeliveryScheduler()
+        provider_registry = GovernanceIntegrityProviderRegistry()
+
+        worker = GovernanceIntegrityDeliveryWorker(
+            scheduler=scheduler,
+            delivery_engine=None,
+            retry_orchestrator=None,
+        )
+
+        runtime = build_integrity_delivery_runtime(
+
+            worker=
+                worker,
+
+            scheduler=
+                scheduler,
+
+            provider_registry=
+                provider_registry
+        )
+
+        runtime.start()
+
+        runtime.run_iteration()
+
+        status = runtime.status()
+
+    except Exception as exc:
+        _render_runtime_failure(
+            exc,
+            json_output=json_output,
+            stderr=stderr,
+        )
+
+        return int(GovernanceDeliveryRuntimeExitCode.RUNTIME_ERROR)
+
+    if json_output:
+        _render_runtime_status_json(status, stdout=stdout)
+    else:
+        _render_runtime_status_human(status, stdout=stdout)
+
+    return int(GovernanceDeliveryRuntimeExitCode.SUCCESS)
+
+
+def _render_runtime_status_json(
+    status: GovernanceIntegrityRuntimeStatus,
+    *,
+    stdout: TextIO,
+) -> None:
+    """
+    Render runtime status as JSON.
+    """
+
+    json.dump(
+        {
+            "state": status.state.value,
+            "started_at": (
+                status.started_at.isoformat()
+                if status.started_at
+                else None
+            ),
+            "uptime_seconds": status.uptime_seconds,
+            "worker_iterations": status.worker_iterations,
+            "active_dispatches": status.active_dispatches,
+        },
+        stdout,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+
+    stdout.write("\n")
+
+
+def _render_runtime_status_human(
+    status: GovernanceIntegrityRuntimeStatus,
+    *,
+    stdout: TextIO,
+) -> None:
+    """
+    Render runtime status as human-readable text.
+    """
+
+    stdout.write("Governance Delivery Runtime Status\n")
+    stdout.write("================================\n")
+    stdout.write(f"State: {status.state.value.upper()}\n")
+
+    if status.started_at:
+        stdout.write(f"Started at: {status.started_at.isoformat()}\n")
+    else:
+        stdout.write("Started at: not started\n")
+
+    stdout.write(f"Uptime: {status.uptime_seconds}s\n")
+    stdout.write(f"Worker iterations: {status.worker_iterations}\n")
+    stdout.write(f"Active dispatches: {status.active_dispatches}\n")
+
+
+def _render_runtime_failure(
+    error: Exception,
+    *,
+    json_output: bool,
+    stderr: TextIO,
+) -> None:
+    """
+    Render a runtime operation failure.
+    """
+
+    if json_output:
+        json.dump(
+            {
+                "status": "runtime_error",
+                "error": str(error),
+                "exit_code": int(
+                    GovernanceDeliveryRuntimeExitCode.RUNTIME_ERROR
+                ),
+            },
+            stderr,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stderr.write("\n")
+
+        return
+
+    stderr.write(
+        "Governance delivery runtime operation failed.\n"
     )
 
     stderr.write(f"Reason: {error}\n")
