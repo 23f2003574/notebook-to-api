@@ -67,6 +67,28 @@ def test_register_returns_registration_with_provider_name() -> None:
     assert registration.provider_name == "SlackProvider"
 
 
+# --- Capabilities --------------------------------------------------------
+
+
+def test_capabilities_returns_provider_metadata() -> None:
+    registry = GovernanceIntegrityProviderRegistry()
+
+    registry.register(EMAIL, EmailProvider())
+
+    caps = registry.capabilities(EMAIL)
+
+    assert caps.supports_retry
+    assert caps.supports_timeout
+    assert caps.supports_rate_limit
+
+
+def test_capabilities_raises_for_unregistered_channel_type() -> None:
+    registry = GovernanceIntegrityProviderRegistry()
+
+    with pytest.raises(LookupError):
+        registry.capabilities(WEBHOOK)
+
+
 # --- Resolve -----------------------------------------------------------
 
 
@@ -163,3 +185,9 @@ def test_runtime_registers_every_default_provider() -> None:
     assert isinstance(registry.resolve(EMAIL), EmailProvider)
     assert isinstance(registry.resolve(SLACK), SlackProvider)
     assert isinstance(registry.resolve(WEBHOOK), WebhookProvider)
+
+    for channel_type in (EMAIL, SLACK, WEBHOOK):
+        caps = registry.capabilities(channel_type)
+        assert caps.supports_retry
+        assert caps.supports_timeout
+        assert caps.supports_rate_limit

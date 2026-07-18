@@ -207,8 +207,10 @@ from backend.observability.deployment_governance_delivery_policies_cli import (
     run_deployment_governance_delivery_policy_update,
 )
 from backend.observability.deployment_governance_provider_registry_cli import (
+    run_deployment_governance_provider_capabilities,
     run_deployment_governance_provider_list,
     run_deployment_governance_provider_show,
+    run_deployment_governance_provider_validate,
 )
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
@@ -2972,6 +2974,51 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    providers_capabilities_parser = providers_subparsers.add_parser(
+        "capabilities",
+        help="Show the capabilities of the provider for one channel type.",
+    )
+    providers_capabilities_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to show the provider's capabilities for.",
+    )
+    providers_capabilities_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    providers_validate_parser = providers_subparsers.add_parser(
+        "validate",
+        help=(
+            "Validate configured delivery policies against a channel "
+            "type's provider capabilities."
+        ),
+    )
+    providers_validate_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to validate configured delivery policies for.",
+    )
+    providers_validate_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -3716,10 +3763,24 @@ def main():
                     exit_code = run_deployment_governance_provider_list(
                         json_output=args.json_output,
                     )
-                else:
+                elif args.providers_command == "show":
                     exit_code = run_deployment_governance_provider_show(
                         channel_type=args.channel_type,
                         json_output=args.json_output,
+                    )
+                elif args.providers_command == "capabilities":
+                    exit_code = (
+                        run_deployment_governance_provider_capabilities(
+                            channel_type=args.channel_type,
+                            json_output=args.json_output,
+                        )
+                    )
+                else:
+                    exit_code = (
+                        run_deployment_governance_provider_validate(
+                            channel_type=args.channel_type,
+                            json_output=args.json_output,
+                        )
                     )
                 sys.exit(exit_code)
             try:

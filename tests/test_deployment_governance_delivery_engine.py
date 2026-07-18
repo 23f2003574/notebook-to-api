@@ -39,6 +39,9 @@ from backend.observability.deployment_governance_persistence import (
     DeploymentGovernancePersistenceConfig,
     build_deployment_governance_persistence,
 )
+from backend.observability.deployment_governance_provider_capabilities import (
+    GovernanceIntegrityProviderCapabilities,
+)
 from backend.observability.deployment_governance_provider_registry import (
     GovernanceIntegrityProviderRegistry,
 )
@@ -405,6 +408,15 @@ class RecordingProvider:
 
     def deliver(self, dispatch, notification, channel, policy):
         self.received_policies.append(policy)
+
+    def capabilities(self):
+        return GovernanceIntegrityProviderCapabilities(
+            supports_retry=True,
+            supports_timeout=True,
+            supports_rate_limit=True,
+            supports_attachments=True,
+            supports_markdown=True,
+        )
 
 
 def test_deliver_supplies_resolved_policy_to_provider() -> None:

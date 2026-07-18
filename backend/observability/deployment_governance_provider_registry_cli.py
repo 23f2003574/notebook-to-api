@@ -11,6 +11,10 @@ from .deployment_governance_persistence import (
     build_deployment_governance_persistence,
     deployment_governance_persistence_config_from_env,
 )
+from .deployment_governance_provider_capabilities import (
+    GovernanceIntegrityProviderCapabilities,
+    validate_delivery_policy_capabilities,
+)
 from .deployment_governance_provider_registry import (
     GovernanceIntegrityProviderRegistration,
 )
@@ -127,6 +131,219 @@ def run_deployment_governance_provider_show(
         _write_registration_fields(registration, stdout=stdout)
 
     return 0
+
+
+def run_deployment_governance_provider_capabilities(
+    *,
+    channel_type: str,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and show the capabilities of the provider
+    registered for one channel type.
+
+    Exit codes: 0 the capabilities were found, 2 they could not be
+    found or shown (unknown channel type, or no provider registered).
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        resolved_channel_type = (
+            GovernanceIntegrityNotificationChannelType(channel_type)
+        )
+
+        capabilities = (
+            runtime
+            .build_integrity_provider_registry()
+            .capabilities(resolved_channel_type)
+        )
+
+    except Exception as exc:
+        _render_provider_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            {
+                "channel_type": resolved_channel_type.value,
+                **capabilities.to_dict(),
+            },
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write("Provider Capabilities\n\n")
+
+        stdout.write(f"Channel type: {resolved_channel_type.value}\n")
+
+        _write_capabilities_fields(capabilities, stdout=stdout)
+
+    return 0
+
+
+def run_deployment_governance_provider_validate(
+    *,
+    channel_type: str,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and validate every configured delivery
+    policy for channels of one channel type against that type's
+    registered provider capabilities.
+
+    Exit codes: 0 every checked policy is compatible (including when
+    none are configured), 2 the validation could not be completed or
+    a configured policy is incompatible with its provider's
+    capabilities.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        resolved_channel_type = (
+            GovernanceIntegrityNotificationChannelType(channel_type)
+        )
+
+        capabilities = (
+            runtime
+            .build_integrity_provider_registry()
+            .capabilities(resolved_channel_type)
+        )
+
+        channel_service = (
+            runtime.build_integrity_notification_channel_service()
+        )
+
+        policy_service = (
+            runtime.build_integrity_delivery_policy_service()
+        )
+
+        results: list[dict[str, object]] = []
+
+        for channel in channel_service.list():
+            if channel.channel_type is not resolved_channel_type:
+                continue
+
+            try:
+                policy = policy_service.resolve(channel.name)
+
+            except LookupError:
+                continue
+
+            try:
+                validate_delivery_policy_capabilities(
+                    policy, capabilities
+                )
+
+            except ValueError as exc:
+                results.append(
+                    {
+                        "channel_name": channel.name,
+                        "compatible": False,
+                        "error": str(exc),
+                    }
+                )
+
+            else:
+                results.append(
+                    {
+                        "channel_name": channel.name,
+                        "compatible": True,
+                        "error": None,
+                    }
+                )
+
+    except Exception as exc:
+        _render_provider_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    incompatible = [
+        result for result in results if not result["compatible"]
+    ]
+
+    if json_output:
+        json.dump(
+            {
+                "channel_type": resolved_channel_type.value,
+                "results": results,
+            },
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write("Provider Policy Validation\n\n")
+
+        stdout.write(f"Channel type: {resolved_channel_type.value}\n\n")
+
+        if not results:
+            stdout.write(
+                "No delivery policies are configured for channels of "
+                "this type.\n"
+            )
+
+        else:
+            for result in results:
+                status = (
+                    "compatible"
+                    if result["compatible"]
+                    else "incompatible"
+                )
+
+                stdout.write(
+                    f"{result['channel_name']}: {status}\n"
+                )
+
+                if result["error"] is not None:
+                    stdout.write(f"  {result['error']}\n")
+
+    return 2 if incompatible else 0
+
+
+def _write_capabilities_fields(
+    capabilities: GovernanceIntegrityProviderCapabilities,
+    *,
+    stdout: TextIO,
+) -> None:
+    stdout.write(f"Supports retry: {capabilities.supports_retry}\n")
+
+    stdout.write(f"Supports timeout: {capabilities.supports_timeout}\n")
+
+    stdout.write(
+        f"Supports rate limit: {capabilities.supports_rate_limit}\n"
+    )
+
+    stdout.write(
+        f"Supports attachments: {capabilities.supports_attachments}\n"
+    )
+
+    stdout.write(
+        f"Supports markdown: {capabilities.supports_markdown}\n"
+    )
 
 
 def _write_registration_fields(

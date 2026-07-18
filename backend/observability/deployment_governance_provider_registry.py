@@ -12,6 +12,9 @@ if TYPE_CHECKING:
     from .deployment_governance_delivery_engine import (
         GovernanceIntegrityNotificationProvider,
     )
+    from .deployment_governance_provider_capabilities import (
+        GovernanceIntegrityProviderCapabilities,
+    )
 
 
 @dataclass(frozen=True)
@@ -106,6 +109,20 @@ class GovernanceIntegrityProviderRegistry:
                 )
 
             return provider
+
+    def capabilities(
+        self,
+        channel_type: GovernanceIntegrityNotificationChannelType,
+    ) -> "GovernanceIntegrityProviderCapabilities":
+        """
+        Return the capabilities of the provider registered for a
+        channel type.
+
+        Raises LookupError if no provider is registered for this
+        channel type.
+        """
+
+        return self.resolve(channel_type).capabilities()
 
     def unregister(
         self,

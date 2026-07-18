@@ -3,9 +3,18 @@ from __future__ import annotations
 import json
 from io import StringIO
 
+from backend.observability.deployment_governance_notification_channels import (
+    GovernanceIntegrityNotificationChannelType,
+)
+from backend.observability.deployment_governance_persistence import (
+    build_deployment_governance_persistence,
+    deployment_governance_persistence_config_from_env,
+)
 from backend.observability.deployment_governance_provider_registry_cli import (
+    run_deployment_governance_provider_capabilities,
     run_deployment_governance_provider_list,
     run_deployment_governance_provider_show,
+    run_deployment_governance_provider_validate,
 )
 
 
@@ -99,3 +108,122 @@ def test_show_fails_for_invalid_channel_type(monkeypatch, tmp_path) -> None:
 
     assert exit_code == 2
     assert "could not be completed" in stderr.getvalue()
+
+
+def test_capabilities_human(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "providers-capabilities.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_provider_capabilities(
+        channel_type="email", stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    output = stdout.getvalue()
+    assert "Channel type: email" in output
+    assert "Supports retry: True" in output
+    assert "Supports markdown: False" in output
+
+
+def test_capabilities_json(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "providers-capabilities-json.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_provider_capabilities(
+        channel_type="slack",
+        json_output=True,
+        stdout=stdout,
+        stderr=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert json.loads(stdout.getvalue()) == {
+        "channel_type": "slack",
+        "supports_retry": True,
+        "supports_timeout": True,
+        "supports_rate_limit": True,
+        "supports_attachments": True,
+        "supports_markdown": True,
+    }
+
+
+def test_validate_with_no_configured_channels(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "providers-validate-empty.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_provider_validate(
+        channel_type="email", stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    assert "No delivery policies are configured" in stdout.getvalue()
+
+
+def test_validate_with_compatible_policy(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "providers-validate-compatible.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    runtime.build_integrity_notification_channel_service().create(
+        "email",
+        GovernanceIntegrityNotificationChannelType.EMAIL,
+        "ops@example.com",
+    )
+
+    runtime.build_integrity_delivery_policy_service().create(
+        "email",
+        retry_limit=3,
+        timeout_seconds=30,
+        rate_limit_per_minute=60,
+    )
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_provider_validate(
+        channel_type="email", stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    assert "email: compatible" in stdout.getvalue()
+
+
+def test_validate_json(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "providers-validate-json.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    runtime.build_integrity_notification_channel_service().create(
+        "email",
+        GovernanceIntegrityNotificationChannelType.EMAIL,
+        "ops@example.com",
+    )
+
+    runtime.build_integrity_delivery_policy_service().create(
+        "email",
+        retry_limit=3,
+        timeout_seconds=30,
+        rate_limit_per_minute=60,
+    )
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_provider_validate(
+        channel_type="email",
+        json_output=True,
+        stdout=stdout,
+        stderr=StringIO(),
+    )
+
+    assert exit_code == 0
+    payload = json.loads(stdout.getvalue())
+    assert payload["channel_type"] == "email"
+    assert payload["results"] == [
+        {"channel_name": "email", "compatible": True, "error": None}
+    ]

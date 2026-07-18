@@ -21,6 +21,10 @@ from .deployment_governance_notifications import (
     GovernanceIntegrityNotification,
     GovernanceIntegrityNotificationRepository,
 )
+from .deployment_governance_provider_capabilities import (
+    GovernanceIntegrityProviderCapabilities,
+    validate_delivery_policy_capabilities,
+)
 from .deployment_governance_provider_registry import (
     GovernanceIntegrityProviderRegistry,
 )
@@ -118,6 +122,12 @@ class GovernanceIntegrityNotificationProvider(Protocol):
         values entirely.
         """
 
+    def capabilities(self) -> GovernanceIntegrityProviderCapabilities:
+        """
+        Return this provider's feature-support capabilities, used to
+        validate a channel's delivery policy before delivery.
+        """
+
 
 class EmailProvider:
     """
@@ -133,6 +143,15 @@ class EmailProvider:
         policy: GovernanceIntegrityDeliveryPolicy | None,
     ) -> None:
         return
+
+    def capabilities(self) -> GovernanceIntegrityProviderCapabilities:
+        return GovernanceIntegrityProviderCapabilities(
+            supports_retry=True,
+            supports_timeout=True,
+            supports_rate_limit=True,
+            supports_attachments=True,
+            supports_markdown=False,
+        )
 
 
 class SlackProvider:
@@ -150,6 +169,15 @@ class SlackProvider:
     ) -> None:
         return
 
+    def capabilities(self) -> GovernanceIntegrityProviderCapabilities:
+        return GovernanceIntegrityProviderCapabilities(
+            supports_retry=True,
+            supports_timeout=True,
+            supports_rate_limit=True,
+            supports_attachments=True,
+            supports_markdown=True,
+        )
+
 
 class WebhookProvider:
     """
@@ -165,6 +193,15 @@ class WebhookProvider:
         policy: GovernanceIntegrityDeliveryPolicy | None,
     ) -> None:
         return
+
+    def capabilities(self) -> GovernanceIntegrityProviderCapabilities:
+        return GovernanceIntegrityProviderCapabilities(
+            supports_retry=True,
+            supports_timeout=True,
+            supports_rate_limit=True,
+            supports_attachments=False,
+            supports_markdown=False,
+        )
 
 
 class GovernanceIntegrityDeliveryEngine:
@@ -257,6 +294,15 @@ class GovernanceIntegrityDeliveryEngine:
 
             except LookupError:
                 policy = None
+
+            if policy is not None:
+                capabilities = self._provider_registry.capabilities(
+                    channel.channel_type
+                )
+
+                validate_delivery_policy_capabilities(
+                    policy, capabilities
+                )
 
             provider.deliver(dispatch, notification, channel, policy)
 
