@@ -77,6 +77,10 @@ DEPLOYMENT_GOVERNANCE_PROVIDER_CONFIGURATION_TABLE: Final[
     str
 ] = "provider_configurations"
 
+DEPLOYMENT_GOVERNANCE_PROVIDER_SECRETS_TABLE: Final[
+    str
+] = "provider_secrets"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -120,6 +124,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_notification_preferences_migration(),
             DeploymentGovernanceSQLiteSchema._create_delivery_policies_migration(),
             DeploymentGovernanceSQLiteSchema._create_provider_configurations_migration(),
+            DeploymentGovernanceSQLiteSchema._create_provider_secrets_migration(),
         )
 
     @staticmethod
@@ -1299,6 +1304,55 @@ class DeploymentGovernanceSQLiteSchema:
                     CHECK (
                         length(
                             trim(configuration_json)
+                        ) > 0
+                    )
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_provider_secrets_migration() -> SQLiteMigration:
+        """
+        Migration 19 creates storage for sensitive credentials of
+        governance audit delivery providers
+        (backend/observability/deployment_governance_provider_secrets.py),
+        kept in a table separate from provider_configurations so
+        secrets and non-sensitive settings have independent
+        lifecycles.
+
+        The values themselves are stored as a JSON object in
+        secrets_json rather than individual columns, since each
+        provider defines its own secret keys. This is local,
+        unencrypted storage.
+        """
+
+        return SQLiteMigration(
+            version=19,
+            name="create governance audit provider secrets table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_PROVIDER_SECRETS_TABLE}
+                (
+                    channel_type TEXT NOT NULL
+                        PRIMARY KEY,
+
+                    secrets_json TEXT NOT NULL,
+
+                    updated_at TEXT NOT NULL,
+
+                    CHECK (
+                        channel_type IN (
+                            'email',
+                            'webhook',
+                            'slack'
+                        )
+                    ),
+
+                    CHECK (
+                        length(
+                            trim(secrets_json)
                         ) > 0
                     )
                 )

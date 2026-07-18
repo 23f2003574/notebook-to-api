@@ -58,6 +58,11 @@ from backend.observability.deployment_governance_provider_lifecycle import (
 from backend.observability.deployment_governance_provider_registry import (
     GovernanceIntegrityProviderRegistry,
 )
+from backend.observability.deployment_governance_provider_secrets import (
+    GovernanceIntegrityProviderSecrets,
+    GovernanceIntegrityProviderSecretsService,
+    InMemoryGovernanceIntegrityProviderSecretsRepository,
+)
 
 BASE_TIME = datetime(2026, 7, 15, 23, 0, 0, tzinfo=timezone.utc)
 
@@ -100,12 +105,26 @@ def _default_configuration_service(
     )
 
 
+def _default_secrets_service(
+    registry: GovernanceIntegrityProviderRegistry | None = None,
+) -> GovernanceIntegrityProviderSecretsService:
+    return GovernanceIntegrityProviderSecretsService(
+        InMemoryGovernanceIntegrityProviderSecretsRepository(),
+        (
+            registry
+            if registry is not None
+            else GovernanceIntegrityProviderRegistry()
+        ),
+    )
+
+
 class Harness:
     def __init__(
         self,
         *,
         provider_registry=None,
         configuration_service=None,
+        secrets_service=None,
         clock=None,
     ) -> None:
         self.dispatch_repository = (
@@ -144,6 +163,12 @@ class Harness:
             else configuration_service
         )
 
+        self.secrets_service = (
+            _default_secrets_service(self.provider_registry)
+            if secrets_service is None
+            else secrets_service
+        )
+
         self.engine = GovernanceIntegrityDeliveryEngine(
             self.dispatch_repository,
             self.notification_repository,
@@ -151,6 +176,7 @@ class Harness:
             self.provider_registry,
             self.policy_service,
             self.configuration_service,
+            self.secrets_service,
             clock=clock,
         )
 
@@ -293,9 +319,14 @@ def test_stub_providers_deliver_without_raising(provider_class) -> None:
         checked_at=BASE_TIME,
     )
 
+    secrets = GovernanceIntegrityProviderSecrets.empty(
+        GovernanceIntegrityNotificationChannelType.EMAIL,
+        checked_at=BASE_TIME,
+    )
+
     assert (
         provider.deliver(
-            dispatch, notification, channel, None, configuration
+            dispatch, notification, channel, None, configuration, secrets
         )
         is None
     )
@@ -357,6 +388,7 @@ def test_deliver_requests_provider_through_registry() -> None:
         spy_registry,
         harness.policy_service,
         harness.configuration_service,
+        harness.secrets_service,
     )
 
     result = engine.deliver("d1")
@@ -376,7 +408,9 @@ class UnhealthyEmailProvider:
     def __init__(self, message: str = "provider offline") -> None:
         self._message = message
 
-    def deliver(self, dispatch, notification, channel, policy, configuration):
+    def deliver(
+        self, dispatch, notification, channel, policy, configuration, secrets
+    ):
         raise AssertionError(
             "deliver must not be called for an unhealthy provider"
         )
@@ -550,10 +584,14 @@ class RecordingProvider:
     def __init__(self) -> None:
         self.received_policies: list[object] = []
         self.received_configurations: list[object] = []
+        self.received_secrets: list[object] = []
 
-    def deliver(self, dispatch, notification, channel, policy, configuration):
+    def deliver(
+        self, dispatch, notification, channel, policy, configuration, secrets
+    ):
         self.received_policies.append(policy)
         self.received_configurations.append(configuration)
+        self.received_secrets.append(secrets)
 
     def capabilities(self):
         return GovernanceIntegrityProviderCapabilities(
@@ -606,6 +644,7 @@ def test_deliver_supplies_resolved_policy_to_provider() -> None:
         ),
         harness.policy_service,
         harness.configuration_service,
+        harness.secrets_service,
     )
 
     result = engine.deliver("d1")
@@ -640,6 +679,7 @@ def test_deliver_supplies_none_policy_when_unconfigured() -> None:
         ),
         harness.policy_service,
         harness.configuration_service,
+        harness.secrets_service,
     )
 
     engine.deliver("d1")
@@ -678,6 +718,7 @@ def test_deliver_supplies_stored_configuration_to_provider() -> None:
         ),
         harness.policy_service,
         harness.configuration_service,
+        harness.secrets_service,
     )
 
     engine.deliver("d1")
@@ -716,12 +757,144 @@ def test_deliver_supplies_empty_configuration_when_unconfigured() -> None:
         ),
         harness.policy_service,
         harness.configuration_service,
+        harness.secrets_service,
     )
 
     engine.deliver("d1")
 
     configuration = recording_provider.received_configurations[0]
     assert dict(configuration.values) == {}
+
+
+def test_deliver_supplies_stored_secrets_to_provider() -> None:
+    harness = Harness()
+
+    harness.add_notification("n1")
+    harness.add_channel(
+        "email", GovernanceIntegrityNotificationChannelType.EMAIL
+    )
+    harness.add_dispatch(
+        "d1", notification_id="n1", channel_name="email"
+    )
+
+    harness.secrets_service.create(
+        GovernanceIntegrityNotificationChannelType.EMAIL,
+        {"api_key": "abc123"},
+    )
+
+    recording_provider = RecordingProvider()
+
+    engine = GovernanceIntegrityDeliveryEngine(
+        harness.dispatch_repository,
+        harness.notification_repository,
+        harness.channel_repository,
+        _build_provider_registry(
+            {
+                GovernanceIntegrityNotificationChannelType.EMAIL: (
+                    recording_provider
+                ),
+            }
+        ),
+        harness.policy_service,
+        harness.configuration_service,
+        harness.secrets_service,
+    )
+
+    engine.deliver("d1")
+
+    assert len(recording_provider.received_secrets) == 1
+    secrets = recording_provider.received_secrets[0]
+    assert dict(secrets.values) == {"api_key": "abc123"}
+
+
+def test_deliver_supplies_empty_secrets_when_unconfigured() -> None:
+    harness = Harness()
+
+    harness.add_notification("n1")
+    harness.add_channel(
+        "email", GovernanceIntegrityNotificationChannelType.EMAIL
+    )
+    harness.add_dispatch(
+        "d1", notification_id="n1", channel_name="email"
+    )
+
+    recording_provider = RecordingProvider()
+
+    engine = GovernanceIntegrityDeliveryEngine(
+        harness.dispatch_repository,
+        harness.notification_repository,
+        harness.channel_repository,
+        _build_provider_registry(
+            {
+                GovernanceIntegrityNotificationChannelType.EMAIL: (
+                    recording_provider
+                ),
+            }
+        ),
+        harness.policy_service,
+        harness.configuration_service,
+        harness.secrets_service,
+    )
+
+    engine.deliver("d1")
+
+    secrets = recording_provider.received_secrets[0]
+    assert dict(secrets.values) == {}
+
+
+def test_deliver_supplies_configuration_and_secrets_together() -> None:
+    """
+    Exercises the combined delivery-engine contract: a mock provider
+    should receive both its resolved configuration and its resolved
+    secrets in the same deliver() call.
+    """
+
+    harness = Harness()
+
+    harness.add_notification("n1")
+    harness.add_channel(
+        "email", GovernanceIntegrityNotificationChannelType.EMAIL
+    )
+    harness.add_dispatch(
+        "d1", notification_id="n1", channel_name="email"
+    )
+
+    harness.configuration_service.create(
+        GovernanceIntegrityNotificationChannelType.EMAIL,
+        {"timeout": "30"},
+    )
+    harness.secrets_service.create(
+        GovernanceIntegrityNotificationChannelType.EMAIL,
+        {"api_key": "abc123"},
+    )
+
+    recording_provider = RecordingProvider()
+
+    engine = GovernanceIntegrityDeliveryEngine(
+        harness.dispatch_repository,
+        harness.notification_repository,
+        harness.channel_repository,
+        _build_provider_registry(
+            {
+                GovernanceIntegrityNotificationChannelType.EMAIL: (
+                    recording_provider
+                ),
+            }
+        ),
+        harness.policy_service,
+        harness.configuration_service,
+        harness.secrets_service,
+    )
+
+    result = engine.deliver("d1")
+
+    assert result.status is GovernanceIntegrityDeliveryStatus.SUCCESS
+    assert dict(recording_provider.received_configurations[0].values) == {
+        "timeout": "30"
+    }
+    assert dict(recording_provider.received_secrets[0].values) == {
+        "api_key": "abc123"
+    }
 
 
 # --- Service: deliver_all ---------------------------------------------

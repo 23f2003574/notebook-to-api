@@ -225,6 +225,13 @@ from backend.observability.deployment_governance_provider_configuration_cli impo
     run_deployment_governance_provider_config_show,
     run_deployment_governance_provider_config_update,
 )
+from backend.observability.deployment_governance_provider_secrets_cli import (
+    run_deployment_governance_provider_secrets_create,
+    run_deployment_governance_provider_secrets_delete,
+    run_deployment_governance_provider_secrets_list,
+    run_deployment_governance_provider_secrets_show,
+    run_deployment_governance_provider_secrets_update,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -3281,6 +3288,139 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    secrets_parser = providers_subparsers.add_parser(
+        "secrets",
+        help="Manage sensitive credentials for governance audit providers.",
+        description=(
+            "Create and manage sensitive credentials for governance "
+            "audit delivery providers, stored separately from their "
+            "typed configuration.\n\n"
+            "This is local, unencrypted storage: a production "
+            "deployment would need envelope encryption or an "
+            "external secrets manager.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    secrets_subparsers = secrets_parser.add_subparsers(
+        dest="secrets_command", required=True
+    )
+
+    secrets_create_parser = secrets_subparsers.add_parser(
+        "create",
+        help="Create a new provider secret set.",
+    )
+    secrets_create_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to create the secret set for.",
+    )
+    secrets_create_parser.add_argument(
+        "--set",
+        action="append",
+        dest="values",
+        default=None,
+        metavar="KEY=VALUE",
+        help="Secret key=value pair. Repeatable.",
+    )
+    secrets_create_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    secrets_list_parser = secrets_subparsers.add_parser(
+        "list",
+        help="List every stored provider secret set.",
+    )
+    secrets_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    secrets_show_parser = secrets_subparsers.add_parser(
+        "show",
+        help="Show one stored provider secret set.",
+    )
+    secrets_show_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to show the secret set for.",
+    )
+    secrets_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    secrets_update_parser = secrets_subparsers.add_parser(
+        "update",
+        help="Replace an existing provider secret set's values.",
+    )
+    secrets_update_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to update the secret set for.",
+    )
+    secrets_update_parser.add_argument(
+        "--set",
+        action="append",
+        dest="values",
+        default=None,
+        metavar="KEY=VALUE",
+        help=(
+            "Secret key=value pair. Repeatable. Replaces the "
+            "complete set of stored values."
+        ),
+    )
+    secrets_update_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    secrets_delete_parser = secrets_subparsers.add_parser(
+        "delete",
+        help="Delete one stored provider secret set.",
+    )
+    secrets_delete_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to delete the secret set for.",
+    )
+    secrets_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -4075,7 +4215,7 @@ def main():
                         channel_type=args.channel_type,
                         json_output=args.json_output,
                     )
-                else:
+                elif args.providers_command == "config":
                     if args.config_command == "create":
                         exit_code = (
                             run_deployment_governance_provider_config_create(
@@ -4108,6 +4248,43 @@ def main():
                     else:
                         exit_code = (
                             run_deployment_governance_provider_config_delete(
+                                channel_type=args.channel_type,
+                                json_output=args.json_output,
+                            )
+                        )
+                else:
+                    if args.secrets_command == "create":
+                        exit_code = (
+                            run_deployment_governance_provider_secrets_create(
+                                channel_type=args.channel_type,
+                                values=args.values,
+                                json_output=args.json_output,
+                            )
+                        )
+                    elif args.secrets_command == "list":
+                        exit_code = (
+                            run_deployment_governance_provider_secrets_list(
+                                json_output=args.json_output,
+                            )
+                        )
+                    elif args.secrets_command == "show":
+                        exit_code = (
+                            run_deployment_governance_provider_secrets_show(
+                                channel_type=args.channel_type,
+                                json_output=args.json_output,
+                            )
+                        )
+                    elif args.secrets_command == "update":
+                        exit_code = (
+                            run_deployment_governance_provider_secrets_update(
+                                channel_type=args.channel_type,
+                                values=args.values,
+                                json_output=args.json_output,
+                            )
+                        )
+                    else:
+                        exit_code = (
+                            run_deployment_governance_provider_secrets_delete(
                                 channel_type=args.channel_type,
                                 json_output=args.json_output,
                             )

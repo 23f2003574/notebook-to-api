@@ -49,6 +49,10 @@ from backend.observability.deployment_governance_provider_configuration import (
 from backend.observability.deployment_governance_provider_registry import (
     GovernanceIntegrityProviderRegistry,
 )
+from backend.observability.deployment_governance_provider_secrets import (
+    GovernanceIntegrityProviderSecretsService,
+    InMemoryGovernanceIntegrityProviderSecretsRepository,
+)
 from backend.observability.sqlite_deployment_governance_delivery_history import (
     SQLiteGovernanceIntegrityDeliveryHistoryRepository,
 )
@@ -96,6 +100,11 @@ class Harness:
             )
         )
 
+        self.secrets_service = GovernanceIntegrityProviderSecretsService(
+            InMemoryGovernanceIntegrityProviderSecretsRepository(),
+            self.provider_registry,
+        )
+
         self.engine = GovernanceIntegrityDeliveryEngine(
             self.dispatch_repository,
             self.notification_repository,
@@ -103,6 +112,7 @@ class Harness:
             self.provider_registry,
             self.policy_service,
             self.configuration_service,
+            self.secrets_service,
         )
 
         self.history_repository = (

@@ -40,6 +40,10 @@ from .deployment_governance_provider_lifecycle import (
 from .deployment_governance_provider_registry import (
     GovernanceIntegrityProviderRegistry,
 )
+from .deployment_governance_provider_secrets import (
+    GovernanceIntegrityProviderSecrets,
+    GovernanceIntegrityProviderSecretsService,
+)
 
 
 class GovernanceIntegrityDeliveryStatus(
@@ -124,6 +128,7 @@ class GovernanceIntegrityNotificationProvider(Protocol):
         channel: GovernanceIntegrityNotificationChannel,
         policy: GovernanceIntegrityDeliveryPolicy | None,
         configuration: GovernanceIntegrityProviderConfiguration,
+        secrets: GovernanceIntegrityProviderSecrets,
     ) -> None:
         """
         Deliver one notification through this provider's channel.
@@ -132,9 +137,11 @@ class GovernanceIntegrityNotificationProvider(Protocol):
         timeout, rate limit), or None if no policy has been
         configured. configuration is this provider's typed runtime
         settings, or an empty configuration if none have been stored.
-        Raises on failure. A stub provider that does not perform
-        external I/O simply returns, and may ignore policy and
-        configuration values entirely.
+        secrets is this provider's sensitive credentials, or an empty
+        secret set if none have been stored. Raises on failure. A
+        stub provider that does not perform external I/O simply
+        returns, and may ignore policy, configuration, and secrets
+        values entirely.
         """
 
     def capabilities(self) -> GovernanceIntegrityProviderCapabilities:
@@ -153,7 +160,7 @@ class GovernanceIntegrityNotificationProvider(Protocol):
 class EmailProvider:
     """
     Local stub email provider: performs no external I/O and always
-    succeeds. Ignores the resolved delivery policy and configuration.
+    succeeds. Ignores the resolved delivery policy, configuration, and secrets.
     """
 
     def deliver(
@@ -163,6 +170,7 @@ class EmailProvider:
         channel: GovernanceIntegrityNotificationChannel,
         policy: GovernanceIntegrityDeliveryPolicy | None,
         configuration: GovernanceIntegrityProviderConfiguration,
+        secrets: GovernanceIntegrityProviderSecrets,
     ) -> None:
         return
 
@@ -197,6 +205,7 @@ class SlackProvider:
         channel: GovernanceIntegrityNotificationChannel,
         policy: GovernanceIntegrityDeliveryPolicy | None,
         configuration: GovernanceIntegrityProviderConfiguration,
+        secrets: GovernanceIntegrityProviderSecrets,
     ) -> None:
         return
 
@@ -231,6 +240,7 @@ class WebhookProvider:
         channel: GovernanceIntegrityNotificationChannel,
         policy: GovernanceIntegrityDeliveryPolicy | None,
         configuration: GovernanceIntegrityProviderConfiguration,
+        secrets: GovernanceIntegrityProviderSecrets,
     ) -> None:
         return
 
@@ -279,6 +289,7 @@ class GovernanceIntegrityDeliveryEngine:
         configuration_service: (
             GovernanceIntegrityProviderConfigurationService
         ),
+        secrets_service: GovernanceIntegrityProviderSecretsService,
         *,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -293,6 +304,8 @@ class GovernanceIntegrityDeliveryEngine:
         self._policy_service = policy_service
 
         self._configuration_service = configuration_service
+
+        self._secrets_service = secrets_service
 
         self._clock = clock or (
             lambda: datetime.now(timezone.utc)
@@ -389,8 +402,17 @@ class GovernanceIntegrityDeliveryEngine:
                 channel.channel_type
             )
 
+            secrets = self._secrets_service.resolve(
+                channel.channel_type
+            )
+
             provider.deliver(
-                dispatch, notification, channel, policy, configuration
+                dispatch,
+                notification,
+                channel,
+                policy,
+                configuration,
+                secrets,
             )
 
         except Exception as exc:
