@@ -271,6 +271,9 @@ if TYPE_CHECKING:
     from .deployment_governance_provider_requests import (
         GovernanceIntegrityProviderRequestService,
     )
+    from .deployment_governance_provider_responses import (
+        GovernanceIntegrityProviderResponseService,
+    )
     from .deployment_governance_delivery_history import (
         GovernanceIntegrityDeliveryHistoryService,
     )
@@ -1352,6 +1355,24 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_provider_registry(),
         )
 
+    def build_integrity_provider_response_service(
+        self,
+    ) -> "GovernanceIntegrityProviderResponseService":
+        """
+        Build the governance audit provider response service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_provider_responses import (
+            GovernanceIntegrityProviderResponseService,
+        )
+
+        return GovernanceIntegrityProviderResponseService(
+            self.build_integrity_provider_registry()
+        )
+
     def build_integrity_delivery_engine(
         self,
     ) -> "GovernanceIntegrityDeliveryEngine":
@@ -1373,6 +1394,7 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_provider_registry(),
             self.build_integrity_delivery_policy_service(),
             self.build_integrity_provider_request_service(),
+            self.build_integrity_provider_response_service(),
         )
 
     def build_integrity_delivery_history_service(

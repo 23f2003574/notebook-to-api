@@ -65,6 +65,10 @@ from backend.observability.deployment_governance_provider_requests import (
     GovernanceIntegrityProviderRequest,
     GovernanceIntegrityProviderRequestService,
 )
+from backend.observability.deployment_governance_provider_responses import (
+    GovernanceIntegrityProviderResponse,
+    GovernanceIntegrityProviderResponseService,
+)
 from backend.observability.deployment_governance_provider_secrets import (
     GovernanceIntegrityProviderSecretsService,
     InMemoryGovernanceIntegrityProviderSecretsRepository,
@@ -121,12 +125,19 @@ def _build_request_service(
     )
 
 
+def _build_response_service(
+    registry: GovernanceIntegrityProviderRegistry,
+) -> GovernanceIntegrityProviderResponseService:
+    return GovernanceIntegrityProviderResponseService(registry)
+
+
 class Harness:
     def __init__(
         self,
         *,
         provider_registry=None,
         request_service=None,
+        response_service=None,
         clock=None,
     ) -> None:
         self.dispatch_repository = (
@@ -167,6 +178,12 @@ class Harness:
             else request_service
         )
 
+        self.response_service = (
+            _build_response_service(self.provider_registry)
+            if response_service is None
+            else response_service
+        )
+
         self.engine = GovernanceIntegrityDeliveryEngine(
             self.dispatch_repository,
             self.notification_repository,
@@ -174,6 +191,7 @@ class Harness:
             self.provider_registry,
             self.policy_service,
             self.request_service,
+            self.response_service,
             clock=clock,
         )
 
@@ -295,10 +313,13 @@ def _stub_request() -> GovernanceIntegrityProviderRequest:
     "provider_class",
     [EmailProvider, SlackProvider, WebhookProvider],
 )
-def test_stub_providers_deliver_without_raising(provider_class) -> None:
+def test_stub_providers_deliver_returns_success_response(provider_class) -> None:
     provider = provider_class()
 
-    assert provider.deliver(_stub_request()) is None
+    response = provider.deliver(_stub_request())
+
+    assert isinstance(response, GovernanceIntegrityProviderResponse)
+    assert response.status_code == 200
 
 
 @pytest.mark.parametrize(
@@ -405,6 +426,7 @@ def test_deliver_requests_provider_through_registry() -> None:
         spy_registry,
         harness.policy_service,
         harness.request_service,
+        harness.response_service,
     )
 
     result = engine.deliver("d1")
@@ -609,14 +631,23 @@ class RecordingProvider:
     def __init__(
         self,
         authentication_type=GovernanceIntegrityAuthenticationType.NONE,
+        response_status_code: int = 200,
     ) -> None:
         self.received_requests: list[GovernanceIntegrityProviderRequest] = []
         self.deliver_call_count = 0
         self._authentication_type = authentication_type
+        self._response_status_code = response_status_code
 
     def deliver(self, request):
         self.deliver_call_count += 1
         self.received_requests.append(request)
+
+        return GovernanceIntegrityProviderResponse(
+            status_code=self._response_status_code,
+            headers={},
+            body={},
+            duration_ms=0,
+        )
 
     def build_request(
         self, notification, channel, configuration, authentication, policy
@@ -697,6 +728,7 @@ def test_deliver_calls_provider_deliver_with_built_request_exactly_once() -> (
         custom_registry,
         harness.policy_service,
         _build_request_service(custom_registry, harness.policy_service),
+        _build_response_service(custom_registry),
     )
 
     result = engine.deliver("d1")
@@ -743,6 +775,7 @@ def test_deliver_does_not_call_provider_deliver_when_request_fails_to_build() ->
         custom_registry,
         harness.policy_service,
         _build_request_service(custom_registry, harness.policy_service),
+        _build_response_service(custom_registry),
     )
 
     result = engine.deliver("d1")
@@ -750,6 +783,132 @@ def test_deliver_does_not_call_provider_deliver_when_request_fails_to_build() ->
     assert result.status is GovernanceIntegrityDeliveryStatus.FAILED
     assert "api_key" in result.error
     assert recording_provider.deliver_call_count == 0
+
+
+def test_deliver_fails_on_normalized_server_error_response() -> None:
+    """
+    A provider that returns a 5xx response should produce a FAILED
+    delivery result: the engine relies on the response service's
+    normalized outcome rather than interpreting the raw response
+    itself.
+    """
+
+    harness = Harness()
+
+    harness.add_notification("n1")
+    harness.add_channel(
+        "email", GovernanceIntegrityNotificationChannelType.EMAIL
+    )
+    harness.add_dispatch(
+        "d1", notification_id="n1", channel_name="email"
+    )
+
+    recording_provider = RecordingProvider(response_status_code=503)
+
+    custom_registry = _build_provider_registry(
+        {
+            GovernanceIntegrityNotificationChannelType.EMAIL: (
+                recording_provider
+            ),
+        }
+    )
+
+    engine = GovernanceIntegrityDeliveryEngine(
+        harness.dispatch_repository,
+        harness.notification_repository,
+        harness.channel_repository,
+        custom_registry,
+        harness.policy_service,
+        _build_request_service(custom_registry, harness.policy_service),
+        _build_response_service(custom_registry),
+    )
+
+    result = engine.deliver("d1")
+
+    assert result.status is GovernanceIntegrityDeliveryStatus.FAILED
+    assert "server error" in result.error
+    assert recording_provider.deliver_call_count == 1
+
+
+def test_deliver_fails_on_normalized_client_error_response() -> None:
+    harness = Harness()
+
+    harness.add_notification("n1")
+    harness.add_channel(
+        "email", GovernanceIntegrityNotificationChannelType.EMAIL
+    )
+    harness.add_dispatch(
+        "d1", notification_id="n1", channel_name="email"
+    )
+
+    recording_provider = RecordingProvider(response_status_code=404)
+
+    custom_registry = _build_provider_registry(
+        {
+            GovernanceIntegrityNotificationChannelType.EMAIL: (
+                recording_provider
+            ),
+        }
+    )
+
+    engine = GovernanceIntegrityDeliveryEngine(
+        harness.dispatch_repository,
+        harness.notification_repository,
+        harness.channel_repository,
+        custom_registry,
+        harness.policy_service,
+        _build_request_service(custom_registry, harness.policy_service),
+        _build_response_service(custom_registry),
+    )
+
+    result = engine.deliver("d1")
+
+    assert result.status is GovernanceIntegrityDeliveryStatus.FAILED
+    assert "client error" in result.error
+
+
+def test_deliver_raises_on_unsupported_response_status_code() -> None:
+    """
+    An unsupported status code cannot be normalized by the response
+    service, so the delivery engine surfaces it as a FAILED result
+    (the ValueError is caught alongside every other delivery
+    failure).
+    """
+
+    harness = Harness()
+
+    harness.add_notification("n1")
+    harness.add_channel(
+        "email", GovernanceIntegrityNotificationChannelType.EMAIL
+    )
+    harness.add_dispatch(
+        "d1", notification_id="n1", channel_name="email"
+    )
+
+    recording_provider = RecordingProvider(response_status_code=999)
+
+    custom_registry = _build_provider_registry(
+        {
+            GovernanceIntegrityNotificationChannelType.EMAIL: (
+                recording_provider
+            ),
+        }
+    )
+
+    engine = GovernanceIntegrityDeliveryEngine(
+        harness.dispatch_repository,
+        harness.notification_repository,
+        harness.channel_repository,
+        custom_registry,
+        harness.policy_service,
+        _build_request_service(custom_registry, harness.policy_service),
+        _build_response_service(custom_registry),
+    )
+
+    result = engine.deliver("d1")
+
+    assert result.status is GovernanceIntegrityDeliveryStatus.FAILED
+    assert "999" in result.error
 
 
 # --- Service: deliver_all ---------------------------------------------

@@ -47,6 +47,10 @@ from .deployment_governance_provider_requests import (
     GovernanceIntegrityProviderRequest,
     GovernanceIntegrityProviderRequestService,
 )
+from .deployment_governance_provider_responses import (
+    GovernanceIntegrityProviderResponse,
+    GovernanceIntegrityProviderResponseService,
+)
 
 
 class GovernanceIntegrityDeliveryStatus(
@@ -127,15 +131,20 @@ class GovernanceIntegrityNotificationProvider(Protocol):
     def deliver(
         self,
         request: GovernanceIntegrityProviderRequest,
-    ) -> None:
+    ) -> GovernanceIntegrityProviderResponse:
         """
-        Deliver one already-built provider request.
+        Deliver one already-built provider request and return its raw
+        response.
 
         The request pipeline resolves configuration, authentication,
         and delivery policy, and builds the complete request through
         build_request() before this is ever called: a provider never
-        assembles its own inputs. Raises on failure. A stub provider
-        that does not perform external I/O simply returns, and may
+        assembles its own inputs. The response processing layer
+        normalizes the returned response afterward: a provider never
+        interprets its own response for success/failure. Raises on
+        failure to deliver at all (as opposed to a returned
+        error-status response). A stub provider that does not perform
+        external I/O simply returns a synthetic response, and may
         ignore the request's values entirely.
         """
 
@@ -211,6 +220,20 @@ def _build_stub_request(
     )
 
 
+def _build_stub_response() -> GovernanceIntegrityProviderResponse:
+    """
+    Shared stub response for the local, no-external-I/O built-in
+    providers: always a synthetic, immediate 200.
+    """
+
+    return GovernanceIntegrityProviderResponse(
+        status_code=200,
+        headers={},
+        body={"status": "ok"},
+        duration_ms=0,
+    )
+
+
 class EmailProvider:
     """
     Local stub email provider: performs no external I/O and always
@@ -220,8 +243,8 @@ class EmailProvider:
     def deliver(
         self,
         request: GovernanceIntegrityProviderRequest,
-    ) -> None:
-        return
+    ) -> GovernanceIntegrityProviderResponse:
+        return _build_stub_response()
 
     def build_request(
         self,
@@ -263,8 +286,8 @@ class SlackProvider:
     def deliver(
         self,
         request: GovernanceIntegrityProviderRequest,
-    ) -> None:
-        return
+    ) -> GovernanceIntegrityProviderResponse:
+        return _build_stub_response()
 
     def build_request(
         self,
@@ -306,8 +329,8 @@ class WebhookProvider:
     def deliver(
         self,
         request: GovernanceIntegrityProviderRequest,
-    ) -> None:
-        return
+    ) -> GovernanceIntegrityProviderResponse:
+        return _build_stub_response()
 
     def build_request(
         self,
@@ -365,6 +388,7 @@ class GovernanceIntegrityDeliveryEngine:
         provider_registry: GovernanceIntegrityProviderRegistry,
         policy_service: GovernanceIntegrityDeliveryPolicyService,
         request_service: GovernanceIntegrityProviderRequestService,
+        response_service: GovernanceIntegrityProviderResponseService,
         *,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -379,6 +403,8 @@ class GovernanceIntegrityDeliveryEngine:
         self._policy_service = policy_service
 
         self._request_service = request_service
+
+        self._response_service = response_service
 
         self._clock = clock or (
             lambda: datetime.now(timezone.utc)
@@ -475,7 +501,18 @@ class GovernanceIntegrityDeliveryEngine:
                 notification, channel
             )
 
-            provider.deliver(request)
+            response = provider.deliver(request)
+
+            outcome = self._response_service.process(response)
+
+            if not outcome.success:
+                raise RuntimeError(
+                    outcome.message
+                    or (
+                        "delivery failed with provider status "
+                        f"'{outcome.provider_status}'"
+                    )
+                )
 
         except Exception as exc:
             return GovernanceIntegrityDeliveryResult(
