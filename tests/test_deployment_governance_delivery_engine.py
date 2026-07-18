@@ -73,6 +73,9 @@ from backend.observability.deployment_governance_provider_secrets import (
     GovernanceIntegrityProviderSecretsService,
     InMemoryGovernanceIntegrityProviderSecretsRepository,
 )
+from backend.observability.deployment_governance_retry_orchestrator import (
+    GovernanceIntegrityRetryOrchestrator,
+)
 
 BASE_TIME = datetime(2026, 7, 15, 23, 0, 0, tzinfo=timezone.utc)
 
@@ -131,6 +134,10 @@ def _build_response_service(
     return GovernanceIntegrityProviderResponseService(registry)
 
 
+def _build_retry_orchestrator() -> GovernanceIntegrityRetryOrchestrator:
+    return GovernanceIntegrityRetryOrchestrator(clock=lambda: BASE_TIME)
+
+
 class Harness:
     def __init__(
         self,
@@ -138,6 +145,7 @@ class Harness:
         provider_registry=None,
         request_service=None,
         response_service=None,
+        retry_orchestrator=None,
         clock=None,
     ) -> None:
         self.dispatch_repository = (
@@ -184,6 +192,12 @@ class Harness:
             else response_service
         )
 
+        self.retry_orchestrator = (
+            _build_retry_orchestrator()
+            if retry_orchestrator is None
+            else retry_orchestrator
+        )
+
         self.engine = GovernanceIntegrityDeliveryEngine(
             self.dispatch_repository,
             self.notification_repository,
@@ -192,6 +206,7 @@ class Harness:
             self.policy_service,
             self.request_service,
             self.response_service,
+            self.retry_orchestrator,
             clock=clock,
         )
 
@@ -427,6 +442,7 @@ def test_deliver_requests_provider_through_registry() -> None:
         harness.policy_service,
         harness.request_service,
         harness.response_service,
+        harness.retry_orchestrator,
     )
 
     result = engine.deliver("d1")
@@ -729,6 +745,7 @@ def test_deliver_calls_provider_deliver_with_built_request_exactly_once() -> (
         harness.policy_service,
         _build_request_service(custom_registry, harness.policy_service),
         _build_response_service(custom_registry),
+        _build_retry_orchestrator(),
     )
 
     result = engine.deliver("d1")
@@ -776,6 +793,7 @@ def test_deliver_does_not_call_provider_deliver_when_request_fails_to_build() ->
         harness.policy_service,
         _build_request_service(custom_registry, harness.policy_service),
         _build_response_service(custom_registry),
+        _build_retry_orchestrator(),
     )
 
     result = engine.deliver("d1")
@@ -821,6 +839,7 @@ def test_deliver_fails_on_normalized_server_error_response() -> None:
         harness.policy_service,
         _build_request_service(custom_registry, harness.policy_service),
         _build_response_service(custom_registry),
+        _build_retry_orchestrator(),
     )
 
     result = engine.deliver("d1")
@@ -859,6 +878,7 @@ def test_deliver_fails_on_normalized_client_error_response() -> None:
         harness.policy_service,
         _build_request_service(custom_registry, harness.policy_service),
         _build_response_service(custom_registry),
+        _build_retry_orchestrator(),
     )
 
     result = engine.deliver("d1")
@@ -903,6 +923,7 @@ def test_deliver_raises_on_unsupported_response_status_code() -> None:
         harness.policy_service,
         _build_request_service(custom_registry, harness.policy_service),
         _build_response_service(custom_registry),
+        _build_retry_orchestrator(),
     )
 
     result = engine.deliver("d1")

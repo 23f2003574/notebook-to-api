@@ -62,6 +62,9 @@ from backend.observability.deployment_governance_provider_secrets import (
     GovernanceIntegrityProviderSecretsService,
     InMemoryGovernanceIntegrityProviderSecretsRepository,
 )
+from backend.observability.deployment_governance_retry_orchestrator import (
+    GovernanceIntegrityRetryOrchestrator,
+)
 from backend.observability.sqlite_deployment_governance_delivery_history import (
     SQLiteGovernanceIntegrityDeliveryHistoryRepository,
 )
@@ -133,6 +136,8 @@ class Harness:
             self.provider_registry
         )
 
+        self.retry_orchestrator = GovernanceIntegrityRetryOrchestrator()
+
         self.engine = GovernanceIntegrityDeliveryEngine(
             self.dispatch_repository,
             self.notification_repository,
@@ -141,6 +146,7 @@ class Harness:
             self.policy_service,
             self.request_service,
             self.response_service,
+            self.retry_orchestrator,
         )
 
         self.history_repository = (

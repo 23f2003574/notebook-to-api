@@ -244,6 +244,10 @@ from backend.observability.deployment_governance_provider_responses_cli import (
     run_deployment_governance_provider_response_show,
     run_deployment_governance_provider_response_validate,
 )
+from backend.observability.deployment_governance_retry_orchestrator_cli import (
+    run_deployment_governance_retries_evaluate,
+    run_deployment_governance_retries_preview,
+)
 # export_openapi_schema is imported lazily (see below) because it imports
 # generated/app.py at module load time, which re-executes a previously
 # compiled notebook's top-level code as a side effect (stray stdout output).
@@ -3619,6 +3623,63 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    retries_parser = audits_subparsers.add_parser(
+        "retries",
+        help="Evaluate governance audit delivery retry decisions.",
+        description=(
+            "Deliver one dispatch and evaluate whether its failure "
+            "should be retried, independent of the delivery engine "
+            "itself.\n\n"
+            "Exit codes: 0 the operation succeeded, 2 the operation "
+            "could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    retries_subparsers = retries_parser.add_subparsers(
+        dest="retries_command", required=True
+    )
+
+    retries_evaluate_parser = retries_subparsers.add_parser(
+        "evaluate",
+        help="Evaluate the retry decision for one dispatch at a given attempt.",
+    )
+    retries_evaluate_parser.add_argument(
+        "--dispatch-id",
+        required=True,
+        dest="dispatch_id",
+        help="Identifier of the dispatch to evaluate.",
+    )
+    retries_evaluate_parser.add_argument(
+        "--attempt",
+        required=True,
+        type=int,
+        dest="attempt",
+        help="Zero-based number of attempts already made.",
+    )
+    retries_evaluate_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    retries_preview_parser = retries_subparsers.add_parser(
+        "preview",
+        help="Preview the retry decision for one dispatch at its first attempt.",
+    )
+    retries_preview_parser.add_argument(
+        "--dispatch-id",
+        required=True,
+        dest="dispatch_id",
+        help="Identifier of the dispatch to preview.",
+    )
+    retries_preview_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -4534,6 +4595,19 @@ def main():
                                 json_output=args.json_output,
                             )
                         )
+                sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "retries":
+                if args.retries_command == "evaluate":
+                    exit_code = run_deployment_governance_retries_evaluate(
+                        dispatch_id=args.dispatch_id,
+                        attempt=args.attempt,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = run_deployment_governance_retries_preview(
+                        dispatch_id=args.dispatch_id,
+                        json_output=args.json_output,
+                    )
                 sys.exit(exit_code)
             try:
                 since = parse_governance_audit_timestamp(args.since)

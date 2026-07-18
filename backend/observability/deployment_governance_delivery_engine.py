@@ -51,6 +51,9 @@ from .deployment_governance_provider_responses import (
     GovernanceIntegrityProviderResponse,
     GovernanceIntegrityProviderResponseService,
 )
+from .deployment_governance_retry_orchestrator import (
+    GovernanceIntegrityRetryOrchestrator,
+)
 
 
 class GovernanceIntegrityDeliveryStatus(
@@ -389,6 +392,7 @@ class GovernanceIntegrityDeliveryEngine:
         policy_service: GovernanceIntegrityDeliveryPolicyService,
         request_service: GovernanceIntegrityProviderRequestService,
         response_service: GovernanceIntegrityProviderResponseService,
+        retry_orchestrator: GovernanceIntegrityRetryOrchestrator,
         *,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -405,6 +409,8 @@ class GovernanceIntegrityDeliveryEngine:
         self._request_service = request_service
 
         self._response_service = response_service
+
+        self._retry_orchestrator = retry_orchestrator
 
         self._clock = clock or (
             lambda: datetime.now(timezone.utc)
@@ -506,13 +512,23 @@ class GovernanceIntegrityDeliveryEngine:
             outcome = self._response_service.process(response)
 
             if not outcome.success:
-                raise RuntimeError(
-                    outcome.message
-                    or (
-                        "delivery failed with provider status "
-                        f"'{outcome.provider_status}'"
-                    )
+                error_message = outcome.message or (
+                    "delivery failed with provider status "
+                    f"'{outcome.provider_status}'"
                 )
+
+                if policy is not None:
+                    decision = self._retry_orchestrator.evaluate(
+                        outcome, policy, 0
+                    )
+
+                    if decision.should_retry:
+                        error_message = (
+                            f"{error_message} (retry {decision.retry_attempt} "
+                            f"scheduled in {decision.delay_seconds}s)"
+                        )
+
+                raise RuntimeError(error_message)
 
         except Exception as exc:
             return GovernanceIntegrityDeliveryResult(

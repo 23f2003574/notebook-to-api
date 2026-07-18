@@ -274,6 +274,9 @@ if TYPE_CHECKING:
     from .deployment_governance_provider_responses import (
         GovernanceIntegrityProviderResponseService,
     )
+    from .deployment_governance_retry_orchestrator import (
+        GovernanceIntegrityRetryOrchestrator,
+    )
     from .deployment_governance_delivery_history import (
         GovernanceIntegrityDeliveryHistoryService,
     )
@@ -1373,6 +1376,22 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_provider_registry()
         )
 
+    def build_integrity_retry_orchestrator(
+        self,
+    ) -> "GovernanceIntegrityRetryOrchestrator":
+        """
+        Build the governance audit retry orchestrator.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_retry_orchestrator import (
+            GovernanceIntegrityRetryOrchestrator,
+        )
+
+        return GovernanceIntegrityRetryOrchestrator()
+
     def build_integrity_delivery_engine(
         self,
     ) -> "GovernanceIntegrityDeliveryEngine":
@@ -1395,6 +1414,7 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_delivery_policy_service(),
             self.build_integrity_provider_request_service(),
             self.build_integrity_provider_response_service(),
+            self.build_integrity_retry_orchestrator(),
         )
 
     def build_integrity_delivery_history_service(
