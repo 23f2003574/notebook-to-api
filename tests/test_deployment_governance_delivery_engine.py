@@ -42,6 +42,10 @@ from backend.observability.deployment_governance_persistence import (
 from backend.observability.deployment_governance_provider_capabilities import (
     GovernanceIntegrityProviderCapabilities,
 )
+from backend.observability.deployment_governance_provider_health import (
+    GovernanceIntegrityProviderHealth,
+    GovernanceIntegrityProviderHealthStatus,
+)
 from backend.observability.deployment_governance_provider_registry import (
     GovernanceIntegrityProviderRegistry,
 )
@@ -271,6 +275,14 @@ class SpyProviderRegistry:
         self.resolved_channel_types.append(channel_type)
         return self._provider
 
+    def health(self, channel_type):
+        return GovernanceIntegrityProviderHealth(
+            channel_type=channel_type,
+            status=GovernanceIntegrityProviderHealthStatus.HEALTHY,
+            checked_at=BASE_TIME,
+            message=None,
+        )
+
 
 def test_deliver_requests_provider_through_registry() -> None:
     harness = Harness()
@@ -299,6 +311,63 @@ def test_deliver_requests_provider_through_registry() -> None:
     assert spy_registry.resolved_channel_types == [
         GovernanceIntegrityNotificationChannelType.EMAIL
     ]
+
+
+class UnhealthyEmailProvider:
+    """
+    Test double for a provider whose health check reports UNHEALTHY,
+    in place of a real stub provider.
+    """
+
+    def __init__(self, message: str = "provider offline") -> None:
+        self._message = message
+
+    def deliver(self, dispatch, notification, channel, policy):
+        raise AssertionError(
+            "deliver must not be called for an unhealthy provider"
+        )
+
+    def capabilities(self):
+        return GovernanceIntegrityProviderCapabilities(
+            supports_retry=True,
+            supports_timeout=True,
+            supports_rate_limit=True,
+            supports_attachments=True,
+            supports_markdown=True,
+        )
+
+    def health_check(self):
+        return GovernanceIntegrityProviderHealth(
+            channel_type=GovernanceIntegrityNotificationChannelType.EMAIL,
+            status=GovernanceIntegrityProviderHealthStatus.UNHEALTHY,
+            checked_at=BASE_TIME,
+            message=self._message,
+        )
+
+
+def test_deliver_fails_when_provider_is_unhealthy() -> None:
+    harness = Harness(
+        provider_registry=_build_provider_registry(
+            {
+                GovernanceIntegrityNotificationChannelType.EMAIL: (
+                    UnhealthyEmailProvider("mailbox unreachable")
+                ),
+            }
+        )
+    )
+
+    harness.add_notification("n1")
+    harness.add_channel(
+        "email", GovernanceIntegrityNotificationChannelType.EMAIL
+    )
+    harness.add_dispatch(
+        "d1", notification_id="n1", channel_name="email"
+    )
+
+    result = harness.engine.deliver("d1")
+
+    assert result.status is GovernanceIntegrityDeliveryStatus.FAILED
+    assert "mailbox unreachable" in result.error
 
 
 # --- Service: deliver ----------------------------------------------------
@@ -416,6 +485,14 @@ class RecordingProvider:
             supports_rate_limit=True,
             supports_attachments=True,
             supports_markdown=True,
+        )
+
+    def health_check(self):
+        return GovernanceIntegrityProviderHealth(
+            channel_type=GovernanceIntegrityNotificationChannelType.EMAIL,
+            status=GovernanceIntegrityProviderHealthStatus.HEALTHY,
+            checked_at=BASE_TIME,
+            message=None,
         )
 
 

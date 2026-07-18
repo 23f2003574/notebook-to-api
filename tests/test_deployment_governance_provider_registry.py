@@ -89,6 +89,40 @@ def test_capabilities_raises_for_unregistered_channel_type() -> None:
         registry.capabilities(WEBHOOK)
 
 
+# --- Health --------------------------------------------------------------
+
+
+def test_health_returns_provider_status() -> None:
+    registry = GovernanceIntegrityProviderRegistry()
+
+    registry.register(EMAIL, EmailProvider())
+
+    assert registry.health(EMAIL).status.value == "healthy"
+
+
+def test_health_raises_for_unregistered_channel_type() -> None:
+    registry = GovernanceIntegrityProviderRegistry()
+
+    with pytest.raises(LookupError):
+        registry.health(WEBHOOK)
+
+
+def test_health_all_returns_every_registered_provider() -> None:
+    registry = GovernanceIntegrityProviderRegistry()
+
+    registry.register(WEBHOOK, WebhookProvider())
+    registry.register(EMAIL, EmailProvider())
+    registry.register(SLACK, SlackProvider())
+
+    health_records = registry.health_all()
+
+    assert [health.channel_type for health in health_records] == [
+        EMAIL,
+        SLACK,
+        WEBHOOK,
+    ]
+
+
 # --- Resolve -----------------------------------------------------------
 
 
@@ -191,3 +225,5 @@ def test_runtime_registers_every_default_provider() -> None:
         assert caps.supports_retry
         assert caps.supports_timeout
         assert caps.supports_rate_limit
+
+        assert registry.health(channel_type).status.value == "healthy"

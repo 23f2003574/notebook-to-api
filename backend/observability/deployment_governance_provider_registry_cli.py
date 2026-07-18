@@ -15,6 +15,9 @@ from .deployment_governance_provider_capabilities import (
     GovernanceIntegrityProviderCapabilities,
     validate_delivery_policy_capabilities,
 )
+from .deployment_governance_provider_health import (
+    GovernanceIntegrityProviderHealth,
+)
 from .deployment_governance_provider_registry import (
     GovernanceIntegrityProviderRegistration,
 )
@@ -322,6 +325,150 @@ def run_deployment_governance_provider_validate(
                     stdout.write(f"  {result['error']}\n")
 
     return 2 if incompatible else 0
+
+
+def run_deployment_governance_provider_health(
+    *,
+    channel_type: str,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and check the health of the provider
+    registered for one channel type.
+
+    Exit codes: 0 the health check was performed (whether healthy or
+    unhealthy), 2 the health check could not be performed (unknown
+    channel type, or no provider registered).
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        resolved_channel_type = (
+            GovernanceIntegrityNotificationChannelType(channel_type)
+        )
+
+        health = (
+            runtime
+            .build_integrity_provider_health_service()
+            .check(resolved_channel_type)
+        )
+
+    except Exception as exc:
+        _render_provider_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        _render_health_json(health, stdout=stdout)
+
+    else:
+        stdout.write("Provider Health\n\n")
+
+        _write_health_fields(health, stdout=stdout)
+
+    return 0
+
+
+def run_deployment_governance_provider_health_all(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and check the health of every registered
+    delivery provider.
+
+    Exit codes: 0 the health check was performed (whether every
+    provider is healthy or not), 2 the health check could not be
+    performed.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        health_records = (
+            runtime
+            .build_integrity_provider_health_service()
+            .check_all()
+        )
+
+    except Exception as exc:
+        _render_provider_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            [health.to_dict() for health in health_records],
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write("Provider Health\n")
+
+        stdout.write("===============\n\n")
+
+        if not health_records:
+            stdout.write(
+                "No governance audit delivery providers are "
+                "registered.\n"
+            )
+
+        else:
+            for health in health_records:
+                stdout.write(
+                    f"{health.channel_type.value}: {health.status.value}\n"
+                )
+
+    return 0
+
+
+def _write_health_fields(
+    health: GovernanceIntegrityProviderHealth,
+    *,
+    stdout: TextIO,
+) -> None:
+    stdout.write(f"Channel type: {health.channel_type.value}\n")
+
+    stdout.write(f"Status: {health.status.value}\n")
+
+    stdout.write(f"Checked at: {health.checked_at.isoformat()}\n")
+
+    if health.message is not None:
+        stdout.write(f"Message: {health.message}\n")
+
+
+def _render_health_json(
+    health: GovernanceIntegrityProviderHealth,
+    *,
+    stdout: TextIO,
+) -> None:
+    json.dump(
+        health.to_dict(),
+        stdout,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+
+    stdout.write("\n")
 
 
 def _write_capabilities_fields(

@@ -12,6 +12,7 @@ from .deployment_governance_delivery_policies import (
 from .deployment_governance_notification_channels import (
     GovernanceIntegrityNotificationChannel,
     GovernanceIntegrityNotificationChannelRepository,
+    GovernanceIntegrityNotificationChannelType,
 )
 from .deployment_governance_notification_dispatcher import (
     GovernanceIntegrityNotificationDispatch,
@@ -24,6 +25,10 @@ from .deployment_governance_notifications import (
 from .deployment_governance_provider_capabilities import (
     GovernanceIntegrityProviderCapabilities,
     validate_delivery_policy_capabilities,
+)
+from .deployment_governance_provider_health import (
+    GovernanceIntegrityProviderHealth,
+    GovernanceIntegrityProviderHealthStatus,
 )
 from .deployment_governance_provider_registry import (
     GovernanceIntegrityProviderRegistry,
@@ -128,6 +133,12 @@ class GovernanceIntegrityNotificationProvider(Protocol):
         validate a channel's delivery policy before delivery.
         """
 
+    def health_check(self) -> GovernanceIntegrityProviderHealth:
+        """
+        Return this provider's current operational health, checked
+        before delivery is attempted.
+        """
+
 
 class EmailProvider:
     """
@@ -151,6 +162,14 @@ class EmailProvider:
             supports_rate_limit=True,
             supports_attachments=True,
             supports_markdown=False,
+        )
+
+    def health_check(self) -> GovernanceIntegrityProviderHealth:
+        return GovernanceIntegrityProviderHealth(
+            channel_type=GovernanceIntegrityNotificationChannelType.EMAIL,
+            status=GovernanceIntegrityProviderHealthStatus.HEALTHY,
+            checked_at=datetime.now(timezone.utc),
+            message=None,
         )
 
 
@@ -178,6 +197,14 @@ class SlackProvider:
             supports_markdown=True,
         )
 
+    def health_check(self) -> GovernanceIntegrityProviderHealth:
+        return GovernanceIntegrityProviderHealth(
+            channel_type=GovernanceIntegrityNotificationChannelType.SLACK,
+            status=GovernanceIntegrityProviderHealthStatus.HEALTHY,
+            checked_at=datetime.now(timezone.utc),
+            message=None,
+        )
+
 
 class WebhookProvider:
     """
@@ -201,6 +228,16 @@ class WebhookProvider:
             supports_rate_limit=True,
             supports_attachments=False,
             supports_markdown=False,
+        )
+
+    def health_check(self) -> GovernanceIntegrityProviderHealth:
+        return GovernanceIntegrityProviderHealth(
+            channel_type=(
+                GovernanceIntegrityNotificationChannelType.WEBHOOK
+            ),
+            status=GovernanceIntegrityProviderHealthStatus.HEALTHY,
+            checked_at=datetime.now(timezone.utc),
+            message=None,
         )
 
 
@@ -288,6 +325,22 @@ class GovernanceIntegrityDeliveryEngine:
             provider = self._provider_registry.resolve(
                 channel.channel_type
             )
+
+            health = self._provider_registry.health(
+                channel.channel_type
+            )
+
+            if (
+                health.status
+                is GovernanceIntegrityProviderHealthStatus.UNHEALTHY
+            ):
+                raise RuntimeError(
+                    health.message
+                    or (
+                        "delivery provider for channel type "
+                        f"'{channel.channel_type.value}' is unhealthy"
+                    )
+                )
 
             try:
                 policy = self._policy_service.resolve(channel.name)

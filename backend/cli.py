@@ -208,6 +208,8 @@ from backend.observability.deployment_governance_delivery_policies_cli import (
 )
 from backend.observability.deployment_governance_provider_registry_cli import (
     run_deployment_governance_provider_capabilities,
+    run_deployment_governance_provider_health,
+    run_deployment_governance_provider_health_all,
     run_deployment_governance_provider_list,
     run_deployment_governance_provider_show,
     run_deployment_governance_provider_validate,
@@ -3019,6 +3021,38 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    providers_health_parser = providers_subparsers.add_parser(
+        "health",
+        help="Check the health of the provider for one channel type.",
+    )
+    providers_health_parser.add_argument(
+        "--channel-type",
+        required=True,
+        dest="channel_type",
+        choices=[
+            channel_type.value
+            for channel_type in GovernanceIntegrityNotificationChannelType
+        ],
+        help="Channel type to check the registered provider's health for.",
+    )
+    providers_health_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    providers_health_all_parser = providers_subparsers.add_parser(
+        "health-all",
+        help="Check the health of every registered provider.",
+    )
+    providers_health_all_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     check_parser = governance_subparsers.add_parser(
         "check",
         help="Execute and enforce a governance integrity policy gate.",
@@ -3775,10 +3809,21 @@ def main():
                             json_output=args.json_output,
                         )
                     )
-                else:
+                elif args.providers_command == "validate":
                     exit_code = (
                         run_deployment_governance_provider_validate(
                             channel_type=args.channel_type,
+                            json_output=args.json_output,
+                        )
+                    )
+                elif args.providers_command == "health":
+                    exit_code = run_deployment_governance_provider_health(
+                        channel_type=args.channel_type,
+                        json_output=args.json_output,
+                    )
+                else:
+                    exit_code = (
+                        run_deployment_governance_provider_health_all(
                             json_output=args.json_output,
                         )
                     )

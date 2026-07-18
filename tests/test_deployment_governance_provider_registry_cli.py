@@ -12,6 +12,8 @@ from backend.observability.deployment_governance_persistence import (
 )
 from backend.observability.deployment_governance_provider_registry_cli import (
     run_deployment_governance_provider_capabilities,
+    run_deployment_governance_provider_health,
+    run_deployment_governance_provider_health_all,
     run_deployment_governance_provider_list,
     run_deployment_governance_provider_show,
     run_deployment_governance_provider_validate,
@@ -227,3 +229,68 @@ def test_validate_json(monkeypatch, tmp_path) -> None:
     assert payload["results"] == [
         {"channel_name": "email", "compatible": True, "error": None}
     ]
+
+
+def test_health_human(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "providers-health.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_provider_health(
+        channel_type="email", stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    output = stdout.getvalue()
+    assert "Channel type: email" in output
+    assert "Status: healthy" in output
+
+
+def test_health_json(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "providers-health-json.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_provider_health(
+        channel_type="webhook",
+        json_output=True,
+        stdout=stdout,
+        stderr=StringIO(),
+    )
+
+    assert exit_code == 0
+    payload = json.loads(stdout.getvalue())
+    assert payload["channel_type"] == "webhook"
+    assert payload["status"] == "healthy"
+    assert payload["message"] is None
+
+
+def test_health_all_human(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "providers-health-all.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_provider_health_all(
+        stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    output = stdout.getvalue()
+    assert "email: healthy" in output
+    assert "slack: healthy" in output
+    assert "webhook: healthy" in output
+
+
+def test_health_all_json(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "providers-health-all-json.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_provider_health_all(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    payload = json.loads(stdout.getvalue())
+    assert len(payload) == 3
+    assert all(record["status"] == "healthy" for record in payload)

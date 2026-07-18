@@ -15,6 +15,9 @@ if TYPE_CHECKING:
     from .deployment_governance_provider_capabilities import (
         GovernanceIntegrityProviderCapabilities,
     )
+    from .deployment_governance_provider_health import (
+        GovernanceIntegrityProviderHealth,
+    )
 
 
 @dataclass(frozen=True)
@@ -123,6 +126,33 @@ class GovernanceIntegrityProviderRegistry:
         """
 
         return self.resolve(channel_type).capabilities()
+
+    def health(
+        self,
+        channel_type: GovernanceIntegrityNotificationChannelType,
+    ) -> "GovernanceIntegrityProviderHealth":
+        """
+        Return the health of the provider registered for a channel
+        type.
+
+        Raises LookupError if no provider is registered for this
+        channel type.
+        """
+
+        return self.resolve(channel_type).health_check()
+
+    def health_all(
+        self,
+    ) -> tuple["GovernanceIntegrityProviderHealth", ...]:
+        """
+        Return the health of every registered provider, ordered by
+        channel type value.
+        """
+
+        return tuple(
+            self.resolve(registration.channel_type).health_check()
+            for registration in self.list()
+        )
 
     def unregister(
         self,

@@ -242,6 +242,9 @@ if TYPE_CHECKING:
     from .deployment_governance_provider_registry import (
         GovernanceIntegrityProviderRegistry,
     )
+    from .deployment_governance_provider_health import (
+        GovernanceIntegrityProviderHealthService,
+    )
     from .deployment_governance_delivery_history import (
         GovernanceIntegrityDeliveryHistoryService,
     )
@@ -1217,6 +1220,24 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return registry
+
+    def build_integrity_provider_health_service(
+        self,
+    ) -> "GovernanceIntegrityProviderHealthService":
+        """
+        Build the governance audit delivery provider health service.
+
+        Imported locally (not at module top level) to avoid a circular
+        import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_provider_health import (
+            GovernanceIntegrityProviderHealthService,
+        )
+
+        return GovernanceIntegrityProviderHealthService(
+            self.build_integrity_provider_registry()
+        )
 
     def build_integrity_delivery_engine(
         self,
