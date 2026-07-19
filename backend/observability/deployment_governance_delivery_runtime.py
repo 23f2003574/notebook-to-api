@@ -184,6 +184,10 @@ class GovernanceIntegrityDeliveryRuntime:
 
         self._worker_iterations += 1
 
+        if self.metrics_service is not None:
+
+            self.metrics_service.flush()
+
     def _validate_providers(
         self
     ):

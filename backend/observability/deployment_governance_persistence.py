@@ -105,6 +105,10 @@ from .deployment_governance_metrics_repository import (
     GovernanceIntegrityMetricsRepository,
     InMemoryGovernanceIntegrityMetricsRepository,
 )
+from .deployment_governance_metrics_history import (
+    GovernanceIntegrityMetricsHistoryRepository,
+    InMemoryGovernanceIntegrityMetricsHistoryRepository,
+)
 from .deployment_governance_integrity_audit import (
     DeploymentGovernanceIntegrityAuditService,
     DeploymentGovernanceTraceIntegrityAuditSource,
@@ -171,6 +175,9 @@ from .sqlite_deployment_governance_delivery_scheduler import (
 )
 from .deployment_governance_metrics_repository import (
     SQLiteGovernanceIntegrityMetricsRepository,
+)
+from .deployment_governance_metrics_history import (
+    SQLiteGovernanceIntegrityMetricsHistoryRepository,
 )
 from .sqlite_deployment_governance_audit_history import (
     SQLiteGovernanceIntegrityAuditHistoryRepository,
@@ -322,6 +329,8 @@ DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
 ] = Path(
     "data/notebook2api.db"
 )
+
+DEFAULT_METRICS_HISTORY_RETENTION: Final[int] = 500
 
 
 class DeploymentGovernancePersistenceBackend(
@@ -576,6 +585,14 @@ class DeploymentGovernancePersistenceRuntime:
 
     metrics_repository: GovernanceIntegrityMetricsRepository = field(
         default_factory=InMemoryGovernanceIntegrityMetricsRepository
+    )
+
+    metrics_history_repository: (
+        GovernanceIntegrityMetricsHistoryRepository
+    ) = field(
+        default_factory=(
+            InMemoryGovernanceIntegrityMetricsHistoryRepository
+        )
     )
 
     metrics_service: GovernanceIntegrityMetricsService = field(
@@ -1423,6 +1440,18 @@ class DeploymentGovernancePersistenceRuntime:
 
         return self.metrics_repository
 
+    def build_integrity_metrics_history_repository(
+        self,
+    ) -> GovernanceIntegrityMetricsHistoryRepository:
+        """
+        Return the durable governance metrics history repository.
+
+        Like build_integrity_metrics_service, this returns the
+        runtime's single stored instance.
+        """
+
+        return self.metrics_history_repository
+
     def build_integrity_metrics_service(
         self,
     ) -> GovernanceIntegrityMetricsService:
@@ -1733,8 +1762,14 @@ def _build_memory_runtime(
         InMemoryGovernanceIntegrityMetricsRepository()
     )
 
+    metrics_history_repository = (
+        InMemoryGovernanceIntegrityMetricsHistoryRepository()
+    )
+
     metrics_service = GovernanceIntegrityMetricsService(
-        metrics_repository
+        metrics_repository,
+        history_repository=metrics_history_repository,
+        history_retention=DEFAULT_METRICS_HISTORY_RETENTION,
     )
 
     return DeploymentGovernancePersistenceRuntime(
@@ -1771,6 +1806,7 @@ def _build_memory_runtime(
         database=None,
         automatic_audit_retention=automatic_audit_retention,
         metrics_repository=metrics_repository,
+        metrics_history_repository=metrics_history_repository,
         metrics_service=metrics_service,
     )
 
@@ -1974,6 +2010,15 @@ def _build_sqlite_runtime(
         )
     )
 
+    metrics_history_repository = (
+        SQLiteGovernanceIntegrityMetricsHistoryRepository(
+            database,
+            initialize_schema=(
+                config.initialize_schema
+            ),
+        )
+    )
+
     # SQLite persistence for the execution queue is intentionally
     # deferred (see deployment_governance_audit_execution_queue.py):
     # it stays in-process memory regardless of the configured backend.
@@ -2010,7 +2055,9 @@ def _build_sqlite_runtime(
     )
 
     metrics_service = GovernanceIntegrityMetricsService(
-        metrics_repository
+        metrics_repository,
+        history_repository=metrics_history_repository,
+        history_retention=DEFAULT_METRICS_HISTORY_RETENTION,
     )
 
     return DeploymentGovernancePersistenceRuntime(
@@ -2047,6 +2094,7 @@ def _build_sqlite_runtime(
         database=database,
         automatic_audit_retention=automatic_audit_retention,
         metrics_repository=metrics_repository,
+        metrics_history_repository=metrics_history_repository,
         metrics_service=metrics_service,
     )
 

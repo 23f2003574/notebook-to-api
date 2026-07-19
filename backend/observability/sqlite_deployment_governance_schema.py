@@ -89,6 +89,10 @@ DEPLOYMENT_GOVERNANCE_METRICS_TABLE: Final[
     str
 ] = "governance_metrics"
 
+DEPLOYMENT_GOVERNANCE_METRICS_HISTORY_TABLE: Final[
+    str
+] = "governance_metric_history"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -135,6 +139,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_provider_secrets_migration(),
             DeploymentGovernanceSQLiteSchema._create_scheduled_dispatches_migration(),
             DeploymentGovernanceSQLiteSchema._create_governance_metrics_migration(),
+            DeploymentGovernanceSQLiteSchema._create_governance_metrics_history_migration(),
         )
 
     @staticmethod
@@ -1448,6 +1453,50 @@ class DeploymentGovernanceSQLiteSchema:
                     updated_at TEXT NOT NULL,
 
                     CHECK (id = 1)
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_governance_metrics_history_migration() -> (
+        SQLiteMigration
+    ):
+        """
+        Migration 22 creates append-only storage for periodic
+        immutable governance metrics snapshots, used for trend
+        analysis
+        (backend/observability/deployment_governance_metrics_history.py).
+
+        Unlike governance_metrics, which holds the single current
+        counters, this table accumulates one row per captured
+        snapshot and is never updated in place, only appended to and
+        pruned.
+        """
+
+        return SQLiteMigration(
+            version=22,
+            name="create governance metric history table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_METRICS_HISTORY_TABLE}
+                (
+                    id INTEGER
+                        PRIMARY KEY,
+
+                    captured_at TEXT NOT NULL,
+
+                    metrics_json TEXT NOT NULL
+                )
+                """,
+
+                f"""
+                CREATE INDEX
+                idx_governance_metric_history_captured_at
+                ON {DEPLOYMENT_GOVERNANCE_METRICS_HISTORY_TABLE}
+                (
+                    captured_at
                 )
                 """,
             ),

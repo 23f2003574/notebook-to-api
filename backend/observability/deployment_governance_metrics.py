@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from threading import Lock
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .deployment_governance_metrics_repository import (
         GovernanceIntegrityMetricsRepository,
+    )
+    from .deployment_governance_metrics_history import (
+        GovernanceIntegrityMetricsHistoryRepository,
+        GovernanceIntegrityMetricsSnapshot,
     )
 
 
@@ -82,6 +87,10 @@ class GovernanceIntegrityMetricsService:
         repository: "GovernanceIntegrityMetricsRepository | None" = None,
         *,
         auto_flush_enabled: bool = True,
+        history_repository: (
+            "GovernanceIntegrityMetricsHistoryRepository | None"
+        ) = None,
+        history_retention: int | None = None,
     ) -> None:
         self._lock = Lock()
 
@@ -96,6 +105,10 @@ class GovernanceIntegrityMetricsService:
         self._repository = repository
 
         self._auto_flush_enabled = auto_flush_enabled
+
+        self._history_repository = history_repository
+
+        self._history_retention = history_retention
 
     def record_success(self, duration_ms: float) -> None:
         """
@@ -199,13 +212,84 @@ class GovernanceIntegrityMetricsService:
     def flush(self) -> None:
         """
         Persist the current in-memory metrics to the repository, if
-        one is configured. A no-op otherwise.
+        one is configured, and capture a new history snapshot, if a
+        history repository is configured. A no-op otherwise.
         """
 
-        if self._repository is None:
-            return
+        if self._repository is not None:
+            self._repository.save(self.snapshot())
 
-        self._repository.save(self.snapshot())
+        self.capture_snapshot()
+
+    def capture_snapshot(
+        self,
+    ) -> "GovernanceIntegrityMetricsSnapshot | None":
+        """
+        Append the current metrics as a new immutable history entry,
+        if a history repository is configured.
+
+        Returns the captured snapshot, or None if no history
+        repository is configured. When a retention limit is
+        configured, prunes the history down to that limit right
+        after appending.
+        """
+
+        if self._history_repository is None:
+            return None
+
+        from .deployment_governance_metrics_history import (
+            GovernanceIntegrityMetricsSnapshot,
+        )
+
+        snapshot = GovernanceIntegrityMetricsSnapshot(
+            captured_at=datetime.now(timezone.utc),
+            metrics=self.snapshot(),
+        )
+
+        self._history_repository.append(snapshot)
+
+        if self._history_retention is not None:
+            self._history_repository.prune(self._history_retention)
+
+        return snapshot
+
+    def history(
+        self,
+        limit: int | None = None,
+    ) -> tuple["GovernanceIntegrityMetricsSnapshot", ...]:
+        """
+        Return captured metrics snapshots newest first, or an empty
+        tuple if no history repository is configured.
+        """
+
+        if self._history_repository is None:
+            return ()
+
+        return self._history_repository.list(limit)
+
+    def latest(self) -> "GovernanceIntegrityMetricsSnapshot | None":
+        """
+        Return the most recently captured metrics snapshot, or None
+        if no history repository is configured or nothing has been
+        captured yet.
+        """
+
+        if self._history_repository is None:
+            return None
+
+        return self._history_repository.latest()
+
+    def prune(self, max_entries: int) -> int:
+        """
+        Discard the oldest metrics snapshots beyond max_entries.
+        Returns the number discarded, or 0 if no history repository
+        is configured.
+        """
+
+        if self._history_repository is None:
+            return 0
+
+        return self._history_repository.prune(max_entries)
 
     def auto_flush(self) -> None:
         """

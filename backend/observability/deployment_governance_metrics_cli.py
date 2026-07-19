@@ -7,6 +7,9 @@ from typing import TextIO
 from .deployment_governance_metrics import (
     GovernanceIntegrityMetrics,
 )
+from .deployment_governance_metrics_history import (
+    GovernanceIntegrityMetricsSnapshot,
+)
 from .deployment_governance_persistence import (
     build_deployment_governance_persistence,
     deployment_governance_persistence_config_from_env,
@@ -188,6 +191,146 @@ def run_deployment_governance_metrics_reload(
         _render_metrics_human(metrics, stdout=stdout)
 
     return 0
+
+
+def run_deployment_governance_metrics_history(
+    *,
+    limit: int | None = None,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and list captured governance audit
+    notification delivery metrics snapshots, newest first.
+
+    Exit codes: 0 the history was retrieved, 2 the history could not
+    be retrieved.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        snapshots = (
+            runtime
+            .build_integrity_metrics_service()
+            .history(limit)
+        )
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        _render_history_json(snapshots, stdout=stdout)
+
+    else:
+        _render_history_human(snapshots, stdout=stdout)
+
+    return 0
+
+
+def run_deployment_governance_metrics_latest(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and show the most recently captured
+    governance audit notification delivery metrics snapshot.
+
+    Exit codes: 0 the latest snapshot was retrieved (even if none
+    exists yet), 2 it could not be retrieved.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        snapshot = (
+            runtime
+            .build_integrity_metrics_service()
+            .latest()
+        )
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            snapshot.to_dict() if snapshot is not None else None,
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    elif snapshot is None:
+        stdout.write("No governance metrics snapshots captured yet.\n")
+
+    else:
+        _render_history_human((snapshot,), stdout=stdout)
+
+    return 0
+
+
+def _render_history_human(
+    snapshots: tuple[GovernanceIntegrityMetricsSnapshot, ...],
+    *,
+    stdout: TextIO,
+) -> None:
+    if not snapshots:
+        stdout.write("No governance metrics snapshots captured yet.\n")
+
+        return
+
+    stdout.write("Governance Delivery Metrics History\n\n")
+
+    for snapshot in snapshots:
+        metrics = snapshot.metrics
+
+        stdout.write(f"Captured At: {snapshot.captured_at.isoformat()}\n")
+
+        stdout.write(f"  Total Dispatches: {metrics.total_dispatches}\n")
+
+        stdout.write(f"  Successful: {metrics.successful_dispatches}\n")
+
+        stdout.write(f"  Failed: {metrics.failed_dispatches}\n")
+
+        stdout.write(f"  Retries: {metrics.retry_dispatches}\n")
+
+        stdout.write(
+            f"  Average Duration: {metrics.average_duration_ms:.0f} ms\n\n"
+        )
+
+
+def _render_history_json(
+    snapshots: tuple[GovernanceIntegrityMetricsSnapshot, ...],
+    *,
+    stdout: TextIO,
+) -> None:
+    json.dump(
+        [snapshot.to_dict() for snapshot in snapshots],
+        stdout,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+
+    stdout.write("\n")
 
 
 def _render_metrics_human(

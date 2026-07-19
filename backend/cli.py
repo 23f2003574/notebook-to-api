@@ -164,6 +164,8 @@ from backend.observability.deployment_governance_notifications_cli import (
 from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics,
     run_deployment_governance_metrics_export,
+    run_deployment_governance_metrics_history,
+    run_deployment_governance_metrics_latest,
     run_deployment_governance_metrics_reload,
     run_deployment_governance_metrics_reset,
 )
@@ -2406,6 +2408,45 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    notifications_metrics_history_parser = (
+        notifications_metrics_subparsers.add_parser(
+            "history",
+            help=(
+                "List captured notification delivery metrics "
+                "snapshots, newest first."
+            ),
+        )
+    )
+    notifications_metrics_history_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        dest="limit",
+        help="Maximum number of snapshots to list.",
+    )
+    notifications_metrics_history_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    notifications_metrics_latest_parser = (
+        notifications_metrics_subparsers.add_parser(
+            "latest",
+            help=(
+                "Show the most recently captured notification "
+                "delivery metrics snapshot."
+            ),
+        )
+    )
+    notifications_metrics_latest_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     channels_parser = audits_subparsers.add_parser(
         "channels",
         help="Manage governance audit notification delivery channels.",
@@ -4469,6 +4510,15 @@ def main():
                         )
                     elif metrics_subcommand == "reload":
                         exit_code = run_deployment_governance_metrics_reload(
+                            json_output=args.json_output,
+                        )
+                    elif metrics_subcommand == "history":
+                        exit_code = run_deployment_governance_metrics_history(
+                            limit=args.limit,
+                            json_output=args.json_output,
+                        )
+                    elif metrics_subcommand == "latest":
+                        exit_code = run_deployment_governance_metrics_latest(
                             json_output=args.json_output,
                         )
                     else:

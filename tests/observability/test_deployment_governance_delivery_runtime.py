@@ -881,3 +881,51 @@ class TestGovernanceIntegrityDeliveryRuntimeMetricsPersistence:
 
         metrics_service.snapshot.assert_called_once()
         assert result == metrics_service.snapshot.return_value
+
+    def test_run_iteration_flushes_metrics_periodically(self):
+        worker = Mock()
+        scheduler = Mock()
+        del scheduler.active_dispatch_count
+        provider_registry = Mock()
+        provider_registry.list_providers.return_value = []
+        clock = Mock()
+        clock.now.return_value = datetime.now(timezone.utc)
+
+        metrics_service = Mock(spec=GovernanceIntegrityMetricsService)
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_service=metrics_service,
+        )
+
+        runtime.start()
+        metrics_service.flush.reset_mock()
+
+        runtime.run_iteration()
+        runtime.run_iteration()
+
+        assert metrics_service.flush.call_count == 2
+
+    def test_run_iteration_without_metrics_service_does_not_raise(
+        self,
+    ):
+        worker = Mock()
+        scheduler = Mock()
+        del scheduler.active_dispatch_count
+        provider_registry = Mock()
+        provider_registry.list_providers.return_value = []
+        clock = Mock()
+        clock.now.return_value = datetime.now(timezone.utc)
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+        )
+
+        runtime.start()
+        runtime.run_iteration()

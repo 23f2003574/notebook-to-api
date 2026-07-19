@@ -9,6 +9,9 @@ from backend.observability.deployment_governance_metrics import (
 from backend.observability.deployment_governance_metrics_repository import (
     InMemoryGovernanceIntegrityMetricsRepository,
 )
+from backend.observability.deployment_governance_metrics_history import (
+    InMemoryGovernanceIntegrityMetricsHistoryRepository,
+)
 
 
 class TestGovernanceIntegrityMetrics:
@@ -294,3 +297,153 @@ class TestGovernanceIntegrityMetricsServicePersistence:
 
         assert repository.load() is None
         assert service.snapshot().total_dispatches == 0
+
+
+class TestGovernanceIntegrityMetricsServiceHistory:
+
+    def test_capture_snapshot_without_history_repository_returns_none(
+        self,
+    ):
+        service = GovernanceIntegrityMetricsService()
+
+        assert service.capture_snapshot() is None
+
+    def test_history_without_history_repository_is_empty(self):
+        service = GovernanceIntegrityMetricsService()
+
+        assert service.history() == ()
+
+    def test_latest_without_history_repository_is_none(self):
+        service = GovernanceIntegrityMetricsService()
+
+        assert service.latest() is None
+
+    def test_capture_snapshot_appends_current_metrics(self):
+        history_repository = (
+            InMemoryGovernanceIntegrityMetricsHistoryRepository()
+        )
+
+        service = GovernanceIntegrityMetricsService(
+            auto_flush_enabled=False,
+            history_repository=history_repository,
+        )
+
+        service.record_success(10.0)
+
+        captured = service.capture_snapshot()
+
+        assert captured is not None
+        assert captured.metrics == service.snapshot()
+        assert service.latest() == captured
+
+    def test_flush_captures_a_history_snapshot(self):
+        history_repository = (
+            InMemoryGovernanceIntegrityMetricsHistoryRepository()
+        )
+
+        service = GovernanceIntegrityMetricsService(
+            auto_flush_enabled=False,
+            history_repository=history_repository,
+        )
+
+        service.record_success(10.0)
+        service.flush()
+
+        assert len(service.history()) == 1
+        assert service.latest().metrics.successful_dispatches == 1
+
+    def test_record_auto_captures_history_by_default(self):
+        history_repository = (
+            InMemoryGovernanceIntegrityMetricsHistoryRepository()
+        )
+
+        service = GovernanceIntegrityMetricsService(
+            history_repository=history_repository,
+        )
+
+        service.record_success(10.0)
+        service.record_failure(20.0)
+
+        assert len(service.history()) == 2
+
+    def test_history_is_newest_first(self):
+        history_repository = (
+            InMemoryGovernanceIntegrityMetricsHistoryRepository()
+        )
+
+        service = GovernanceIntegrityMetricsService(
+            auto_flush_enabled=False,
+            history_repository=history_repository,
+        )
+
+        service.record_success(10.0)
+        service.capture_snapshot()
+
+        service.record_success(20.0)
+        service.capture_snapshot()
+
+        history = service.history()
+
+        assert len(history) == 2
+        assert (
+            history[0].metrics.successful_dispatches
+            == 2
+        )
+        assert (
+            history[1].metrics.successful_dispatches
+            == 1
+        )
+
+    def test_history_respects_limit(self):
+        history_repository = (
+            InMemoryGovernanceIntegrityMetricsHistoryRepository()
+        )
+
+        service = GovernanceIntegrityMetricsService(
+            auto_flush_enabled=False,
+            history_repository=history_repository,
+        )
+
+        for _ in range(5):
+            service.capture_snapshot()
+
+        assert len(service.history(limit=2)) == 2
+
+    def test_prune_delegates_to_history_repository(self):
+        history_repository = (
+            InMemoryGovernanceIntegrityMetricsHistoryRepository()
+        )
+
+        service = GovernanceIntegrityMetricsService(
+            auto_flush_enabled=False,
+            history_repository=history_repository,
+        )
+
+        for _ in range(5):
+            service.capture_snapshot()
+
+        discarded = service.prune(2)
+
+        assert discarded == 3
+        assert len(service.history()) == 2
+
+    def test_prune_without_history_repository_returns_zero(self):
+        service = GovernanceIntegrityMetricsService()
+
+        assert service.prune(5) == 0
+
+    def test_configured_retention_auto_prunes_after_capture(self):
+        history_repository = (
+            InMemoryGovernanceIntegrityMetricsHistoryRepository()
+        )
+
+        service = GovernanceIntegrityMetricsService(
+            auto_flush_enabled=False,
+            history_repository=history_repository,
+            history_retention=2,
+        )
+
+        for _ in range(5):
+            service.capture_snapshot()
+
+        assert len(service.history()) == 2

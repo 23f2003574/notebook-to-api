@@ -6,6 +6,8 @@ from io import StringIO
 from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics,
     run_deployment_governance_metrics_export,
+    run_deployment_governance_metrics_history,
+    run_deployment_governance_metrics_latest,
     run_deployment_governance_metrics_reload,
     run_deployment_governance_metrics_reset,
 )
@@ -192,3 +194,114 @@ def test_reset_clears_persisted_snapshot(
         reloaded_runtime.build_integrity_metrics_repository().load()
         is None
     )
+
+
+def test_latest_with_no_history_is_null(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-latest-empty.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_latest(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    assert json.loads(stdout.getvalue()) is None
+
+
+def test_latest_returns_most_recent_snapshot(
+    monkeypatch, tmp_path
+) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-latest.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    service = runtime.build_integrity_metrics_service()
+    service.record_success(100.0)
+    service.record_failure(50.0)
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_latest(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert payload["metrics"]["total_dispatches"] == 2
+    assert "captured_at" in payload
+
+
+def test_history_with_no_snapshots_is_empty(
+    monkeypatch, tmp_path
+) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-history-empty.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_history(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    assert json.loads(stdout.getvalue()) == []
+
+
+def test_history_returns_newest_first(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-history.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    service = runtime.build_integrity_metrics_service()
+    service.record_success(100.0)
+    service.record_success(200.0)
+    service.record_success(300.0)
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_history(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert len(payload) == 3
+    assert (
+        payload[0]["metrics"]["successful_dispatches"] == 3
+    )
+    assert (
+        payload[-1]["metrics"]["successful_dispatches"] == 1
+    )
+
+
+def test_history_respects_limit(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-history-limit.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    service = runtime.build_integrity_metrics_service()
+
+    for _ in range(5):
+        service.record_success(10.0)
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_history(
+        limit=2, json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert len(payload) == 2
