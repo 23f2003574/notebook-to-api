@@ -14,6 +14,9 @@ from backend.observability.deployment_governance_metrics import (
 from backend.observability.deployment_governance_metrics_alerts import (
     GovernanceIntegrityMetricsAlertService,
 )
+from backend.observability.deployment_governance_metrics_collector import (
+    GovernanceIntegrityMetricsCollector,
+)
 
 
 class TestGovernanceIntegrityRuntimeStatus:
@@ -1153,3 +1156,123 @@ class TestGovernanceIntegrityDeliveryRuntimeDashboard:
         assert dashboard.summary.total_dispatches == 10
         assert dashboard.failure_rate == 90.0
         assert dashboard.active_alerts >= 1
+
+
+class TestGovernanceIntegrityDeliveryRuntimeMetricsCollector:
+
+    def test_start_starts_the_metrics_collector(self):
+        worker = Mock()
+        scheduler = Mock()
+        del scheduler.active_dispatch_count
+        provider_registry = Mock()
+        provider_registry.list_providers.return_value = []
+        clock = Mock()
+        clock.now.return_value = datetime.now(timezone.utc)
+
+        metrics_collector = Mock(spec=GovernanceIntegrityMetricsCollector)
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_collector=metrics_collector,
+        )
+
+        runtime.start()
+
+        metrics_collector.start.assert_called_once()
+
+    def test_stop_stops_the_metrics_collector(self):
+        worker = Mock()
+        scheduler = Mock()
+        del scheduler.active_dispatch_count
+        provider_registry = Mock()
+        provider_registry.list_providers.return_value = []
+        clock = Mock()
+        clock.now.return_value = datetime.now(timezone.utc)
+
+        metrics_collector = Mock(spec=GovernanceIntegrityMetricsCollector)
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_collector=metrics_collector,
+        )
+
+        runtime.start()
+        runtime.stop()
+
+        metrics_collector.stop.assert_called_once()
+
+    def test_stop_without_start_does_not_stop_collector(self):
+        worker = Mock()
+        scheduler = Mock()
+        provider_registry = Mock()
+        clock = Mock()
+
+        metrics_collector = Mock(spec=GovernanceIntegrityMetricsCollector)
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_collector=metrics_collector,
+        )
+
+        runtime.stop()
+
+        metrics_collector.stop.assert_not_called()
+
+    def test_runtime_without_collector_does_not_raise(self):
+        worker = Mock()
+        scheduler = Mock()
+        del scheduler.active_dispatch_count
+        provider_registry = Mock()
+        provider_registry.list_providers.return_value = []
+        clock = Mock()
+        clock.now.return_value = datetime.now(timezone.utc)
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+        )
+
+        runtime.start()
+        runtime.stop()
+
+    def test_collector_lifecycle_with_real_service_end_to_end(self):
+        worker = Mock()
+        scheduler = Mock()
+        del scheduler.active_dispatch_count
+        provider_registry = Mock()
+        provider_registry.list_providers.return_value = []
+        clock = Mock()
+        clock.now.return_value = datetime.now(timezone.utc)
+
+        metrics_service = GovernanceIntegrityMetricsService()
+        metrics_collector = GovernanceIntegrityMetricsCollector(
+            metrics_service, interval_seconds=60.0
+        )
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_service=metrics_service,
+            metrics_collector=metrics_collector,
+        )
+
+        runtime.start()
+
+        assert metrics_collector.is_running() is True
+
+        runtime.stop()
+
+        assert metrics_collector.is_running() is False

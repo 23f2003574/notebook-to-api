@@ -15,6 +15,9 @@ from .deployment_governance_metrics_dashboard import (
     GovernanceIntegrityMetricsDashboard,
     GovernanceIntegrityMetricsDashboardService,
 )
+from .deployment_governance_metrics_collector import (
+    GovernanceIntegrityMetricsCollector,
+)
 
 
 class GovernanceIntegrityRuntimeState(
@@ -55,7 +58,8 @@ class GovernanceIntegrityDeliveryRuntime:
         provider_registry,
         clock,
         metrics_service: Optional[GovernanceIntegrityMetricsService] = None,
-        alert_service: Optional[GovernanceIntegrityMetricsAlertService] = None
+        alert_service: Optional[GovernanceIntegrityMetricsAlertService] = None,
+        metrics_collector: Optional[GovernanceIntegrityMetricsCollector] = None
     ):
         self.worker = worker
         self.scheduler = scheduler
@@ -63,6 +67,7 @@ class GovernanceIntegrityDeliveryRuntime:
         self.clock = clock
         self.metrics_service = metrics_service
         self.alert_service = alert_service
+        self.metrics_collector = metrics_collector
 
         self._state = GovernanceIntegrityRuntimeState.STOPPED
         self._started_at: Optional[datetime] = None
@@ -196,6 +201,10 @@ class GovernanceIntegrityDeliveryRuntime:
 
         self._evaluate_alerts()
 
+        if self.metrics_collector is not None:
+
+            self.metrics_collector.start()
+
         self._state = (
             GovernanceIntegrityRuntimeState.RUNNING
         )
@@ -213,6 +222,10 @@ class GovernanceIntegrityDeliveryRuntime:
         self._state = (
             GovernanceIntegrityRuntimeState.STOPPING
         )
+
+        if self.metrics_collector is not None:
+
+            self.metrics_collector.stop()
 
         if self.metrics_service is not None:
 
@@ -284,7 +297,8 @@ def build_integrity_delivery_runtime(
     provider_registry,
     clock=None,
     metrics_service=None,
-    alert_service=None
+    alert_service=None,
+    metrics_collector=None
 ) -> GovernanceIntegrityDeliveryRuntime:
 
     if clock is None:
@@ -339,5 +353,8 @@ def build_integrity_delivery_runtime(
             metrics_service,
 
         alert_service=
-            alert_service
+            alert_service,
+
+        metrics_collector=
+            metrics_collector
     )

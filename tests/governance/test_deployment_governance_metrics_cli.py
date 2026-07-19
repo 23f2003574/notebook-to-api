@@ -8,6 +8,8 @@ from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics_aggregate,
     run_deployment_governance_metrics_alerts,
     run_deployment_governance_metrics_alerts_clear,
+    run_deployment_governance_metrics_collector_collect,
+    run_deployment_governance_metrics_collector_status,
     run_deployment_governance_metrics_dashboard,
     run_deployment_governance_metrics_export,
     run_deployment_governance_metrics_export_csv,
@@ -779,3 +781,57 @@ def test_requests_reflects_same_process_traffic() -> None:
     payload = json.loads(stdout.getvalue())
 
     assert payload["total_requests"] >= 1
+
+
+def test_collector_status_fresh_process_is_not_running(
+    monkeypatch, tmp_path
+) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-collector-status.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_collector_status(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    assert json.loads(stdout.getvalue()) == {"running": False}
+
+
+def test_collector_collect_with_no_activity(
+    monkeypatch, tmp_path
+) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-collector-empty.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_collector_collect(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    assert json.loads(stdout.getvalue()) is None
+
+
+def test_collector_collect_captures_snapshot_with_activity(
+    monkeypatch, tmp_path
+) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-collector-activity.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    runtime.build_integrity_metrics_service().record_success(50.0)
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_collector_collect(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert payload["metrics"]["successful_dispatches"] == 1

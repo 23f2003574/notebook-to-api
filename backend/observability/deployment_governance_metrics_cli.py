@@ -12,6 +12,9 @@ from .deployment_governance_metrics_aggregation import (
     GovernanceIntegrityMetricsAggregate,
     GovernanceIntegrityMetricsAggregationService,
 )
+from .deployment_governance_metrics_collector import (
+    GovernanceIntegrityMetricsCollector,
+)
 from .deployment_governance_metrics_alerts import (
     GovernanceIntegrityMetricAlert,
 )
@@ -886,6 +889,125 @@ def _render_request_metrics_human(
     stdout.write(
         f"Average Latency: {metrics.average_latency_ms:.2f} ms\n"
     )
+
+
+def run_deployment_governance_metrics_collector_status(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Show whether the background governance metrics collector is
+    running.
+
+    Builds a fresh collector bound to this process's own metrics
+    service: a CLI invocation is a separate process from any running
+    delivery runtime, so this always reports not-running unless a
+    collector happens to be started within this same process.
+
+    Exit codes: 0 the status was retrieved, 2 it could not be.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        collector = GovernanceIntegrityMetricsCollector(
+            runtime.build_integrity_metrics_service()
+        )
+
+        running = collector.is_running()
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            {"running": running},
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write(
+            "Governance metrics collector is "
+            f"{'running' if running else 'not running'}.\n"
+        )
+
+    return 0
+
+
+def run_deployment_governance_metrics_collector_collect(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Manually trigger one governance metrics history collection,
+    resyncing metrics from durable storage first.
+
+    Captures nothing, and reports as much, if there has been no
+    dispatch activity at all.
+
+    Exit codes: 0 the collection ran (whether or not it captured a
+    snapshot), 2 it could not run.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        metrics_service = runtime.build_integrity_metrics_service()
+
+        metrics_service.load()
+
+        collector = GovernanceIntegrityMetricsCollector(
+            metrics_service
+        )
+
+        snapshot = collector.collect_once()
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            snapshot.to_dict() if snapshot is not None else None,
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    elif snapshot is None:
+        stdout.write(
+            "No activity to collect; no snapshot captured.\n"
+        )
+
+    else:
+        stdout.write("Governance metrics snapshot captured.\n\n")
+
+        _render_history_human((snapshot,), stdout=stdout)
+
+    return 0
 
 
 def _render_history_human(

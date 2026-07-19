@@ -166,6 +166,8 @@ from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics_aggregate,
     run_deployment_governance_metrics_alerts,
     run_deployment_governance_metrics_alerts_clear,
+    run_deployment_governance_metrics_collector_collect,
+    run_deployment_governance_metrics_collector_status,
     run_deployment_governance_metrics_dashboard,
     run_deployment_governance_metrics_export,
     run_deployment_governance_metrics_requests,
@@ -2620,6 +2622,51 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    notifications_metrics_collector_parser = (
+        notifications_metrics_subparsers.add_parser(
+            "collector",
+            help="Inspect or trigger the background metrics collector.",
+        )
+    )
+    notifications_metrics_collector_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+    notifications_metrics_collector_subparsers = (
+        notifications_metrics_collector_parser.add_subparsers(
+            dest="notifications_metrics_collector_command",
+            required=True,
+        )
+    )
+
+    notifications_metrics_collector_status_parser = (
+        notifications_metrics_collector_subparsers.add_parser(
+            "status",
+            help="Show whether the background metrics collector is running.",
+        )
+    )
+    notifications_metrics_collector_status_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    notifications_metrics_collector_collect_parser = (
+        notifications_metrics_collector_subparsers.add_parser(
+            "collect",
+            help="Manually trigger one metrics history collection.",
+        )
+    )
+    notifications_metrics_collector_collect_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     channels_parser = audits_subparsers.add_parser(
         "channels",
         help="Manage governance audit notification delivery channels.",
@@ -4738,6 +4785,18 @@ def main():
                         exit_code = run_deployment_governance_metrics_requests(
                             json_output=args.json_output,
                         )
+                    elif metrics_subcommand == "collector":
+                        if (
+                            args.notifications_metrics_collector_command
+                            == "collect"
+                        ):
+                            exit_code = run_deployment_governance_metrics_collector_collect(
+                                json_output=args.json_output,
+                            )
+                        else:
+                            exit_code = run_deployment_governance_metrics_collector_status(
+                                json_output=args.json_output,
+                            )
                     else:
                         exit_code = run_deployment_governance_metrics(
                             json_output=args.json_output,
