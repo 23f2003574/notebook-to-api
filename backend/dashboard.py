@@ -17,6 +17,9 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from backend.routes.upload import router as upload_router
+from backend.observability.deployment_governance_api import (
+    router as governance_metrics_router,
+)
 
 app = FastAPI(
     title="notebook-to-api Dashboard",
@@ -35,6 +38,7 @@ app.add_middleware(
 
 # Include API routes
 app.include_router(upload_router)
+app.include_router(governance_metrics_router)
 
 
 @app.get("/")
