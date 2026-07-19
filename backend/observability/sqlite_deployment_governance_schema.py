@@ -85,6 +85,10 @@ DEPLOYMENT_GOVERNANCE_SCHEDULED_DISPATCH_TABLE: Final[
     str
 ] = "scheduled_dispatches"
 
+DEPLOYMENT_GOVERNANCE_METRICS_TABLE: Final[
+    str
+] = "governance_metrics"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -130,6 +134,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_provider_configurations_migration(),
             DeploymentGovernanceSQLiteSchema._create_provider_secrets_migration(),
             DeploymentGovernanceSQLiteSchema._create_scheduled_dispatches_migration(),
+            DeploymentGovernanceSQLiteSchema._create_governance_metrics_migration(),
         )
 
     @staticmethod
@@ -1410,6 +1415,39 @@ class DeploymentGovernanceSQLiteSchema:
                 (
                     state,
                     scheduled_at
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_governance_metrics_migration() -> SQLiteMigration:
+        """
+        Migration 21 creates storage for the single persisted
+        snapshot of live governance audit notification delivery
+        metrics
+        (backend/observability/deployment_governance_metrics.py).
+
+        The row is pinned to id = 1 so the table can only ever hold
+        one snapshot: metrics are a running singleton, not a history.
+        """
+
+        return SQLiteMigration(
+            version=21,
+            name="create governance metrics table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_METRICS_TABLE}
+                (
+                    id INTEGER NOT NULL
+                        PRIMARY KEY,
+
+                    metrics_json TEXT NOT NULL,
+
+                    updated_at TEXT NOT NULL,
+
+                    CHECK (id = 1)
                 )
                 """,
             ),

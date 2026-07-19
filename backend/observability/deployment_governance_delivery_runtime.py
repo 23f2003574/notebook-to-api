@@ -138,6 +138,10 @@ class GovernanceIntegrityDeliveryRuntime:
 
         self._validate_providers()
 
+        if self.metrics_service is not None:
+
+            self.metrics_service.load()
+
         self._state = (
             GovernanceIntegrityRuntimeState.RUNNING
         )
@@ -155,6 +159,10 @@ class GovernanceIntegrityDeliveryRuntime:
         self._state = (
             GovernanceIntegrityRuntimeState.STOPPING
         )
+
+        if self.metrics_service is not None:
+
+            self.metrics_service.flush()
 
         self._state = (
             GovernanceIntegrityRuntimeState.STOPPED

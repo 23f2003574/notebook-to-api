@@ -8,6 +8,9 @@ from backend.observability.deployment_governance_delivery_runtime import (
     GovernanceIntegrityDeliveryRuntime,
     build_integrity_delivery_runtime
 )
+from backend.observability.deployment_governance_metrics import (
+    GovernanceIntegrityMetricsService,
+)
 
 
 class TestGovernanceIntegrityRuntimeStatus:
@@ -769,3 +772,112 @@ class TestBuildIntegrityDeliveryRuntime:
                 provider_registry=
                     None
             )
+
+
+class TestGovernanceIntegrityDeliveryRuntimeMetricsPersistence:
+
+    def test_start_loads_metrics_from_service(self):
+        worker = Mock()
+        scheduler = Mock()
+        del scheduler.active_dispatch_count
+        provider_registry = Mock()
+        provider_registry.list_providers.return_value = []
+        clock = Mock()
+        clock.now.return_value = datetime.now(timezone.utc)
+
+        metrics_service = Mock(spec=GovernanceIntegrityMetricsService)
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_service=metrics_service,
+        )
+
+        runtime.start()
+
+        metrics_service.load.assert_called_once()
+
+    def test_stop_flushes_metrics_to_service(self):
+        worker = Mock()
+        scheduler = Mock()
+        del scheduler.active_dispatch_count
+        provider_registry = Mock()
+        provider_registry.list_providers.return_value = []
+        clock = Mock()
+        clock.now.return_value = datetime.now(timezone.utc)
+
+        metrics_service = Mock(spec=GovernanceIntegrityMetricsService)
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_service=metrics_service,
+        )
+
+        runtime.start()
+        runtime.stop()
+
+        metrics_service.flush.assert_called_once()
+
+    def test_stop_without_start_does_not_flush(self):
+        worker = Mock()
+        scheduler = Mock()
+        provider_registry = Mock()
+        clock = Mock()
+
+        metrics_service = Mock(spec=GovernanceIntegrityMetricsService)
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_service=metrics_service,
+        )
+
+        runtime.stop()
+
+        metrics_service.flush.assert_not_called()
+
+    def test_metrics_without_service_returns_empty_snapshot(self):
+        worker = Mock()
+        scheduler = Mock()
+        provider_registry = Mock()
+        clock = Mock()
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+        )
+
+        metrics = runtime.metrics()
+
+        assert metrics.total_dispatches == 0
+        assert metrics.average_duration_ms == 0.0
+
+    def test_metrics_delegates_to_service_snapshot(self):
+        worker = Mock()
+        scheduler = Mock()
+        provider_registry = Mock()
+        clock = Mock()
+
+        metrics_service = Mock(spec=GovernanceIntegrityMetricsService)
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_service=metrics_service,
+        )
+
+        result = runtime.metrics()
+
+        metrics_service.snapshot.assert_called_once()
+        assert result == metrics_service.snapshot.return_value

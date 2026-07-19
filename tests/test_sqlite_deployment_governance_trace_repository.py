@@ -125,7 +125,7 @@ def test_sqlite_repository_schema_initialization_is_idempotent(
 
     assert (
         database.current_schema_version()
-        == 20
+        == 21
     )
 
     applied_versions = tuple(
@@ -154,6 +154,7 @@ def test_sqlite_repository_schema_initialization_is_idempotent(
         18,
         19,
         20,
+        21,
     )
 
 

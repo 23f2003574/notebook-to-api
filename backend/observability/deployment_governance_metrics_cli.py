@@ -32,11 +32,11 @@ def run_deployment_governance_metrics(
             deployment_governance_persistence_config_from_env()
         )
 
-        metrics = (
-            runtime
-            .build_integrity_metrics_service()
-            .snapshot()
-        )
+        metrics_service = runtime.build_integrity_metrics_service()
+
+        metrics_service.load()
+
+        metrics = metrics_service.snapshot()
 
     except Exception as exc:
         _render_metrics_failure(
@@ -91,6 +91,99 @@ def run_deployment_governance_metrics_reset(
 
     else:
         stdout.write("Governance delivery metrics reset.\n\n")
+
+        _render_metrics_human(metrics, stdout=stdout)
+
+    return 0
+
+
+def run_deployment_governance_metrics_export(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and export the durably stored governance
+    audit notification delivery metrics snapshot.
+
+    Reads through the repository (via load()) rather than the
+    process-local in-memory counters: each CLI invocation starts a
+    fresh, empty metrics service, so exporting the in-memory state
+    directly would always export zeroes and, if combined with a
+    write, would clobber whatever a running delivery runtime had
+    already persisted.
+
+    Exit codes: 0 the metrics were exported, 2 the metrics could not
+    be exported.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        metrics_service = runtime.build_integrity_metrics_service()
+
+        metrics_service.load()
+
+        metrics = metrics_service.snapshot()
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        _render_metrics_json(metrics, stdout=stdout)
+
+    else:
+        stdout.write("Governance delivery metrics exported.\n\n")
+
+        _render_metrics_human(metrics, stdout=stdout)
+
+    return 0
+
+
+def run_deployment_governance_metrics_reload(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and replace live in-memory governance audit
+    notification delivery metrics with whatever is durably stored.
+
+    Exit codes: 0 the metrics were reloaded, 2 the metrics could not
+    be reloaded.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        metrics_service = runtime.build_integrity_metrics_service()
+
+        metrics_service.load()
+
+        metrics = metrics_service.snapshot()
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        _render_metrics_json(metrics, stdout=stdout)
+
+    else:
+        stdout.write("Governance delivery metrics reloaded.\n\n")
 
         _render_metrics_human(metrics, stdout=stdout)
 

@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from threading import Lock
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .deployment_governance_metrics_repository import (
+        GovernanceIntegrityMetricsRepository,
+    )
 
 
 @dataclass(frozen=True)
@@ -71,7 +77,12 @@ class GovernanceIntegrityMetricsService:
     method is guarded by a single lock.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        repository: "GovernanceIntegrityMetricsRepository | None" = None,
+        *,
+        auto_flush_enabled: bool = True,
+    ) -> None:
         self._lock = Lock()
 
         self._successful_dispatches = 0
@@ -81,6 +92,10 @@ class GovernanceIntegrityMetricsService:
         self._retry_dispatches = 0
 
         self._average_duration_ms = 0.0
+
+        self._repository = repository
+
+        self._auto_flush_enabled = auto_flush_enabled
 
     def record_success(self, duration_ms: float) -> None:
         """
@@ -96,6 +111,8 @@ class GovernanceIntegrityMetricsService:
             self._successful_dispatches += 1
             self._record_duration_locked(duration_ms)
 
+        self.auto_flush()
+
     def record_failure(self, duration_ms: float) -> None:
         """
         Record one failed provider delivery and its duration.
@@ -110,6 +127,8 @@ class GovernanceIntegrityMetricsService:
             self._failed_dispatches += 1
             self._record_duration_locked(duration_ms)
 
+        self.auto_flush()
+
     def record_retry(self) -> None:
         """
         Record one dispatch being scheduled for retry.
@@ -117,6 +136,8 @@ class GovernanceIntegrityMetricsService:
 
         with self._lock:
             self._retry_dispatches += 1
+
+        self.auto_flush()
 
     def snapshot(self) -> GovernanceIntegrityMetrics:
         """
@@ -137,7 +158,9 @@ class GovernanceIntegrityMetricsService:
 
     def reset(self) -> None:
         """
-        Clear every recorded metric back to zero.
+        Clear every recorded metric back to zero, and clear the
+        persisted snapshot from the repository, if one is
+        configured.
         """
 
         with self._lock:
@@ -145,6 +168,57 @@ class GovernanceIntegrityMetricsService:
             self._failed_dispatches = 0
             self._retry_dispatches = 0
             self._average_duration_ms = 0.0
+
+        if self._repository is not None:
+            self._repository.reset()
+
+    def load(self) -> None:
+        """
+        Replace the in-memory counters with whatever snapshot is
+        persisted in the repository, if one is configured.
+
+        Intended to be called once on startup. If the repository has
+        nothing stored yet, the in-memory counters are left
+        untouched.
+        """
+
+        if self._repository is None:
+            return
+
+        loaded = self._repository.load()
+
+        if loaded is None:
+            return
+
+        with self._lock:
+            self._successful_dispatches = loaded.successful_dispatches
+            self._failed_dispatches = loaded.failed_dispatches
+            self._retry_dispatches = loaded.retry_dispatches
+            self._average_duration_ms = loaded.average_duration_ms
+
+    def flush(self) -> None:
+        """
+        Persist the current in-memory metrics to the repository, if
+        one is configured. A no-op otherwise.
+        """
+
+        if self._repository is None:
+            return
+
+        self._repository.save(self.snapshot())
+
+    def auto_flush(self) -> None:
+        """
+        Flush to the repository, but only when auto-flush is enabled.
+
+        Called after every mutating update (record_success,
+        record_failure, record_retry) so a configured repository
+        stays current without every caller having to remember to
+        flush explicitly.
+        """
+
+        if self._auto_flush_enabled:
+            self.flush()
 
     def _record_duration_locked(self, duration_ms: float) -> None:
         """

@@ -101,6 +101,10 @@ from .deployment_governance_audit_retention import (
 from .deployment_governance_metrics import (
     GovernanceIntegrityMetricsService,
 )
+from .deployment_governance_metrics_repository import (
+    GovernanceIntegrityMetricsRepository,
+    InMemoryGovernanceIntegrityMetricsRepository,
+)
 from .deployment_governance_integrity_audit import (
     DeploymentGovernanceIntegrityAuditService,
     DeploymentGovernanceTraceIntegrityAuditSource,
@@ -164,6 +168,9 @@ from .sqlite_deployment_governance_provider_secrets import (
 )
 from .sqlite_deployment_governance_delivery_scheduler import (
     SQLiteGovernanceIntegrityDeliveryScheduleRepository,
+)
+from .deployment_governance_metrics_repository import (
+    SQLiteGovernanceIntegrityMetricsRepository,
 )
 from .sqlite_deployment_governance_audit_history import (
     SQLiteGovernanceIntegrityAuditHistoryRepository,
@@ -565,6 +572,10 @@ class DeploymentGovernancePersistenceRuntime:
         default_factory=(
             GovernanceIntegrityAuditAutomaticRetentionConfig.disabled
         )
+    )
+
+    metrics_repository: GovernanceIntegrityMetricsRepository = field(
+        default_factory=InMemoryGovernanceIntegrityMetricsRepository
     )
 
     metrics_service: GovernanceIntegrityMetricsService = field(
@@ -1400,6 +1411,18 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_provider_registry()
         )
 
+    def build_integrity_metrics_repository(
+        self,
+    ) -> GovernanceIntegrityMetricsRepository:
+        """
+        Return the durable governance metrics repository.
+
+        Like build_integrity_metrics_service, this returns the
+        runtime's single stored instance.
+        """
+
+        return self.metrics_repository
+
     def build_integrity_metrics_service(
         self,
     ) -> GovernanceIntegrityMetricsService:
@@ -1706,6 +1729,14 @@ def _build_memory_runtime(
         InMemoryGovernanceIntegrityDeliveryScheduleRepository()
     )
 
+    metrics_repository = (
+        InMemoryGovernanceIntegrityMetricsRepository()
+    )
+
+    metrics_service = GovernanceIntegrityMetricsService(
+        metrics_repository
+    )
+
     return DeploymentGovernancePersistenceRuntime(
         config=config,
         repository=repository,
@@ -1739,6 +1770,8 @@ def _build_memory_runtime(
         delivery_schedule_repository=delivery_schedule_repository,
         database=None,
         automatic_audit_retention=automatic_audit_retention,
+        metrics_repository=metrics_repository,
+        metrics_service=metrics_service,
     )
 
 
@@ -1932,6 +1965,15 @@ def _build_sqlite_runtime(
         )
     )
 
+    metrics_repository = (
+        SQLiteGovernanceIntegrityMetricsRepository(
+            database,
+            initialize_schema=(
+                config.initialize_schema
+            ),
+        )
+    )
+
     # SQLite persistence for the execution queue is intentionally
     # deferred (see deployment_governance_audit_execution_queue.py):
     # it stays in-process memory regardless of the configured backend.
@@ -1967,6 +2009,10 @@ def _build_sqlite_runtime(
         repository=repository,
     )
 
+    metrics_service = GovernanceIntegrityMetricsService(
+        metrics_repository
+    )
+
     return DeploymentGovernancePersistenceRuntime(
         config=config,
         repository=repository,
@@ -2000,6 +2046,8 @@ def _build_sqlite_runtime(
         delivery_schedule_repository=delivery_schedule_repository,
         database=database,
         automatic_audit_retention=automatic_audit_retention,
+        metrics_repository=metrics_repository,
+        metrics_service=metrics_service,
     )
 
 

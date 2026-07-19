@@ -6,6 +6,9 @@ from backend.observability.deployment_governance_metrics import (
     GovernanceIntegrityMetrics,
     GovernanceIntegrityMetricsService,
 )
+from backend.observability.deployment_governance_metrics_repository import (
+    InMemoryGovernanceIntegrityMetricsRepository,
+)
 
 
 class TestGovernanceIntegrityMetrics:
@@ -181,3 +184,113 @@ class TestGovernanceIntegrityMetricsService:
         assert snapshot.successful_dispatches == 1600
         assert snapshot.total_dispatches == 1600
         assert snapshot.average_duration_ms == pytest.approx(10.0)
+
+
+class TestGovernanceIntegrityMetricsServicePersistence:
+
+    def test_load_with_no_repository_is_a_no_op(self):
+        service = GovernanceIntegrityMetricsService()
+
+        service.load()
+
+        assert service.snapshot().total_dispatches == 0
+
+    def test_load_with_empty_repository_leaves_counters_untouched(
+        self,
+    ):
+        repository = InMemoryGovernanceIntegrityMetricsRepository()
+
+        service = GovernanceIntegrityMetricsService(repository)
+
+        service.load()
+
+        assert service.snapshot().total_dispatches == 0
+
+    def test_load_restores_persisted_snapshot(self):
+        repository = InMemoryGovernanceIntegrityMetricsRepository()
+
+        repository.save(
+            GovernanceIntegrityMetrics(
+                total_dispatches=5,
+                successful_dispatches=3,
+                failed_dispatches=2,
+                retry_dispatches=1,
+                average_duration_ms=75.0,
+            )
+        )
+
+        service = GovernanceIntegrityMetricsService(
+            repository, auto_flush_enabled=False
+        )
+
+        service.load()
+
+        snapshot = service.snapshot()
+
+        assert snapshot.total_dispatches == 5
+        assert snapshot.successful_dispatches == 3
+        assert snapshot.failed_dispatches == 2
+        assert snapshot.retry_dispatches == 1
+        assert snapshot.average_duration_ms == 75.0
+
+    def test_flush_with_no_repository_is_a_no_op(self):
+        service = GovernanceIntegrityMetricsService()
+
+        service.record_success(10.0)
+        service.flush()
+
+    def test_flush_persists_current_snapshot(self):
+        repository = InMemoryGovernanceIntegrityMetricsRepository()
+
+        service = GovernanceIntegrityMetricsService(
+            repository, auto_flush_enabled=False
+        )
+
+        service.record_success(10.0)
+        service.record_failure(20.0)
+
+        service.flush()
+
+        persisted = repository.load()
+
+        assert persisted is not None
+        assert persisted.total_dispatches == 2
+        assert persisted.successful_dispatches == 1
+        assert persisted.failed_dispatches == 1
+
+    def test_record_auto_flushes_by_default(self):
+        repository = InMemoryGovernanceIntegrityMetricsRepository()
+
+        service = GovernanceIntegrityMetricsService(repository)
+
+        service.record_success(10.0)
+
+        persisted = repository.load()
+
+        assert persisted is not None
+        assert persisted.successful_dispatches == 1
+
+    def test_record_does_not_flush_when_auto_flush_disabled(self):
+        repository = InMemoryGovernanceIntegrityMetricsRepository()
+
+        service = GovernanceIntegrityMetricsService(
+            repository, auto_flush_enabled=False
+        )
+
+        service.record_success(10.0)
+
+        assert repository.load() is None
+
+    def test_reset_clears_persisted_storage(self):
+        repository = InMemoryGovernanceIntegrityMetricsRepository()
+
+        service = GovernanceIntegrityMetricsService(repository)
+
+        service.record_success(10.0)
+
+        assert repository.load() is not None
+
+        service.reset()
+
+        assert repository.load() is None
+        assert service.snapshot().total_dispatches == 0

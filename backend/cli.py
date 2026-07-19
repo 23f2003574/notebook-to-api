@@ -163,6 +163,8 @@ from backend.observability.deployment_governance_notifications_cli import (
 )
 from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics,
+    run_deployment_governance_metrics_export,
+    run_deployment_governance_metrics_reload,
     run_deployment_governance_metrics_reset,
 )
 from backend.observability.deployment_governance_notification_channels import (
@@ -2372,6 +2374,38 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    notifications_metrics_export_parser = (
+        notifications_metrics_subparsers.add_parser(
+            "export",
+            help=(
+                "Export the durably stored notification delivery "
+                "metrics snapshot."
+            ),
+        )
+    )
+    notifications_metrics_export_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    notifications_metrics_reload_parser = (
+        notifications_metrics_subparsers.add_parser(
+            "reload",
+            help=(
+                "Reload notification delivery metrics from durable "
+                "storage."
+            ),
+        )
+    )
+    notifications_metrics_reload_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     channels_parser = audits_subparsers.add_parser(
         "channels",
         help="Manage governance audit notification delivery channels.",
@@ -4421,13 +4455,20 @@ def main():
                         json_output=args.json_output,
                     )
                 elif args.notifications_command == "metrics":
-                    if (
-                        getattr(
-                            args, "notifications_metrics_command", None
-                        )
-                        == "reset"
-                    ):
+                    metrics_subcommand = getattr(
+                        args, "notifications_metrics_command", None
+                    )
+
+                    if metrics_subcommand == "reset":
                         exit_code = run_deployment_governance_metrics_reset(
+                            json_output=args.json_output,
+                        )
+                    elif metrics_subcommand == "export":
+                        exit_code = run_deployment_governance_metrics_export(
+                            json_output=args.json_output,
+                        )
+                    elif metrics_subcommand == "reload":
+                        exit_code = run_deployment_governance_metrics_reload(
                             json_output=args.json_output,
                         )
                     else:
