@@ -18,6 +18,7 @@ import uvicorn
 
 from backend.routes.upload import router as upload_router
 from backend.observability.deployment_governance_api import (
+    register_governance_metrics_middleware,
     router as governance_metrics_router,
 )
 
@@ -35,6 +36,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Collect request metrics for the governance API endpoints
+register_governance_metrics_middleware(app)
 
 # Include API routes
 app.include_router(upload_router)

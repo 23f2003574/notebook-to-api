@@ -22,6 +22,9 @@ from .deployment_governance_metrics_dashboard import (
 from .deployment_governance_metrics_history import (
     GovernanceIntegrityMetricsSnapshot,
 )
+from .deployment_governance_metrics_middleware import (
+    GovernanceIntegrityRequestMetrics,
+)
 from .deployment_governance_persistence import (
     build_deployment_governance_persistence,
     deployment_governance_persistence_config_from_env,
@@ -811,6 +814,78 @@ def _render_dashboard_human(
     stdout.write(f"Retry Rate: {dashboard.retry_rate:.2f}%\n")
 
     stdout.write(f"Active Alerts: {dashboard.active_alerts}\n")
+
+
+def run_deployment_governance_metrics_requests(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Show governance API request metrics: request count, response
+    status breakdown, latency, and exceptions.
+
+    These are collected in-process by
+    GovernanceIntegrityMetricsMiddleware while a governance API
+    server is running. A CLI invocation is always a separate
+    process, so unless it happens to run in the same interpreter as
+    a live server, this will report a fresh, empty collector rather
+    than a running server's traffic.
+
+    Exit codes: 0 the request metrics were retrieved, 2 they could
+    not be retrieved.
+    """
+
+    try:
+        from .deployment_governance_api import (
+            get_request_metrics_collector,
+        )
+
+        metrics = get_request_metrics_collector().snapshot()
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            metrics.to_dict(),
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        _render_request_metrics_human(metrics, stdout=stdout)
+
+    return 0
+
+
+def _render_request_metrics_human(
+    metrics: GovernanceIntegrityRequestMetrics,
+    *,
+    stdout: TextIO,
+) -> None:
+    stdout.write("Governance API Request Metrics\n\n")
+
+    stdout.write(f"Total Requests: {metrics.total_requests}\n")
+
+    stdout.write(f"Successful: {metrics.successful_requests}\n")
+
+    stdout.write(f"Failed: {metrics.failed_requests}\n")
+
+    stdout.write(f"Exceptions: {metrics.exceptions}\n")
+
+    stdout.write(
+        f"Average Latency: {metrics.average_latency_ms:.2f} ms\n"
+    )
 
 
 def _render_history_human(

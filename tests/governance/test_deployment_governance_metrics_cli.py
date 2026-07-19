@@ -15,6 +15,7 @@ from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics_history,
     run_deployment_governance_metrics_latest,
     run_deployment_governance_metrics_reload,
+    run_deployment_governance_metrics_requests,
     run_deployment_governance_metrics_reset,
 )
 from backend.observability.deployment_governance_persistence import (
@@ -729,3 +730,52 @@ def test_dashboard_reflects_active_alerts(
     payload = json.loads(stdout.getvalue())
 
     assert payload["active_alerts"] >= 1
+
+
+def test_requests_empty_state() -> None:
+    from backend.observability.deployment_governance_api import (
+        get_request_metrics_collector,
+    )
+
+    get_request_metrics_collector().reset()
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_requests(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    assert json.loads(stdout.getvalue()) == {
+        "total_requests": 0,
+        "successful_requests": 0,
+        "failed_requests": 0,
+        "exceptions": 0,
+        "average_latency_ms": 0.0,
+    }
+
+
+def test_requests_reflects_same_process_traffic() -> None:
+    from fastapi.testclient import TestClient
+
+    from backend.dashboard import app
+    from backend.observability.deployment_governance_api import (
+        get_request_metrics_collector,
+    )
+
+    get_request_metrics_collector().reset()
+
+    client = TestClient(app)
+    client.get("/governance/metrics")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_requests(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert payload["total_requests"] >= 1
