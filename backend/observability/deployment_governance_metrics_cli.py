@@ -28,6 +28,9 @@ from .deployment_governance_metrics_history import (
 from .deployment_governance_metrics_middleware import (
     GovernanceIntegrityRequestMetrics,
 )
+from .deployment_governance_metrics_retention import (
+    GovernanceIntegrityMetricsRetentionService,
+)
 from .deployment_governance_persistence import (
     build_deployment_governance_persistence,
     deployment_governance_persistence_config_from_env,
@@ -1006,6 +1009,134 @@ def run_deployment_governance_metrics_collector_collect(
         stdout.write("Governance metrics snapshot captured.\n\n")
 
         _render_history_human((snapshot,), stdout=stdout)
+
+    return 0
+
+
+def run_deployment_governance_metrics_retention_status(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Show the configured governance metrics retention policy and
+    which currently captured snapshots are expired under it, without
+    deleting anything.
+
+    Exit codes: 0 the status was retrieved, 2 it could not be.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        retention_service = GovernanceIntegrityMetricsRetentionService(
+            runtime.build_integrity_metrics_history_repository()
+        )
+
+        policy = retention_service.retention_policy()
+
+        expired = retention_service.expired()
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            {
+                "policy": policy.to_dict(),
+                "expired_count": len(expired),
+            },
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write("Governance Metrics Retention Status\n\n")
+
+        stdout.write(
+            "Max Age: "
+            + (
+                "disabled"
+                if policy.max_age is None
+                else f"{policy.max_age}"
+            )
+            + "\n"
+        )
+
+        stdout.write(
+            "Max Entries: "
+            + (
+                "disabled"
+                if policy.max_entries is None
+                else str(policy.max_entries)
+            )
+            + "\n"
+        )
+
+        stdout.write(f"Expired Snapshots: {len(expired)}\n")
+
+    return 0
+
+
+def run_deployment_governance_metrics_retention_run(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Run governance metrics retention now, deleting every currently
+    expired snapshot.
+
+    Exit codes: 0 retention ran (even if nothing was pruned), 2 it
+    could not run.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        retention_service = GovernanceIntegrityMetricsRetentionService(
+            runtime.build_integrity_metrics_history_repository()
+        )
+
+        discarded = retention_service.prune()
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            {"discarded": discarded},
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write(
+            f"Governance metrics retention pruned {discarded} "
+            "snapshot(s).\n"
+        )
 
     return 0
 

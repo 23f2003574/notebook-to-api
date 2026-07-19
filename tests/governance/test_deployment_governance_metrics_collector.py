@@ -11,6 +11,9 @@ from backend.observability.deployment_governance_metrics_collector import (
 from backend.observability.deployment_governance_metrics_history import (
     InMemoryGovernanceIntegrityMetricsHistoryRepository,
 )
+from backend.observability.deployment_governance_metrics_retention import (
+    GovernanceIntegrityMetricsRetentionService,
+)
 
 
 def _service_with_history():
@@ -263,3 +266,64 @@ class TestGovernanceIntegrityMetricsCollectorPeriodicCollection:
 
         finally:
             collector.stop()
+
+
+class TestGovernanceIntegrityMetricsCollectorRetentionIntegration:
+
+    def test_retention_runs_after_successful_collection(self):
+        metrics_service, history_repository = _service_with_history()
+
+        for _ in range(5):
+            metrics_service.record_success(10.0)
+            metrics_service.capture_snapshot()
+
+        retention_service = GovernanceIntegrityMetricsRetentionService(
+            history_repository, max_age=None, max_entries=2
+        )
+
+        collector = GovernanceIntegrityMetricsCollector(
+            metrics_service, retention_service=retention_service
+        )
+
+        metrics_service.record_success(20.0)
+
+        collector.collect_once()
+
+        # 5 pre-existing snapshots + 1 just captured = 6, pruned
+        # down to the newest 2 by the retention service.
+        assert len(metrics_service.history()) == 2
+
+    def test_retention_not_run_when_collection_is_empty(self):
+        metrics_service, history_repository = _service_with_history()
+
+        retention_service = GovernanceIntegrityMetricsRetentionService(
+            history_repository, max_age=None, max_entries=2
+        )
+        retention_service.prune = lambda: (_ for _ in ()).throw(
+            AssertionError("prune() should not be called")
+        )
+
+        collector = GovernanceIntegrityMetricsCollector(
+            metrics_service, retention_service=retention_service
+        )
+
+        result = collector.collect_once()
+
+        assert result is None
+
+    def test_collector_without_retention_service_does_not_prune(self):
+        metrics_service, history_repository = _service_with_history()
+
+        for _ in range(5):
+            metrics_service.record_success(10.0)
+            metrics_service.capture_snapshot()
+
+        collector = GovernanceIntegrityMetricsCollector(
+            metrics_service
+        )
+
+        metrics_service.record_success(20.0)
+
+        collector.collect_once()
+
+        assert len(metrics_service.history()) == 6

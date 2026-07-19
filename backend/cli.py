@@ -171,6 +171,8 @@ from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics_dashboard,
     run_deployment_governance_metrics_export,
     run_deployment_governance_metrics_requests,
+    run_deployment_governance_metrics_retention_run,
+    run_deployment_governance_metrics_retention_status,
     run_deployment_governance_metrics_export_csv,
     run_deployment_governance_metrics_export_json,
     run_deployment_governance_metrics_history,
@@ -2667,6 +2669,54 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    notifications_metrics_retention_parser = (
+        notifications_metrics_subparsers.add_parser(
+            "retention",
+            help="Inspect or run governance metrics history retention.",
+        )
+    )
+    notifications_metrics_retention_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+    notifications_metrics_retention_subparsers = (
+        notifications_metrics_retention_parser.add_subparsers(
+            dest="notifications_metrics_retention_command",
+            required=True,
+        )
+    )
+
+    notifications_metrics_retention_status_parser = (
+        notifications_metrics_retention_subparsers.add_parser(
+            "status",
+            help=(
+                "Show the retention policy and how many snapshots "
+                "are expired."
+            ),
+        )
+    )
+    notifications_metrics_retention_status_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    notifications_metrics_retention_run_parser = (
+        notifications_metrics_retention_subparsers.add_parser(
+            "run",
+            help="Delete every currently expired metrics snapshot.",
+        )
+    )
+    notifications_metrics_retention_run_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     channels_parser = audits_subparsers.add_parser(
         "channels",
         help="Manage governance audit notification delivery channels.",
@@ -4795,6 +4845,18 @@ def main():
                             )
                         else:
                             exit_code = run_deployment_governance_metrics_collector_status(
+                                json_output=args.json_output,
+                            )
+                    elif metrics_subcommand == "retention":
+                        if (
+                            args.notifications_metrics_retention_command
+                            == "run"
+                        ):
+                            exit_code = run_deployment_governance_metrics_retention_run(
+                                json_output=args.json_output,
+                            )
+                        else:
+                            exit_code = run_deployment_governance_metrics_retention_status(
                                 json_output=args.json_output,
                             )
                     else:

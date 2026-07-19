@@ -19,6 +19,11 @@ from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics_reload,
     run_deployment_governance_metrics_requests,
     run_deployment_governance_metrics_reset,
+    run_deployment_governance_metrics_retention_run,
+    run_deployment_governance_metrics_retention_status,
+)
+from backend.observability.deployment_governance_metrics_history import (
+    GovernanceIntegrityMetricsSnapshot,
 )
 from backend.observability.deployment_governance_persistence import (
     build_deployment_governance_persistence,
@@ -835,3 +840,110 @@ def test_collector_collect_captures_snapshot_with_activity(
     payload = json.loads(stdout.getvalue())
 
     assert payload["metrics"]["successful_dispatches"] == 1
+
+
+def _seed_history_repository(runtime, count: int) -> None:
+    from datetime import datetime, timezone
+
+    from backend.observability.deployment_governance_metrics import (
+        GovernanceIntegrityMetrics,
+    )
+
+    repository = runtime.build_integrity_metrics_history_repository()
+
+    for i in range(count):
+        repository.append(
+            GovernanceIntegrityMetricsSnapshot(
+                captured_at=datetime.now(timezone.utc),
+                metrics=GovernanceIntegrityMetrics(
+                    total_dispatches=i + 1,
+                    successful_dispatches=i + 1,
+                    failed_dispatches=0,
+                    retry_dispatches=0,
+                    average_duration_ms=0.0,
+                ),
+            )
+        )
+
+
+def test_retention_status_on_empty_history(
+    monkeypatch, tmp_path
+) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-retention-empty.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_retention_status(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert payload["expired_count"] == 0
+    assert payload["policy"]["max_entries"] == 500
+
+
+def test_retention_status_reports_expired_count(
+    monkeypatch, tmp_path
+) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-retention-status.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    _seed_history_repository(runtime, 600)
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_retention_status(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert payload["expired_count"] == 100
+
+
+def test_retention_run_prunes_expired_snapshots(
+    monkeypatch, tmp_path
+) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-retention-run.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    _seed_history_repository(runtime, 600)
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_retention_run(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    assert json.loads(stdout.getvalue()) == {"discarded": 100}
+
+    repository = runtime.build_integrity_metrics_history_repository()
+
+    assert len(repository.list()) == 500
+
+
+def test_retention_run_on_empty_history_prunes_nothing(
+    monkeypatch, tmp_path
+) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-retention-run-empty.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_retention_run(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    assert json.loads(stdout.getvalue()) == {"discarded": 0}

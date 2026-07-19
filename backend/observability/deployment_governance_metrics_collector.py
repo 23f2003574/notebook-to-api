@@ -10,6 +10,9 @@ if TYPE_CHECKING:
     from .deployment_governance_metrics_history import (
         GovernanceIntegrityMetricsSnapshot,
     )
+    from .deployment_governance_metrics_retention import (
+        GovernanceIntegrityMetricsRetentionService,
+    )
 
 DEFAULT_COLLECTION_INTERVAL_SECONDS = 60.0
 
@@ -31,6 +34,9 @@ class GovernanceIntegrityMetricsCollector:
         interval_seconds: float = (
             DEFAULT_COLLECTION_INTERVAL_SECONDS
         ),
+        retention_service: (
+            "GovernanceIntegrityMetricsRetentionService | None"
+        ) = None,
     ) -> None:
         if interval_seconds <= 0:
             raise ValueError(
@@ -40,6 +46,8 @@ class GovernanceIntegrityMetricsCollector:
         self._metrics_service = metrics_service
 
         self._interval_seconds = interval_seconds
+
+        self._retention_service = retention_service
 
         self._lock = threading.Lock()
 
@@ -109,6 +117,11 @@ class GovernanceIntegrityMetricsCollector:
         Returns None, and captures nothing, if there has been no
         dispatch activity at all: an all-zero snapshot would only
         add noise to the history, not a meaningful data point.
+
+        When a snapshot is successfully captured and a retention
+        service is configured, retention runs immediately
+        afterward, so history never grows unbounded between
+        collections.
         """
 
         metrics = self._metrics_service.snapshot()
@@ -116,7 +129,12 @@ class GovernanceIntegrityMetricsCollector:
         if metrics.total_dispatches == 0:
             return None
 
-        return self._metrics_service.capture_snapshot()
+        snapshot = self._metrics_service.capture_snapshot()
+
+        if self._retention_service is not None:
+            self._retention_service.prune()
+
+        return snapshot
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
