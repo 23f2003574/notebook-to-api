@@ -11,6 +11,9 @@ from backend.observability.deployment_governance_delivery_runtime import (
 from backend.observability.deployment_governance_metrics import (
     GovernanceIntegrityMetricsService,
 )
+from backend.observability.deployment_governance_metrics_alerts import (
+    GovernanceIntegrityMetricsAlertService,
+)
 
 
 class TestGovernanceIntegrityRuntimeStatus:
@@ -929,3 +932,165 @@ class TestGovernanceIntegrityDeliveryRuntimeMetricsPersistence:
 
         runtime.start()
         runtime.run_iteration()
+
+
+class TestGovernanceIntegrityDeliveryRuntimeAlerts:
+
+    def test_active_alerts_without_alert_service_is_empty(self):
+        worker = Mock()
+        scheduler = Mock()
+        provider_registry = Mock()
+        clock = Mock()
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+        )
+
+        assert runtime.active_alerts() == ()
+
+    def test_active_alerts_delegates_to_alert_service(self):
+        worker = Mock()
+        scheduler = Mock()
+        provider_registry = Mock()
+        clock = Mock()
+
+        alert_service = Mock(spec=GovernanceIntegrityMetricsAlertService)
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            alert_service=alert_service,
+        )
+
+        result = runtime.active_alerts()
+
+        alert_service.active.assert_called_once()
+        assert result == alert_service.active.return_value
+
+    def test_run_iteration_evaluates_alerts(self):
+        worker = Mock()
+        scheduler = Mock()
+        del scheduler.active_dispatch_count
+        provider_registry = Mock()
+        provider_registry.list_providers.return_value = []
+        clock = Mock()
+        clock.now.return_value = datetime.now(timezone.utc)
+
+        metrics_service = Mock(spec=GovernanceIntegrityMetricsService)
+        alert_service = Mock(spec=GovernanceIntegrityMetricsAlertService)
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_service=metrics_service,
+            alert_service=alert_service,
+        )
+
+        runtime.start()
+        alert_service.evaluate.reset_mock()
+
+        runtime.run_iteration()
+
+        alert_service.evaluate.assert_called_once_with(
+            metrics_service.snapshot.return_value
+        )
+
+    def test_stop_evaluates_alerts(self):
+        worker = Mock()
+        scheduler = Mock()
+        del scheduler.active_dispatch_count
+        provider_registry = Mock()
+        provider_registry.list_providers.return_value = []
+        clock = Mock()
+        clock.now.return_value = datetime.now(timezone.utc)
+
+        metrics_service = Mock(spec=GovernanceIntegrityMetricsService)
+        alert_service = Mock(spec=GovernanceIntegrityMetricsAlertService)
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_service=metrics_service,
+            alert_service=alert_service,
+        )
+
+        runtime.start()
+        alert_service.evaluate.reset_mock()
+
+        runtime.stop()
+
+        alert_service.evaluate.assert_called_once_with(
+            metrics_service.snapshot.return_value
+        )
+
+    def test_start_evaluates_alerts(self):
+        worker = Mock()
+        scheduler = Mock()
+        del scheduler.active_dispatch_count
+        provider_registry = Mock()
+        provider_registry.list_providers.return_value = []
+        clock = Mock()
+        clock.now.return_value = datetime.now(timezone.utc)
+
+        metrics_service = Mock(spec=GovernanceIntegrityMetricsService)
+        alert_service = Mock(spec=GovernanceIntegrityMetricsAlertService)
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_service=metrics_service,
+            alert_service=alert_service,
+        )
+
+        runtime.start()
+
+        alert_service.evaluate.assert_called_once_with(
+            metrics_service.snapshot.return_value
+        )
+
+    def test_alerts_use_real_service_end_to_end(self):
+        worker = Mock()
+        scheduler = Mock()
+        del scheduler.active_dispatch_count
+        provider_registry = Mock()
+        provider_registry.list_providers.return_value = []
+        clock = Mock()
+        clock.now.return_value = datetime.now(timezone.utc)
+
+        metrics_service = GovernanceIntegrityMetricsService()
+        alert_service = GovernanceIntegrityMetricsAlertService()
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_service=metrics_service,
+            alert_service=alert_service,
+        )
+
+        runtime.start()
+
+        for _ in range(9):
+            metrics_service.record_failure(10.0)
+
+        metrics_service.record_success(10.0)
+
+        runtime.run_iteration()
+
+        active_names = {
+            alert.name for alert in runtime.active_alerts()
+        }
+
+        assert "failure_rate" in active_names

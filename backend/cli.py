@@ -164,6 +164,8 @@ from backend.observability.deployment_governance_notifications_cli import (
 from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics,
     run_deployment_governance_metrics_aggregate,
+    run_deployment_governance_metrics_alerts,
+    run_deployment_governance_metrics_alerts_clear,
     run_deployment_governance_metrics_export,
     run_deployment_governance_metrics_export_csv,
     run_deployment_governance_metrics_export_json,
@@ -2552,6 +2554,41 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    notifications_metrics_alerts_parser = (
+        notifications_metrics_subparsers.add_parser(
+            "alerts",
+            help=(
+                "Evaluate and show active notification delivery "
+                "metric alerts."
+            ),
+        )
+    )
+    notifications_metrics_alerts_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+    notifications_metrics_alerts_subparsers = (
+        notifications_metrics_alerts_parser.add_subparsers(
+            dest="notifications_metrics_alerts_command",
+            required=False,
+        )
+    )
+
+    notifications_metrics_alerts_clear_parser = (
+        notifications_metrics_alerts_subparsers.add_parser(
+            "clear",
+            help="Dismiss every active notification delivery metric alert.",
+        )
+    )
+    notifications_metrics_alerts_clear_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     channels_parser = audits_subparsers.add_parser(
         "channels",
         help="Manage governance audit notification delivery channels.",
@@ -4646,6 +4683,22 @@ def main():
                             daily=args.daily,
                             json_output=args.json_output,
                         )
+                    elif metrics_subcommand == "alerts":
+                        if (
+                            getattr(
+                                args,
+                                "notifications_metrics_alerts_command",
+                                None,
+                            )
+                            == "clear"
+                        ):
+                            exit_code = run_deployment_governance_metrics_alerts_clear(
+                                json_output=args.json_output,
+                            )
+                        else:
+                            exit_code = run_deployment_governance_metrics_alerts(
+                                json_output=args.json_output,
+                            )
                     else:
                         exit_code = run_deployment_governance_metrics(
                             json_output=args.json_output,

@@ -101,6 +101,9 @@ from .deployment_governance_audit_retention import (
 from .deployment_governance_metrics import (
     GovernanceIntegrityMetricsService,
 )
+from .deployment_governance_metrics_alerts import (
+    GovernanceIntegrityMetricsAlertService,
+)
 from .deployment_governance_metrics_repository import (
     GovernanceIntegrityMetricsRepository,
     InMemoryGovernanceIntegrityMetricsRepository,
@@ -597,6 +600,10 @@ class DeploymentGovernancePersistenceRuntime:
 
     metrics_service: GovernanceIntegrityMetricsService = field(
         default_factory=GovernanceIntegrityMetricsService
+    )
+
+    metrics_alert_service: GovernanceIntegrityMetricsAlertService = field(
+        default_factory=GovernanceIntegrityMetricsAlertService
     )
 
     @property
@@ -1467,6 +1474,19 @@ class DeploymentGovernancePersistenceRuntime:
         """
 
         return self.metrics_service
+
+    def build_integrity_metrics_alert_service(
+        self,
+    ) -> GovernanceIntegrityMetricsAlertService:
+        """
+        Return the shared governance metrics alert service.
+
+        Like build_integrity_metrics_service, this returns the
+        runtime's single stored instance so active alert state
+        persists across calls within one process.
+        """
+
+        return self.metrics_alert_service
 
     def build_integrity_retry_orchestrator(
         self,

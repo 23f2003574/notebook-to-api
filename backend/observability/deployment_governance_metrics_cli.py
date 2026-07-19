@@ -12,6 +12,9 @@ from .deployment_governance_metrics_aggregation import (
     GovernanceIntegrityMetricsAggregate,
     GovernanceIntegrityMetricsAggregationService,
 )
+from .deployment_governance_metrics_alerts import (
+    GovernanceIntegrityMetricAlert,
+)
 from .deployment_governance_metrics_history import (
     GovernanceIntegrityMetricsSnapshot,
 )
@@ -584,6 +587,139 @@ def _render_aggregates_json(
 ) -> None:
     json.dump(
         [aggregate.to_dict() for aggregate in aggregates],
+        stdout,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+
+    stdout.write("\n")
+
+
+def run_deployment_governance_metrics_alerts(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence, evaluate governance audit notification
+    delivery metric alerts against the latest metrics snapshot, and
+    show every currently active (triggered) alert.
+
+    Exit codes: 0 the alerts were evaluated (even if none are
+    active), 2 they could not be evaluated.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        metrics_service = runtime.build_integrity_metrics_service()
+
+        metrics_service.load()
+
+        alert_service = runtime.build_integrity_metrics_alert_service()
+
+        alert_service.evaluate(metrics_service.snapshot())
+
+        alerts = alert_service.active()
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        _render_alerts_json(alerts, stdout=stdout)
+
+    else:
+        _render_alerts_human(alerts, stdout=stdout)
+
+    return 0
+
+
+def run_deployment_governance_metrics_alerts_clear(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and dismiss every currently active
+    governance audit notification delivery metric alert.
+
+    Exit codes: 0 the alerts were cleared, 2 they could not be
+    cleared.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        alert_service = runtime.build_integrity_metrics_alert_service()
+
+        alert_service.clear()
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            {"status": "cleared"},
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write("Governance metric alerts cleared.\n")
+
+    return 0
+
+
+def _render_alerts_human(
+    alerts: tuple[GovernanceIntegrityMetricAlert, ...],
+    *,
+    stdout: TextIO,
+) -> None:
+    if not alerts:
+        stdout.write("No active governance metric alerts.\n")
+
+        return
+
+    stdout.write("Governance Metric Alerts\n\n")
+
+    for alert in alerts:
+        stdout.write(f"Alert: {alert.name}\n")
+
+        stdout.write(f"  Value: {alert.value}\n")
+
+        stdout.write(f"  Threshold: {alert.threshold}\n")
+
+        stdout.write(
+            f"  Triggered At: {alert.triggered_at.isoformat()}\n\n"
+        )
+
+
+def _render_alerts_json(
+    alerts: tuple[GovernanceIntegrityMetricAlert, ...],
+    *,
+    stdout: TextIO,
+) -> None:
+    json.dump(
+        [alert.to_dict() for alert in alerts],
         stdout,
         ensure_ascii=False,
         indent=2,

@@ -6,6 +6,8 @@ from io import StringIO
 from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics,
     run_deployment_governance_metrics_aggregate,
+    run_deployment_governance_metrics_alerts,
+    run_deployment_governance_metrics_alerts_clear,
     run_deployment_governance_metrics_export,
     run_deployment_governance_metrics_export_csv,
     run_deployment_governance_metrics_export_json,
@@ -592,3 +594,58 @@ def test_aggregate_daily_with_empty_history(
 
     assert exit_code == 0
     assert json.loads(stdout.getvalue()) == []
+
+
+def test_alerts_with_no_activity_is_empty(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-alerts-empty.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_alerts(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    assert json.loads(stdout.getvalue()) == []
+
+
+def test_alerts_shows_active_alerts(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-alerts-active.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    service = runtime.build_integrity_metrics_service()
+
+    for _ in range(9):
+        service.record_failure(10.0)
+
+    service.record_success(10.0)
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_alerts(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    names = {alert["name"] for alert in payload}
+
+    assert "failure_rate" in names
+
+
+def test_alerts_clear_confirms_success(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-alerts-clear.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_alerts_clear(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    assert json.loads(stdout.getvalue()) == {"status": "cleared"}

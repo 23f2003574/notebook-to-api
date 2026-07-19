@@ -7,6 +7,10 @@ from .deployment_governance_metrics import (
     GovernanceIntegrityMetrics,
     GovernanceIntegrityMetricsService,
 )
+from .deployment_governance_metrics_alerts import (
+    GovernanceIntegrityMetricAlert,
+    GovernanceIntegrityMetricsAlertService,
+)
 
 
 class GovernanceIntegrityRuntimeState(
@@ -46,13 +50,15 @@ class GovernanceIntegrityDeliveryRuntime:
         scheduler,
         provider_registry,
         clock,
-        metrics_service: Optional[GovernanceIntegrityMetricsService] = None
+        metrics_service: Optional[GovernanceIntegrityMetricsService] = None,
+        alert_service: Optional[GovernanceIntegrityMetricsAlertService] = None
     ):
         self.worker = worker
         self.scheduler = scheduler
         self.provider_registry = provider_registry
         self.clock = clock
         self.metrics_service = metrics_service
+        self.alert_service = alert_service
 
         self._state = GovernanceIntegrityRuntimeState.STOPPED
         self._started_at: Optional[datetime] = None
@@ -122,6 +128,26 @@ class GovernanceIntegrityDeliveryRuntime:
 
         return self.metrics_service.snapshot()
 
+    def active_alerts(
+        self
+    ) -> "tuple[GovernanceIntegrityMetricAlert, ...]":
+
+        if self.alert_service is None:
+
+            return ()
+
+        return self.alert_service.active()
+
+    def _evaluate_alerts(
+        self
+    ):
+
+        if self.alert_service is None or self.metrics_service is None:
+
+            return
+
+        self.alert_service.evaluate(self.metrics_service.snapshot())
+
     def start(
         self
     ):
@@ -141,6 +167,8 @@ class GovernanceIntegrityDeliveryRuntime:
         if self.metrics_service is not None:
 
             self.metrics_service.load()
+
+        self._evaluate_alerts()
 
         self._state = (
             GovernanceIntegrityRuntimeState.RUNNING
@@ -163,6 +191,8 @@ class GovernanceIntegrityDeliveryRuntime:
         if self.metrics_service is not None:
 
             self.metrics_service.flush()
+
+        self._evaluate_alerts()
 
         self._state = (
             GovernanceIntegrityRuntimeState.STOPPED
@@ -187,6 +217,8 @@ class GovernanceIntegrityDeliveryRuntime:
         if self.metrics_service is not None:
 
             self.metrics_service.flush()
+
+        self._evaluate_alerts()
 
     def _validate_providers(
         self
@@ -225,7 +257,8 @@ def build_integrity_delivery_runtime(
     scheduler,
     provider_registry,
     clock=None,
-    metrics_service=None
+    metrics_service=None,
+    alert_service=None
 ) -> GovernanceIntegrityDeliveryRuntime:
 
     if clock is None:
@@ -277,5 +310,8 @@ def build_integrity_delivery_runtime(
             clock,
 
         metrics_service=
-            metrics_service
+            metrics_service,
+
+        alert_service=
+            alert_service
     )
