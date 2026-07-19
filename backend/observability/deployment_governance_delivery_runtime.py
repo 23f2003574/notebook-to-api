@@ -3,6 +3,11 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
+from .deployment_governance_metrics import (
+    GovernanceIntegrityMetrics,
+    GovernanceIntegrityMetricsService,
+)
+
 
 class GovernanceIntegrityRuntimeState(
     str,
@@ -40,12 +45,14 @@ class GovernanceIntegrityDeliveryRuntime:
         worker,
         scheduler,
         provider_registry,
-        clock
+        clock,
+        metrics_service: Optional[GovernanceIntegrityMetricsService] = None
     ):
         self.worker = worker
         self.scheduler = scheduler
         self.provider_registry = provider_registry
         self.clock = clock
+        self.metrics_service = metrics_service
 
         self._state = GovernanceIntegrityRuntimeState.STOPPED
         self._started_at: Optional[datetime] = None
@@ -98,6 +105,22 @@ class GovernanceIntegrityDeliveryRuntime:
     ) -> bool:
 
         return self._state == GovernanceIntegrityRuntimeState.RUNNING
+
+    def metrics(
+        self
+    ) -> GovernanceIntegrityMetrics:
+
+        if self.metrics_service is None:
+
+            return GovernanceIntegrityMetrics(
+                total_dispatches=0,
+                successful_dispatches=0,
+                failed_dispatches=0,
+                retry_dispatches=0,
+                average_duration_ms=0.0
+            )
+
+        return self.metrics_service.snapshot()
 
     def start(
         self
@@ -189,7 +212,8 @@ def build_integrity_delivery_runtime(
     worker,
     scheduler,
     provider_registry,
-    clock=None
+    clock=None,
+    metrics_service=None
 ) -> GovernanceIntegrityDeliveryRuntime:
 
     if clock is None:
@@ -238,5 +262,8 @@ def build_integrity_delivery_runtime(
             provider_registry,
 
         clock=
-            clock
+            clock,
+
+        metrics_service=
+            metrics_service
     )

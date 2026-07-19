@@ -98,6 +98,9 @@ from .deployment_governance_audit_history import (
 from .deployment_governance_audit_retention import (
     GovernanceIntegrityAuditAutomaticRetentionConfig,
 )
+from .deployment_governance_metrics import (
+    GovernanceIntegrityMetricsService,
+)
 from .deployment_governance_integrity_audit import (
     DeploymentGovernanceIntegrityAuditService,
     DeploymentGovernanceTraceIntegrityAuditSource,
@@ -562,6 +565,10 @@ class DeploymentGovernancePersistenceRuntime:
         default_factory=(
             GovernanceIntegrityAuditAutomaticRetentionConfig.disabled
         )
+    )
+
+    metrics_service: GovernanceIntegrityMetricsService = field(
+        default_factory=GovernanceIntegrityMetricsService
     )
 
     @property
@@ -1393,6 +1400,22 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_provider_registry()
         )
 
+    def build_integrity_metrics_service(
+        self,
+    ) -> GovernanceIntegrityMetricsService:
+        """
+        Return the shared governance audit notification delivery
+        metrics service.
+
+        Unlike most build_integrity_* methods, this returns the
+        runtime's single stored instance rather than constructing a
+        new one: the delivery engine, retry orchestrator, and
+        delivery runtime record into and read from the same live
+        counters.
+        """
+
+        return self.metrics_service
+
     def build_integrity_retry_orchestrator(
         self,
     ) -> "GovernanceIntegrityRetryOrchestrator":
@@ -1407,7 +1430,9 @@ class DeploymentGovernancePersistenceRuntime:
             GovernanceIntegrityRetryOrchestrator,
         )
 
-        return GovernanceIntegrityRetryOrchestrator()
+        return GovernanceIntegrityRetryOrchestrator(
+            metrics_service=self.build_integrity_metrics_service(),
+        )
 
     def build_integrity_delivery_scheduler(
         self,
@@ -1451,6 +1476,7 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_provider_response_service(),
             self.build_integrity_retry_orchestrator(),
             scheduler=self.build_integrity_delivery_scheduler(),
+            metrics_service=self.build_integrity_metrics_service(),
         )
 
     def build_integrity_delivery_worker(

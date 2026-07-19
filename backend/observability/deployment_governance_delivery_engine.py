@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Callable, Protocol, TYPE_CHECKING, runtime_checkable
 
+from .deployment_governance_metrics import (
+    GovernanceIntegrityMetricsService,
+)
 from .deployment_governance_delivery_policies import (
     GovernanceIntegrityDeliveryPolicy,
     GovernanceIntegrityDeliveryPolicyService,
@@ -401,6 +405,7 @@ class GovernanceIntegrityDeliveryEngine:
         *,
         scheduler: "GovernanceIntegrityDeliveryScheduler | None" = None,
         clock: Callable[[], datetime] | None = None,
+        metrics_service: GovernanceIntegrityMetricsService | None = None,
     ) -> None:
         self._dispatch_repository = dispatch_repository
 
@@ -424,6 +429,8 @@ class GovernanceIntegrityDeliveryEngine:
             lambda: datetime.now(timezone.utc)
         )
 
+        self._metrics_service = metrics_service
+
     def deliver(
         self,
         dispatch_id: str,
@@ -444,6 +451,8 @@ class GovernanceIntegrityDeliveryEngine:
             raise KeyError(
                 f"notification dispatch '{dispatch_id}' was not found"
             )
+
+        started_at = time.monotonic()
 
         try:
             notification = self._notification_repository.get(
@@ -544,12 +553,22 @@ class GovernanceIntegrityDeliveryEngine:
                 raise RuntimeError(error_message)
 
         except Exception as exc:
+            if self._metrics_service is not None:
+                self._metrics_service.record_failure(
+                    (time.monotonic() - started_at) * 1000.0
+                )
+
             return GovernanceIntegrityDeliveryResult(
                 dispatch_id=dispatch.dispatch_id,
                 channel_name=dispatch.channel_name,
                 status=GovernanceIntegrityDeliveryStatus.FAILED,
                 delivered_at=self._clock(),
                 error=str(exc),
+            )
+
+        if self._metrics_service is not None:
+            self._metrics_service.record_success(
+                (time.monotonic() - started_at) * 1000.0
             )
 
         return GovernanceIntegrityDeliveryResult(

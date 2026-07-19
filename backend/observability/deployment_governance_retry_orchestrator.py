@@ -8,6 +8,9 @@ from typing import Callable, TYPE_CHECKING
 from .deployment_governance_delivery_policies import (
     GovernanceIntegrityDeliveryPolicy,
 )
+from .deployment_governance_metrics import (
+    GovernanceIntegrityMetricsService,
+)
 from .deployment_governance_provider_responses import (
     GovernanceIntegrityProviderResponseOutcome,
 )
@@ -114,6 +117,7 @@ class GovernanceIntegrityRetryOrchestrator:
         ),
         base_delay_seconds: int = DEFAULT_BASE_DELAY_SECONDS,
         max_delay_seconds: int | None = None,
+        metrics_service: GovernanceIntegrityMetricsService | None = None,
     ) -> None:
         self._clock = clock or (
             lambda: datetime.now(timezone.utc)
@@ -124,6 +128,8 @@ class GovernanceIntegrityRetryOrchestrator:
         self._base_delay_seconds = base_delay_seconds
 
         self._max_delay_seconds = max_delay_seconds
+
+        self._metrics_service = metrics_service
 
     def evaluate(
         self,
@@ -174,6 +180,9 @@ class GovernanceIntegrityRetryOrchestrator:
 
         delay_seconds = self._compute_delay_seconds(attempt)
 
+        if self._metrics_service is not None:
+            self._metrics_service.record_retry()
+
         return GovernanceIntegrityRetryDecision(
             should_retry=True,
             retry_attempt=attempt + 1,
@@ -222,6 +231,9 @@ class GovernanceIntegrityRetryOrchestrator:
             )
 
         delay_seconds = self._compute_delay_seconds(attempt)
+
+        if self._metrics_service is not None:
+            self._metrics_service.record_retry()
 
         return GovernanceIntegrityRetryDecision(
             should_retry=True,

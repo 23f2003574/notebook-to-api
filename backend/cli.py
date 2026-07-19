@@ -161,6 +161,10 @@ from backend.observability.deployment_governance_notifications_cli import (
     run_deployment_governance_notifications_queue,
     run_deployment_governance_notifications_show,
 )
+from backend.observability.deployment_governance_metrics_cli import (
+    run_deployment_governance_metrics,
+    run_deployment_governance_metrics_reset,
+)
 from backend.observability.deployment_governance_notification_channels import (
     GovernanceIntegrityNotificationChannelType,
 )
@@ -2339,6 +2343,35 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    notifications_metrics_parser = notifications_subparsers.add_parser(
+        "metrics",
+        help="Show live governance audit notification delivery metrics.",
+    )
+    notifications_metrics_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+    notifications_metrics_subparsers = (
+        notifications_metrics_parser.add_subparsers(
+            dest="notifications_metrics_command", required=False
+        )
+    )
+
+    notifications_metrics_reset_parser = (
+        notifications_metrics_subparsers.add_parser(
+            "reset",
+            help="Clear live notification delivery metrics.",
+        )
+    )
+    notifications_metrics_reset_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     channels_parser = audits_subparsers.add_parser(
         "channels",
         help="Manage governance audit notification delivery channels.",
@@ -4387,6 +4420,20 @@ def main():
                         notification_id=args.notification_id,
                         json_output=args.json_output,
                     )
+                elif args.notifications_command == "metrics":
+                    if (
+                        getattr(
+                            args, "notifications_metrics_command", None
+                        )
+                        == "reset"
+                    ):
+                        exit_code = run_deployment_governance_metrics_reset(
+                            json_output=args.json_output,
+                        )
+                    else:
+                        exit_code = run_deployment_governance_metrics(
+                            json_output=args.json_output,
+                        )
                 else:
                     exit_code = run_deployment_governance_notifications_clear(
                         json_output=args.json_output,
