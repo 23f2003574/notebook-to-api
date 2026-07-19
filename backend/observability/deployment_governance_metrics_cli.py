@@ -287,6 +287,140 @@ def run_deployment_governance_metrics_latest(
     return 0
 
 
+def run_deployment_governance_metrics_export_json(
+    *,
+    include_history: bool = False,
+    output_path: str | None = None,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and export current governance audit
+    notification delivery metrics (and optionally their captured
+    history) as JSON, for offline analysis.
+
+    Writes to output_path when given, otherwise to stdout.
+
+    Exit codes: 0 the export succeeded, 2 it could not be exported.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        metrics_service = runtime.build_integrity_metrics_service()
+
+        metrics_service.load()
+
+        rendered = metrics_service.export_service().export_json(
+            include_history=include_history
+        )
+
+        if output_path is not None:
+            with open(output_path, "w", encoding="utf-8") as handle:
+                handle.write(rendered)
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    _render_export_result(
+        rendered,
+        output_path=output_path,
+        json_output=json_output,
+        stdout=stdout,
+    )
+
+    return 0
+
+
+def run_deployment_governance_metrics_export_csv(
+    *,
+    include_history: bool = False,
+    output_path: str | None = None,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and export current governance audit
+    notification delivery metrics (and optionally their captured
+    history) as CSV, for offline analysis.
+
+    Writes to output_path when given, otherwise to stdout.
+
+    Exit codes: 0 the export succeeded, 2 it could not be exported.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        metrics_service = runtime.build_integrity_metrics_service()
+
+        metrics_service.load()
+
+        rendered = metrics_service.export_service().export_csv(
+            include_history=include_history
+        )
+
+        if output_path is not None:
+            with open(output_path, "w", encoding="utf-8") as handle:
+                handle.write(rendered)
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    _render_export_result(
+        rendered,
+        output_path=output_path,
+        json_output=json_output,
+        stdout=stdout,
+    )
+
+    return 0
+
+
+def _render_export_result(
+    rendered: str,
+    *,
+    output_path: str | None,
+    json_output: bool,
+    stdout: TextIO,
+) -> None:
+    if output_path is not None:
+        if json_output:
+            json.dump(
+                {"status": "exported", "output_path": output_path},
+                stdout,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+
+            stdout.write("\n")
+
+        else:
+            stdout.write(f"Governance metrics exported to {output_path}\n")
+
+        return
+
+    stdout.write(rendered)
+
+    if not rendered.endswith("\n"):
+        stdout.write("\n")
+
+
 def _render_history_human(
     snapshots: tuple[GovernanceIntegrityMetricsSnapshot, ...],
     *,

@@ -6,6 +6,8 @@ from io import StringIO
 from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics,
     run_deployment_governance_metrics_export,
+    run_deployment_governance_metrics_export_csv,
+    run_deployment_governance_metrics_export_json,
     run_deployment_governance_metrics_history,
     run_deployment_governance_metrics_latest,
     run_deployment_governance_metrics_reload,
@@ -305,3 +307,158 @@ def test_history_respects_limit(monkeypatch, tmp_path) -> None:
     payload = json.loads(stdout.getvalue())
 
     assert len(payload) == 2
+
+
+def test_export_json_to_stdout(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-export-json.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    runtime.build_integrity_metrics_service().record_success(100.0)
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_export_json(
+        stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert payload["metrics"]["successful_dispatches"] == 1
+    assert "history" not in payload
+
+
+def test_export_json_with_history_flag(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-export-json-history.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    runtime.build_integrity_metrics_service().record_success(100.0)
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_export_json(
+        include_history=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert len(payload["history"]) == 1
+
+
+def test_export_json_to_output_file(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-export-json-file.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    runtime.build_integrity_metrics_service().record_success(100.0)
+
+    output_path = tmp_path / "export.json"
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_export_json(
+        output_path=str(output_path), stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    assert "exported" in stdout.getvalue().lower()
+
+    payload = json.loads(output_path.read_text())
+
+    assert payload["metrics"]["successful_dispatches"] == 1
+
+
+def test_export_csv_to_stdout(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-export-csv.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    runtime.build_integrity_metrics_service().record_success(100.0)
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_export_csv(
+        stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    lines = stdout.getvalue().strip().splitlines()
+
+    assert lines[0].startswith("row_type,captured_at,")
+    assert len(lines) == 2
+
+
+def test_export_csv_with_history_flag(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-export-csv-history.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    runtime.build_integrity_metrics_service().record_success(100.0)
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_export_csv(
+        include_history=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    lines = stdout.getvalue().strip().splitlines()
+
+    assert len(lines) == 3
+
+
+def test_export_csv_to_output_file(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-export-csv-file.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    runtime.build_integrity_metrics_service().record_success(100.0)
+
+    output_path = tmp_path / "export.csv"
+
+    exit_code = run_deployment_governance_metrics_export_csv(
+        output_path=str(output_path),
+        stdout=StringIO(),
+        stderr=StringIO(),
+    )
+
+    assert exit_code == 0
+
+    content = output_path.read_text()
+
+    assert content.startswith("row_type,captured_at,")
+
+
+def test_export_with_empty_history(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-export-empty-history.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_export_json(
+        include_history=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert payload["history"] == []

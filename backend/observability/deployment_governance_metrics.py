@@ -13,6 +13,9 @@ if TYPE_CHECKING:
         GovernanceIntegrityMetricsHistoryRepository,
         GovernanceIntegrityMetricsSnapshot,
     )
+    from .deployment_governance_metrics_export import (
+        GovernanceIntegrityMetricsExportService,
+    )
 
 
 @dataclass(frozen=True)
@@ -290,6 +293,19 @@ class GovernanceIntegrityMetricsService:
             return 0
 
         return self._history_repository.prune(max_entries)
+
+    def export_service(self) -> "GovernanceIntegrityMetricsExportService":
+        """
+        Return a GovernanceIntegrityMetricsExportService bound to
+        this service, for formatting current metrics (and optionally
+        history) for offline analysis.
+        """
+
+        from .deployment_governance_metrics_export import (
+            GovernanceIntegrityMetricsExportService,
+        )
+
+        return GovernanceIntegrityMetricsExportService(self)
 
     def auto_flush(self) -> None:
         """

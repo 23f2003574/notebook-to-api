@@ -164,6 +164,8 @@ from backend.observability.deployment_governance_notifications_cli import (
 from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics,
     run_deployment_governance_metrics_export,
+    run_deployment_governance_metrics_export_csv,
+    run_deployment_governance_metrics_export_json,
     run_deployment_governance_metrics_history,
     run_deployment_governance_metrics_latest,
     run_deployment_governance_metrics_reload,
@@ -2447,6 +2449,62 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    notifications_metrics_export_json_parser = (
+        notifications_metrics_subparsers.add_parser(
+            "export-json",
+            help=(
+                "Export current metrics (and optionally history) as "
+                "JSON for offline analysis."
+            ),
+        )
+    )
+    notifications_metrics_export_json_parser.add_argument(
+        "--history",
+        action="store_true",
+        dest="include_history",
+        help="Include captured metrics history in the export.",
+    )
+    notifications_metrics_export_json_parser.add_argument(
+        "--output",
+        default=None,
+        dest="output_path",
+        help="File path to write the export to. Defaults to stdout.",
+    )
+    notifications_metrics_export_json_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit a machine-readable confirmation when --output is set.",
+    )
+
+    notifications_metrics_export_csv_parser = (
+        notifications_metrics_subparsers.add_parser(
+            "export-csv",
+            help=(
+                "Export current metrics (and optionally history) as "
+                "CSV for offline analysis."
+            ),
+        )
+    )
+    notifications_metrics_export_csv_parser.add_argument(
+        "--history",
+        action="store_true",
+        dest="include_history",
+        help="Include captured metrics history in the export.",
+    )
+    notifications_metrics_export_csv_parser.add_argument(
+        "--output",
+        default=None,
+        dest="output_path",
+        help="File path to write the export to. Defaults to stdout.",
+    )
+    notifications_metrics_export_csv_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit a machine-readable confirmation when --output is set.",
+    )
+
     channels_parser = audits_subparsers.add_parser(
         "channels",
         help="Manage governance audit notification delivery channels.",
@@ -4519,6 +4577,18 @@ def main():
                         )
                     elif metrics_subcommand == "latest":
                         exit_code = run_deployment_governance_metrics_latest(
+                            json_output=args.json_output,
+                        )
+                    elif metrics_subcommand == "export-json":
+                        exit_code = run_deployment_governance_metrics_export_json(
+                            include_history=args.include_history,
+                            output_path=args.output_path,
+                            json_output=args.json_output,
+                        )
+                    elif metrics_subcommand == "export-csv":
+                        exit_code = run_deployment_governance_metrics_export_csv(
+                            include_history=args.include_history,
+                            output_path=args.output_path,
                             json_output=args.json_output,
                         )
                     else:
