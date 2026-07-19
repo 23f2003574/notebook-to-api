@@ -166,6 +166,7 @@ from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics_aggregate,
     run_deployment_governance_metrics_alerts,
     run_deployment_governance_metrics_alerts_clear,
+    run_deployment_governance_metrics_dashboard,
     run_deployment_governance_metrics_export,
     run_deployment_governance_metrics_export_csv,
     run_deployment_governance_metrics_export_json,
@@ -2589,6 +2590,22 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    notifications_metrics_dashboard_parser = (
+        notifications_metrics_subparsers.add_parser(
+            "dashboard",
+            help=(
+                "Show a compact notification delivery metrics "
+                "dashboard."
+            ),
+        )
+    )
+    notifications_metrics_dashboard_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     channels_parser = audits_subparsers.add_parser(
         "channels",
         help="Manage governance audit notification delivery channels.",
@@ -4699,6 +4716,10 @@ def main():
                             exit_code = run_deployment_governance_metrics_alerts(
                                 json_output=args.json_output,
                             )
+                    elif metrics_subcommand == "dashboard":
+                        exit_code = run_deployment_governance_metrics_dashboard(
+                            json_output=args.json_output,
+                        )
                     else:
                         exit_code = run_deployment_governance_metrics(
                             json_output=args.json_output,

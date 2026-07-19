@@ -15,6 +15,10 @@ from .deployment_governance_metrics_aggregation import (
 from .deployment_governance_metrics_alerts import (
     GovernanceIntegrityMetricAlert,
 )
+from .deployment_governance_metrics_dashboard import (
+    GovernanceIntegrityMetricsDashboard,
+    GovernanceIntegrityMetricsDashboardService,
+)
 from .deployment_governance_metrics_history import (
     GovernanceIntegrityMetricsSnapshot,
 )
@@ -727,6 +731,86 @@ def _render_alerts_json(
     )
 
     stdout.write("\n")
+
+
+def run_deployment_governance_metrics_dashboard(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and build a compact governance audit
+    notification delivery metrics dashboard: current counters,
+    derived percentages, and active alert count.
+
+    Resyncs metrics from durable storage and re-evaluates alerts
+    before building the dashboard, since each CLI invocation starts
+    with fresh, empty in-memory state.
+
+    Exit codes: 0 the dashboard was built, 2 it could not be built.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        dashboard_service = GovernanceIntegrityMetricsDashboardService(
+            runtime.build_integrity_metrics_service(),
+            alert_service=(
+                runtime.build_integrity_metrics_alert_service()
+            ),
+        )
+
+        dashboard = dashboard_service.refresh()
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            dashboard.to_dict(),
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        _render_dashboard_human(dashboard, stdout=stdout)
+
+    return 0
+
+
+def _render_dashboard_human(
+    dashboard: GovernanceIntegrityMetricsDashboard,
+    *,
+    stdout: TextIO,
+) -> None:
+    stdout.write("Governance Delivery Metrics Dashboard\n\n")
+
+    stdout.write(
+        f"Last Updated: {dashboard.last_updated.isoformat()}\n\n"
+    )
+
+    stdout.write(
+        f"Total Dispatches: {dashboard.summary.total_dispatches}\n"
+    )
+
+    stdout.write(f"Success Rate: {dashboard.success_rate:.2f}%\n")
+
+    stdout.write(f"Failure Rate: {dashboard.failure_rate:.2f}%\n")
+
+    stdout.write(f"Retry Rate: {dashboard.retry_rate:.2f}%\n")
+
+    stdout.write(f"Active Alerts: {dashboard.active_alerts}\n")
 
 
 def _render_history_human(

@@ -1094,3 +1094,62 @@ class TestGovernanceIntegrityDeliveryRuntimeAlerts:
         }
 
         assert "failure_rate" in active_names
+
+
+class TestGovernanceIntegrityDeliveryRuntimeDashboard:
+
+    def test_dashboard_without_metrics_service_is_empty(self):
+        worker = Mock()
+        scheduler = Mock()
+        provider_registry = Mock()
+        clock = Mock()
+        clock.now.return_value = datetime.now(timezone.utc)
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+        )
+
+        dashboard = runtime.dashboard()
+
+        assert dashboard.summary.total_dispatches == 0
+        assert dashboard.success_rate == 0.0
+        assert dashboard.active_alerts == 0
+
+    def test_dashboard_reflects_metrics_and_alerts(self):
+        worker = Mock()
+        scheduler = Mock()
+        del scheduler.active_dispatch_count
+        provider_registry = Mock()
+        provider_registry.list_providers.return_value = []
+        clock = Mock()
+        clock.now.return_value = datetime.now(timezone.utc)
+
+        metrics_service = GovernanceIntegrityMetricsService()
+        alert_service = GovernanceIntegrityMetricsAlertService()
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_service=metrics_service,
+            alert_service=alert_service,
+        )
+
+        runtime.start()
+
+        for _ in range(9):
+            metrics_service.record_failure(10.0)
+
+        metrics_service.record_success(10.0)
+
+        runtime.run_iteration()
+
+        dashboard = runtime.dashboard()
+
+        assert dashboard.summary.total_dispatches == 10
+        assert dashboard.failure_rate == 90.0
+        assert dashboard.active_alerts >= 1

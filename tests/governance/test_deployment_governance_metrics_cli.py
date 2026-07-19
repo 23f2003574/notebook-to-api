@@ -8,6 +8,7 @@ from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics_aggregate,
     run_deployment_governance_metrics_alerts,
     run_deployment_governance_metrics_alerts_clear,
+    run_deployment_governance_metrics_dashboard,
     run_deployment_governance_metrics_export,
     run_deployment_governance_metrics_export_csv,
     run_deployment_governance_metrics_export_json,
@@ -649,3 +650,82 @@ def test_alerts_clear_confirms_success(monkeypatch, tmp_path) -> None:
 
     assert exit_code == 0
     assert json.loads(stdout.getvalue()) == {"status": "cleared"}
+
+
+def test_dashboard_on_empty_history(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-dashboard-empty.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_dashboard(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert payload["summary"]["total_dispatches"] == 0
+    assert payload["success_rate"] == 0.0
+    assert payload["active_alerts"] == 0
+
+
+def test_dashboard_reflects_persisted_metrics(
+    monkeypatch, tmp_path
+) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-dashboard.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    service = runtime.build_integrity_metrics_service()
+
+    for _ in range(7):
+        service.record_success(10.0)
+
+    for _ in range(3):
+        service.record_failure(10.0)
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_dashboard(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert payload["summary"]["total_dispatches"] == 10
+    assert payload["success_rate"] == 70.0
+    assert payload["failure_rate"] == 30.0
+
+
+def test_dashboard_reflects_active_alerts(
+    monkeypatch, tmp_path
+) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-dashboard-alerts.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    service = runtime.build_integrity_metrics_service()
+
+    for _ in range(9):
+        service.record_failure(10.0)
+
+    service.record_success(10.0)
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_dashboard(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert payload["active_alerts"] >= 1

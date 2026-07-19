@@ -11,6 +11,10 @@ from .deployment_governance_metrics_alerts import (
     GovernanceIntegrityMetricAlert,
     GovernanceIntegrityMetricsAlertService,
 )
+from .deployment_governance_metrics_dashboard import (
+    GovernanceIntegrityMetricsDashboard,
+    GovernanceIntegrityMetricsDashboardService,
+)
 
 
 class GovernanceIntegrityRuntimeState(
@@ -137,6 +141,28 @@ class GovernanceIntegrityDeliveryRuntime:
             return ()
 
         return self.alert_service.active()
+
+    def dashboard(
+        self
+    ) -> GovernanceIntegrityMetricsDashboard:
+
+        if self.metrics_service is None:
+
+            return GovernanceIntegrityMetricsDashboard(
+                summary=self.metrics(),
+                success_rate=0.0,
+                failure_rate=0.0,
+                retry_rate=0.0,
+                active_alerts=0,
+                last_updated=self.clock.now()
+            )
+
+        dashboard_service = GovernanceIntegrityMetricsDashboardService(
+            self.metrics_service,
+            alert_service=self.alert_service
+        )
+
+        return dashboard_service.overview()
 
     def _evaluate_alerts(
         self
