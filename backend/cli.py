@@ -168,6 +168,8 @@ from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics_alerts_clear,
     run_deployment_governance_metrics_collector_collect,
     run_deployment_governance_metrics_collector_status,
+    run_deployment_governance_metrics_config_reload,
+    run_deployment_governance_metrics_config_show,
     run_deployment_governance_metrics_dashboard,
     run_deployment_governance_metrics_export,
     run_deployment_governance_metrics_requests,
@@ -2717,6 +2719,51 @@ def main():
         help="Emit machine-readable JSON output.",
     )
 
+    notifications_metrics_config_parser = (
+        notifications_metrics_subparsers.add_parser(
+            "config",
+            help="Show or reload governance metrics configuration.",
+        )
+    )
+    notifications_metrics_config_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+    notifications_metrics_config_subparsers = (
+        notifications_metrics_config_parser.add_subparsers(
+            dest="notifications_metrics_config_command",
+            required=True,
+        )
+    )
+
+    notifications_metrics_config_show_parser = (
+        notifications_metrics_config_subparsers.add_parser(
+            "show",
+            help="Show the currently loaded metrics configuration.",
+        )
+    )
+    notifications_metrics_config_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    notifications_metrics_config_reload_parser = (
+        notifications_metrics_config_subparsers.add_parser(
+            "reload",
+            help="Reload metrics configuration from the environment.",
+        )
+    )
+    notifications_metrics_config_reload_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     channels_parser = audits_subparsers.add_parser(
         "channels",
         help="Manage governance audit notification delivery channels.",
@@ -4857,6 +4904,18 @@ def main():
                             )
                         else:
                             exit_code = run_deployment_governance_metrics_retention_status(
+                                json_output=args.json_output,
+                            )
+                    elif metrics_subcommand == "config":
+                        if (
+                            args.notifications_metrics_config_command
+                            == "reload"
+                        ):
+                            exit_code = run_deployment_governance_metrics_config_reload(
+                                json_output=args.json_output,
+                            )
+                        else:
+                            exit_code = run_deployment_governance_metrics_config_show(
                                 json_output=args.json_output,
                             )
                     else:

@@ -10,6 +10,8 @@ from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics_alerts_clear,
     run_deployment_governance_metrics_collector_collect,
     run_deployment_governance_metrics_collector_status,
+    run_deployment_governance_metrics_config_reload,
+    run_deployment_governance_metrics_config_show,
     run_deployment_governance_metrics_dashboard,
     run_deployment_governance_metrics_export,
     run_deployment_governance_metrics_export_csv,
@@ -947,3 +949,76 @@ def test_retention_run_on_empty_history_prunes_nothing(
 
     assert exit_code == 0
     assert json.loads(stdout.getvalue()) == {"discarded": 0}
+
+
+def test_config_show_reports_defaults(monkeypatch) -> None:
+    monkeypatch.delenv(
+        "NOTEBOOK2API_GOVERNANCE_METRICS_COLLECTION_INTERVAL_SECONDS",
+        raising=False,
+    )
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_config_show(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert payload["collection_interval_seconds"] == 60
+    assert payload["max_history_entries"] == 500
+    assert payload["max_history_age_days"] == 30
+    assert payload["auto_flush"] is True
+
+
+def test_config_show_reflects_environment(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "NOTEBOOK2API_GOVERNANCE_METRICS_COLLECTION_INTERVAL_SECONDS",
+        "15",
+    )
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_config_show(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert payload["collection_interval_seconds"] == 15
+
+
+def test_config_reload_reflects_environment(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "NOTEBOOK2API_GOVERNANCE_METRICS_MAX_HISTORY_ENTRIES", "77"
+    )
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_config_reload(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert payload["max_history_entries"] == 77
+
+
+def test_config_show_invalid_env_value_fails(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "NOTEBOOK2API_GOVERNANCE_METRICS_AUTO_FLUSH", "not-a-bool"
+    )
+
+    stderr = StringIO()
+
+    exit_code = run_deployment_governance_metrics_config_show(
+        json_output=True, stdout=StringIO(), stderr=stderr
+    )
+
+    assert exit_code == 2

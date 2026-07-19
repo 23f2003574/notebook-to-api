@@ -327,3 +327,124 @@ class TestGovernanceIntegrityMetricsCollectorRetentionIntegration:
         collector.collect_once()
 
         assert len(metrics_service.history()) == 6
+
+
+class TestGovernanceIntegrityMetricsCollectorReconfigure:
+
+    def test_reconfigure_interval_takes_effect(self):
+        metrics_service, _ = _service_with_history()
+
+        collector = GovernanceIntegrityMetricsCollector(
+            metrics_service, interval_seconds=60.0
+        )
+
+        collector.reconfigure(interval_seconds=0.05)
+
+        assert collector._interval_seconds == 0.05
+
+    def test_reconfigure_rejects_non_positive_interval(self):
+        metrics_service, _ = _service_with_history()
+
+        collector = GovernanceIntegrityMetricsCollector(
+            metrics_service
+        )
+
+        with pytest.raises(ValueError):
+            collector.reconfigure(interval_seconds=0)
+
+        with pytest.raises(ValueError):
+            collector.reconfigure(interval_seconds=-1)
+
+    def test_reconfigure_replaces_retention_service(self):
+        metrics_service, history_repository = _service_with_history()
+
+        collector = GovernanceIntegrityMetricsCollector(
+            metrics_service
+        )
+
+        from backend.observability.deployment_governance_metrics_retention import (
+            GovernanceIntegrityMetricsRetentionService,
+        )
+
+        retention_service = GovernanceIntegrityMetricsRetentionService(
+            history_repository, max_age=None, max_entries=1
+        )
+
+        collector.reconfigure(retention_service=retention_service)
+
+        for _ in range(3):
+            metrics_service.record_success(10.0)
+            metrics_service.capture_snapshot()
+
+        metrics_service.record_success(20.0)
+        collector.collect_once()
+
+        assert len(metrics_service.history()) == 1
+
+    def test_reconfigure_can_clear_retention_service(self):
+        metrics_service, history_repository = _service_with_history()
+
+        from backend.observability.deployment_governance_metrics_retention import (
+            GovernanceIntegrityMetricsRetentionService,
+        )
+
+        retention_service = GovernanceIntegrityMetricsRetentionService(
+            history_repository, max_age=None, max_entries=1
+        )
+
+        collector = GovernanceIntegrityMetricsCollector(
+            metrics_service, retention_service=retention_service
+        )
+
+        collector.reconfigure(retention_service=None)
+
+        for _ in range(3):
+            metrics_service.record_success(10.0)
+            metrics_service.capture_snapshot()
+
+        metrics_service.record_success(20.0)
+        collector.collect_once()
+
+        assert len(metrics_service.history()) == 4
+
+    def test_reconfigure_without_arguments_changes_nothing(self):
+        metrics_service, _ = _service_with_history()
+
+        collector = GovernanceIntegrityMetricsCollector(
+            metrics_service, interval_seconds=42.0
+        )
+
+        collector.reconfigure()
+
+        assert collector._interval_seconds == 42.0
+
+    def test_reconfigure_while_running_is_picked_up(self):
+        metrics_service, _ = _service_with_history()
+
+        # Reconfigure only takes effect on the background thread's
+        # *next* wait cycle, not by interrupting an in-progress one,
+        # so the initial interval must be short enough for that next
+        # cycle to arrive within this test's patience window.
+        collector = GovernanceIntegrityMetricsCollector(
+            metrics_service, interval_seconds=0.1
+        )
+
+        collector.start()
+
+        try:
+            collector.reconfigure(interval_seconds=0.05)
+
+            metrics_service.record_success(10.0)
+
+            deadline = time.monotonic() + 2.0
+
+            while (
+                len(metrics_service.history()) < 1
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.02)
+
+            assert len(metrics_service.history()) >= 1
+
+        finally:
+            collector.stop()

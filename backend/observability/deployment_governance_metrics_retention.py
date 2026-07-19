@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Callable, TYPE_CHECKING
+from threading import Lock
+from typing import Any, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .deployment_governance_metrics_history import (
@@ -13,6 +14,8 @@ if TYPE_CHECKING:
 DEFAULT_RETENTION_MAX_AGE: timedelta = timedelta(days=30)
 
 DEFAULT_RETENTION_MAX_ENTRIES: int = 500
+
+_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -80,6 +83,8 @@ class GovernanceIntegrityMetricsRetentionService:
             lambda: datetime.now(timezone.utc)
         )
 
+        self._lock = Lock()
+
     def retention_policy(
         self,
     ) -> GovernanceIntegrityMetricsRetentionPolicy:
@@ -87,7 +92,39 @@ class GovernanceIntegrityMetricsRetentionService:
         Return the currently configured retention policy.
         """
 
-        return self._policy
+        with self._lock:
+            return self._policy
+
+    def reconfigure(
+        self,
+        *,
+        max_age: Any = _UNSET,
+        max_entries: Any = _UNSET,
+    ) -> None:
+        """
+        Replace the retention policy without recreating the service.
+
+        Only fields explicitly passed are changed (including None,
+        to disable that rule); omitted fields keep their current
+        value. Takes effect on the next expired()/prune() call.
+        """
+
+        with self._lock:
+            current = self._policy
+
+            new_max_age = (
+                current.max_age if max_age is _UNSET else max_age
+            )
+
+            new_max_entries = (
+                current.max_entries
+                if max_entries is _UNSET
+                else max_entries
+            )
+
+            self._policy = GovernanceIntegrityMetricsRetentionPolicy(
+                max_age=new_max_age, max_entries=new_max_entries
+            )
 
     def expired(
         self,
@@ -121,10 +158,13 @@ class GovernanceIntegrityMetricsRetentionService:
         self,
         newest_first: tuple["GovernanceIntegrityMetricsSnapshot", ...],
     ) -> int:
+        with self._lock:
+            policy = self._policy
+
         retain_count = len(newest_first)
 
-        if self._policy.max_age is not None:
-            cutoff = self._clock() - self._policy.max_age
+        if policy.max_age is not None:
+            cutoff = self._clock() - policy.max_age
 
             retain_count = min(
                 retain_count,
@@ -135,7 +175,7 @@ class GovernanceIntegrityMetricsRetentionService:
                 ),
             )
 
-        if self._policy.max_entries is not None:
-            retain_count = min(retain_count, self._policy.max_entries)
+        if policy.max_entries is not None:
+            retain_count = min(retain_count, policy.max_entries)
 
         return retain_count

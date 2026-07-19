@@ -15,6 +15,10 @@ from .deployment_governance_metrics_aggregation import (
 from .deployment_governance_metrics_collector import (
     GovernanceIntegrityMetricsCollector,
 )
+from .deployment_governance_metrics_config import (
+    GovernanceIntegrityMetricsConfig,
+    GovernanceIntegrityMetricsConfigService,
+)
 from .deployment_governance_metrics_alerts import (
     GovernanceIntegrityMetricAlert,
 )
@@ -1139,6 +1143,112 @@ def run_deployment_governance_metrics_retention_run(
         )
 
     return 0
+
+
+def run_deployment_governance_metrics_config_show(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Show the currently loaded governance metrics configuration,
+    sourced from environment variables.
+
+    Exit codes: 0 the config was retrieved, 2 it could not be.
+    """
+
+    try:
+        config = GovernanceIntegrityMetricsConfigService().load()
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            config.to_dict(),
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        _render_config_human(config, stdout=stdout)
+
+    return 0
+
+
+def run_deployment_governance_metrics_config_reload(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Re-read governance metrics configuration from environment
+    variables.
+
+    Exit codes: 0 the config was reloaded, 2 it could not be
+    (including if the environment holds invalid values).
+    """
+
+    try:
+        config = GovernanceIntegrityMetricsConfigService().reload()
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            config.to_dict(),
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write("Governance metrics configuration reloaded.\n\n")
+
+        _render_config_human(config, stdout=stdout)
+
+    return 0
+
+
+def _render_config_human(
+    config: GovernanceIntegrityMetricsConfig,
+    *,
+    stdout: TextIO,
+) -> None:
+    stdout.write("Governance Metrics Configuration\n\n")
+
+    stdout.write(
+        "Collection Interval: "
+        f"{config.collection_interval_seconds}s\n"
+    )
+
+    stdout.write(
+        f"Max History Entries: {config.max_history_entries}\n"
+    )
+
+    stdout.write(
+        f"Max History Age: {config.max_history_age_days} day(s)\n"
+    )
+
+    stdout.write(f"Auto Flush: {config.auto_flush}\n")
 
 
 def _render_history_human(

@@ -18,6 +18,13 @@ from .deployment_governance_metrics_dashboard import (
 from .deployment_governance_metrics_collector import (
     GovernanceIntegrityMetricsCollector,
 )
+from .deployment_governance_metrics_retention import (
+    GovernanceIntegrityMetricsRetentionService,
+)
+from .deployment_governance_metrics_config import (
+    GovernanceIntegrityMetricsConfig,
+    GovernanceIntegrityMetricsConfigService,
+)
 
 
 class GovernanceIntegrityRuntimeState(
@@ -59,7 +66,9 @@ class GovernanceIntegrityDeliveryRuntime:
         clock,
         metrics_service: Optional[GovernanceIntegrityMetricsService] = None,
         alert_service: Optional[GovernanceIntegrityMetricsAlertService] = None,
-        metrics_collector: Optional[GovernanceIntegrityMetricsCollector] = None
+        metrics_collector: Optional[GovernanceIntegrityMetricsCollector] = None,
+        metrics_retention_service: Optional[GovernanceIntegrityMetricsRetentionService] = None,
+        config_service: Optional[GovernanceIntegrityMetricsConfigService] = None
     ):
         self.worker = worker
         self.scheduler = scheduler
@@ -68,6 +77,8 @@ class GovernanceIntegrityDeliveryRuntime:
         self.metrics_service = metrics_service
         self.alert_service = alert_service
         self.metrics_collector = metrics_collector
+        self.metrics_retention_service = metrics_retention_service
+        self.config_service = config_service
 
         self._state = GovernanceIntegrityRuntimeState.STOPPED
         self._started_at: Optional[datetime] = None
@@ -169,6 +180,47 @@ class GovernanceIntegrityDeliveryRuntime:
 
         return dashboard_service.overview()
 
+    def reload_config(
+        self
+    ) -> Optional[GovernanceIntegrityMetricsConfig]:
+        """
+        Re-read metrics configuration from its source and apply it
+        to the collector, retention service, and metrics service,
+        without restarting the runtime.
+
+        Returns the newly loaded config, or None if no config
+        service is configured (a no-op in that case).
+        """
+
+        if self.config_service is None:
+
+            return None
+
+        config = self.config_service.reload()
+
+        if self.metrics_collector is not None:
+
+            self.metrics_collector.reconfigure(
+                interval_seconds=config.collection_interval_seconds
+            )
+
+        if self.metrics_retention_service is not None:
+
+            from datetime import timedelta
+
+            self.metrics_retention_service.reconfigure(
+                max_age=timedelta(days=config.max_history_age_days),
+                max_entries=config.max_history_entries
+            )
+
+        if self.metrics_service is not None:
+
+            self.metrics_service.set_auto_flush_enabled(
+                config.auto_flush
+            )
+
+        return config
+
     def _evaluate_alerts(
         self
     ):
@@ -194,6 +246,8 @@ class GovernanceIntegrityDeliveryRuntime:
         )
 
         self._validate_providers()
+
+        self.reload_config()
 
         if self.metrics_service is not None:
 
@@ -298,7 +352,9 @@ def build_integrity_delivery_runtime(
     clock=None,
     metrics_service=None,
     alert_service=None,
-    metrics_collector=None
+    metrics_collector=None,
+    metrics_retention_service=None,
+    config_service=None
 ) -> GovernanceIntegrityDeliveryRuntime:
 
     if clock is None:
@@ -356,5 +412,11 @@ def build_integrity_delivery_runtime(
             alert_service,
 
         metrics_collector=
-            metrics_collector
+            metrics_collector,
+
+        metrics_retention_service=
+            metrics_retention_service,
+
+        config_service=
+            config_service
     )

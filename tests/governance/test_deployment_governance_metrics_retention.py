@@ -283,3 +283,77 @@ class TestGovernanceIntegrityMetricsRetentionServiceOrdering:
             > remaining[1].captured_at
             > remaining[2].captured_at
         )
+
+
+class TestGovernanceIntegrityMetricsRetentionServiceReconfigure:
+
+    def test_reconfigure_max_entries_takes_effect(self):
+        repository = _repository_with_snapshots(5)
+
+        service = GovernanceIntegrityMetricsRetentionService(
+            repository, max_age=None, max_entries=10
+        )
+
+        service.reconfigure(max_entries=2)
+
+        assert service.retention_policy().max_entries == 2
+
+        service.prune()
+
+        assert len(repository.list()) == 2
+
+    def test_reconfigure_max_age_takes_effect(self):
+        repository = _repository_with_snapshots(5)
+
+        now = BASE_TIME + timedelta(days=4)
+
+        service = GovernanceIntegrityMetricsRetentionService(
+            repository, max_age=None, max_entries=None, clock=lambda: now
+        )
+
+        service.reconfigure(max_age=timedelta(days=2))
+
+        assert service.retention_policy().max_age == timedelta(days=2)
+
+        service.prune()
+
+        assert len(repository.list()) == 3
+
+    def test_reconfigure_omitted_fields_are_unchanged(self):
+        repository = InMemoryGovernanceIntegrityMetricsHistoryRepository()
+
+        service = GovernanceIntegrityMetricsRetentionService(
+            repository, max_age=timedelta(days=7), max_entries=100
+        )
+
+        service.reconfigure(max_entries=5)
+
+        policy = service.retention_policy()
+
+        assert policy.max_age == timedelta(days=7)
+        assert policy.max_entries == 5
+
+    def test_reconfigure_can_disable_a_rule_with_explicit_none(self):
+        repository = InMemoryGovernanceIntegrityMetricsHistoryRepository()
+
+        service = GovernanceIntegrityMetricsRetentionService(
+            repository, max_age=timedelta(days=7), max_entries=100
+        )
+
+        service.reconfigure(max_age=None)
+
+        policy = service.retention_policy()
+
+        assert policy.max_age is None
+        assert policy.max_entries == 100
+
+    def test_reconfigure_rejects_invalid_values(self):
+        repository = InMemoryGovernanceIntegrityMetricsHistoryRepository()
+
+        service = GovernanceIntegrityMetricsRetentionService(repository)
+
+        with pytest.raises(ValueError):
+            service.reconfigure(max_entries=-1)
+
+        with pytest.raises(ValueError):
+            service.reconfigure(max_age=timedelta(0))

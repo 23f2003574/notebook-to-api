@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .deployment_governance_metrics import (
@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 DEFAULT_COLLECTION_INTERVAL_SECONDS = 60.0
 
 DEFAULT_STOP_TIMEOUT_SECONDS = 5.0
+
+_UNSET = object()
 
 
 class GovernanceIntegrityMetricsCollector:
@@ -106,6 +108,38 @@ class GovernanceIntegrityMetricsCollector:
                 self._thread is not None
                 and self._thread.is_alive()
             )
+
+    def reconfigure(
+        self,
+        *,
+        interval_seconds: float | None = None,
+        retention_service: Any = _UNSET,
+    ) -> None:
+        """
+        Apply new settings without restarting the collector.
+
+        interval_seconds, if given, takes effect on the background
+        thread's next wait cycle: no restart is needed, but it does
+        not interrupt a wait already in progress, so if the previous
+        interval was long, the change is only visible after that
+        wait completes. retention_service, if explicitly passed
+        (including None, to clear it), replaces the configured
+        retention service and applies immediately to the next
+        collect_once() call, whether triggered by the background
+        thread or manually.
+        """
+
+        if interval_seconds is not None and interval_seconds <= 0:
+            raise ValueError(
+                "interval_seconds must be greater than zero"
+            )
+
+        with self._lock:
+            if interval_seconds is not None:
+                self._interval_seconds = interval_seconds
+
+            if retention_service is not _UNSET:
+                self._retention_service = retention_service
 
     def collect_once(
         self,

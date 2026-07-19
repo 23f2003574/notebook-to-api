@@ -447,3 +447,30 @@ class TestGovernanceIntegrityMetricsServiceHistory:
             service.capture_snapshot()
 
         assert len(service.history()) == 2
+
+
+class TestGovernanceIntegrityMetricsServiceSetAutoFlushEnabled:
+
+    def test_disable_auto_flush_stops_flushing_on_record(self):
+        repository = InMemoryGovernanceIntegrityMetricsRepository()
+
+        service = GovernanceIntegrityMetricsService(repository)
+
+        service.set_auto_flush_enabled(False)
+
+        service.record_success(10.0)
+
+        assert repository.load() is None
+
+    def test_enable_auto_flush_resumes_flushing_on_record(self):
+        repository = InMemoryGovernanceIntegrityMetricsRepository()
+
+        service = GovernanceIntegrityMetricsService(
+            repository, auto_flush_enabled=False
+        )
+
+        service.set_auto_flush_enabled(True)
+
+        service.record_success(10.0)
+
+        assert repository.load() is not None

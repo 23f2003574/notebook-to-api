@@ -320,6 +320,15 @@ class GovernanceIntegrityMetricsService:
         if self._auto_flush_enabled:
             self.flush()
 
+    def set_auto_flush_enabled(self, enabled: bool) -> None:
+        """
+        Enable or disable auto-flush after every mutating update,
+        without recreating the service.
+        """
+
+        with self._lock:
+            self._auto_flush_enabled = enabled
+
     def _record_duration_locked(self, duration_ms: float) -> None:
         """
         Update the running average duration with one new sample.

@@ -17,6 +17,12 @@ from backend.observability.deployment_governance_metrics_alerts import (
 from backend.observability.deployment_governance_metrics_collector import (
     GovernanceIntegrityMetricsCollector,
 )
+from backend.observability.deployment_governance_metrics_retention import (
+    GovernanceIntegrityMetricsRetentionService,
+)
+from backend.observability.deployment_governance_metrics_config import (
+    GovernanceIntegrityMetricsConfigService,
+)
 
 
 class TestGovernanceIntegrityRuntimeStatus:
@@ -1276,3 +1282,227 @@ class TestGovernanceIntegrityDeliveryRuntimeMetricsCollector:
         runtime.stop()
 
         assert metrics_collector.is_running() is False
+
+
+class TestGovernanceIntegrityDeliveryRuntimeConfigInjection:
+
+    def test_reload_config_without_config_service_returns_none(self):
+        worker = Mock()
+        scheduler = Mock()
+        provider_registry = Mock()
+        clock = Mock()
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+        )
+
+        assert runtime.reload_config() is None
+
+    def test_reload_config_injects_into_collector(self):
+        worker = Mock()
+        scheduler = Mock()
+        provider_registry = Mock()
+        clock = Mock()
+
+        metrics_service = GovernanceIntegrityMetricsService()
+        metrics_collector = GovernanceIntegrityMetricsCollector(
+            metrics_service, interval_seconds=60.0
+        )
+        config_service = GovernanceIntegrityMetricsConfigService(
+            environ={
+                "NOTEBOOK2API_GOVERNANCE_METRICS_COLLECTION_INTERVAL_SECONDS": (
+                    "15"
+                ),
+            }
+        )
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_service=metrics_service,
+            metrics_collector=metrics_collector,
+            config_service=config_service,
+        )
+
+        runtime.reload_config()
+
+        assert metrics_collector._interval_seconds == 15
+
+    def test_reload_config_injects_into_retention_service(self):
+        worker = Mock()
+        scheduler = Mock()
+        provider_registry = Mock()
+        clock = Mock()
+
+        from backend.observability.deployment_governance_metrics_history import (
+            InMemoryGovernanceIntegrityMetricsHistoryRepository,
+        )
+
+        metrics_service = GovernanceIntegrityMetricsService()
+        retention_service = GovernanceIntegrityMetricsRetentionService(
+            InMemoryGovernanceIntegrityMetricsHistoryRepository(),
+        )
+        config_service = GovernanceIntegrityMetricsConfigService(
+            environ={
+                "NOTEBOOK2API_GOVERNANCE_METRICS_MAX_HISTORY_ENTRIES": (
+                    "42"
+                ),
+                "NOTEBOOK2API_GOVERNANCE_METRICS_MAX_HISTORY_AGE_DAYS": (
+                    "3"
+                ),
+            }
+        )
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_service=metrics_service,
+            metrics_retention_service=retention_service,
+            config_service=config_service,
+        )
+
+        runtime.reload_config()
+
+        policy = retention_service.retention_policy()
+
+        assert policy.max_entries == 42
+        assert policy.max_age == timedelta(days=3)
+
+    def test_reload_config_injects_into_metrics_service(self):
+        worker = Mock()
+        scheduler = Mock()
+        provider_registry = Mock()
+        clock = Mock()
+
+        metrics_service = GovernanceIntegrityMetricsService()
+        config_service = GovernanceIntegrityMetricsConfigService(
+            environ={
+                "NOTEBOOK2API_GOVERNANCE_METRICS_AUTO_FLUSH": "false",
+            }
+        )
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_service=metrics_service,
+            config_service=config_service,
+        )
+
+        runtime.reload_config()
+
+        assert metrics_service._auto_flush_enabled is False
+
+    def test_reload_config_returns_the_new_config(self):
+        worker = Mock()
+        scheduler = Mock()
+        provider_registry = Mock()
+        clock = Mock()
+
+        config_service = GovernanceIntegrityMetricsConfigService(
+            environ={
+                "NOTEBOOK2API_GOVERNANCE_METRICS_COLLECTION_INTERVAL_SECONDS": (
+                    "77"
+                ),
+            }
+        )
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            config_service=config_service,
+        )
+
+        config = runtime.reload_config()
+
+        assert config.collection_interval_seconds == 77
+
+    def test_start_applies_config_automatically(self):
+        worker = Mock()
+        scheduler = Mock()
+        del scheduler.active_dispatch_count
+        provider_registry = Mock()
+        provider_registry.list_providers.return_value = []
+        clock = Mock()
+        clock.now.return_value = datetime.now(timezone.utc)
+
+        metrics_service = GovernanceIntegrityMetricsService()
+        metrics_collector = GovernanceIntegrityMetricsCollector(
+            metrics_service, interval_seconds=60.0
+        )
+        config_service = GovernanceIntegrityMetricsConfigService(
+            environ={
+                "NOTEBOOK2API_GOVERNANCE_METRICS_COLLECTION_INTERVAL_SECONDS": (
+                    "10"
+                ),
+            }
+        )
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_service=metrics_service,
+            metrics_collector=metrics_collector,
+            config_service=config_service,
+        )
+
+        runtime.start()
+
+        try:
+            assert metrics_collector._interval_seconds == 10
+
+        finally:
+            runtime.stop()
+
+    def test_reload_config_can_be_called_again_without_restart(self):
+        worker = Mock()
+        scheduler = Mock()
+        provider_registry = Mock()
+        clock = Mock()
+
+        metrics_service = GovernanceIntegrityMetricsService()
+        metrics_collector = GovernanceIntegrityMetricsCollector(
+            metrics_service, interval_seconds=60.0
+        )
+        environ = {
+            "NOTEBOOK2API_GOVERNANCE_METRICS_COLLECTION_INTERVAL_SECONDS": (
+                "20"
+            ),
+        }
+        config_service = GovernanceIntegrityMetricsConfigService(
+            environ=environ
+        )
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_service=metrics_service,
+            metrics_collector=metrics_collector,
+            config_service=config_service,
+        )
+
+        runtime.reload_config()
+
+        assert metrics_collector._interval_seconds == 20
+
+        environ[
+            "NOTEBOOK2API_GOVERNANCE_METRICS_COLLECTION_INTERVAL_SECONDS"
+        ] = "35"
+
+        runtime.reload_config()
+
+        assert metrics_collector._interval_seconds == 35
