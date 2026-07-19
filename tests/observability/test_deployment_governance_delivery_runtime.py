@@ -152,6 +152,7 @@ class TestGovernanceIntegrityDeliveryRuntime:
 
         worker = Mock()
         scheduler = Mock()
+        del scheduler.active_dispatch_count
         provider_registry = Mock()
         clock = Mock()
 
@@ -184,6 +185,7 @@ class TestGovernanceIntegrityDeliveryRuntime:
 
         worker = Mock()
         scheduler = Mock()
+        del scheduler.active_dispatch_count
         provider_registry = Mock()
         provider_registry.list_providers.return_value = []
         clock = Mock()
@@ -254,6 +256,7 @@ class TestGovernanceIntegrityDeliveryRuntime:
 
         worker = Mock()
         scheduler = Mock()
+        del scheduler.active_dispatch_count
         provider_registry = Mock()
         provider_registry.list_providers.return_value = []
         clock = Mock()
@@ -291,6 +294,7 @@ class TestGovernanceIntegrityDeliveryRuntime:
 
         worker = Mock()
         scheduler = Mock()
+        del scheduler.active_dispatch_count
         provider_registry = Mock()
         provider_registry.list_providers.return_value = []
         clock = Mock()
@@ -323,6 +327,7 @@ class TestGovernanceIntegrityDeliveryRuntime:
 
         worker = Mock()
         scheduler = Mock()
+        del scheduler.active_dispatch_count
         provider_registry = Mock()
         provider_registry.list_providers.return_value = []
         clock = Mock()
@@ -389,6 +394,7 @@ class TestGovernanceIntegrityDeliveryRuntime:
 
         worker = Mock()
         scheduler = Mock()
+        del scheduler.active_dispatch_count
         provider_registry = Mock()
         provider_registry.list_providers.return_value = []
         clock = Mock()
@@ -426,6 +432,7 @@ class TestGovernanceIntegrityDeliveryRuntime:
 
         worker = Mock()
         scheduler = Mock()
+        del scheduler.active_dispatch_count
         provider_registry = Mock()
         provider_registry.list_providers.return_value = []
         clock = Mock()
@@ -465,6 +472,7 @@ class TestGovernanceIntegrityDeliveryRuntime:
 
         worker = Mock()
         scheduler = Mock()
+        del scheduler.active_dispatch_count
         provider_registry = Mock()
         provider_registry.list_providers.return_value = []
         clock = Mock()

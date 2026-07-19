@@ -129,10 +129,6 @@ class GovernanceIntegrityDeliveryRuntime:
 
             return
 
-        if self._state == GovernanceIntegrityRuntimeState.STOPPING:
-
-            return
-
         self._state = (
             GovernanceIntegrityRuntimeState.STOPPING
         )
