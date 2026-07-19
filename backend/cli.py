@@ -163,6 +163,7 @@ from backend.observability.deployment_governance_notifications_cli import (
 )
 from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics,
+    run_deployment_governance_metrics_aggregate,
     run_deployment_governance_metrics_export,
     run_deployment_governance_metrics_export_csv,
     run_deployment_governance_metrics_export_json,
@@ -2505,6 +2506,52 @@ def main():
         help="Emit a machine-readable confirmation when --output is set.",
     )
 
+    notifications_metrics_aggregate_parser = (
+        notifications_metrics_subparsers.add_parser(
+            "aggregate",
+            help=(
+                "Aggregate captured notification delivery metrics "
+                "history over a time window."
+            ),
+        )
+    )
+    notifications_metrics_aggregate_parser.add_argument(
+        "--from",
+        default=None,
+        dest="range_start",
+        help=(
+            "ISO-8601 timezone-aware start of the window. Required "
+            "unless --hourly or --daily is given."
+        ),
+    )
+    notifications_metrics_aggregate_parser.add_argument(
+        "--to",
+        default=None,
+        dest="range_end",
+        help=(
+            "ISO-8601 timezone-aware end of the window. Required "
+            "unless --hourly or --daily is given."
+        ),
+    )
+    notifications_metrics_aggregate_parser.add_argument(
+        "--hourly",
+        action="store_true",
+        dest="hourly",
+        help="Bucket the window into consecutive 1-hour aggregates.",
+    )
+    notifications_metrics_aggregate_parser.add_argument(
+        "--daily",
+        action="store_true",
+        dest="daily",
+        help="Bucket the window into consecutive 1-day aggregates.",
+    )
+    notifications_metrics_aggregate_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
     channels_parser = audits_subparsers.add_parser(
         "channels",
         help="Manage governance audit notification delivery channels.",
@@ -4589,6 +4636,14 @@ def main():
                         exit_code = run_deployment_governance_metrics_export_csv(
                             include_history=args.include_history,
                             output_path=args.output_path,
+                            json_output=args.json_output,
+                        )
+                    elif metrics_subcommand == "aggregate":
+                        exit_code = run_deployment_governance_metrics_aggregate(
+                            start=args.range_start,
+                            end=args.range_end,
+                            hourly=args.hourly,
+                            daily=args.daily,
                             json_output=args.json_output,
                         )
                     else:

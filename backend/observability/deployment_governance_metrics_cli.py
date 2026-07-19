@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime
 from typing import TextIO
 
 from .deployment_governance_metrics import (
     GovernanceIntegrityMetrics,
+)
+from .deployment_governance_metrics_aggregation import (
+    GovernanceIntegrityMetricsAggregate,
+    GovernanceIntegrityMetricsAggregationService,
 )
 from .deployment_governance_metrics_history import (
     GovernanceIntegrityMetricsSnapshot,
@@ -14,6 +19,39 @@ from .deployment_governance_persistence import (
     build_deployment_governance_persistence,
     deployment_governance_persistence_config_from_env,
 )
+
+
+def parse_governance_metrics_timestamp(
+    value: str | None,
+) -> datetime | None:
+    """
+    Parse an optional ISO-8601 governance metrics timestamp. Raises
+    ValueError if the value is not valid ISO-8601 or is timezone
+    naive.
+    """
+
+    if value is None:
+        return None
+
+    normalized = value.strip()
+
+    if not normalized:
+        raise ValueError("timestamp must not be empty")
+
+    try:
+        parsed = datetime.fromisoformat(normalized)
+
+    except ValueError as exc:
+        raise ValueError(
+            "timestamp must be valid ISO-8601"
+        ) from exc
+
+    if parsed.tzinfo is None:
+        raise ValueError(
+            "timestamp must be timezone-aware"
+        )
+
+    return parsed
 
 
 def run_deployment_governance_metrics(
@@ -419,6 +457,140 @@ def _render_export_result(
 
     if not rendered.endswith("\n"):
         stdout.write("\n")
+
+
+def run_deployment_governance_metrics_aggregate(
+    *,
+    start: str | None = None,
+    end: str | None = None,
+    hourly: bool = False,
+    daily: bool = False,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and aggregate captured governance audit
+    notification delivery metrics history over a time window.
+
+    start/end are raw ISO-8601 strings (as received from the CLI's
+    --from/--to flags); parsing failures are reported the same way
+    as any other export failure. Without --hourly/--daily, both
+    start and end must be given and a single aggregate for that
+    exact window is produced. With --hourly or --daily, start/end
+    are optional and default to the full range of captured history.
+
+    Exit codes: 0 the aggregation succeeded, 2 it could not be
+    computed (including passing both --hourly and --daily, or
+    omitting --from/--to without either).
+    """
+
+    try:
+        if hourly and daily:
+            raise ValueError(
+                "--hourly and --daily are mutually exclusive"
+            )
+
+        parsed_start = parse_governance_metrics_timestamp(start)
+        parsed_end = parse_governance_metrics_timestamp(end)
+
+        if (
+            not hourly
+            and not daily
+            and (parsed_start is None or parsed_end is None)
+        ):
+            raise ValueError(
+                "--from and --to are required unless --hourly or "
+                "--daily is given"
+            )
+
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        aggregation_service = GovernanceIntegrityMetricsAggregationService(
+            runtime.build_integrity_metrics_history_repository()
+        )
+
+        if hourly:
+            aggregates = aggregation_service.hourly(
+                start=parsed_start, end=parsed_end
+            )
+
+        elif daily:
+            aggregates = aggregation_service.daily(
+                start=parsed_start, end=parsed_end
+            )
+
+        else:
+            aggregates = (
+                aggregation_service.between(
+                    parsed_start, parsed_end
+                ),
+            )
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        _render_aggregates_json(aggregates, stdout=stdout)
+
+    else:
+        _render_aggregates_human(aggregates, stdout=stdout)
+
+    return 0
+
+
+def _render_aggregates_human(
+    aggregates: tuple[GovernanceIntegrityMetricsAggregate, ...],
+    *,
+    stdout: TextIO,
+) -> None:
+    if not aggregates:
+        stdout.write("No governance metrics activity in this range.\n")
+
+        return
+
+    stdout.write("Governance Delivery Metrics Aggregation\n\n")
+
+    for aggregate in aggregates:
+        stdout.write(
+            f"Window: {aggregate.start.isoformat()} - "
+            f"{aggregate.end.isoformat()}\n"
+        )
+
+        stdout.write(f"  Dispatches: {aggregate.dispatches}\n")
+
+        stdout.write(f"  Successes: {aggregate.successes}\n")
+
+        stdout.write(f"  Failures: {aggregate.failures}\n")
+
+        stdout.write(f"  Retries: {aggregate.retries}\n")
+
+        stdout.write(
+            "  Average Duration: "
+            f"{aggregate.average_duration_ms:.0f} ms\n\n"
+        )
+
+
+def _render_aggregates_json(
+    aggregates: tuple[GovernanceIntegrityMetricsAggregate, ...],
+    *,
+    stdout: TextIO,
+) -> None:
+    json.dump(
+        [aggregate.to_dict() for aggregate in aggregates],
+        stdout,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+
+    stdout.write("\n")
 
 
 def _render_history_human(

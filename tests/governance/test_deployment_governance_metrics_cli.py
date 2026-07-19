@@ -5,6 +5,7 @@ from io import StringIO
 
 from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics,
+    run_deployment_governance_metrics_aggregate,
     run_deployment_governance_metrics_export,
     run_deployment_governance_metrics_export_csv,
     run_deployment_governance_metrics_export_json,
@@ -462,3 +463,132 @@ def test_export_with_empty_history(monkeypatch, tmp_path) -> None:
     payload = json.loads(stdout.getvalue())
 
     assert payload["history"] == []
+
+
+def test_aggregate_requires_range_without_bucket_flag(
+    monkeypatch, tmp_path
+) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-aggregate-missing.db")
+
+    stderr = StringIO()
+
+    exit_code = run_deployment_governance_metrics_aggregate(
+        stdout=StringIO(), stderr=stderr
+    )
+
+    assert exit_code == 2
+    assert "--from and --to" in stderr.getvalue()
+
+
+def test_aggregate_rejects_hourly_and_daily_together(
+    monkeypatch, tmp_path
+) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-aggregate-conflict.db")
+
+    stderr = StringIO()
+
+    exit_code = run_deployment_governance_metrics_aggregate(
+        hourly=True, daily=True, stdout=StringIO(), stderr=stderr
+    )
+
+    assert exit_code == 2
+    assert "mutually exclusive" in stderr.getvalue()
+
+
+def test_aggregate_rejects_naive_timestamps(
+    monkeypatch, tmp_path
+) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-aggregate-naive.db")
+
+    stderr = StringIO()
+
+    exit_code = run_deployment_governance_metrics_aggregate(
+        start="2026-01-01T00:00:00",
+        end="2026-01-02T00:00:00",
+        stdout=StringIO(),
+        stderr=stderr,
+    )
+
+    assert exit_code == 2
+    assert "timezone-aware" in stderr.getvalue()
+
+
+def test_aggregate_between_explicit_range(
+    monkeypatch, tmp_path
+) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-aggregate-between.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    runtime.build_integrity_metrics_service().record_success(100.0)
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_aggregate(
+        start="2020-01-01T00:00:00+00:00",
+        end="2030-01-01T00:00:00+00:00",
+        json_output=True,
+        stdout=stdout,
+        stderr=StringIO(),
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert len(payload) == 1
+    assert payload[0]["dispatches"] == 1
+
+
+def test_aggregate_hourly_defaults_to_full_history_range(
+    monkeypatch, tmp_path
+) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-aggregate-hourly.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    service = runtime.build_integrity_metrics_service()
+
+    # Two captures are needed: with only one snapshot ever recorded,
+    # the default range collapses to that single instant and it
+    # becomes its own baseline (zero-length, empty window).
+    service.record_success(100.0)
+    service.record_success(200.0)
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_aggregate(
+        hourly=True,
+        json_output=True,
+        stdout=stdout,
+        stderr=StringIO(),
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert len(payload) == 1
+    assert payload[0]["dispatches"] == 1
+
+
+def test_aggregate_daily_with_empty_history(
+    monkeypatch, tmp_path
+) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-aggregate-empty.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_aggregate(
+        daily=True,
+        json_output=True,
+        stdout=stdout,
+        stderr=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert json.loads(stdout.getvalue()) == []
