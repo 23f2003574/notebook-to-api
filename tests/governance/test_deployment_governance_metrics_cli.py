@@ -6,6 +6,8 @@ from io import StringIO
 from backend.observability.deployment_governance_metrics_cli import (
     run_deployment_governance_metrics,
     run_deployment_governance_metrics_aggregate,
+    run_deployment_governance_metrics_bootstrap,
+    run_deployment_governance_metrics_health,
     run_deployment_governance_metrics_alerts,
     run_deployment_governance_metrics_alerts_clear,
     run_deployment_governance_metrics_collector_collect,
@@ -1022,3 +1024,81 @@ def test_config_show_invalid_env_value_fails(monkeypatch) -> None:
     )
 
     assert exit_code == 2
+
+
+def test_health_reports_successful_initialization(
+    monkeypatch, tmp_path
+) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-health.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_health(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert payload["built"] is True
+    assert payload["initialized"] is True
+    assert payload["collector_running"] is True
+
+
+def test_health_reflects_active_alerts(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-health-alerts.db")
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    service = runtime.build_integrity_metrics_service()
+
+    for _ in range(9):
+        service.record_failure(10.0)
+
+    service.record_success(10.0)
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_health(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert payload["active_alerts"] >= 1
+
+
+def test_bootstrap_reports_success(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-bootstrap.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_bootstrap(
+        json_output=True, stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+
+    payload = json.loads(stdout.getvalue())
+
+    assert payload["status"] == "bootstrap succeeded"
+    assert payload["built"] is True
+    assert payload["initialized"] is True
+
+
+def test_bootstrap_human_output(monkeypatch, tmp_path) -> None:
+    setup_env(monkeypatch, tmp_path, "metrics-bootstrap-human.db")
+
+    stdout = StringIO()
+
+    exit_code = run_deployment_governance_metrics_bootstrap(
+        stdout=stdout, stderr=StringIO()
+    )
+
+    assert exit_code == 0
+    assert "bootstrapped successfully" in stdout.getvalue()

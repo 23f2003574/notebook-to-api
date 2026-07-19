@@ -12,6 +12,10 @@ from .deployment_governance_metrics_aggregation import (
     GovernanceIntegrityMetricsAggregate,
     GovernanceIntegrityMetricsAggregationService,
 )
+from .deployment_governance_metrics_bootstrap import (
+    GovernanceIntegrityMetricsBootstrap,
+    GovernanceIntegrityMetricsBootstrapHealth,
+)
 from .deployment_governance_metrics_collector import (
     GovernanceIntegrityMetricsCollector,
 )
@@ -1249,6 +1253,146 @@ def _render_config_human(
     )
 
     stdout.write(f"Auto Flush: {config.auto_flush}\n")
+
+
+def run_deployment_governance_metrics_health(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Build and initialize the full governance metrics subsystem,
+    report its resulting health, then shut it back down.
+
+    Exercises the entire bootstrap lifecycle (construction, wiring,
+    startup) as a health check: a failure anywhere in that sequence
+    is reported as a failed health check rather than left running.
+
+    Exit codes: 0 the subsystem initialized successfully, 2 it did
+    not.
+    """
+
+    try:
+        persistence_runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        bootstrap = GovernanceIntegrityMetricsBootstrap(
+            persistence_runtime
+        )
+
+        bootstrap.build()
+        bootstrap.initialize()
+
+        try:
+            health = bootstrap.health()
+
+        finally:
+            bootstrap.shutdown()
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            health.to_dict(),
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        _render_health_human(health, stdout=stdout)
+
+    return 0
+
+
+def run_deployment_governance_metrics_bootstrap(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Run the full governance metrics bootstrap sequence (build,
+    initialize, shut back down) and confirm it succeeded.
+
+    Useful as a deploy-time or CI smoke check that every metrics
+    dependency can still be constructed and wired correctly.
+
+    Exit codes: 0 the bootstrap sequence completed successfully, 2
+    it did not.
+    """
+
+    try:
+        persistence_runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        bootstrap = GovernanceIntegrityMetricsBootstrap(
+            persistence_runtime
+        )
+
+        bootstrap.build()
+        bootstrap.initialize()
+
+        try:
+            health = bootstrap.health()
+
+        finally:
+            bootstrap.shutdown()
+
+    except Exception as exc:
+        _render_metrics_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            {"status": "bootstrap succeeded", **health.to_dict()},
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write(
+            "Governance metrics subsystem bootstrapped "
+            "successfully.\n\n"
+        )
+
+        _render_health_human(health, stdout=stdout)
+
+    return 0
+
+
+def _render_health_human(
+    health: GovernanceIntegrityMetricsBootstrapHealth,
+    *,
+    stdout: TextIO,
+) -> None:
+    stdout.write("Governance Metrics Bootstrap Health\n\n")
+
+    stdout.write(f"Built: {health.built}\n")
+
+    stdout.write(f"Initialized: {health.initialized}\n")
+
+    stdout.write(f"Collector Running: {health.collector_running}\n")
+
+    stdout.write(f"Active Alerts: {health.active_alerts}\n")
 
 
 def _render_history_human(

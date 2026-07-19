@@ -23,6 +23,13 @@ from backend.observability.deployment_governance_metrics_retention import (
 from backend.observability.deployment_governance_metrics_config import (
     GovernanceIntegrityMetricsConfigService,
 )
+from backend.observability.deployment_governance_metrics_bootstrap import (
+    GovernanceIntegrityMetricsBootstrap,
+)
+from backend.observability.deployment_governance_persistence import (
+    build_deployment_governance_persistence,
+    deployment_governance_persistence_config_from_env,
+)
 
 
 class TestGovernanceIntegrityRuntimeStatus:
@@ -1506,3 +1513,141 @@ class TestGovernanceIntegrityDeliveryRuntimeConfigInjection:
         runtime.reload_config()
 
         assert metrics_collector._interval_seconds == 35
+
+
+class TestGovernanceIntegrityDeliveryRuntimeMetricsBootstrap:
+
+    def test_metrics_bootstrap_returns_none_when_not_given(self):
+        worker = Mock()
+        scheduler = Mock()
+        provider_registry = Mock()
+        clock = Mock()
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+        )
+
+        assert runtime.metrics_bootstrap() is None
+
+    def test_metrics_bootstrap_returns_the_given_instance(self):
+        worker = Mock()
+        scheduler = Mock()
+        provider_registry = Mock()
+        clock = Mock()
+
+        persistence_runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        bootstrap = GovernanceIntegrityMetricsBootstrap(
+            persistence_runtime
+        ).build()
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_bootstrap=bootstrap,
+        )
+
+        assert runtime.metrics_bootstrap() is bootstrap
+
+    def test_bootstrap_fills_in_unset_metrics_dependencies(self):
+        worker = Mock()
+        scheduler = Mock()
+        provider_registry = Mock()
+        clock = Mock()
+
+        persistence_runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        bootstrap = GovernanceIntegrityMetricsBootstrap(
+            persistence_runtime
+        ).build()
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_bootstrap=bootstrap,
+        )
+
+        assert runtime.metrics_service is bootstrap.metrics_service
+        assert runtime.alert_service is bootstrap.alert_service
+        assert runtime.metrics_collector is bootstrap.metrics_collector
+        assert (
+            runtime.metrics_retention_service
+            is bootstrap.retention_service
+        )
+        assert runtime.config_service is bootstrap.config_service
+
+    def test_explicit_dependency_overrides_bootstrap(self):
+        worker = Mock()
+        scheduler = Mock()
+        provider_registry = Mock()
+        clock = Mock()
+
+        persistence_runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        bootstrap = GovernanceIntegrityMetricsBootstrap(
+            persistence_runtime
+        ).build()
+
+        explicit_metrics_service = GovernanceIntegrityMetricsService()
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_service=explicit_metrics_service,
+            metrics_bootstrap=bootstrap,
+        )
+
+        assert runtime.metrics_service is explicit_metrics_service
+        assert runtime.metrics_service is not bootstrap.metrics_service
+        # Non-overridden dependencies still come from the bootstrap.
+        assert runtime.alert_service is bootstrap.alert_service
+
+    def test_runtime_lifecycle_with_bootstrap_end_to_end(self):
+        worker = Mock()
+        scheduler = Mock()
+        del scheduler.active_dispatch_count
+        provider_registry = Mock()
+        provider_registry.list_providers.return_value = []
+        clock = Mock()
+        clock.now.return_value = datetime.now(timezone.utc)
+
+        persistence_runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        bootstrap = GovernanceIntegrityMetricsBootstrap(
+            persistence_runtime
+        ).build()
+
+        runtime = GovernanceIntegrityDeliveryRuntime(
+            worker=worker,
+            scheduler=scheduler,
+            provider_registry=provider_registry,
+            clock=clock,
+            metrics_bootstrap=bootstrap,
+        )
+
+        runtime.start()
+
+        try:
+            assert runtime.metrics_collector.is_running() is True
+
+        finally:
+            runtime.stop()
+
+        assert runtime.metrics_collector.is_running() is False

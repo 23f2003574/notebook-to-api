@@ -25,6 +25,9 @@ from .deployment_governance_metrics_config import (
     GovernanceIntegrityMetricsConfig,
     GovernanceIntegrityMetricsConfigService,
 )
+from .deployment_governance_metrics_bootstrap import (
+    GovernanceIntegrityMetricsBootstrap,
+)
 
 
 class GovernanceIntegrityRuntimeState(
@@ -68,17 +71,51 @@ class GovernanceIntegrityDeliveryRuntime:
         alert_service: Optional[GovernanceIntegrityMetricsAlertService] = None,
         metrics_collector: Optional[GovernanceIntegrityMetricsCollector] = None,
         metrics_retention_service: Optional[GovernanceIntegrityMetricsRetentionService] = None,
-        config_service: Optional[GovernanceIntegrityMetricsConfigService] = None
+        config_service: Optional[GovernanceIntegrityMetricsConfigService] = None,
+        metrics_bootstrap: Optional[GovernanceIntegrityMetricsBootstrap] = None
     ):
         self.worker = worker
         self.scheduler = scheduler
         self.provider_registry = provider_registry
         self.clock = clock
+
+        # A given metrics_bootstrap replaces the previous pattern of
+        # wiring each metrics-related dependency independently: any
+        # of the five below that were not explicitly passed are
+        # filled in from it, but an explicit value always wins.
+        if metrics_bootstrap is not None:
+            metrics_service = (
+                metrics_service
+                if metrics_service is not None
+                else metrics_bootstrap.metrics_service
+            )
+            alert_service = (
+                alert_service
+                if alert_service is not None
+                else metrics_bootstrap.alert_service
+            )
+            metrics_collector = (
+                metrics_collector
+                if metrics_collector is not None
+                else metrics_bootstrap.metrics_collector
+            )
+            metrics_retention_service = (
+                metrics_retention_service
+                if metrics_retention_service is not None
+                else metrics_bootstrap.retention_service
+            )
+            config_service = (
+                config_service
+                if config_service is not None
+                else metrics_bootstrap.config_service
+            )
+
         self.metrics_service = metrics_service
         self.alert_service = alert_service
         self.metrics_collector = metrics_collector
         self.metrics_retention_service = metrics_retention_service
         self.config_service = config_service
+        self._metrics_bootstrap = metrics_bootstrap
 
         self._state = GovernanceIntegrityRuntimeState.STOPPED
         self._started_at: Optional[datetime] = None
@@ -179,6 +216,12 @@ class GovernanceIntegrityDeliveryRuntime:
         )
 
         return dashboard_service.overview()
+
+    def metrics_bootstrap(
+        self
+    ) -> Optional[GovernanceIntegrityMetricsBootstrap]:
+
+        return self._metrics_bootstrap
 
     def reload_config(
         self
@@ -354,7 +397,8 @@ def build_integrity_delivery_runtime(
     alert_service=None,
     metrics_collector=None,
     metrics_retention_service=None,
-    config_service=None
+    config_service=None,
+    metrics_bootstrap=None
 ) -> GovernanceIntegrityDeliveryRuntime:
 
     if clock is None:
@@ -418,5 +462,8 @@ def build_integrity_delivery_runtime(
             metrics_retention_service,
 
         config_service=
-            config_service
+            config_service,
+
+        metrics_bootstrap=
+            metrics_bootstrap
     )
