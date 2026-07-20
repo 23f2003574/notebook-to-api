@@ -63,6 +63,9 @@ if TYPE_CHECKING:
     from .deployment_governance_delivery_scheduler import (
         GovernanceIntegrityDeliveryScheduler,
     )
+    from .deployment_governance_logging import (
+        GovernanceIntegrityLogger,
+    )
 
 
 class GovernanceIntegrityDeliveryStatus(
@@ -406,6 +409,7 @@ class GovernanceIntegrityDeliveryEngine:
         scheduler: "GovernanceIntegrityDeliveryScheduler | None" = None,
         clock: Callable[[], datetime] | None = None,
         metrics_service: GovernanceIntegrityMetricsService | None = None,
+        logger: "GovernanceIntegrityLogger | None" = None,
     ) -> None:
         self._dispatch_repository = dispatch_repository
 
@@ -430,6 +434,8 @@ class GovernanceIntegrityDeliveryEngine:
         )
 
         self._metrics_service = metrics_service
+
+        self._logger = logger
 
     def deliver(
         self,
@@ -545,6 +551,15 @@ class GovernanceIntegrityDeliveryEngine:
                             f"scheduled in {decision.delay_seconds}s)"
                         )
 
+                        if self._logger is not None:
+                            self._logger.warning(
+                                "delivery_engine",
+                                "retry_scheduled",
+                                dispatch_id=dispatch.dispatch_id,
+                                retry_attempt=decision.retry_attempt,
+                                delay_seconds=decision.delay_seconds,
+                            )
+
                         if self._scheduler is not None:
                             self._schedule_retry_best_effort(
                                 dispatch.dispatch_id, decision
@@ -558,6 +573,14 @@ class GovernanceIntegrityDeliveryEngine:
                     (time.monotonic() - started_at) * 1000.0
                 )
 
+            if self._logger is not None:
+                self._logger.exception(
+                    "delivery_engine",
+                    "delivery_failed",
+                    dispatch_id=dispatch.dispatch_id,
+                    channel_name=dispatch.channel_name,
+                )
+
             return GovernanceIntegrityDeliveryResult(
                 dispatch_id=dispatch.dispatch_id,
                 channel_name=dispatch.channel_name,
@@ -569,6 +592,14 @@ class GovernanceIntegrityDeliveryEngine:
         if self._metrics_service is not None:
             self._metrics_service.record_success(
                 (time.monotonic() - started_at) * 1000.0
+            )
+
+        if self._logger is not None:
+            self._logger.info(
+                "delivery_engine",
+                "delivery_succeeded",
+                dispatch_id=dispatch.dispatch_id,
+                channel_name=dispatch.channel_name,
             )
 
         return GovernanceIntegrityDeliveryResult(

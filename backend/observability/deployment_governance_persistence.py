@@ -104,6 +104,9 @@ from .deployment_governance_metrics import (
 from .deployment_governance_metrics_alerts import (
     GovernanceIntegrityMetricsAlertService,
 )
+from .deployment_governance_logging import (
+    GovernanceIntegrityLogger,
+)
 from .deployment_governance_metrics_repository import (
     GovernanceIntegrityMetricsRepository,
     InMemoryGovernanceIntegrityMetricsRepository,
@@ -605,6 +608,16 @@ class DeploymentGovernancePersistenceRuntime:
     metrics_alert_service: GovernanceIntegrityMetricsAlertService = field(
         default_factory=GovernanceIntegrityMetricsAlertService
     )
+
+    logger: GovernanceIntegrityLogger = field(
+        default_factory=GovernanceIntegrityLogger
+    )
+
+    def __post_init__(self) -> None:
+        # metrics_service is constructed independently by its own
+        # default_factory above, so the shared logger is attached
+        # here rather than threaded through at construction time.
+        self.metrics_service.set_logger(self.logger)
 
     @property
     def durable(
@@ -1488,6 +1501,20 @@ class DeploymentGovernancePersistenceRuntime:
 
         return self.metrics_alert_service
 
+    def build_integrity_logger(
+        self,
+    ) -> GovernanceIntegrityLogger:
+        """
+        Return the shared governance structured logger.
+
+        Like build_integrity_metrics_service, this returns the
+        runtime's single stored instance rather than constructing a
+        new one, so every governance component that logs through it
+        shares one buffered history of recent activity.
+        """
+
+        return self.logger
+
     def build_integrity_retry_orchestrator(
         self,
     ) -> "GovernanceIntegrityRetryOrchestrator":
@@ -1549,6 +1576,7 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_retry_orchestrator(),
             scheduler=self.build_integrity_delivery_scheduler(),
             metrics_service=self.build_integrity_metrics_service(),
+            logger=self.build_integrity_logger(),
         )
 
     def build_integrity_delivery_worker(

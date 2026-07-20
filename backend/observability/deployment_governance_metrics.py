@@ -16,6 +16,9 @@ if TYPE_CHECKING:
     from .deployment_governance_metrics_export import (
         GovernanceIntegrityMetricsExportService,
     )
+    from .deployment_governance_logging import (
+        GovernanceIntegrityLogger,
+    )
 
 
 @dataclass(frozen=True)
@@ -94,6 +97,7 @@ class GovernanceIntegrityMetricsService:
             "GovernanceIntegrityMetricsHistoryRepository | None"
         ) = None,
         history_retention: int | None = None,
+        logger: "GovernanceIntegrityLogger | None" = None,
     ) -> None:
         self._lock = Lock()
 
@@ -113,6 +117,8 @@ class GovernanceIntegrityMetricsService:
 
         self._history_retention = history_retention
 
+        self._logger = logger
+
     def record_success(self, duration_ms: float) -> None:
         """
         Record one successful provider delivery and its duration.
@@ -126,6 +132,11 @@ class GovernanceIntegrityMetricsService:
         with self._lock:
             self._successful_dispatches += 1
             self._record_duration_locked(duration_ms)
+
+        if self._logger is not None:
+            self._logger.info(
+                "metrics", "record_success", duration_ms=duration_ms
+            )
 
         self.auto_flush()
 
@@ -143,6 +154,11 @@ class GovernanceIntegrityMetricsService:
             self._failed_dispatches += 1
             self._record_duration_locked(duration_ms)
 
+        if self._logger is not None:
+            self._logger.warning(
+                "metrics", "record_failure", duration_ms=duration_ms
+            )
+
         self.auto_flush()
 
     def record_retry(self) -> None:
@@ -152,6 +168,9 @@ class GovernanceIntegrityMetricsService:
 
         with self._lock:
             self._retry_dispatches += 1
+
+        if self._logger is not None:
+            self._logger.info("metrics", "record_retry")
 
         self.auto_flush()
 
@@ -328,6 +347,17 @@ class GovernanceIntegrityMetricsService:
 
         with self._lock:
             self._auto_flush_enabled = enabled
+
+    def set_logger(
+        self, logger: "GovernanceIntegrityLogger | None"
+    ) -> None:
+        """
+        Attach (or detach) a GovernanceIntegrityLogger after
+        construction, without recreating the service.
+        """
+
+        with self._lock:
+            self._logger = logger
 
     def _record_duration_locked(self, duration_ms: float) -> None:
         """

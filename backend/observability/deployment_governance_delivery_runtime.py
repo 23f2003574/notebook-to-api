@@ -28,6 +28,9 @@ from .deployment_governance_metrics_config import (
 from .deployment_governance_metrics_bootstrap import (
     GovernanceIntegrityMetricsBootstrap,
 )
+from .deployment_governance_logging import (
+    GovernanceIntegrityLogger,
+)
 
 
 class GovernanceIntegrityRuntimeState(
@@ -72,12 +75,14 @@ class GovernanceIntegrityDeliveryRuntime:
         metrics_collector: Optional[GovernanceIntegrityMetricsCollector] = None,
         metrics_retention_service: Optional[GovernanceIntegrityMetricsRetentionService] = None,
         config_service: Optional[GovernanceIntegrityMetricsConfigService] = None,
-        metrics_bootstrap: Optional[GovernanceIntegrityMetricsBootstrap] = None
+        metrics_bootstrap: Optional[GovernanceIntegrityMetricsBootstrap] = None,
+        logger: Optional[GovernanceIntegrityLogger] = None
     ):
         self.worker = worker
         self.scheduler = scheduler
         self.provider_registry = provider_registry
         self.clock = clock
+        self.logger = logger
 
         # A given metrics_bootstrap replaces the previous pattern of
         # wiring each metrics-related dependency independently: any
@@ -308,6 +313,12 @@ class GovernanceIntegrityDeliveryRuntime:
 
         self._started_at = self.clock.now()
 
+        if self.logger is not None:
+
+            self.logger.info(
+                "delivery_runtime", "runtime_started"
+            )
+
     def stop(
         self
     ):
@@ -336,6 +347,12 @@ class GovernanceIntegrityDeliveryRuntime:
 
         self._started_at = None
 
+        if self.logger is not None:
+
+            self.logger.info(
+                "delivery_runtime", "runtime_stopped"
+            )
+
     def run_iteration(
         self
     ):
@@ -346,7 +363,19 @@ class GovernanceIntegrityDeliveryRuntime:
                 "runtime is not running"
             )
 
-        self.worker.run_once()
+        try:
+
+            self.worker.run_once()
+
+        except Exception:
+
+            if self.logger is not None:
+
+                self.logger.exception(
+                    "delivery_runtime", "worker_iteration_failed"
+                )
+
+            raise
 
         self._worker_iterations += 1
 
@@ -398,7 +427,8 @@ def build_integrity_delivery_runtime(
     metrics_collector=None,
     metrics_retention_service=None,
     config_service=None,
-    metrics_bootstrap=None
+    metrics_bootstrap=None,
+    logger=None
 ) -> GovernanceIntegrityDeliveryRuntime:
 
     if clock is None:
@@ -465,5 +495,8 @@ def build_integrity_delivery_runtime(
             config_service,
 
         metrics_bootstrap=
-            metrics_bootstrap
+            metrics_bootstrap,
+
+        logger=
+            logger
     )

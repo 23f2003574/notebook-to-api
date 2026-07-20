@@ -1,0 +1,257 @@
+from __future__ import annotations
+
+import logging
+import sys
+import traceback
+from collections import deque
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from threading import Lock
+from typing import Any, Callable, Mapping
+
+_VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
+
+_LEVEL_TO_STDLIB = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+}
+
+DEFAULT_LOG_BUFFER_SIZE = 1000
+
+
+@dataclass(frozen=True)
+class GovernanceLogEntry:
+    """
+    One immutable structured log record emitted by a governance
+    component.
+    """
+
+    timestamp: datetime
+
+    level: str
+
+    component: str
+
+    event: str
+
+    fields: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        if self.timestamp.tzinfo is None:
+            raise ValueError(
+                "timestamp must be timezone-aware"
+            )
+
+        if self.level not in _VALID_LEVELS:
+            raise ValueError(
+                f"level must be one of {', '.join(_VALID_LEVELS)}"
+            )
+
+        if not self.component:
+            raise ValueError(
+                "component must not be empty"
+            )
+
+        if not self.event:
+            raise ValueError(
+                "event must not be empty"
+            )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "timestamp": self.timestamp.isoformat(),
+            "level": self.level,
+            "component": self.component,
+            "event": self.event,
+            "fields": dict(self.fields),
+        }
+
+
+class GovernanceIntegrityLogger:
+    """
+    Centralized structured logger for governance components.
+
+    Every call produces an immutable GovernanceLogEntry: a UTC
+    timestamp, a level, the emitting component's name, an event
+    name, and structured key/value fields. Entries are kept in a
+    bounded in-memory buffer (so a CLI or dashboard can tail recent
+    activity) and forwarded to a standard library logging.Logger for
+    real output, rather than ever calling print() directly. Safe to
+    share across concurrent governance services: every mutating call
+    is guarded by a single lock.
+    """
+
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], datetime] | None = None,
+        buffer_size: int = DEFAULT_LOG_BUFFER_SIZE,
+        sink: logging.Logger | None = None,
+    ) -> None:
+        if buffer_size < 1:
+            raise ValueError(
+                "buffer_size must be at least 1"
+            )
+
+        self._clock = clock or (
+            lambda: datetime.now(timezone.utc)
+        )
+
+        self._sink = sink or logging.getLogger(
+            "notebook2api.governance"
+        )
+
+        self._lock = Lock()
+
+        self._entries: "deque[GovernanceLogEntry]" = deque(
+            maxlen=buffer_size
+        )
+
+    def debug(
+        self,
+        component: str,
+        event: str,
+        **fields: Any,
+    ) -> GovernanceLogEntry:
+        """
+        Record one DEBUG-level structured entry.
+        """
+
+        return self._log("DEBUG", component, event, fields)
+
+    def info(
+        self,
+        component: str,
+        event: str,
+        **fields: Any,
+    ) -> GovernanceLogEntry:
+        """
+        Record one INFO-level structured entry.
+        """
+
+        return self._log("INFO", component, event, fields)
+
+    def warning(
+        self,
+        component: str,
+        event: str,
+        **fields: Any,
+    ) -> GovernanceLogEntry:
+        """
+        Record one WARNING-level structured entry.
+        """
+
+        return self._log("WARNING", component, event, fields)
+
+    def error(
+        self,
+        component: str,
+        event: str,
+        **fields: Any,
+    ) -> GovernanceLogEntry:
+        """
+        Record one ERROR-level structured entry.
+        """
+
+        return self._log("ERROR", component, event, fields)
+
+    def exception(
+        self,
+        component: str,
+        event: str,
+        **fields: Any,
+    ) -> GovernanceLogEntry:
+        """
+        Record one ERROR-level entry that also captures the
+        currently handled exception's traceback, if any.
+
+        Intended to be called from inside an except block, mirroring
+        logging.Logger.exception(). Outside of an except block (no
+        exception currently being handled), behaves exactly like
+        error().
+        """
+
+        exc_type, exc_value, exc_tb = sys.exc_info()
+
+        if exc_type is not None:
+            fields = {
+                **fields,
+                "exception": "".join(
+                    traceback.format_exception(
+                        exc_type, exc_value, exc_tb
+                    )
+                ).strip(),
+            }
+
+        return self._log("ERROR", component, event, fields)
+
+    def entries(
+        self,
+        limit: int | None = None,
+        level: str | None = None,
+    ) -> tuple[GovernanceLogEntry, ...]:
+        """
+        Return buffered log entries, newest first, optionally
+        filtered to one level and/or capped to the most recent
+        limit entries.
+        """
+
+        if level is not None and level not in _VALID_LEVELS:
+            raise ValueError(
+                f"level must be one of {', '.join(_VALID_LEVELS)}"
+            )
+
+        with self._lock:
+            snapshot = list(self._entries)
+
+        snapshot.reverse()
+
+        if level is not None:
+            snapshot = [
+                entry
+                for entry in snapshot
+                if entry.level == level
+            ]
+
+        if limit is not None:
+            snapshot = snapshot[:limit]
+
+        return tuple(snapshot)
+
+    def clear(self) -> None:
+        """
+        Discard every buffered entry. Does not affect the standard
+        library sink.
+        """
+
+        with self._lock:
+            self._entries.clear()
+
+    def _log(
+        self,
+        level: str,
+        component: str,
+        event: str,
+        fields: Mapping[str, Any],
+    ) -> GovernanceLogEntry:
+        entry = GovernanceLogEntry(
+            timestamp=self._clock(),
+            level=level,
+            component=component,
+            event=event,
+            fields=dict(fields),
+        )
+
+        with self._lock:
+            self._entries.append(entry)
+
+        self._sink.log(
+            _LEVEL_TO_STDLIB[level],
+            "%s: %s",
+            event,
+            entry.fields,
+        )
+
+        return entry

@@ -46,6 +46,9 @@ from backend.observability.deployment_governance_audit_replay_diff_cli import (
 from backend.observability.deployment_governance_audit_timeline_cli import (
     run_deployment_governance_audit_timeline,
 )
+from backend.observability.deployment_governance_logging_cli import (
+    run_deployment_governance_logging_tail,
+)
 from backend.observability.deployment_governance_audit_session_cli import (
     run_deployment_governance_audit_session,
 )
@@ -749,6 +752,57 @@ def main():
         help="Maximum number of timeline events to return. Default: all.",
     )
     timeline_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    logs_parser = audits_subparsers.add_parser(
+        "logs",
+        help="Inspect recent structured governance log entries.",
+        description=(
+            "Inspect the structured log entries recorded by "
+            "governance components (metrics, delivery engine, "
+            "delivery runtime) through the shared governance "
+            "logger.\n\n"
+            "This is read-only: it never emits a new log entry."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    logs_subparsers = logs_parser.add_subparsers(
+        dest="logs_command", required=True
+    )
+
+    logs_tail_parser = logs_subparsers.add_parser(
+        "tail",
+        help="Show the most recently buffered governance log entries.",
+        description=(
+            "Show the most recently buffered governance log entries, "
+            "newest first.\n\n"
+            "Exit codes: 0 the log tail was produced (even if empty), "
+            "2 it could not be (including an invalid --level)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    logs_tail_parser.add_argument(
+        "--level",
+        type=str,
+        default=None,
+        dest="level",
+        help=(
+            "Only show entries at this level (debug, info, warning, "
+            "error). Default: all levels."
+        ),
+    )
+    logs_tail_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        dest="limit",
+        help="Maximum number of log entries to return. Default: all.",
+    )
+    logs_tail_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -4406,6 +4460,14 @@ def main():
                     json_output=args.json_output,
                 )
                 sys.exit(exit_code)
+            if getattr(args, "audits_command", None) == "logs":
+                if args.logs_command == "tail":
+                    exit_code = run_deployment_governance_logging_tail(
+                        level=args.level,
+                        limit=args.limit,
+                        json_output=args.json_output,
+                    )
+                    sys.exit(exit_code)
             if getattr(args, "audits_command", None) == "session":
                 exit_code = run_deployment_governance_audit_session(
                     limit=args.limit,
