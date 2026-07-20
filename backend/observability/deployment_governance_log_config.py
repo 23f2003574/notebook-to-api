@@ -139,7 +139,13 @@ class GovernanceLogConfigService:
     without restarting the process.
 
     Every config the service ever holds is immutable and validated;
-    only the reference this service holds is ever swapped.
+    only the reference this service holds is ever swapped. This
+    already gives GovernanceLoggingBootstrap (see
+    deployment_governance_logging_bootstrap.py) its "fail fast on
+    invalid configuration" property for free: constructing this
+    service (and every reload()/update() call) validates through
+    GovernanceLogConfig.__post_init__ immediately, so the bootstrap
+    never has to separately re-check a config it has already loaded.
     """
 
     def __init__(

@@ -54,6 +54,9 @@ from .deployment_governance_log_config import (
     GovernanceLogConfig,
     GovernanceLogConfigService,
 )
+from .deployment_governance_logging_bootstrap import (
+    GovernanceLoggingBootstrap,
+)
 
 
 class GovernanceIntegrityRuntimeState(
@@ -106,12 +109,64 @@ class GovernanceIntegrityDeliveryRuntime:
         context_service: Optional[GovernanceLogContextService] = None,
         sampling_service: Optional[GovernanceLogSamplingService] = None,
         batcher: Optional[GovernanceLogBatcher] = None,
-        log_config_service: Optional[GovernanceLogConfigService] = None
+        log_config_service: Optional[GovernanceLogConfigService] = None,
+        logging_bootstrap: Optional[GovernanceLoggingBootstrap] = None
     ):
         self.worker = worker
         self.scheduler = scheduler
         self.provider_registry = provider_registry
         self.clock = clock
+
+        # A given logging_bootstrap replaces the previous pattern of
+        # wiring each logging-related dependency independently: any
+        # of the eight below that were not explicitly passed are
+        # filled in from it, but an explicit value always wins.
+        # correlation_service/search_service/export_service/
+        # replay_service are also on the bootstrap but have no
+        # corresponding attribute here to back-fill; reach them via
+        # logging_bootstrap() instead.
+        if logging_bootstrap is not None:
+            logger = (
+                logger
+                if logger is not None
+                else logging_bootstrap.logger
+            )
+            log_repository = (
+                log_repository
+                if log_repository is not None
+                else logging_bootstrap.log_repository
+            )
+            log_rotation_service = (
+                log_rotation_service
+                if log_rotation_service is not None
+                else logging_bootstrap.log_rotation_service
+            )
+            redaction_service = (
+                redaction_service
+                if redaction_service is not None
+                else logging_bootstrap.redaction_service
+            )
+            context_service = (
+                context_service
+                if context_service is not None
+                else logging_bootstrap.context_service
+            )
+            sampling_service = (
+                sampling_service
+                if sampling_service is not None
+                else logging_bootstrap.sampling_service
+            )
+            batcher = (
+                batcher
+                if batcher is not None
+                else logging_bootstrap.batcher
+            )
+            log_config_service = (
+                log_config_service
+                if log_config_service is not None
+                else logging_bootstrap.log_config_service
+            )
+
         self.logger = logger
         self.log_repository = log_repository
         self.log_rotation_service = log_rotation_service
@@ -120,6 +175,7 @@ class GovernanceIntegrityDeliveryRuntime:
         self.sampling_service = sampling_service
         self.batcher = batcher
         self.log_config_service = log_config_service
+        self._logging_bootstrap = logging_bootstrap
 
         # Wired immediately, not deferred to start(): redaction is a
         # security property of the logger and should take effect as
@@ -271,6 +327,12 @@ class GovernanceIntegrityDeliveryRuntime:
     ) -> Optional[GovernanceIntegrityMetricsBootstrap]:
 
         return self._metrics_bootstrap
+
+    def logging_bootstrap(
+        self
+    ) -> Optional[GovernanceLoggingBootstrap]:
+
+        return self._logging_bootstrap
 
     def reload_config(
         self
@@ -564,7 +626,8 @@ def build_integrity_delivery_runtime(
     context_service=None,
     sampling_service=None,
     batcher=None,
-    log_config_service=None
+    log_config_service=None,
+    logging_bootstrap=None
 ) -> GovernanceIntegrityDeliveryRuntime:
 
     if clock is None:
@@ -655,5 +718,8 @@ def build_integrity_delivery_runtime(
             batcher,
 
         log_config_service=
-            log_config_service
+            log_config_service,
+
+        logging_bootstrap=
+            logging_bootstrap
     )

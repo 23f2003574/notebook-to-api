@@ -68,6 +68,8 @@ from backend.observability.deployment_governance_logging_cli import (
     run_deployment_governance_logging_replay_next,
     run_deployment_governance_logging_config_show,
     run_deployment_governance_logging_config_reload,
+    run_deployment_governance_logging_bootstrap,
+    run_deployment_governance_logging_health,
 )
 from backend.observability.deployment_governance_audit_session_cli import (
     run_deployment_governance_audit_session,
@@ -1476,6 +1478,48 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     logs_config_reload_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    logs_bootstrap_parser = logs_subparsers.add_parser(
+        "bootstrap",
+        help=(
+            "Build, initialize, and shut down the governance "
+            "logging bootstrap."
+        ),
+        description=(
+            "Build and initialize a GovernanceLoggingBootstrap "
+            "(wiring and validating every logging component "
+            "together, then applying current configuration), report "
+            "the resulting health, then shut it down before "
+            "exiting.\n\n"
+            "Exit codes: 0 the bootstrap built, initialized, and "
+            "shut down cleanly, 2 it could not."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    logs_bootstrap_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    logs_health_parser = logs_subparsers.add_parser(
+        "health",
+        help="Report governance logging subsystem health.",
+        description=(
+            "Build and initialize a GovernanceLoggingBootstrap and "
+            "report its health, then shut it down before exiting.\n\n"
+            "Exit codes: 0 the health snapshot was produced, 2 it "
+            "could not be."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    logs_health_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -5315,6 +5359,18 @@ def main():
                             )
                         )
                         sys.exit(exit_code)
+                if args.logs_command == "bootstrap":
+                    exit_code = (
+                        run_deployment_governance_logging_bootstrap(
+                            json_output=args.json_output,
+                        )
+                    )
+                    sys.exit(exit_code)
+                if args.logs_command == "health":
+                    exit_code = run_deployment_governance_logging_health(
+                        json_output=args.json_output,
+                    )
+                    sys.exit(exit_code)
             if getattr(args, "audits_command", None) == "session":
                 exit_code = run_deployment_governance_audit_session(
                     limit=args.limit,

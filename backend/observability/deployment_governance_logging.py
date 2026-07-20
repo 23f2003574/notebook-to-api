@@ -248,6 +248,17 @@ class GovernanceIntegrityLogger:
 
         return self._log("ERROR", component, event, fields)
 
+    def buffered_count(self) -> int:
+        """
+        Return how many entries are currently held in the in-memory
+        buffer, without materializing them into a snapshot the way
+        entries() does. Intended for lightweight health reporting
+        (see GovernanceLoggingBootstrap.health()).
+        """
+
+        with self._lock:
+            return len(self._entries)
+
     def entries(
         self,
         limit: int | None = None,

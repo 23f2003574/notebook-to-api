@@ -14,6 +14,10 @@ from .deployment_governance_log_sampling import (
 from .deployment_governance_log_config import (
     GovernanceLogConfig,
 )
+from .deployment_governance_logging_bootstrap import (
+    GovernanceLoggingBootstrapHealth,
+    build_integrity_logging_bootstrap,
+)
 from .deployment_governance_persistence import (
     build_deployment_governance_persistence,
     deployment_governance_persistence_config_from_env,
@@ -1335,6 +1339,144 @@ def _render_logging_config_human(
     stdout.write(f"Sampling Enabled: {config.enable_sampling}\n")
 
     stdout.write(f"Redaction Enabled: {config.enable_redaction}\n")
+
+
+def run_deployment_governance_logging_bootstrap(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence, build and initialize a
+    GovernanceLoggingBootstrap for it (wiring and validating every
+    logging component together, then applying current
+    configuration), report the resulting health, then shut it down
+    (flushing any pending batch entries) before exiting.
+
+    Exit codes: 0 the bootstrap built, initialized, and shut down
+    cleanly, 2 it could not (including a missing dependency or
+    invalid configuration).
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        bootstrap = build_integrity_logging_bootstrap(runtime)
+
+        bootstrap.initialize()
+
+        health = bootstrap.health()
+
+        bootstrap.shutdown()
+
+    except Exception as exc:
+        _render_logging_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            health.to_dict(),
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write("Governance Logging Bootstrap\n\n")
+
+        stdout.write(
+            "Built, initialized, and shut down successfully.\n\n"
+        )
+
+        _render_logging_bootstrap_health_human(health, stdout=stdout)
+
+    return 0
+
+
+def run_deployment_governance_logging_health(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence, build and initialize a
+    GovernanceLoggingBootstrap for it, and report its health, then
+    shut it down (flushing any pending batch entries) before
+    exiting.
+
+    Exit codes: 0 the health snapshot was produced, 2 it could not
+    be (including a missing dependency or invalid configuration).
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        bootstrap = build_integrity_logging_bootstrap(runtime)
+
+        bootstrap.initialize()
+
+        health = bootstrap.health()
+
+        bootstrap.shutdown()
+
+    except Exception as exc:
+        _render_logging_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            health.to_dict(),
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write("Governance Logging Health\n\n")
+
+        _render_logging_bootstrap_health_human(health, stdout=stdout)
+
+    return 0
+
+
+def _render_logging_bootstrap_health_human(
+    health: "GovernanceLoggingBootstrapHealth",
+    *,
+    stdout: TextIO,
+) -> None:
+    stdout.write(f"Built: {health.built}\n")
+
+    stdout.write(f"Initialized: {health.initialized}\n")
+
+    stdout.write(
+        f"Dependencies Valid: {health.dependencies_valid}\n"
+    )
+
+    stdout.write(
+        f"Pending Batch Count: {health.pending_batch_count}\n"
+    )
+
+    stdout.write(
+        f"Buffered Entry Count: {health.buffered_entry_count}\n"
+    )
 
 
 def _render_logging_human(
