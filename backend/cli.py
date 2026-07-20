@@ -56,6 +56,8 @@ from backend.observability.deployment_governance_logging_cli import (
     run_deployment_governance_logging_export_json,
     run_deployment_governance_logging_export_csv,
     run_deployment_governance_logging_export_ndjson,
+    run_deployment_governance_logging_redaction_rules,
+    run_deployment_governance_logging_redaction_test,
 )
 from backend.observability.deployment_governance_audit_session_cli import (
     run_deployment_governance_audit_session,
@@ -1120,6 +1122,59 @@ def main():
                 "timestamp (inclusive)."
             ),
         )
+
+    logs_redaction_parser = logs_subparsers.add_parser(
+        "redaction",
+        help="Inspect and test governance log redaction rules.",
+        description=(
+            "Inspect the rules governance log redaction applies "
+            "before entries are persisted or exported."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    redaction_subparsers = logs_redaction_parser.add_subparsers(
+        dest="redaction_command", required=True
+    )
+
+    redaction_rules_parser = redaction_subparsers.add_parser(
+        "rules",
+        help="List the currently registered redaction rules.",
+        description=(
+            "List the currently registered governance log "
+            "redaction rules (field name and replacement).\n\n"
+            "Exit codes: 0 the rules were retrieved, 2 they could "
+            "not be."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    redaction_rules_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    redaction_test_parser = redaction_subparsers.add_parser(
+        "test",
+        help=(
+            "Show what the current redaction rules would do to a "
+            "sample payload."
+        ),
+        description=(
+            "Show what the currently configured redaction rules "
+            "would do to a built-in sample payload covering every "
+            "default-sensitive field name plus a nested example. "
+            "Never logs, persists, or exports anything.\n\n"
+            "Exit codes: 0 the test ran, 2 it could not."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    redaction_test_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
 
     session_parser = audits_subparsers.add_parser(
         "session",
@@ -4865,6 +4920,21 @@ def main():
                         until=until,
                     )
                     sys.exit(exit_code)
+                if args.logs_command == "redaction":
+                    if args.redaction_command == "rules":
+                        exit_code = (
+                            run_deployment_governance_logging_redaction_rules(
+                                json_output=args.json_output,
+                            )
+                        )
+                        sys.exit(exit_code)
+                    if args.redaction_command == "test":
+                        exit_code = (
+                            run_deployment_governance_logging_redaction_test(
+                                json_output=args.json_output,
+                            )
+                        )
+                        sys.exit(exit_code)
             if getattr(args, "audits_command", None) == "session":
                 exit_code = run_deployment_governance_audit_session(
                     limit=args.limit,

@@ -3,11 +3,15 @@ from __future__ import annotations
 import csv
 import json
 from datetime import datetime
-from typing import TYPE_CHECKING, TextIO
+from typing import Iterator, TYPE_CHECKING, TextIO
 
 if TYPE_CHECKING:
+    from .deployment_governance_logging import GovernanceLogEntry
     from .deployment_governance_log_search import (
         GovernanceLogSearchService,
+    )
+    from .deployment_governance_log_redaction import (
+        GovernanceLogRedactionService,
     )
 
 _CSV_FIELDNAMES = (
@@ -33,13 +37,46 @@ class GovernanceLogExportService:
     large history does not require it to fit in memory all at once.
     Entries are written in the order iter_search yields them (newest
     first) and are never reordered.
+
+    When a redaction_service is given, every entry is redacted
+    immediately before it is written, regardless of whether it was
+    already redacted before persistence: this is a second,
+    independent layer of protection, so entries written to the
+    repository before redaction was configured (or by a caller that
+    bypassed the logger entirely) are still never exported with
+    sensitive values intact.
     """
 
     def __init__(
         self,
         search_service: "GovernanceLogSearchService",
+        *,
+        redaction_service: (
+            "GovernanceLogRedactionService | None"
+        ) = None,
     ) -> None:
         self._search_service = search_service
+
+        self._redaction_service = redaction_service
+
+    def _iter_entries(
+        self,
+        *,
+        level: str | None,
+        component: str | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> Iterator["GovernanceLogEntry"]:
+        for entry in self._search_service.iter_search(
+            level=level,
+            component=component,
+            since=since,
+            until=until,
+        ):
+            if self._redaction_service is not None:
+                entry = self._redaction_service.redact(entry)
+
+            yield entry
 
     def export_json(
         self,
@@ -63,7 +100,7 @@ class GovernanceLogExportService:
 
         count = 0
 
-        for entry in self._search_service.iter_search(
+        for entry in self._iter_entries(
             level=level,
             component=component,
             since=since,
@@ -98,7 +135,7 @@ class GovernanceLogExportService:
 
         count = 0
 
-        for entry in self._search_service.iter_search(
+        for entry in self._iter_entries(
             level=level,
             component=component,
             since=since,
@@ -138,7 +175,7 @@ class GovernanceLogExportService:
 
         count = 0
 
-        for entry in self._search_service.iter_search(
+        for entry in self._iter_entries(
             level=level,
             component=component,
             since=since,

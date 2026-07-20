@@ -13,6 +13,9 @@ if TYPE_CHECKING:
     from .deployment_governance_log_repository import (
         GovernanceLogRepository,
     )
+    from .deployment_governance_log_redaction import (
+        GovernanceLogRedactionService,
+    )
 
 _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
@@ -95,6 +98,9 @@ class GovernanceIntegrityLogger:
         buffer_size: int = DEFAULT_LOG_BUFFER_SIZE,
         sink: logging.Logger | None = None,
         repository: "GovernanceLogRepository | None" = None,
+        redaction_service: (
+            "GovernanceLogRedactionService | None"
+        ) = None,
     ) -> None:
         if buffer_size < 1:
             raise ValueError(
@@ -116,6 +122,8 @@ class GovernanceIntegrityLogger:
         )
 
         self._repository = repository
+
+        self._redaction_service = redaction_service
 
     def debug(
         self,
@@ -294,6 +302,18 @@ class GovernanceIntegrityLogger:
         with self._lock:
             self._repository = repository
 
+    def set_redaction_service(
+        self,
+        redaction_service: "GovernanceLogRedactionService | None",
+    ) -> None:
+        """
+        Attach (or detach) a GovernanceLogRedactionService after
+        construction, without recreating the logger.
+        """
+
+        with self._lock:
+            self._redaction_service = redaction_service
+
     def _log(
         self,
         level: str,
@@ -308,6 +328,15 @@ class GovernanceIntegrityLogger:
             event=event,
             fields=dict(fields),
         )
+
+        with self._lock:
+            redaction_service = self._redaction_service
+
+        if redaction_service is not None:
+            # Redacted before it ever reaches the in-memory buffer or
+            # a configured repository: neither should ever hold a
+            # sensitive value, even transiently.
+            entry = redaction_service.redact(entry)
 
         with self._lock:
             self._entries.append(entry)

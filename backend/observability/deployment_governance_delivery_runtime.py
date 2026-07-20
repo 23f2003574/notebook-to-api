@@ -37,6 +37,9 @@ from .deployment_governance_log_repository import (
 from .deployment_governance_log_rotation import (
     GovernanceLogRotationService,
 )
+from .deployment_governance_log_redaction import (
+    GovernanceLogRedactionService,
+)
 
 
 class GovernanceIntegrityRuntimeState(
@@ -84,7 +87,8 @@ class GovernanceIntegrityDeliveryRuntime:
         metrics_bootstrap: Optional[GovernanceIntegrityMetricsBootstrap] = None,
         logger: Optional[GovernanceIntegrityLogger] = None,
         log_repository: Optional[GovernanceLogRepository] = None,
-        log_rotation_service: Optional[GovernanceLogRotationService] = None
+        log_rotation_service: Optional[GovernanceLogRotationService] = None,
+        redaction_service: Optional[GovernanceLogRedactionService] = None
     ):
         self.worker = worker
         self.scheduler = scheduler
@@ -93,6 +97,14 @@ class GovernanceIntegrityDeliveryRuntime:
         self.logger = logger
         self.log_repository = log_repository
         self.log_rotation_service = log_rotation_service
+        self.redaction_service = redaction_service
+
+        # Wired immediately, not deferred to start(): redaction is a
+        # security property of the logger and should take effect as
+        # soon as both are configured together, regardless of
+        # whether/when this runtime is started.
+        if self.logger is not None and self.redaction_service is not None:
+            self.logger.set_redaction_service(self.redaction_service)
 
         # A given metrics_bootstrap replaces the previous pattern of
         # wiring each metrics-related dependency independently: any
@@ -444,7 +456,8 @@ def build_integrity_delivery_runtime(
     metrics_bootstrap=None,
     logger=None,
     log_repository=None,
-    log_rotation_service=None
+    log_rotation_service=None,
+    redaction_service=None
 ) -> GovernanceIntegrityDeliveryRuntime:
 
     if clock is None:
@@ -520,5 +533,8 @@ def build_integrity_delivery_runtime(
             log_repository,
 
         log_rotation_service=
-            log_rotation_service
+            log_rotation_service,
+
+        redaction_service=
+            redaction_service
     )

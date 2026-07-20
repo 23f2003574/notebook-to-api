@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, TextIO
 
@@ -11,6 +11,18 @@ from .deployment_governance_persistence import (
     build_deployment_governance_persistence,
     deployment_governance_persistence_config_from_env,
 )
+
+_REDACTION_TEST_SAMPLE_FIELDS = {
+    "password": "hunter2",
+    "token": "abc123",
+    "secret": "s3cr3t",
+    "api_key": "sk-live-xyz",
+    "authorization": "Bearer abc.def.ghi",
+    "cookie": "session=xyz",
+    "username": "alice",
+    "headers": {"Authorization": "Bearer nested-token"},
+    "items": [{"token": "nested-list-token"}, "plain-string"],
+}
 
 
 def run_deployment_governance_logging_tail(
@@ -489,6 +501,147 @@ def _run_logging_export(
         f"Exported {count} governance log "
         f"entr{'y' if count == 1 else 'ies'} to {path}.\n"
     )
+
+    return 0
+
+
+def run_deployment_governance_logging_redaction_rules(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and list the currently registered
+    governance log redaction rules.
+
+    This is a read-only inspection command: it never registers,
+    unregisters, or applies a rule. Exit codes: 0 the rules were
+    retrieved, 2 they could not be.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        rules = (
+            runtime
+            .build_integrity_log_redaction_service()
+            .list_rules()
+        )
+
+    except Exception as exc:
+        _render_logging_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            [rule.to_dict() for rule in rules],
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write("Governance Log Redaction Rules\n\n")
+
+        if not rules:
+            stdout.write("No redaction rules are configured.\n")
+
+        else:
+            for rule in rules:
+                stdout.write(
+                    f"{rule.field} -> {rule.replacement}\n"
+                )
+
+    return 0
+
+
+def run_deployment_governance_logging_redaction_test(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and show what the currently configured
+    governance log redaction rules would do to a built-in sample
+    payload covering every default-sensitive field name plus a
+    nested example (a dict-in-a-dict and a list of dicts).
+
+    This never logs, persists, or exports anything: it only runs
+    the configured rules against the sample in memory, so it is
+    safe to use to sanity-check a custom rule set. Exit codes: 0 the
+    test ran, 2 it could not.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        redaction_service = (
+            runtime.build_integrity_log_redaction_service()
+        )
+
+        sample_entry = GovernanceLogEntry(
+            timestamp=datetime.now(timezone.utc),
+            level="INFO",
+            component="redaction-test",
+            event="sample",
+            fields=_REDACTION_TEST_SAMPLE_FIELDS,
+        )
+
+        redacted_entry = redaction_service.redact(sample_entry)
+
+    except Exception as exc:
+        _render_logging_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            {
+                "before": dict(sample_entry.fields),
+                "after": dict(redacted_entry.fields),
+            },
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write("Governance Log Redaction Test\n\n")
+
+        stdout.write("Before:\n")
+
+        stdout.write(
+            json.dumps(
+                sample_entry.fields, indent=2, ensure_ascii=False
+            )
+        )
+
+        stdout.write("\n\nAfter:\n")
+
+        stdout.write(
+            json.dumps(
+                redacted_entry.fields, indent=2, ensure_ascii=False
+            )
+        )
+
+        stdout.write("\n")
 
     return 0
 

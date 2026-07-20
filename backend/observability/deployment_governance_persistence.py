@@ -122,6 +122,9 @@ from .deployment_governance_log_repository import (
 from .deployment_governance_log_rotation import (
     GovernanceLogRotationService,
 )
+from .deployment_governance_log_redaction import (
+    GovernanceLogRedactionService,
+)
 from .deployment_governance_log_search import (
     GovernanceLogSearchService,
 )
@@ -637,6 +640,10 @@ class DeploymentGovernancePersistenceRuntime:
         init=False
     )
 
+    redaction_service: GovernanceLogRedactionService = field(
+        default_factory=GovernanceLogRedactionService
+    )
+
     def __post_init__(self) -> None:
         # metrics_service and logger are each constructed
         # independently by their own default_factory above, so the
@@ -647,6 +654,8 @@ class DeploymentGovernancePersistenceRuntime:
         self.metrics_service.set_logger(self.logger)
 
         self.logger.set_repository(self.log_repository)
+
+        self.logger.set_redaction_service(self.redaction_service)
 
         object.__setattr__(
             self,
@@ -1600,19 +1609,39 @@ class DeploymentGovernancePersistenceRuntime:
 
         return GovernanceLogSearchService(self.log_repository)
 
+    def build_integrity_log_redaction_service(
+        self,
+    ) -> GovernanceLogRedactionService:
+        """
+        Return the shared governance log redaction service.
+
+        Like build_integrity_logger, this returns the runtime's
+        single stored instance. It is already attached to the
+        logger (see __post_init__), so registering or unregistering
+        a rule here takes effect for every future logged entry too.
+        """
+
+        return self.redaction_service
+
     def build_integrity_log_export_service(
         self,
     ) -> GovernanceLogExportService:
         """
         Build a governance log export service bound to a fresh
-        search service over the shared log repository.
+        search service over the shared log repository, and the
+        shared redaction service: exported entries are redacted a
+        second time on the way out, independent of whether they were
+        already redacted before persistence.
 
         Like build_integrity_log_search_service, this constructs a
         new (stateless) instance on every call.
         """
 
         return GovernanceLogExportService(
-            self.build_integrity_log_search_service()
+            self.build_integrity_log_search_service(),
+            redaction_service=(
+                self.build_integrity_log_redaction_service()
+            ),
         )
 
     def build_integrity_retry_orchestrator(
