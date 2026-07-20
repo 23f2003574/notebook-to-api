@@ -1102,6 +1102,119 @@ def run_deployment_governance_logging_pending(
     return 0
 
 
+def run_deployment_governance_logging_replay(
+    *,
+    since: datetime | None = None,
+    event: str | None = None,
+    limit: int | None = None,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and replay the durable governance log
+    history chronologically (oldest first), optionally starting
+    from --from and/or filtered to one --event, optionally capped
+    to the first --limit matching entries.
+
+    Read-only: never mutates stored logs. Exit codes: 0 the replay
+    was produced (even if empty), 2 it could not be.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        replay_service = runtime.build_integrity_log_replay_service(
+            since=since, event=event
+        )
+
+        entries = replay_service.replay(limit=limit)
+
+    except Exception as exc:
+        _render_logging_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        _render_logging_json(entries, stdout=stdout)
+
+    else:
+        _render_logging_human(entries, stdout=stdout)
+
+    return 0
+
+
+def run_deployment_governance_logging_replay_next(
+    *,
+    since: datetime | None = None,
+    event: str | None = None,
+    limit: int | None = None,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence, build a replay scoped to --from/--event,
+    and advance its cursor by up to --limit (default 1) entries,
+    reporting them plus the resulting cursor.
+
+    Each invocation is a fresh process, so the cursor always starts
+    at position 0: this demonstrates next()'s progression within one
+    call rather than resuming a previous invocation's position (for
+    that, use GovernanceLogReplayService directly within one
+    process). Read-only: never mutates stored logs. Exit codes: 0
+    the call succeeded (even if nothing matched), 2 it could not.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        replay_service = runtime.build_integrity_log_replay_service(
+            since=since, event=event
+        )
+
+        entries = replay_service.next(limit=limit or 1)
+
+        cursor = replay_service.cursor()
+
+    except Exception as exc:
+        _render_logging_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            {
+                "entries": [entry.to_dict() for entry in entries],
+                "cursor": cursor.to_dict(),
+            },
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        _render_logging_human(entries, stdout=stdout)
+
+        stdout.write(
+            f"\nCursor: position={cursor.position} "
+            f"timestamp={cursor.timestamp}\n"
+        )
+
+    return 0
+
+
 def _render_logging_human(
     entries: tuple[GovernanceLogEntry, ...],
     *,

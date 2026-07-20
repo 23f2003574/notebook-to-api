@@ -51,6 +51,13 @@ class GovernanceLogRepository(Protocol):
     invoked: a sampled-out entry simply never reaches this
     repository at all. Implementations have no sampling awareness of
     their own and always durably persist whatever they are given.
+
+    Replay (see
+    deployment_governance_log_replay.GovernanceLogReplayService)
+    is likewise entirely a read-only, caller-side concern layered on
+    top of search()/count(): this repository has no notion of replay
+    cursors or streams of its own, and nothing here is ever mutated
+    by replaying.
     """
 
     def append(

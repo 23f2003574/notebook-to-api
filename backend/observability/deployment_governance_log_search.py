@@ -187,3 +187,45 @@ class GovernanceLogSearchService:
                 return
 
             offset += batch_size
+
+    def chronological(
+        self,
+        *,
+        level: str | None = None,
+        component: str | None = None,
+        event: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int | None = None,
+    ) -> tuple["GovernanceLogEntry", ...]:
+        """
+        Return matching entries oldest first (unlike every other
+        method here, which returns newest first) -- the natural
+        order for replaying a captured log stream from the
+        beginning. limit caps the OLDEST limit matching entries (the
+        start of the stream), not the newest.
+
+        Streams the underlying newest-first pages via iter_search()
+        rather than issuing one unbounded query, but still
+        materializes the full matching set before reversing it, so
+        this is meant for offline replay/inspection of a bounded
+        history, not a hot path over unbounded data.
+        """
+
+        newest_first = tuple(
+            self.iter_search(
+                level=level,
+                component=component,
+                event=event,
+                since=since,
+                until=until,
+            )
+        )
+
+        oldest_first = tuple(reversed(newest_first))
+
+        return (
+            oldest_first
+            if limit is None
+            else oldest_first[:limit]
+        )

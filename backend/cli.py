@@ -64,6 +64,8 @@ from backend.observability.deployment_governance_logging_cli import (
     run_deployment_governance_logging_sampling_update,
     run_deployment_governance_logging_flush,
     run_deployment_governance_logging_pending,
+    run_deployment_governance_logging_replay,
+    run_deployment_governance_logging_replay_next,
 )
 from backend.observability.deployment_governance_audit_session_cli import (
     run_deployment_governance_audit_session,
@@ -1352,6 +1354,79 @@ def main():
         dest="json_output",
         help="Emit machine-readable JSON output.",
     )
+
+    logs_replay_parser = logs_subparsers.add_parser(
+        "replay",
+        help=(
+            "Replay the durable governance log history "
+            "chronologically."
+        ),
+        description=(
+            "Replay the durable governance log history "
+            "chronologically (oldest first), optionally starting "
+            "from --from and/or filtered to one --event, optionally "
+            "capped to the first --limit matching entries.\n\n"
+            "Read-only: never mutates stored logs.\n\n"
+            "Exit codes: 0 the replay was produced (even if empty), "
+            "2 it could not be."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    logs_replay_next_parser = logs_subparsers.add_parser(
+        "replay-next",
+        help=(
+            "Advance a governance log replay cursor and show what "
+            "it returns."
+        ),
+        description=(
+            "Build a governance log replay scoped to --from/--event "
+            "and advance its cursor by up to --limit (default 1) "
+            "entries, reporting them plus the resulting cursor.\n\n"
+            "Each invocation is a fresh process, so the cursor "
+            "always starts at position 0.\n\n"
+            "Read-only: never mutates stored logs.\n\n"
+            "Exit codes: 0 the call succeeded (even if nothing "
+            "matched), 2 it could not."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    for replay_parser in (
+        logs_replay_parser,
+        logs_replay_next_parser,
+    ):
+        replay_parser.add_argument(
+            "--from",
+            default=None,
+            dest="since",
+            help=(
+                "Only replay entries at or after this ISO-8601 "
+                "timestamp (inclusive)."
+            ),
+        )
+        replay_parser.add_argument(
+            "--event",
+            type=str,
+            default=None,
+            dest="event",
+            help="Only replay entries with this event name.",
+        )
+        replay_parser.add_argument(
+            "--limit",
+            type=int,
+            default=None,
+            dest="limit",
+            help=(
+                "For `replay`: maximum number of entries to return "
+                "(default: all). For `replay-next`: how many "
+                "entries to advance the cursor by (default: 1)."
+            ),
+        )
+        replay_parser.add_argument(
+            "--json",
+            action="store_true",
+            dest="json_output",
+            help="Emit machine-readable JSON output.",
+        )
 
     session_parser = audits_subparsers.add_parser(
         "session",
@@ -5148,6 +5223,26 @@ def main():
                     sys.exit(exit_code)
                 if args.logs_command == "pending":
                     exit_code = run_deployment_governance_logging_pending(
+                        json_output=args.json_output,
+                    )
+                    sys.exit(exit_code)
+                if args.logs_command in ("replay", "replay-next"):
+                    try:
+                        since = parse_governance_audit_timestamp(
+                            args.since
+                        )
+                    except ValueError as exc:
+                        parser.error(str(exc))
+                        return
+                    replay_runner = (
+                        run_deployment_governance_logging_replay
+                        if args.logs_command == "replay"
+                        else run_deployment_governance_logging_replay_next
+                    )
+                    exit_code = replay_runner(
+                        since=since,
+                        event=args.event,
+                        limit=args.limit,
                         json_output=args.json_output,
                     )
                     sys.exit(exit_code)

@@ -143,6 +143,9 @@ from .deployment_governance_log_search import (
 from .deployment_governance_log_export import (
     GovernanceLogExportService,
 )
+from .deployment_governance_log_replay import (
+    GovernanceLogReplayService,
+)
 from .deployment_governance_integrity_audit import (
     DeploymentGovernanceIntegrityAuditService,
     DeploymentGovernanceTraceIntegrityAuditSource,
@@ -1657,6 +1660,30 @@ class DeploymentGovernancePersistenceRuntime:
         """
 
         return GovernanceLogSearchService(self.log_repository)
+
+    def build_integrity_log_replay_service(
+        self,
+        *,
+        since: "datetime | None" = None,
+        event: str | None = None,
+    ) -> GovernanceLogReplayService:
+        """
+        Build a governance log replay service bound to a fresh
+        search service over the shared log repository, scoped to
+        the given since/event filters.
+
+        Like build_integrity_log_search_service, this constructs a
+        new instance on every call: a replay service's cursor is
+        inherently per-session state (see
+        GovernanceLogReplayService), not something to share across
+        callers the way the logger or repository singletons are.
+        """
+
+        return GovernanceLogReplayService(
+            self.build_integrity_log_search_service(),
+            since=since,
+            event=event,
+        )
 
     def build_integrity_log_redaction_service(
         self,
