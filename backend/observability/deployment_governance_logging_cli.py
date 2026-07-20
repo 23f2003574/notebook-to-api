@@ -998,6 +998,110 @@ def _render_sampling_policy_human(
         stdout.write("Always-Log Events: none\n")
 
 
+def run_deployment_governance_logging_flush(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and force-flush the governance log
+    batcher's pending entries to the repository now, regardless of
+    whether batch_size or flush_interval_seconds has been reached.
+
+    Reports 0 flushed if the batcher was never attached to the live
+    logger (batching is opt-in; see
+    DeploymentGovernancePersistenceRuntime.build_integrity_log_batcher's
+    docstring) or simply had nothing pending. Exit codes: 0 the
+    flush ran (even if nothing was pending), 2 it could not run.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        batch = runtime.build_integrity_log_batcher().flush()
+
+    except Exception as exc:
+        _render_logging_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    count = 0 if batch is None else len(batch.entries)
+
+    if json_output:
+        json.dump(
+            {"flushed": count},
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write(
+            f"Flushed {count} governance log "
+            f"entr{'y' if count == 1 else 'ies'}.\n"
+        )
+
+    return 0
+
+
+def run_deployment_governance_logging_pending(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and show how many governance log entries
+    are currently buffered in the batcher, not yet written to the
+    repository.
+
+    Exit codes: 0 the count was retrieved, 2 it could not be.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        pending = (
+            runtime.build_integrity_log_batcher().pending_count()
+        )
+
+    except Exception as exc:
+        _render_logging_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            {"pending": pending},
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write(
+            f"{pending} governance log "
+            f"entr{'y' if pending == 1 else 'ies'} pending.\n"
+        )
+
+    return 0
+
+
 def _render_logging_human(
     entries: tuple[GovernanceLogEntry, ...],
     *,

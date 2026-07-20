@@ -25,6 +25,9 @@ if TYPE_CHECKING:
     from .deployment_governance_log_sampling import (
         GovernanceLogSamplingService,
     )
+    from .deployment_governance_log_batcher import (
+        GovernanceLogBatcher,
+    )
 
 _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
@@ -119,6 +122,7 @@ class GovernanceIntegrityLogger:
         sampling_service: (
             "GovernanceLogSamplingService | None"
         ) = None,
+        batcher: "GovernanceLogBatcher | None" = None,
     ) -> None:
         if buffer_size < 1:
             raise ValueError(
@@ -148,6 +152,8 @@ class GovernanceIntegrityLogger:
         self._correlation_service = correlation_service
 
         self._sampling_service = sampling_service
+
+        self._batcher = batcher
 
     def debug(
         self,
@@ -374,6 +380,20 @@ class GovernanceIntegrityLogger:
         with self._lock:
             self._sampling_service = sampling_service
 
+    def set_batcher(
+        self,
+        batcher: "GovernanceLogBatcher | None",
+    ) -> None:
+        """
+        Attach (or detach) a GovernanceLogBatcher after
+        construction, without recreating the logger. While attached,
+        it replaces direct repository writes: entries are enqueued
+        onto it instead (see _log()).
+        """
+
+        with self._lock:
+            self._batcher = batcher
+
     def _log(
         self,
         level: str,
@@ -445,10 +465,20 @@ class GovernanceIntegrityLogger:
 
             sampling_service = self._sampling_service
 
-        if repository is not None and self._should_persist(
-            sampling_service, entry
-        ):
-            repository.append(entry)
+            batcher = self._batcher
+
+        if self._should_persist(sampling_service, entry):
+            if batcher is not None:
+                # A configured batcher replaces the direct
+                # repository write: the entry is enqueued and
+                # written later, in a batch, to reduce repository
+                # I/O rather than one write per log call.
+                batcher.enqueue(entry)
+
+                batcher.flush_if_needed()
+
+            elif repository is not None:
+                repository.append(entry)
 
         self._sink.log(
             _LEVEL_TO_STDLIB[level],

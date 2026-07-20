@@ -62,6 +62,8 @@ from backend.observability.deployment_governance_logging_cli import (
     run_deployment_governance_logging_trace,
     run_deployment_governance_logging_sampling_show,
     run_deployment_governance_logging_sampling_update,
+    run_deployment_governance_logging_flush,
+    run_deployment_governance_logging_pending,
 )
 from backend.observability.deployment_governance_audit_session_cli import (
     run_deployment_governance_audit_session,
@@ -1306,6 +1308,45 @@ def main():
         ),
     )
     sampling_update_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    logs_flush_parser = logs_subparsers.add_parser(
+        "flush",
+        help="Force-flush the governance log batcher now.",
+        description=(
+            "Force-flush the governance log batcher's pending "
+            "entries to the repository now, regardless of whether "
+            "the configured batch size or flush interval has been "
+            "reached.\n\n"
+            "Exit codes: 0 the flush ran (even if nothing was "
+            "pending), 2 it could not run."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    logs_flush_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    logs_pending_parser = logs_subparsers.add_parser(
+        "pending",
+        help="Show how many governance log entries are buffered.",
+        description=(
+            "Show how many governance log entries are currently "
+            "buffered in the batcher, not yet written to the "
+            "repository.\n\n"
+            "Exit codes: 0 the count was retrieved, 2 it could not "
+            "be."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    logs_pending_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -5100,6 +5141,16 @@ def main():
                             )
                         )
                         sys.exit(exit_code)
+                if args.logs_command == "flush":
+                    exit_code = run_deployment_governance_logging_flush(
+                        json_output=args.json_output,
+                    )
+                    sys.exit(exit_code)
+                if args.logs_command == "pending":
+                    exit_code = run_deployment_governance_logging_pending(
+                        json_output=args.json_output,
+                    )
+                    sys.exit(exit_code)
             if getattr(args, "audits_command", None) == "session":
                 exit_code = run_deployment_governance_audit_session(
                     limit=args.limit,

@@ -134,6 +134,9 @@ from .deployment_governance_log_correlation import (
 from .deployment_governance_log_sampling import (
     GovernanceLogSamplingService,
 )
+from .deployment_governance_log_batcher import (
+    GovernanceLogBatcher,
+)
 from .deployment_governance_log_search import (
     GovernanceLogSearchService,
 )
@@ -665,6 +668,8 @@ class DeploymentGovernancePersistenceRuntime:
         default_factory=GovernanceLogSamplingService
     )
 
+    batcher: GovernanceLogBatcher = field(init=False)
+
     def __post_init__(self) -> None:
         # metrics_service and logger are each constructed
         # independently by their own default_factory above, so the
@@ -693,6 +698,23 @@ class DeploymentGovernancePersistenceRuntime:
         self.log_repository.set_rotation_service(
             self.log_rotation_service
         )
+
+        object.__setattr__(
+            self,
+            "batcher",
+            GovernanceLogBatcher(self.log_repository),
+        )
+
+        # Deliberately NOT attached to the logger here, unlike every
+        # other service above: batching changes when an entry
+        # actually becomes durable (only once its batch is flushed,
+        # not immediately on the logger.info()/... call that
+        # produced it), which would silently change the behavior
+        # every existing caller of this runtime already depends on.
+        # Attaching it is an explicit opt-in:
+        # runtime.build_integrity_logger().set_batcher(
+        #     runtime.build_integrity_log_batcher()
+        # )
 
     @property
     def durable(
@@ -1695,6 +1717,22 @@ class DeploymentGovernancePersistenceRuntime:
         """
 
         return self.sampling_service
+
+    def build_integrity_log_batcher(
+        self,
+    ) -> GovernanceLogBatcher:
+        """
+        Return the shared governance log batcher, bound to the same
+        log repository as the logger.
+
+        Unlike every other build_integrity_log_* accessor here, this
+        one is not pre-attached to build_integrity_logger()'s
+        instance (see __post_init__): attach it explicitly with
+        logger.set_batcher(...) to actually route log writes through
+        it instead of writing directly.
+        """
+
+        return self.batcher
 
     def build_integrity_log_export_service(
         self,

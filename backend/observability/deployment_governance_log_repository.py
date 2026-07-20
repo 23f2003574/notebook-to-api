@@ -3,7 +3,14 @@ from __future__ import annotations
 import json
 import sqlite3
 from threading import RLock
-from typing import Any, Mapping, Protocol, TYPE_CHECKING, runtime_checkable
+from typing import (
+    Any,
+    Iterable,
+    Mapping,
+    Protocol,
+    TYPE_CHECKING,
+    runtime_checkable,
+)
 from datetime import datetime, timezone
 
 from backend.persistence.sqlite_database import (
@@ -53,6 +60,19 @@ class GovernanceLogRepository(Protocol):
         """
         Add one new log entry to the end of the history. Existing
         entries are never modified.
+        """
+
+    def append_many(
+        self,
+        entries: Iterable[GovernanceLogEntry],
+    ) -> None:
+        """
+        Add multiple new log entries to the end of the history, in
+        the given order, in as few underlying writes as practical
+        (e.g. one transaction for the whole batch under the SQLite
+        backend) rather than one write per entry. Intended for
+        GovernanceLogBatcher's flush() to reduce repository I/O
+        under high log volume. A no-op for an empty entries.
         """
 
     def list(
@@ -161,6 +181,26 @@ class InMemoryGovernanceLogRepository:
             rotation_service.rotate()
 
         return entry
+
+    def append_many(
+        self,
+        entries: Iterable[GovernanceLogEntry],
+    ) -> None:
+        entries = tuple(entries)
+
+        if not entries:
+            return
+
+        with self._lock:
+            self._entries.extend(entries)
+
+            rotation_service = self._rotation_service
+
+        if rotation_service is not None:
+            # Rotated once for the whole batch, not once per entry:
+            # rotation is itself I/O, so re-running it after every
+            # single insert would defeat the point of batching.
+            rotation_service.rotate()
 
     def set_rotation_service(
         self,
@@ -430,6 +470,56 @@ class SQLiteGovernanceLogRepository:
             self._rotation_service.rotate()
 
         return entry
+
+    def append_many(
+        self,
+        entries: Iterable[GovernanceLogEntry],
+    ) -> None:
+        entries = tuple(entries)
+
+        if not entries:
+            return
+
+        try:
+            with self._database.transaction(
+                immediate=True
+            ) as connection:
+                connection.executemany(
+                    f"""
+                    INSERT INTO
+                    {DEPLOYMENT_GOVERNANCE_LOGS_TABLE}
+                    (
+                        timestamp,
+                        level,
+                        component,
+                        event,
+                        fields_json
+                    )
+                    VALUES
+                    (
+                        :timestamp,
+                        :level,
+                        :component,
+                        :event,
+                        :fields_json
+                    )
+                    """,
+                    [
+                        self._entry_to_parameters(entry)
+                        for entry in entries
+                    ],
+                )
+
+        except sqlite3.Error as exc:
+            raise SQLitePersistenceError(
+                "failed to append governance log entries"
+            ) from exc
+
+        if self._rotation_service is not None:
+            # Rotated once for the whole batch, not once per entry:
+            # rotation is itself I/O, so re-running it after every
+            # single insert would defeat the point of batching.
+            self._rotation_service.rotate()
 
     def set_rotation_service(
         self,

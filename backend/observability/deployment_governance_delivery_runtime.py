@@ -47,6 +47,9 @@ from .deployment_governance_log_context import (
 from .deployment_governance_log_sampling import (
     GovernanceLogSamplingService,
 )
+from .deployment_governance_log_batcher import (
+    GovernanceLogBatcher,
+)
 
 
 class GovernanceIntegrityRuntimeState(
@@ -97,7 +100,8 @@ class GovernanceIntegrityDeliveryRuntime:
         log_rotation_service: Optional[GovernanceLogRotationService] = None,
         redaction_service: Optional[GovernanceLogRedactionService] = None,
         context_service: Optional[GovernanceLogContextService] = None,
-        sampling_service: Optional[GovernanceLogSamplingService] = None
+        sampling_service: Optional[GovernanceLogSamplingService] = None,
+        batcher: Optional[GovernanceLogBatcher] = None
     ):
         self.worker = worker
         self.scheduler = scheduler
@@ -109,6 +113,7 @@ class GovernanceIntegrityDeliveryRuntime:
         self.redaction_service = redaction_service
         self.context_service = context_service
         self.sampling_service = sampling_service
+        self.batcher = batcher
 
         # Wired immediately, not deferred to start(): redaction is a
         # security property of the logger and should take effect as
@@ -390,6 +395,14 @@ class GovernanceIntegrityDeliveryRuntime:
                 "delivery_runtime", "runtime_stopped"
             )
 
+        if self.batcher is not None:
+
+            # Unconditional, not flush_if_needed(): shutdown must
+            # never leave an enqueued entry stranded in a batch that
+            # never reached its size/interval threshold, including
+            # the "runtime_stopped" entry logged just above.
+            self.batcher.flush()
+
     def run_iteration(
         self
     ):
@@ -434,6 +447,14 @@ class GovernanceIntegrityDeliveryRuntime:
             if self.context_service is not None:
 
                 self.context_service.pop()
+
+            if self.batcher is not None:
+
+                # Checked every iteration regardless of the log
+                # volume this particular iteration produced, so the
+                # interval threshold is still caught during quiet
+                # periods with few or no new entries.
+                self.batcher.flush_if_needed()
 
         if self.metrics_service is not None:
 
@@ -489,7 +510,8 @@ def build_integrity_delivery_runtime(
     log_rotation_service=None,
     redaction_service=None,
     context_service=None,
-    sampling_service=None
+    sampling_service=None,
+    batcher=None
 ) -> GovernanceIntegrityDeliveryRuntime:
 
     if clock is None:
@@ -574,5 +596,8 @@ def build_integrity_delivery_runtime(
             context_service,
 
         sampling_service=
-            sampling_service
+            sampling_service,
+
+        batcher=
+            batcher
     )
