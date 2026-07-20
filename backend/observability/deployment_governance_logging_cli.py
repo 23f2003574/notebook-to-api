@@ -11,6 +11,9 @@ from .deployment_governance_log_context import GovernanceLogContext
 from .deployment_governance_log_sampling import (
     GovernanceLogSamplingPolicy,
 )
+from .deployment_governance_log_config import (
+    GovernanceLogConfig,
+)
 from .deployment_governance_persistence import (
     build_deployment_governance_persistence,
     deployment_governance_persistence_config_from_env,
@@ -1213,6 +1216,125 @@ def run_deployment_governance_logging_replay_next(
         )
 
     return 0
+
+
+def run_deployment_governance_logging_config_show(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and show the currently configured
+    governance logging configuration.
+
+    This is a read-only inspection command: it never reloads or
+    changes the configuration. Exit codes: 0 the configuration was
+    retrieved, 2 it could not be.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        config = (
+            runtime.build_integrity_log_config_service().load()
+        )
+
+    except Exception as exc:
+        _render_logging_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            config.to_dict(),
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        _render_logging_config_human(config, stdout=stdout)
+
+    return 0
+
+
+def run_deployment_governance_logging_config_reload(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence, re-read governance logging configuration
+    from its source, and apply it to the live logger (minimum
+    level, sampling/redaction toggles) and batcher (batch size,
+    flush interval), without restarting anything.
+
+    Exit codes: 0 the configuration was reloaded and applied, 2 it
+    could not be (including an invalid environment value).
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        config = runtime.reload_log_config()
+
+    except Exception as exc:
+        _render_logging_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            config.to_dict(),
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write(
+            "Governance logging configuration reloaded.\n\n"
+        )
+
+        _render_logging_config_human(config, stdout=stdout)
+
+    return 0
+
+
+def _render_logging_config_human(
+    config: "GovernanceLogConfig",
+    *,
+    stdout: TextIO,
+) -> None:
+    stdout.write("Governance Logging Configuration\n\n")
+
+    stdout.write(f"Minimum Level: {config.minimum_level}\n")
+
+    stdout.write(f"Batch Size: {config.batch_size}\n")
+
+    stdout.write(
+        f"Flush Interval (s): {config.flush_interval_seconds}\n"
+    )
+
+    stdout.write(f"Sampling Enabled: {config.enable_sampling}\n")
+
+    stdout.write(f"Redaction Enabled: {config.enable_redaction}\n")
 
 
 def _render_logging_human(

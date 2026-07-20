@@ -38,6 +38,13 @@ _LEVEL_TO_STDLIB = {
     "ERROR": logging.ERROR,
 }
 
+_LEVEL_ORDER = {
+    "DEBUG": 0,
+    "INFO": 1,
+    "WARNING": 2,
+    "ERROR": 3,
+}
+
 DEFAULT_LOG_BUFFER_SIZE = 1000
 
 
@@ -123,10 +130,16 @@ class GovernanceIntegrityLogger:
             "GovernanceLogSamplingService | None"
         ) = None,
         batcher: "GovernanceLogBatcher | None" = None,
+        minimum_level: str = "DEBUG",
     ) -> None:
         if buffer_size < 1:
             raise ValueError(
                 "buffer_size must be at least 1"
+            )
+
+        if minimum_level not in _VALID_LEVELS:
+            raise ValueError(
+                f"minimum_level must be one of {', '.join(_VALID_LEVELS)}"
             )
 
         self._clock = clock or (
@@ -154,6 +167,8 @@ class GovernanceIntegrityLogger:
         self._sampling_service = sampling_service
 
         self._batcher = batcher
+
+        self._minimum_level = minimum_level
 
     def debug(
         self,
@@ -394,6 +409,25 @@ class GovernanceIntegrityLogger:
         with self._lock:
             self._batcher = batcher
 
+    def set_minimum_level(self, minimum_level: str) -> None:
+        """
+        Set the minimum level a call must meet to be logged at all,
+        without recreating the logger. Calls below it are dropped
+        before any other processing (context/correlation merge,
+        redaction, buffering, persistence) happens: unlike a dropped
+        sample (see GovernanceLogSamplingService), a below-threshold
+        entry never reaches the in-memory buffer or the standard
+        library sink either.
+        """
+
+        if minimum_level not in _VALID_LEVELS:
+            raise ValueError(
+                f"minimum_level must be one of {', '.join(_VALID_LEVELS)}"
+            )
+
+        with self._lock:
+            self._minimum_level = minimum_level
+
     def _log(
         self,
         level: str,
@@ -401,6 +435,18 @@ class GovernanceIntegrityLogger:
         event: str,
         fields: Mapping[str, Any],
     ) -> GovernanceLogEntry:
+        with self._lock:
+            minimum_level = self._minimum_level
+
+        if _LEVEL_ORDER[level] < _LEVEL_ORDER[minimum_level]:
+            return GovernanceLogEntry(
+                timestamp=self._clock(),
+                level=level,
+                component=component,
+                event=event,
+                fields=dict(fields),
+            )
+
         with self._lock:
             context_service = self._context_service
 

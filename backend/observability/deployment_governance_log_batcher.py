@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import Lock
-from typing import Callable, TYPE_CHECKING
+from typing import Any, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .deployment_governance_logging import GovernanceLogEntry
@@ -14,6 +14,8 @@ if TYPE_CHECKING:
 DEFAULT_BATCH_SIZE: int = 100
 
 DEFAULT_FLUSH_INTERVAL_SECONDS: float = 5.0
+
+_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -108,6 +110,48 @@ class GovernanceLogBatcher:
 
         with self._lock:
             return len(self._pending)
+
+    def reconfigure(
+        self,
+        *,
+        batch_size: Any = _UNSET,
+        flush_interval_seconds: Any = _UNSET,
+    ) -> None:
+        """
+        Replace batch_size and/or flush_interval_seconds without
+        recreating the batcher or losing any already-enqueued
+        entries. Only fields explicitly passed are changed; omitted
+        fields keep their current value. Takes effect on the next
+        enqueue()/flush_if_needed() call.
+        """
+
+        with self._lock:
+            new_batch_size = (
+                self._batch_size
+                if batch_size is _UNSET
+                else batch_size
+            )
+
+            new_flush_interval_seconds = (
+                self._flush_interval_seconds
+                if flush_interval_seconds is _UNSET
+                else flush_interval_seconds
+            )
+
+            if new_batch_size < 1:
+                raise ValueError(
+                    "batch_size must be at least 1"
+                )
+
+            if new_flush_interval_seconds <= 0:
+                raise ValueError(
+                    "flush_interval_seconds must be greater than "
+                    "zero"
+                )
+
+            self._batch_size = new_batch_size
+
+            self._flush_interval_seconds = new_flush_interval_seconds
 
     def flush(self) -> GovernanceLogBatch | None:
         """

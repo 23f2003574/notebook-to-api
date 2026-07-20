@@ -66,6 +66,8 @@ from backend.observability.deployment_governance_logging_cli import (
     run_deployment_governance_logging_pending,
     run_deployment_governance_logging_replay,
     run_deployment_governance_logging_replay_next,
+    run_deployment_governance_logging_config_show,
+    run_deployment_governance_logging_config_reload,
 )
 from backend.observability.deployment_governance_audit_session_cli import (
     run_deployment_governance_audit_session,
@@ -1427,6 +1429,58 @@ def main():
             dest="json_output",
             help="Emit machine-readable JSON output.",
         )
+
+    logs_config_parser = logs_subparsers.add_parser(
+        "config",
+        help="Inspect and reload governance logging configuration.",
+        description=(
+            "Inspect and reload the centralized governance logging "
+            "configuration (minimum level, batch size, flush "
+            "interval, and whether sampling/redaction are active)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    config_subparsers = logs_config_parser.add_subparsers(
+        dest="logs_config_command", required=True
+    )
+
+    logs_config_show_parser = config_subparsers.add_parser(
+        "show",
+        help="Show the configured governance logging configuration.",
+        description=(
+            "Show the currently configured governance logging "
+            "configuration.\n\n"
+            "Exit codes: 0 the configuration was retrieved, 2 it "
+            "could not be."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    logs_config_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    logs_config_reload_parser = config_subparsers.add_parser(
+        "reload",
+        help="Reload governance logging configuration.",
+        description=(
+            "Re-read governance logging configuration from its "
+            "source and apply it to the live logger and batcher, "
+            "without restarting anything.\n\n"
+            "Exit codes: 0 the configuration was reloaded and "
+            "applied, 2 it could not be (including an invalid "
+            "environment value)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    logs_config_reload_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
 
     session_parser = audits_subparsers.add_parser(
         "session",
@@ -5246,6 +5300,21 @@ def main():
                         json_output=args.json_output,
                     )
                     sys.exit(exit_code)
+                if args.logs_command == "config":
+                    if args.logs_config_command == "show":
+                        exit_code = (
+                            run_deployment_governance_logging_config_show(
+                                json_output=args.json_output,
+                            )
+                        )
+                        sys.exit(exit_code)
+                    if args.logs_config_command == "reload":
+                        exit_code = (
+                            run_deployment_governance_logging_config_reload(
+                                json_output=args.json_output,
+                            )
+                        )
+                        sys.exit(exit_code)
             if getattr(args, "audits_command", None) == "session":
                 exit_code = run_deployment_governance_audit_session(
                     limit=args.limit,

@@ -50,6 +50,10 @@ from .deployment_governance_log_sampling import (
 from .deployment_governance_log_batcher import (
     GovernanceLogBatcher,
 )
+from .deployment_governance_log_config import (
+    GovernanceLogConfig,
+    GovernanceLogConfigService,
+)
 
 
 class GovernanceIntegrityRuntimeState(
@@ -101,7 +105,8 @@ class GovernanceIntegrityDeliveryRuntime:
         redaction_service: Optional[GovernanceLogRedactionService] = None,
         context_service: Optional[GovernanceLogContextService] = None,
         sampling_service: Optional[GovernanceLogSamplingService] = None,
-        batcher: Optional[GovernanceLogBatcher] = None
+        batcher: Optional[GovernanceLogBatcher] = None,
+        log_config_service: Optional[GovernanceLogConfigService] = None
     ):
         self.worker = worker
         self.scheduler = scheduler
@@ -114,6 +119,7 @@ class GovernanceIntegrityDeliveryRuntime:
         self.context_service = context_service
         self.sampling_service = sampling_service
         self.batcher = batcher
+        self.log_config_service = log_config_service
 
         # Wired immediately, not deferred to start(): redaction is a
         # security property of the logger and should take effect as
@@ -303,6 +309,52 @@ class GovernanceIntegrityDeliveryRuntime:
 
             self.metrics_service.set_auto_flush_enabled(
                 config.auto_flush
+            )
+
+        return config
+
+    def reload_log_config(
+        self
+    ) -> Optional[GovernanceLogConfig]:
+        """
+        Re-read governance logging configuration from its source and
+        apply it to the logger (minimum level, and whether sampling
+        and redaction are active) and the batcher (batch size, flush
+        interval), without restarting the runtime.
+
+        Returns the newly loaded config, or None if no
+        log_config_service is configured (a no-op in that case).
+        """
+
+        if self.log_config_service is None:
+
+            return None
+
+        config = self.log_config_service.reload()
+
+        if self.logger is not None:
+
+            self.logger.set_minimum_level(config.minimum_level)
+
+            self.logger.set_sampling_service(
+                self.sampling_service
+                if config.enable_sampling
+                else None
+            )
+
+            self.logger.set_redaction_service(
+                self.redaction_service
+                if config.enable_redaction
+                else None
+            )
+
+        if self.batcher is not None:
+
+            self.batcher.reconfigure(
+                batch_size=config.batch_size,
+                flush_interval_seconds=(
+                    config.flush_interval_seconds
+                )
             )
 
         return config
@@ -511,7 +563,8 @@ def build_integrity_delivery_runtime(
     redaction_service=None,
     context_service=None,
     sampling_service=None,
-    batcher=None
+    batcher=None,
+    log_config_service=None
 ) -> GovernanceIntegrityDeliveryRuntime:
 
     if clock is None:
@@ -599,5 +652,8 @@ def build_integrity_delivery_runtime(
             sampling_service,
 
         batcher=
-            batcher
+            batcher,
+
+        log_config_service=
+            log_config_service
     )

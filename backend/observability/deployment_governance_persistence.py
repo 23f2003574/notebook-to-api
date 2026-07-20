@@ -137,6 +137,10 @@ from .deployment_governance_log_sampling import (
 from .deployment_governance_log_batcher import (
     GovernanceLogBatcher,
 )
+from .deployment_governance_log_config import (
+    GovernanceLogConfig,
+    GovernanceLogConfigService,
+)
 from .deployment_governance_log_search import (
     GovernanceLogSearchService,
 )
@@ -671,6 +675,10 @@ class DeploymentGovernancePersistenceRuntime:
         default_factory=GovernanceLogSamplingService
     )
 
+    log_config_service: GovernanceLogConfigService = field(
+        default_factory=GovernanceLogConfigService
+    )
+
     batcher: GovernanceLogBatcher = field(init=False)
 
     def __post_init__(self) -> None:
@@ -684,13 +692,30 @@ class DeploymentGovernancePersistenceRuntime:
 
         self.logger.set_repository(self.log_repository)
 
-        self.logger.set_redaction_service(self.redaction_service)
+        # log_config_service is the source of truth for whether
+        # redaction/sampling start out attached, the logger's
+        # minimum level, and the batcher's initial size/interval:
+        # loaded once here, up front, rather than each dependent
+        # service applying its own separate default.
+        log_config = self.log_config_service.load()
+
+        self.logger.set_minimum_level(log_config.minimum_level)
+
+        self.logger.set_redaction_service(
+            self.redaction_service
+            if log_config.enable_redaction
+            else None
+        )
 
         self.logger.set_context_service(self.context_service)
 
         self.logger.set_correlation_service(self.correlation_service)
 
-        self.logger.set_sampling_service(self.sampling_service)
+        self.logger.set_sampling_service(
+            self.sampling_service
+            if log_config.enable_sampling
+            else None
+        )
 
         object.__setattr__(
             self,
@@ -705,7 +730,13 @@ class DeploymentGovernancePersistenceRuntime:
         object.__setattr__(
             self,
             "batcher",
-            GovernanceLogBatcher(self.log_repository),
+            GovernanceLogBatcher(
+                self.log_repository,
+                batch_size=log_config.batch_size,
+                flush_interval_seconds=(
+                    log_config.flush_interval_seconds
+                ),
+            ),
         )
 
         # Deliberately NOT attached to the logger here, unlike every
@@ -718,6 +749,39 @@ class DeploymentGovernancePersistenceRuntime:
         # runtime.build_integrity_logger().set_batcher(
         #     runtime.build_integrity_log_batcher()
         # )
+
+    def reload_log_config(self) -> GovernanceLogConfig:
+        """
+        Re-read governance logging configuration from its source and
+        apply it to the logger (minimum level, and whether sampling
+        and redaction are active) and the batcher (batch size, flush
+        interval), without restarting anything.
+
+        Returns the newly loaded config.
+        """
+
+        config = self.log_config_service.reload()
+
+        self.logger.set_minimum_level(config.minimum_level)
+
+        self.logger.set_redaction_service(
+            self.redaction_service
+            if config.enable_redaction
+            else None
+        )
+
+        self.logger.set_sampling_service(
+            self.sampling_service
+            if config.enable_sampling
+            else None
+        )
+
+        self.batcher.reconfigure(
+            batch_size=config.batch_size,
+            flush_interval_seconds=config.flush_interval_seconds,
+        )
+
+        return config
 
     @property
     def durable(
@@ -1684,6 +1748,21 @@ class DeploymentGovernancePersistenceRuntime:
             since=since,
             event=event,
         )
+
+    def build_integrity_log_config_service(
+        self,
+    ) -> GovernanceLogConfigService:
+        """
+        Return the shared governance logging configuration service.
+
+        Like build_integrity_logger, this returns the runtime's
+        single stored instance, already applied once at __post_init__
+        time; call reload_log_config() on this runtime (not this
+        service directly) to re-read and re-apply it to the logger
+        and batcher together.
+        """
+
+        return self.log_config_service
 
     def build_integrity_log_redaction_service(
         self,
