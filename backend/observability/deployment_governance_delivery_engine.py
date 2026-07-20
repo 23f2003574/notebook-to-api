@@ -59,6 +59,11 @@ from .deployment_governance_retry_orchestrator import (
     GovernanceIntegrityRetryOrchestrator,
 )
 
+from .deployment_governance_log_context import (
+    GovernanceLogContext,
+    GovernanceLogContextService,
+)
+
 if TYPE_CHECKING:
     from .deployment_governance_delivery_scheduler import (
         GovernanceIntegrityDeliveryScheduler,
@@ -410,6 +415,9 @@ class GovernanceIntegrityDeliveryEngine:
         clock: Callable[[], datetime] | None = None,
         metrics_service: GovernanceIntegrityMetricsService | None = None,
         logger: "GovernanceIntegrityLogger | None" = None,
+        context_service: (
+            "GovernanceLogContextService | None"
+        ) = None,
     ) -> None:
         self._dispatch_repository = dispatch_repository
 
@@ -437,6 +445,8 @@ class GovernanceIntegrityDeliveryEngine:
 
         self._logger = logger
 
+        self._context_service = context_service
+
     def deliver(
         self,
         dispatch_id: str,
@@ -460,123 +470,159 @@ class GovernanceIntegrityDeliveryEngine:
 
         started_at = time.monotonic()
 
+        context_pushed = False
+
         try:
-            notification = self._notification_repository.get(
-                dispatch.notification_id
-            )
-
-            if notification is None:
-                raise LookupError(
-                    f"notification '{dispatch.notification_id}' "
-                    "was not found"
-                )
-
-            channel = self._channel_repository.get(
-                dispatch.channel_name
-            )
-
-            if channel is None:
-                raise LookupError(
-                    f"notification channel '{dispatch.channel_name}' "
-                    "was not found"
-                )
-
-            metadata = self._provider_registry.metadata(
-                channel.channel_type
-            )
-
-            if (
-                metadata.state
-                is GovernanceIntegrityProviderState.DISABLED
-            ):
-                raise RuntimeError("Provider is disabled.")
-
-            provider = self._provider_registry.resolve(
-                channel.channel_type
-            )
-
-            health = self._provider_registry.health(
-                channel.channel_type
-            )
-
-            if (
-                health.status
-                is GovernanceIntegrityProviderHealthStatus.UNHEALTHY
-            ):
-                raise RuntimeError(
-                    health.message
-                    or (
-                        "delivery provider for channel type "
-                        f"'{channel.channel_type.value}' is unhealthy"
-                    )
-                )
-
             try:
-                policy = self._policy_service.resolve(channel.name)
+                notification = self._notification_repository.get(
+                    dispatch.notification_id
+                )
 
-            except LookupError:
-                policy = None
+                if notification is None:
+                    raise LookupError(
+                        f"notification '{dispatch.notification_id}' "
+                        "was not found"
+                    )
 
-            if policy is not None:
-                capabilities = self._provider_registry.capabilities(
+                channel = self._channel_repository.get(
+                    dispatch.channel_name
+                )
+
+                if channel is None:
+                    raise LookupError(
+                        f"notification channel '{dispatch.channel_name}' "
+                        "was not found"
+                    )
+
+                if self._context_service is not None:
+                    self._context_service.push(
+                        GovernanceLogContext(
+                            request_id=None,
+                            dispatch_id=dispatch.dispatch_id,
+                            provider=channel.channel_type.value,
+                            component="delivery_engine",
+                        )
+                    )
+
+                    context_pushed = True
+
+                metadata = self._provider_registry.metadata(
                     channel.channel_type
                 )
 
-                validate_delivery_policy_capabilities(
-                    policy, capabilities
+                if (
+                    metadata.state
+                    is GovernanceIntegrityProviderState.DISABLED
+                ):
+                    raise RuntimeError("Provider is disabled.")
+
+                provider = self._provider_registry.resolve(
+                    channel.channel_type
                 )
 
-            request = self._request_service.build(
-                notification, channel
-            )
-
-            response = provider.deliver(request)
-
-            outcome = self._response_service.process(response)
-
-            if not outcome.success:
-                error_message = outcome.message or (
-                    "delivery failed with provider status "
-                    f"'{outcome.provider_status}'"
+                health = self._provider_registry.health(
+                    channel.channel_type
                 )
 
-                if policy is not None:
-                    decision = self._retry_orchestrator.evaluate(
-                        outcome, policy, 0
+                if (
+                    health.status
+                    is GovernanceIntegrityProviderHealthStatus.UNHEALTHY
+                ):
+                    raise RuntimeError(
+                        health.message
+                        or (
+                            "delivery provider for channel type "
+                            f"'{channel.channel_type.value}' is unhealthy"
+                        )
                     )
 
-                    if decision.should_retry:
-                        error_message = (
-                            f"{error_message} (retry {decision.retry_attempt} "
-                            f"scheduled in {decision.delay_seconds}s)"
+                try:
+                    policy = self._policy_service.resolve(channel.name)
+
+                except LookupError:
+                    policy = None
+
+                if policy is not None:
+                    capabilities = self._provider_registry.capabilities(
+                        channel.channel_type
+                    )
+
+                    validate_delivery_policy_capabilities(
+                        policy, capabilities
+                    )
+
+                request = self._request_service.build(
+                    notification, channel
+                )
+
+                response = provider.deliver(request)
+
+                outcome = self._response_service.process(response)
+
+                if not outcome.success:
+                    error_message = outcome.message or (
+                        "delivery failed with provider status "
+                        f"'{outcome.provider_status}'"
+                    )
+
+                    if policy is not None:
+                        decision = self._retry_orchestrator.evaluate(
+                            outcome, policy, 0
                         )
 
-                        if self._logger is not None:
-                            self._logger.warning(
-                                "delivery_engine",
-                                "retry_scheduled",
-                                dispatch_id=dispatch.dispatch_id,
-                                retry_attempt=decision.retry_attempt,
-                                delay_seconds=decision.delay_seconds,
+                        if decision.should_retry:
+                            error_message = (
+                                f"{error_message} (retry {decision.retry_attempt} "
+                                f"scheduled in {decision.delay_seconds}s)"
                             )
 
-                        if self._scheduler is not None:
-                            self._schedule_retry_best_effort(
-                                dispatch.dispatch_id, decision
-                            )
+                            if self._logger is not None:
+                                self._logger.warning(
+                                    "delivery_engine",
+                                    "retry_scheduled",
+                                    dispatch_id=dispatch.dispatch_id,
+                                    retry_attempt=decision.retry_attempt,
+                                    delay_seconds=decision.delay_seconds,
+                                )
 
-                raise RuntimeError(error_message)
+                            if self._scheduler is not None:
+                                self._schedule_retry_best_effort(
+                                    dispatch.dispatch_id, decision
+                                )
 
-        except Exception as exc:
+                    raise RuntimeError(error_message)
+
+            except Exception as exc:
+                if self._metrics_service is not None:
+                    self._metrics_service.record_failure(
+                        (time.monotonic() - started_at) * 1000.0
+                    )
+
+                if self._logger is not None:
+                    self._logger.exception(
+                        "delivery_engine",
+                        "delivery_failed",
+                        dispatch_id=dispatch.dispatch_id,
+                        channel_name=dispatch.channel_name,
+                    )
+
+                return GovernanceIntegrityDeliveryResult(
+                    dispatch_id=dispatch.dispatch_id,
+                    channel_name=dispatch.channel_name,
+                    status=GovernanceIntegrityDeliveryStatus.FAILED,
+                    delivered_at=self._clock(),
+                    error=str(exc),
+                )
+
             if self._metrics_service is not None:
-                self._metrics_service.record_failure(
+                self._metrics_service.record_success(
                     (time.monotonic() - started_at) * 1000.0
                 )
 
             if self._logger is not None:
-                self._logger.exception(
+                self._logger.info(
                     "delivery_engine",
-                    "delivery_failed",
+                    "delivery_succeeded",
                     dispatch_id=dispatch.dispatch_id,
                     channel_name=dispatch.channel_name,
                 )
@@ -584,31 +630,14 @@ class GovernanceIntegrityDeliveryEngine:
             return GovernanceIntegrityDeliveryResult(
                 dispatch_id=dispatch.dispatch_id,
                 channel_name=dispatch.channel_name,
-                status=GovernanceIntegrityDeliveryStatus.FAILED,
+                status=GovernanceIntegrityDeliveryStatus.SUCCESS,
                 delivered_at=self._clock(),
-                error=str(exc),
+                error=None,
             )
 
-        if self._metrics_service is not None:
-            self._metrics_service.record_success(
-                (time.monotonic() - started_at) * 1000.0
-            )
-
-        if self._logger is not None:
-            self._logger.info(
-                "delivery_engine",
-                "delivery_succeeded",
-                dispatch_id=dispatch.dispatch_id,
-                channel_name=dispatch.channel_name,
-            )
-
-        return GovernanceIntegrityDeliveryResult(
-            dispatch_id=dispatch.dispatch_id,
-            channel_name=dispatch.channel_name,
-            status=GovernanceIntegrityDeliveryStatus.SUCCESS,
-            delivered_at=self._clock(),
-            error=None,
-        )
+        finally:
+            if context_pushed:
+                self._context_service.pop()
 
     def _schedule_retry_best_effort(
         self,

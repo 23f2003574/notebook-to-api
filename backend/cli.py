@@ -58,6 +58,7 @@ from backend.observability.deployment_governance_logging_cli import (
     run_deployment_governance_logging_export_ndjson,
     run_deployment_governance_logging_redaction_rules,
     run_deployment_governance_logging_redaction_test,
+    run_deployment_governance_logging_context,
 )
 from backend.observability.deployment_governance_audit_session_cli import (
     run_deployment_governance_audit_session,
@@ -1170,6 +1171,27 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     redaction_test_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    logs_context_parser = logs_subparsers.add_parser(
+        "context",
+        help=(
+            "Demonstrate governance log execution context nesting."
+        ),
+        description=(
+            "Demonstrate the governance log execution context "
+            "service's nested push/pop scoping by pushing two "
+            "sample scopes and reporting current() at each step. "
+            "Nothing is logged, persisted, or exported.\n\n"
+            "Exit codes: 0 the demonstration ran, 2 it could not."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    logs_context_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -4935,6 +4957,11 @@ def main():
                             )
                         )
                         sys.exit(exit_code)
+                if args.logs_command == "context":
+                    exit_code = run_deployment_governance_logging_context(
+                        json_output=args.json_output,
+                    )
+                    sys.exit(exit_code)
             if getattr(args, "audits_command", None) == "session":
                 exit_code = run_deployment_governance_audit_session(
                     limit=args.limit,

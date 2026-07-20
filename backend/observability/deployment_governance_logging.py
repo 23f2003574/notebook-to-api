@@ -16,6 +16,9 @@ if TYPE_CHECKING:
     from .deployment_governance_log_redaction import (
         GovernanceLogRedactionService,
     )
+    from .deployment_governance_log_context import (
+        GovernanceLogContextService,
+    )
 
 _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
@@ -101,6 +104,9 @@ class GovernanceIntegrityLogger:
         redaction_service: (
             "GovernanceLogRedactionService | None"
         ) = None,
+        context_service: (
+            "GovernanceLogContextService | None"
+        ) = None,
     ) -> None:
         if buffer_size < 1:
             raise ValueError(
@@ -124,6 +130,8 @@ class GovernanceIntegrityLogger:
         self._repository = repository
 
         self._redaction_service = redaction_service
+
+        self._context_service = context_service
 
     def debug(
         self,
@@ -314,6 +322,18 @@ class GovernanceIntegrityLogger:
         with self._lock:
             self._redaction_service = redaction_service
 
+    def set_context_service(
+        self,
+        context_service: "GovernanceLogContextService | None",
+    ) -> None:
+        """
+        Attach (or detach) a GovernanceLogContextService after
+        construction, without recreating the logger.
+        """
+
+        with self._lock:
+            self._context_service = context_service
+
     def _log(
         self,
         level: str,
@@ -321,12 +341,29 @@ class GovernanceIntegrityLogger:
         event: str,
         fields: Mapping[str, Any],
     ) -> GovernanceLogEntry:
+        with self._lock:
+            context_service = self._context_service
+
+        merged_fields = dict(fields)
+
+        if context_service is not None:
+            context = context_service.current()
+
+            if context is not None:
+                # Explicit fields win: only fill in a context value
+                # for a key the caller did not already supply.
+                for key, value in context.to_dict().items():
+                    if value is None:
+                        continue
+
+                    merged_fields.setdefault(key, value)
+
         entry = GovernanceLogEntry(
             timestamp=self._clock(),
             level=level,
             component=component,
             event=event,
-            fields=dict(fields),
+            fields=merged_fields,
         )
 
         with self._lock:

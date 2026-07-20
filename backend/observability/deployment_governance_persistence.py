@@ -125,6 +125,9 @@ from .deployment_governance_log_rotation import (
 from .deployment_governance_log_redaction import (
     GovernanceLogRedactionService,
 )
+from .deployment_governance_log_context import (
+    GovernanceLogContextService,
+)
 from .deployment_governance_log_search import (
     GovernanceLogSearchService,
 )
@@ -644,6 +647,10 @@ class DeploymentGovernancePersistenceRuntime:
         default_factory=GovernanceLogRedactionService
     )
 
+    context_service: GovernanceLogContextService = field(
+        default_factory=GovernanceLogContextService
+    )
+
     def __post_init__(self) -> None:
         # metrics_service and logger are each constructed
         # independently by their own default_factory above, so the
@@ -656,6 +663,8 @@ class DeploymentGovernancePersistenceRuntime:
         self.logger.set_repository(self.log_repository)
 
         self.logger.set_redaction_service(self.redaction_service)
+
+        self.logger.set_context_service(self.context_service)
 
         object.__setattr__(
             self,
@@ -1623,6 +1632,22 @@ class DeploymentGovernancePersistenceRuntime:
 
         return self.redaction_service
 
+    def build_integrity_log_context_service(
+        self,
+    ) -> GovernanceLogContextService:
+        """
+        Return the shared governance log execution context service.
+
+        Like build_integrity_logger, this returns the runtime's
+        single stored instance. It is already attached to the
+        logger (see __post_init__), so a scope pushed anywhere (the
+        delivery worker, the delivery runtime, or the delivery
+        engine's provider execution) is automatically merged into
+        every log entry produced while it is active.
+        """
+
+        return self.context_service
+
     def build_integrity_log_export_service(
         self,
     ) -> GovernanceLogExportService:
@@ -1706,6 +1731,7 @@ class DeploymentGovernancePersistenceRuntime:
             scheduler=self.build_integrity_delivery_scheduler(),
             metrics_service=self.build_integrity_metrics_service(),
             logger=self.build_integrity_logger(),
+            context_service=self.build_integrity_log_context_service(),
         )
 
     def build_integrity_delivery_worker(
@@ -1726,6 +1752,7 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_delivery_scheduler(),
             self.build_integrity_delivery_engine(),
             self.build_integrity_retry_orchestrator(),
+            context_service=self.build_integrity_log_context_service(),
         )
 
     def build_integrity_delivery_history_service(

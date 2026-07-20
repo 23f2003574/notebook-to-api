@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable, TextIO
 
 from .deployment_governance_logging import GovernanceLogEntry
+from .deployment_governance_log_context import GovernanceLogContext
 from .deployment_governance_persistence import (
     build_deployment_governance_persistence,
     deployment_governance_persistence_config_from_env,
@@ -642,6 +643,120 @@ def run_deployment_governance_logging_redaction_test(
         )
 
         stdout.write("\n")
+
+    return 0
+
+
+def run_deployment_governance_logging_context(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and demonstrate the governance log
+    execution context service's nested push/pop scoping.
+
+    Each CLI invocation is a fresh process, so there is never a live
+    delivery-pipeline context to inspect here (the "before" state is
+    always empty); to see real context values, log something with
+    `logs tail`/`logs search` while a delivery worker iteration is
+    actually running, since those entries have request_id/
+    dispatch_id/provider merged into their fields automatically.
+    This command instead pushes two sample nested scopes and reports
+    current() at each step, to show the mechanics without needing a
+    live delivery pipeline. Nothing is logged, persisted, or
+    exported. Exit codes: 0 the demonstration ran, 2 it could not.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        context_service = (
+            runtime.build_integrity_log_context_service()
+        )
+
+        before = context_service.current()
+
+        outer = GovernanceLogContext(
+            request_id="req-1",
+            dispatch_id=None,
+            provider=None,
+            component="delivery_runtime",
+        )
+
+        context_service.push(outer)
+
+        during_outer_scope = context_service.current()
+
+        inner = GovernanceLogContext(
+            request_id=None,
+            dispatch_id="dispatch-1",
+            provider="webhook",
+            component="delivery_engine",
+        )
+
+        context_service.push(inner)
+
+        during_nested_scope = context_service.current()
+
+        context_service.pop()
+
+        after_inner_pop = context_service.current()
+
+        context_service.pop()
+
+        after_outer_pop = context_service.current()
+
+    except Exception as exc:
+        _render_logging_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    steps = (
+        ("before", before),
+        ("during_outer_scope", during_outer_scope),
+        ("during_nested_scope", during_nested_scope),
+        ("after_inner_pop", after_inner_pop),
+        ("after_outer_pop", after_outer_pop),
+    )
+
+    if json_output:
+        json.dump(
+            {
+                name: (None if context is None else context.to_dict())
+                for name, context in steps
+            },
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write("Governance Log Context Demonstration\n\n")
+
+        for name, context in steps:
+            stdout.write(
+                f"{name}: "
+                + (
+                    "no active context"
+                    if context is None
+                    else (
+                        f"component={context.component} "
+                        f"dispatch_id={context.dispatch_id} "
+                        f"provider={context.provider} "
+                        f"request_id={context.request_id}"
+                    )
+                )
+                + "\n"
+            )
 
     return 0
 

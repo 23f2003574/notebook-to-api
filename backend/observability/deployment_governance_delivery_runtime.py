@@ -40,6 +40,10 @@ from .deployment_governance_log_rotation import (
 from .deployment_governance_log_redaction import (
     GovernanceLogRedactionService,
 )
+from .deployment_governance_log_context import (
+    GovernanceLogContext,
+    GovernanceLogContextService,
+)
 
 
 class GovernanceIntegrityRuntimeState(
@@ -88,7 +92,8 @@ class GovernanceIntegrityDeliveryRuntime:
         logger: Optional[GovernanceIntegrityLogger] = None,
         log_repository: Optional[GovernanceLogRepository] = None,
         log_rotation_service: Optional[GovernanceLogRotationService] = None,
-        redaction_service: Optional[GovernanceLogRedactionService] = None
+        redaction_service: Optional[GovernanceLogRedactionService] = None,
+        context_service: Optional[GovernanceLogContextService] = None
     ):
         self.worker = worker
         self.scheduler = scheduler
@@ -98,6 +103,7 @@ class GovernanceIntegrityDeliveryRuntime:
         self.log_repository = log_repository
         self.log_rotation_service = log_rotation_service
         self.redaction_service = redaction_service
+        self.context_service = context_service
 
         # Wired immediately, not deferred to start(): redaction is a
         # security property of the logger and should take effect as
@@ -389,21 +395,40 @@ class GovernanceIntegrityDeliveryRuntime:
                 "runtime is not running"
             )
 
+        if self.context_service is not None:
+
+            self.context_service.push(
+                GovernanceLogContext(
+                    request_id=None,
+                    dispatch_id=None,
+                    provider=None,
+                    component="delivery_runtime",
+                )
+            )
+
         try:
 
-            self.worker.run_once()
+            try:
 
-        except Exception:
+                self.worker.run_once()
 
-            if self.logger is not None:
+            except Exception:
 
-                self.logger.exception(
-                    "delivery_runtime", "worker_iteration_failed"
-                )
+                if self.logger is not None:
 
-            raise
+                    self.logger.exception(
+                        "delivery_runtime", "worker_iteration_failed"
+                    )
 
-        self._worker_iterations += 1
+                raise
+
+            self._worker_iterations += 1
+
+        finally:
+
+            if self.context_service is not None:
+
+                self.context_service.pop()
 
         if self.metrics_service is not None:
 
@@ -457,7 +482,8 @@ def build_integrity_delivery_runtime(
     logger=None,
     log_repository=None,
     log_rotation_service=None,
-    redaction_service=None
+    redaction_service=None,
+    context_service=None
 ) -> GovernanceIntegrityDeliveryRuntime:
 
     if clock is None:
@@ -536,5 +562,8 @@ def build_integrity_delivery_runtime(
             log_rotation_service,
 
         redaction_service=
-            redaction_service
+            redaction_service,
+
+        context_service=
+            context_service
     )

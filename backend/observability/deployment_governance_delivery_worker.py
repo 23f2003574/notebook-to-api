@@ -4,6 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, TYPE_CHECKING
 
+from .deployment_governance_log_context import (
+    GovernanceLogContext,
+    GovernanceLogContextService,
+)
+
 if TYPE_CHECKING:
     from .deployment_governance_delivery_engine import (
         GovernanceIntegrityDeliveryEngine,
@@ -87,6 +92,7 @@ class GovernanceIntegrityDeliveryWorker:
         delivery_engine: "GovernanceIntegrityDeliveryEngine",
         retry_orchestrator: "GovernanceIntegrityRetryOrchestrator",
         clock: Callable[[], datetime] | None = None,
+        context_service: GovernanceLogContextService | None = None,
     ) -> None:
         self._scheduler = scheduler
 
@@ -97,6 +103,8 @@ class GovernanceIntegrityDeliveryWorker:
         self._clock = clock or (
             lambda: datetime.now(timezone.utc)
         )
+
+        self._context_service = context_service
 
         self._last_summary: GovernanceIntegrityWorkerRunSummary | None = (
             None
@@ -121,37 +129,54 @@ class GovernanceIntegrityDeliveryWorker:
 
         self._scheduler.mark_running(dispatch.dispatch_id)
 
-        try:
-            result = self._delivery_engine.deliver(
-                str(dispatch.dispatch_id)
+        if self._context_service is not None:
+            self._context_service.push(
+                GovernanceLogContext(
+                    request_id=None,
+                    dispatch_id=str(dispatch.dispatch_id),
+                    provider=None,
+                    component="delivery_worker",
+                )
             )
 
-        except Exception:
+        try:
+            try:
+                result = self._delivery_engine.deliver(
+                    str(dispatch.dispatch_id)
+                )
+
+            except Exception:
+                self._scheduler.mark_completed(dispatch.dispatch_id)
+
+                return "failed"
+
+            if result.status == "success":
+                self._scheduler.mark_completed(dispatch.dispatch_id)
+
+                return "succeeded"
+
+            decision = (
+                self._retry_orchestrator.evaluate_delivery_result(
+                    result, dispatch.attempt
+                )
+            )
+
+            if decision.should_retry:
+                self._scheduler.schedule_retry(
+                    dispatch.dispatch_id,
+                    attempt=decision.retry_attempt,
+                    delay_seconds=decision.delay_seconds,
+                )
+
+                return "retried"
+
             self._scheduler.mark_completed(dispatch.dispatch_id)
 
             return "failed"
 
-        if result.status == "success":
-            self._scheduler.mark_completed(dispatch.dispatch_id)
-
-            return "succeeded"
-
-        decision = self._retry_orchestrator.evaluate_delivery_result(
-            result, dispatch.attempt
-        )
-
-        if decision.should_retry:
-            self._scheduler.schedule_retry(
-                dispatch.dispatch_id,
-                attempt=decision.retry_attempt,
-                delay_seconds=decision.delay_seconds,
-            )
-
-            return "retried"
-
-        self._scheduler.mark_completed(dispatch.dispatch_id)
-
-        return "failed"
+        finally:
+            if self._context_service is not None:
+                self._context_service.pop()
 
     def process_ready_dispatches(
         self,
