@@ -4,3 +4,4 @@ nbformat
 watchdog
 pytest
 httpx
+python-multipart
