@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import sys
 from datetime import datetime
-from typing import TextIO
+from pathlib import Path
+from typing import Callable, TextIO
 
 from .deployment_governance_logging import GovernanceLogEntry
 from .deployment_governance_persistence import (
@@ -344,6 +345,150 @@ def run_deployment_governance_logging_search(
 
     else:
         _render_logging_human(entries, stdout=stdout)
+
+    return 0
+
+
+def run_deployment_governance_logging_export_json(
+    *,
+    output_path: "str | Path",
+    level: str | None = None,
+    component: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and export the durable governance log
+    history matching the given filters to output_path as a single
+    JSON array, streamed entry by entry.
+
+    Exit codes: 0 the export was written (even if empty), 2 it
+    could not be (including an invalid --level or an unwritable
+    output path).
+    """
+
+    return _run_logging_export(
+        lambda service, stream: service.export_json(
+            stream,
+            level=None if level is None else level.upper(),
+            component=component,
+            since=since,
+            until=until,
+        ),
+        output_path=output_path,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+
+def run_deployment_governance_logging_export_csv(
+    *,
+    output_path: "str | Path",
+    level: str | None = None,
+    component: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and export the durable governance log
+    history matching the given filters to output_path as CSV,
+    streamed entry by entry.
+
+    Exit codes: 0 the export was written (even if empty), 2 it
+    could not be (including an invalid --level or an unwritable
+    output path).
+    """
+
+    return _run_logging_export(
+        lambda service, stream: service.export_csv(
+            stream,
+            level=None if level is None else level.upper(),
+            component=component,
+            since=since,
+            until=until,
+        ),
+        output_path=output_path,
+        stdout=stdout,
+        stderr=stderr,
+        newline="",
+    )
+
+
+def run_deployment_governance_logging_export_ndjson(
+    *,
+    output_path: "str | Path",
+    level: str | None = None,
+    component: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and export the durable governance log
+    history matching the given filters to output_path as
+    newline-delimited JSON, streamed entry by entry.
+
+    Exit codes: 0 the export was written (even if empty), 2 it
+    could not be (including an invalid --level or an unwritable
+    output path).
+    """
+
+    return _run_logging_export(
+        lambda service, stream: service.export_ndjson(
+            stream,
+            level=None if level is None else level.upper(),
+            component=component,
+            since=since,
+            until=until,
+        ),
+        output_path=output_path,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+
+def _run_logging_export(
+    export: "Callable[[object, TextIO], int]",
+    *,
+    output_path: "str | Path",
+    stdout: TextIO,
+    stderr: TextIO,
+    newline: str | None = None,
+) -> int:
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        export_service = (
+            runtime.build_integrity_log_export_service()
+        )
+
+        path = Path(output_path)
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        with path.open(
+            "w", encoding="utf-8", newline=newline
+        ) as stream:
+            count = export(export_service, stream)
+
+    except Exception as exc:
+        _render_logging_failure(
+            exc, json_output=False, stderr=stderr
+        )
+
+        return 2
+
+    stdout.write(
+        f"Exported {count} governance log "
+        f"entr{'y' if count == 1 else 'ies'} to {path}.\n"
+    )
 
     return 0
 

@@ -125,6 +125,9 @@ from .deployment_governance_log_rotation import (
 from .deployment_governance_log_search import (
     GovernanceLogSearchService,
 )
+from .deployment_governance_log_export import (
+    GovernanceLogExportService,
+)
 from .deployment_governance_integrity_audit import (
     DeploymentGovernanceIntegrityAuditService,
     DeploymentGovernanceTraceIntegrityAuditSource,
@@ -1596,6 +1599,21 @@ class DeploymentGovernancePersistenceRuntime:
         """
 
         return GovernanceLogSearchService(self.log_repository)
+
+    def build_integrity_log_export_service(
+        self,
+    ) -> GovernanceLogExportService:
+        """
+        Build a governance log export service bound to a fresh
+        search service over the shared log repository.
+
+        Like build_integrity_log_search_service, this constructs a
+        new (stateless) instance on every call.
+        """
+
+        return GovernanceLogExportService(
+            self.build_integrity_log_search_service()
+        )
 
     def build_integrity_retry_orchestrator(
         self,

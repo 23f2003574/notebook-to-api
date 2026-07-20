@@ -53,6 +53,9 @@ from backend.observability.deployment_governance_logging_cli import (
     run_deployment_governance_logging_rotate,
     run_deployment_governance_logging_rotation_status,
     run_deployment_governance_logging_search,
+    run_deployment_governance_logging_export_json,
+    run_deployment_governance_logging_export_csv,
+    run_deployment_governance_logging_export_ndjson,
 )
 from backend.observability.deployment_governance_audit_session_cli import (
     run_deployment_governance_audit_session,
@@ -1028,6 +1031,95 @@ def main():
         dest="json_output",
         help="Emit machine-readable JSON output.",
     )
+
+    logs_export_json_parser = logs_subparsers.add_parser(
+        "export-json",
+        help="Export the durable governance log history as JSON.",
+        description=(
+            "Export the durable governance log history matching the "
+            "given filters to --output as a single JSON array, "
+            "streamed entry by entry.\n\n"
+            "Exit codes: 0 the export was written (even if empty), "
+            "2 it could not be."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    logs_export_csv_parser = logs_subparsers.add_parser(
+        "export-csv",
+        help="Export the durable governance log history as CSV.",
+        description=(
+            "Export the durable governance log history matching the "
+            "given filters to --output as CSV, streamed entry by "
+            "entry. The structured fields mapping is JSON-encoded "
+            "into a single fields_json column.\n\n"
+            "Exit codes: 0 the export was written (even if empty), "
+            "2 it could not be."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    logs_export_ndjson_parser = logs_subparsers.add_parser(
+        "export-ndjson",
+        help=(
+            "Export the durable governance log history as "
+            "newline-delimited JSON."
+        ),
+        description=(
+            "Export the durable governance log history matching the "
+            "given filters to --output as newline-delimited JSON "
+            "(one compact JSON object per line), streamed entry by "
+            "entry.\n\n"
+            "Exit codes: 0 the export was written (even if empty), "
+            "2 it could not be."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    for export_parser in (
+        logs_export_json_parser,
+        logs_export_csv_parser,
+        logs_export_ndjson_parser,
+    ):
+        export_parser.add_argument(
+            "--output",
+            type=str,
+            required=True,
+            dest="output_path",
+            help="File path to write the export to.",
+        )
+        export_parser.add_argument(
+            "--level",
+            type=str,
+            default=None,
+            dest="level",
+            help=(
+                "Only export entries at this level (debug, info, "
+                "warning, error). Default: all levels."
+            ),
+        )
+        export_parser.add_argument(
+            "--component",
+            type=str,
+            default=None,
+            dest="component",
+            help="Only export entries from this component. Default: all.",
+        )
+        export_parser.add_argument(
+            "--from",
+            default=None,
+            dest="since",
+            help=(
+                "Only export entries at or after this ISO-8601 "
+                "timestamp (inclusive)."
+            ),
+        )
+        export_parser.add_argument(
+            "--to",
+            default=None,
+            dest="until",
+            help=(
+                "Only export entries at or before this ISO-8601 "
+                "timestamp (inclusive)."
+            ),
+        )
 
     session_parser = audits_subparsers.add_parser(
         "session",
@@ -4737,6 +4829,40 @@ def main():
                         limit=args.limit,
                         offset=args.offset,
                         json_output=args.json_output,
+                    )
+                    sys.exit(exit_code)
+                if args.logs_command in (
+                    "export-json",
+                    "export-csv",
+                    "export-ndjson",
+                ):
+                    try:
+                        since = parse_governance_audit_timestamp(
+                            args.since
+                        )
+                        until = parse_governance_audit_timestamp(
+                            args.until
+                        )
+                    except ValueError as exc:
+                        parser.error(str(exc))
+                        return
+                    export_runner = {
+                        "export-json": (
+                            run_deployment_governance_logging_export_json
+                        ),
+                        "export-csv": (
+                            run_deployment_governance_logging_export_csv
+                        ),
+                        "export-ndjson": (
+                            run_deployment_governance_logging_export_ndjson
+                        ),
+                    }[args.logs_command]
+                    exit_code = export_runner(
+                        output_path=args.output_path,
+                        level=args.level,
+                        component=args.component,
+                        since=since,
+                        until=until,
                     )
                     sys.exit(exit_code)
             if getattr(args, "audits_command", None) == "session":
