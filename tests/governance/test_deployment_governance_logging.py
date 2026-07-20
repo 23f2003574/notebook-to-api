@@ -18,6 +18,11 @@ from backend.observability.deployment_governance_logging_cli import (
     _render_logging_human,
     _render_logging_json,
     run_deployment_governance_logging_tail,
+    run_deployment_governance_logging_list,
+    run_deployment_governance_logging_clear,
+)
+from backend.observability.deployment_governance_log_repository import (
+    InMemoryGovernanceLogRepository,
 )
 
 BASE_TIME = datetime(2026, 7, 20, 12, 0, 0, tzinfo=timezone.utc)
@@ -370,7 +375,7 @@ class TestGovernanceIntegrityLoggingCli:
             stderr=stderr,
         )
 
-        assert "could not be produced" in stderr.getvalue()
+        assert "could not be completed" in stderr.getvalue()
 
     def test_render_logging_failure_json(self):
         stderr = StringIO()
@@ -404,7 +409,7 @@ class TestGovernanceIntegrityLoggingCli:
         )
 
         assert exit_code == 2
-        assert "could not be produced" in stderr.getvalue()
+        assert "could not be completed" in stderr.getvalue()
 
     def test_runner_filters_by_level_and_respects_limit(
         self, monkeypatch
@@ -448,3 +453,172 @@ class TestGovernanceIntegrityLoggingCli:
 
         assert len(payload) == 1
         assert payload[0]["level"] == "WARNING"
+
+
+class TestGovernanceIntegrityLoggerRepositoryWriteThrough:
+
+    def test_log_call_writes_through_to_repository(self):
+        repository = InMemoryGovernanceLogRepository()
+
+        logger = GovernanceIntegrityLogger(
+            clock=lambda: BASE_TIME, repository=repository
+        )
+
+        entry = logger.info("metrics", "record_success")
+
+        assert repository.list() == (entry,)
+
+    def test_set_repository_attaches_after_construction(self):
+        repository = InMemoryGovernanceLogRepository()
+
+        logger = GovernanceIntegrityLogger(clock=lambda: BASE_TIME)
+
+        logger.info("metrics", "before_attach")
+
+        logger.set_repository(repository)
+
+        entry = logger.info("metrics", "after_attach")
+
+        assert repository.list() == (entry,)
+
+    def test_clear_also_clears_repository(self):
+        repository = InMemoryGovernanceLogRepository()
+
+        logger = GovernanceIntegrityLogger(
+            clock=lambda: BASE_TIME, repository=repository
+        )
+
+        logger.info("metrics", "record_success")
+        logger.clear()
+
+        assert logger.entries() == ()
+        assert repository.list() == ()
+
+    def test_logger_without_repository_still_works(self):
+        logger = GovernanceIntegrityLogger(clock=lambda: BASE_TIME)
+
+        entry = logger.info("metrics", "record_success")
+
+        assert logger.entries() == (entry,)
+
+
+class TestGovernanceIntegrityLoggingListAndClearCli:
+
+    def _stub_runtime(self, repository):
+        class _StubRuntime:
+            def build_integrity_log_repository(self):
+                return repository
+
+        return _StubRuntime()
+
+    def test_list_runner_returns_oldest_first(self, monkeypatch):
+        repository = InMemoryGovernanceLogRepository()
+
+        logger = GovernanceIntegrityLogger(
+            clock=lambda: BASE_TIME, repository=repository
+        )
+
+        logger.info("metrics", "first")
+        logger.warning("delivery_engine", "second")
+
+        monkeypatch.setattr(
+            "backend.observability.deployment_governance_logging_cli"
+            ".build_deployment_governance_persistence",
+            lambda config: self._stub_runtime(repository),
+        )
+
+        stdout = StringIO()
+
+        exit_code = run_deployment_governance_logging_list(
+            json_output=True, stdout=stdout, stderr=StringIO()
+        )
+
+        assert exit_code == 0
+
+        payload = json.loads(stdout.getvalue())
+
+        assert [entry["event"] for entry in payload] == [
+            "first",
+            "second",
+        ]
+
+    def test_list_runner_filters_by_component(self, monkeypatch):
+        repository = InMemoryGovernanceLogRepository()
+
+        logger = GovernanceIntegrityLogger(
+            clock=lambda: BASE_TIME, repository=repository
+        )
+
+        logger.info("metrics", "metrics_event")
+        logger.info("delivery_engine", "engine_event")
+
+        monkeypatch.setattr(
+            "backend.observability.deployment_governance_logging_cli"
+            ".build_deployment_governance_persistence",
+            lambda config: self._stub_runtime(repository),
+        )
+
+        stdout = StringIO()
+
+        exit_code = run_deployment_governance_logging_list(
+            component="delivery_engine",
+            json_output=True,
+            stdout=stdout,
+            stderr=StringIO(),
+        )
+
+        assert exit_code == 0
+
+        payload = json.loads(stdout.getvalue())
+
+        assert len(payload) == 1
+        assert payload[0]["event"] == "engine_event"
+
+    def test_list_runner_rejects_invalid_level(self):
+        stderr = StringIO()
+
+        exit_code = run_deployment_governance_logging_list(
+            level="TRACE", stdout=StringIO(), stderr=stderr
+        )
+
+        assert exit_code == 2
+        assert "could not be completed" in stderr.getvalue()
+
+    def test_clear_runner_reports_discarded_count(self, monkeypatch):
+        repository = InMemoryGovernanceLogRepository()
+
+        logger = GovernanceIntegrityLogger(
+            clock=lambda: BASE_TIME, repository=repository
+        )
+
+        logger.info("metrics", "first")
+        logger.info("metrics", "second")
+
+        monkeypatch.setattr(
+            "backend.observability.deployment_governance_logging_cli"
+            ".build_deployment_governance_persistence",
+            lambda config: self._stub_runtime(repository),
+        )
+
+        stdout = StringIO()
+
+        exit_code = run_deployment_governance_logging_clear(
+            json_output=True, stdout=stdout, stderr=StringIO()
+        )
+
+        assert exit_code == 0
+
+        payload = json.loads(stdout.getvalue())
+
+        assert payload["discarded"] == 2
+        assert repository.list() == ()
+
+    def test_clear_runner_handles_empty_repository(self):
+        stdout = StringIO()
+
+        exit_code = run_deployment_governance_logging_clear(
+            stdout=stdout, stderr=StringIO()
+        )
+
+        assert exit_code == 0
+        assert "Cleared 0 governance log entries" in stdout.getvalue()

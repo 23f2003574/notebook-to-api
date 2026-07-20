@@ -48,6 +48,8 @@ from backend.observability.deployment_governance_audit_timeline_cli import (
 )
 from backend.observability.deployment_governance_logging_cli import (
     run_deployment_governance_logging_tail,
+    run_deployment_governance_logging_list,
+    run_deployment_governance_logging_clear,
 )
 from backend.observability.deployment_governance_audit_session_cli import (
     run_deployment_governance_audit_session,
@@ -803,6 +805,69 @@ def main():
         help="Maximum number of log entries to return. Default: all.",
     )
     logs_tail_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    logs_list_parser = logs_subparsers.add_parser(
+        "list",
+        help=(
+            "Show the durable governance log history, oldest first."
+        ),
+        description=(
+            "Show the durable governance log history (via the "
+            "configured log repository), oldest first, unlike "
+            "`logs tail` which reads the in-process buffer.\n\n"
+            "Exit codes: 0 the listing was produced (even if empty), "
+            "2 it could not be (including an invalid --level)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    logs_list_parser.add_argument(
+        "--level",
+        type=str,
+        default=None,
+        dest="level",
+        help=(
+            "Only show entries at this level (debug, info, warning, "
+            "error). Default: all levels."
+        ),
+    )
+    logs_list_parser.add_argument(
+        "--component",
+        type=str,
+        default=None,
+        dest="component",
+        help="Only show entries from this component. Default: all.",
+    )
+    logs_list_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        dest="limit",
+        help="Maximum number of log entries to return. Default: all.",
+    )
+    logs_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    logs_clear_parser = logs_subparsers.add_parser(
+        "clear",
+        help="Discard every entry in the durable governance log history.",
+        description=(
+            "Discard every entry currently stored in the configured "
+            "log repository.\n\n"
+            "Exit codes: 0 the log repository was cleared (even if "
+            "it was already empty), 2 it could not be cleared."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    logs_clear_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -4465,6 +4530,19 @@ def main():
                     exit_code = run_deployment_governance_logging_tail(
                         level=args.level,
                         limit=args.limit,
+                        json_output=args.json_output,
+                    )
+                    sys.exit(exit_code)
+                if args.logs_command == "list":
+                    exit_code = run_deployment_governance_logging_list(
+                        level=args.level,
+                        component=args.component,
+                        limit=args.limit,
+                        json_output=args.json_output,
+                    )
+                    sys.exit(exit_code)
+                if args.logs_command == "clear":
+                    exit_code = run_deployment_governance_logging_clear(
                         json_output=args.json_output,
                     )
                     sys.exit(exit_code)

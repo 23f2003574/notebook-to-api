@@ -7,7 +7,12 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import Lock
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .deployment_governance_log_repository import (
+        GovernanceLogRepository,
+    )
 
 _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
@@ -89,6 +94,7 @@ class GovernanceIntegrityLogger:
         clock: Callable[[], datetime] | None = None,
         buffer_size: int = DEFAULT_LOG_BUFFER_SIZE,
         sink: logging.Logger | None = None,
+        repository: "GovernanceLogRepository | None" = None,
     ) -> None:
         if buffer_size < 1:
             raise ValueError(
@@ -108,6 +114,8 @@ class GovernanceIntegrityLogger:
         self._entries: "deque[GovernanceLogEntry]" = deque(
             maxlen=buffer_size
         )
+
+        self._repository = repository
 
     def debug(
         self,
@@ -222,12 +230,29 @@ class GovernanceIntegrityLogger:
 
     def clear(self) -> None:
         """
-        Discard every buffered entry. Does not affect the standard
-        library sink.
+        Discard every buffered entry, and every entry stored in the
+        configured repository, if one is attached. Does not affect
+        the standard library sink.
         """
 
         with self._lock:
             self._entries.clear()
+
+            repository = self._repository
+
+        if repository is not None:
+            repository.clear()
+
+    def set_repository(
+        self, repository: "GovernanceLogRepository | None"
+    ) -> None:
+        """
+        Attach (or detach) a GovernanceLogRepository after
+        construction, without recreating the logger.
+        """
+
+        with self._lock:
+            self._repository = repository
 
     def _log(
         self,
@@ -246,6 +271,11 @@ class GovernanceIntegrityLogger:
 
         with self._lock:
             self._entries.append(entry)
+
+            repository = self._repository
+
+        if repository is not None:
+            repository.append(entry)
 
         self._sink.log(
             _LEVEL_TO_STDLIB[level],

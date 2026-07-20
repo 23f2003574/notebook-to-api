@@ -31,6 +31,9 @@ from .deployment_governance_metrics_bootstrap import (
 from .deployment_governance_logging import (
     GovernanceIntegrityLogger,
 )
+from .deployment_governance_log_repository import (
+    GovernanceLogRepository,
+)
 
 
 class GovernanceIntegrityRuntimeState(
@@ -76,13 +79,15 @@ class GovernanceIntegrityDeliveryRuntime:
         metrics_retention_service: Optional[GovernanceIntegrityMetricsRetentionService] = None,
         config_service: Optional[GovernanceIntegrityMetricsConfigService] = None,
         metrics_bootstrap: Optional[GovernanceIntegrityMetricsBootstrap] = None,
-        logger: Optional[GovernanceIntegrityLogger] = None
+        logger: Optional[GovernanceIntegrityLogger] = None,
+        log_repository: Optional[GovernanceLogRepository] = None
     ):
         self.worker = worker
         self.scheduler = scheduler
         self.provider_registry = provider_registry
         self.clock = clock
         self.logger = logger
+        self.log_repository = log_repository
 
         # A given metrics_bootstrap replaces the previous pattern of
         # wiring each metrics-related dependency independently: any
@@ -428,7 +433,8 @@ def build_integrity_delivery_runtime(
     metrics_retention_service=None,
     config_service=None,
     metrics_bootstrap=None,
-    logger=None
+    logger=None,
+    log_repository=None
 ) -> GovernanceIntegrityDeliveryRuntime:
 
     if clock is None:
@@ -498,5 +504,8 @@ def build_integrity_delivery_runtime(
             metrics_bootstrap,
 
         logger=
-            logger
+            logger,
+
+        log_repository=
+            log_repository
     )

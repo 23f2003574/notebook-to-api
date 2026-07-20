@@ -115,6 +115,10 @@ from .deployment_governance_metrics_history import (
     GovernanceIntegrityMetricsHistoryRepository,
     InMemoryGovernanceIntegrityMetricsHistoryRepository,
 )
+from .deployment_governance_log_repository import (
+    GovernanceLogRepository,
+    InMemoryGovernanceLogRepository,
+)
 from .deployment_governance_integrity_audit import (
     DeploymentGovernanceIntegrityAuditService,
     DeploymentGovernanceTraceIntegrityAuditSource,
@@ -184,6 +188,9 @@ from .deployment_governance_metrics_repository import (
 )
 from .deployment_governance_metrics_history import (
     SQLiteGovernanceIntegrityMetricsHistoryRepository,
+)
+from .deployment_governance_log_repository import (
+    SQLiteGovernanceLogRepository,
 )
 from .sqlite_deployment_governance_audit_history import (
     SQLiteGovernanceIntegrityAuditHistoryRepository,
@@ -613,11 +620,18 @@ class DeploymentGovernancePersistenceRuntime:
         default_factory=GovernanceIntegrityLogger
     )
 
+    log_repository: GovernanceLogRepository = field(
+        default_factory=InMemoryGovernanceLogRepository
+    )
+
     def __post_init__(self) -> None:
-        # metrics_service is constructed independently by its own
-        # default_factory above, so the shared logger is attached
-        # here rather than threaded through at construction time.
+        # metrics_service and logger are each constructed
+        # independently by their own default_factory above, so the
+        # cross-wiring is attached here rather than threaded through
+        # at construction time.
         self.metrics_service.set_logger(self.logger)
+
+        self.logger.set_repository(self.log_repository)
 
     @property
     def durable(
@@ -1515,6 +1529,21 @@ class DeploymentGovernancePersistenceRuntime:
 
         return self.logger
 
+    def build_integrity_log_repository(
+        self,
+    ) -> GovernanceLogRepository:
+        """
+        Return the shared governance log repository.
+
+        Like build_integrity_logger, this returns the runtime's
+        single stored instance. The logger writes every entry
+        through this repository (see __post_init__), so it is
+        durable under the SQLite backend and reflects the same
+        history the logger itself observed.
+        """
+
+        return self.log_repository
+
     def build_integrity_retry_orchestrator(
         self,
     ) -> "GovernanceIntegrityRetryOrchestrator":
@@ -2067,6 +2096,15 @@ def _build_sqlite_runtime(
         )
     )
 
+    log_repository = (
+        SQLiteGovernanceLogRepository(
+            database,
+            initialize_schema=(
+                config.initialize_schema
+            ),
+        )
+    )
+
     # SQLite persistence for the execution queue is intentionally
     # deferred (see deployment_governance_audit_execution_queue.py):
     # it stays in-process memory regardless of the configured backend.
@@ -2144,6 +2182,7 @@ def _build_sqlite_runtime(
         metrics_repository=metrics_repository,
         metrics_history_repository=metrics_history_repository,
         metrics_service=metrics_service,
+        log_repository=log_repository,
     )
 
 

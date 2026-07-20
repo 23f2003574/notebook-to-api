@@ -93,6 +93,10 @@ DEPLOYMENT_GOVERNANCE_METRICS_HISTORY_TABLE: Final[
     str
 ] = "governance_metric_history"
 
+DEPLOYMENT_GOVERNANCE_LOGS_TABLE: Final[
+    str
+] = "governance_logs"
+
 
 @dataclass(frozen=True)
 class DeploymentGovernanceSQLiteSchema:
@@ -140,6 +144,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_scheduled_dispatches_migration(),
             DeploymentGovernanceSQLiteSchema._create_governance_metrics_migration(),
             DeploymentGovernanceSQLiteSchema._create_governance_metrics_history_migration(),
+            DeploymentGovernanceSQLiteSchema._create_governance_logs_migration(),
         )
 
     @staticmethod
@@ -1497,6 +1502,88 @@ class DeploymentGovernanceSQLiteSchema:
                 ON {DEPLOYMENT_GOVERNANCE_METRICS_HISTORY_TABLE}
                 (
                     captured_at
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_governance_logs_migration() -> SQLiteMigration:
+        """
+        Migration 23 creates append-only storage for structured
+        governance log entries
+        (backend/observability/deployment_governance_log_repository.py).
+
+        Like governance_metric_history, this table accumulates one
+        row per logged entry and is never updated in place, only
+        appended to and cleared.
+        """
+
+        return SQLiteMigration(
+            version=23,
+            name="create governance logs table",
+            statements=(
+                f"""
+                CREATE TABLE
+                {DEPLOYMENT_GOVERNANCE_LOGS_TABLE}
+                (
+                    id INTEGER
+                        PRIMARY KEY,
+
+                    timestamp TEXT NOT NULL,
+
+                    level TEXT NOT NULL
+                        CHECK (
+                            level IN (
+                                'DEBUG',
+                                'INFO',
+                                'WARNING',
+                                'ERROR'
+                            )
+                        ),
+
+                    component TEXT NOT NULL
+                        CHECK (
+                            length(
+                                trim(component)
+                            ) > 0
+                        ),
+
+                    event TEXT NOT NULL
+                        CHECK (
+                            length(
+                                trim(event)
+                            ) > 0
+                        ),
+
+                    fields_json TEXT NOT NULL
+                )
+                """,
+
+                f"""
+                CREATE INDEX
+                idx_governance_logs_timestamp
+                ON {DEPLOYMENT_GOVERNANCE_LOGS_TABLE}
+                (
+                    timestamp
+                )
+                """,
+
+                f"""
+                CREATE INDEX
+                idx_governance_logs_level
+                ON {DEPLOYMENT_GOVERNANCE_LOGS_TABLE}
+                (
+                    level
+                )
+                """,
+
+                f"""
+                CREATE INDEX
+                idx_governance_logs_component
+                ON {DEPLOYMENT_GOVERNANCE_LOGS_TABLE}
+                (
+                    component
                 )
                 """,
             ),
