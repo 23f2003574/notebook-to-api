@@ -182,6 +182,65 @@ class TestInMemoryGovernanceLogRepository:
         assert repository.list() == ()
         assert repository.tail() == ()
 
+    def test_prune_discards_oldest_beyond_max_entries(self):
+        repository = InMemoryGovernanceLogRepository()
+
+        for offset in range(5):
+            repository.append(
+                _entry(offset_minutes=offset, event=f"event_{offset}")
+            )
+
+        discarded = repository.prune(2)
+
+        assert discarded == 3
+        remaining = repository.list()
+        assert [e.event for e in remaining] == ["event_3", "event_4"]
+
+    def test_prune_is_a_no_op_when_under_limit(self):
+        repository = InMemoryGovernanceLogRepository()
+
+        repository.append(_entry())
+
+        assert repository.prune(10) == 0
+        assert len(repository.list()) == 1
+
+    def test_prune_rejects_negative_max_entries(self):
+        repository = InMemoryGovernanceLogRepository()
+
+        with pytest.raises(ValueError):
+            repository.prune(-1)
+
+    def test_prune_older_than_discards_matching_entries(self):
+        repository = InMemoryGovernanceLogRepository()
+
+        old_entry = _entry(offset_minutes=0, event="old")
+        new_entry = _entry(offset_minutes=100, event="new")
+
+        repository.append(old_entry)
+        repository.append(new_entry)
+
+        cutoff = BASE_TIME + timedelta(minutes=50)
+
+        discarded = repository.prune_older_than(cutoff)
+
+        assert discarded == 1
+        assert repository.list() == (new_entry,)
+
+    def test_set_rotation_service_runs_after_append(self):
+        repository = InMemoryGovernanceLogRepository()
+
+        calls = []
+
+        class _FakeRotationService:
+            def rotate(self):
+                calls.append(1)
+
+        repository.set_rotation_service(_FakeRotationService())
+
+        repository.append(_entry())
+
+        assert calls == [1]
+
 
 class TestSQLiteGovernanceLogRepository:
 
@@ -323,6 +382,67 @@ class TestSQLiteGovernanceLogRepository:
         repository.clear()
 
         assert repository.list() == ()
+
+    def test_prune_discards_oldest_beyond_max_entries(self, tmp_path):
+        repository = SQLiteGovernanceLogRepository(
+            self._database(tmp_path)
+        )
+
+        for offset in range(5):
+            repository.append(
+                _entry(offset_minutes=offset, event=f"event_{offset}")
+            )
+
+        discarded = repository.prune(2)
+
+        assert discarded == 3
+        remaining = repository.list()
+        assert [e.event for e in remaining] == ["event_3", "event_4"]
+
+    def test_prune_is_a_no_op_when_under_limit(self, tmp_path):
+        repository = SQLiteGovernanceLogRepository(
+            self._database(tmp_path)
+        )
+
+        repository.append(_entry())
+
+        assert repository.prune(10) == 0
+        assert len(repository.list()) == 1
+
+    def test_prune_older_than_discards_matching_entries(
+        self, tmp_path
+    ):
+        repository = SQLiteGovernanceLogRepository(
+            self._database(tmp_path)
+        )
+
+        repository.append(_entry(offset_minutes=0, event="old"))
+        repository.append(_entry(offset_minutes=100, event="new"))
+
+        cutoff = BASE_TIME + timedelta(minutes=50)
+
+        discarded = repository.prune_older_than(cutoff)
+
+        assert discarded == 1
+        remaining = repository.list()
+        assert [e.event for e in remaining] == ["new"]
+
+    def test_set_rotation_service_runs_after_append(self, tmp_path):
+        repository = SQLiteGovernanceLogRepository(
+            self._database(tmp_path)
+        )
+
+        calls = []
+
+        class _FakeRotationService:
+            def rotate(self):
+                calls.append(1)
+
+        repository.set_rotation_service(_FakeRotationService())
+
+        repository.append(_entry())
+
+        assert calls == [1]
 
     def test_persists_and_survives_reload(self, tmp_path):
         from backend.persistence.sqlite_database import (

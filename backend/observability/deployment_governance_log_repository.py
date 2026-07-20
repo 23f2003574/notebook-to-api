@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from threading import RLock
-from typing import Any, Mapping, Protocol, runtime_checkable
+from typing import Any, Mapping, Protocol, TYPE_CHECKING, runtime_checkable
 from datetime import datetime, timezone
 
 from backend.persistence.sqlite_database import (
@@ -16,6 +16,11 @@ from .sqlite_deployment_governance_schema import (
     DEPLOYMENT_GOVERNANCE_LOGS_TABLE,
     DeploymentGovernanceSQLiteSchema,
 )
+
+if TYPE_CHECKING:
+    from .deployment_governance_log_rotation import (
+        GovernanceLogRotationService,
+    )
 
 _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
@@ -74,16 +79,35 @@ class GovernanceLogRepository(Protocol):
         Discard every stored log entry.
         """
 
+    def prune(self, max_entries: int) -> int:
+        """
+        Discard the oldest entries beyond max_entries, keeping only
+        the most recent ones. Returns the number of entries
+        discarded.
+        """
+
+    def prune_older_than(self, cutoff: datetime) -> int:
+        """
+        Discard every entry timestamped strictly before cutoff.
+        Returns the number of entries discarded.
+        """
+
 
 class InMemoryGovernanceLogRepository:
     """
     Thread-safe in-memory implementation of governance log storage.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        rotation_service: "GovernanceLogRotationService | None" = None,
+    ) -> None:
         self._entries: list[GovernanceLogEntry] = []
 
         self._lock = RLock()
+
+        self._rotation_service = rotation_service
 
     def append(
         self,
@@ -92,7 +116,24 @@ class InMemoryGovernanceLogRepository:
         with self._lock:
             self._entries.append(entry)
 
-            return entry
+            rotation_service = self._rotation_service
+
+        if rotation_service is not None:
+            rotation_service.rotate()
+
+        return entry
+
+    def set_rotation_service(
+        self,
+        rotation_service: "GovernanceLogRotationService | None",
+    ) -> None:
+        """
+        Attach (or detach) a GovernanceLogRotationService to run
+        after every append(), without recreating the repository.
+        """
+
+        with self._lock:
+            self._rotation_service = rotation_service
 
     def list(
         self,
@@ -150,6 +191,36 @@ class InMemoryGovernanceLogRepository:
         with self._lock:
             self._entries.clear()
 
+    def prune(self, max_entries: int) -> int:
+        if max_entries < 0:
+            raise ValueError(
+                "max_entries must not be negative"
+            )
+
+        with self._lock:
+            discarded = max(
+                0, len(self._entries) - max_entries
+            )
+
+            if discarded:
+                self._entries = self._entries[discarded:]
+
+            return discarded
+
+    def prune_older_than(self, cutoff: datetime) -> int:
+        with self._lock:
+            kept = [
+                entry
+                for entry in self._entries
+                if entry.timestamp >= cutoff
+            ]
+
+            discarded = len(self._entries) - len(kept)
+
+            self._entries = kept
+
+            return discarded
+
     @staticmethod
     def _matches(
         entry: GovernanceLogEntry,
@@ -183,8 +254,11 @@ class SQLiteGovernanceLogRepository:
         database: SQLiteDatabase,
         *,
         initialize_schema: bool = True,
+        rotation_service: "GovernanceLogRotationService | None" = None,
     ) -> None:
         self._database = database
+
+        self._rotation_service = rotation_service
 
         if initialize_schema:
             DeploymentGovernanceSQLiteSchema.initialize(
@@ -227,7 +301,21 @@ class SQLiteGovernanceLogRepository:
                 "failed to append governance log entry"
             ) from exc
 
+        if self._rotation_service is not None:
+            self._rotation_service.rotate()
+
         return entry
+
+    def set_rotation_service(
+        self,
+        rotation_service: "GovernanceLogRotationService | None",
+    ) -> None:
+        """
+        Attach (or detach) a GovernanceLogRotationService to run
+        after every append(), without recreating the repository.
+        """
+
+        self._rotation_service = rotation_service
 
     def list(
         self,
@@ -269,6 +357,65 @@ class SQLiteGovernanceLogRepository:
         except sqlite3.Error as exc:
             raise SQLitePersistenceError(
                 "failed to clear governance logs"
+            ) from exc
+
+    def prune(self, max_entries: int) -> int:
+        if max_entries < 0:
+            raise ValueError(
+                "max_entries must not be negative"
+            )
+
+        try:
+            with self._database.transaction(
+                immediate=True
+            ) as connection:
+                cursor = connection.execute(
+                    f"""
+                    DELETE FROM
+                        {DEPLOYMENT_GOVERNANCE_LOGS_TABLE}
+                    WHERE
+                        id NOT IN (
+                            SELECT id FROM
+                                {DEPLOYMENT_GOVERNANCE_LOGS_TABLE}
+                            ORDER BY
+                                id DESC
+                            LIMIT ?
+                        )
+                    """,
+                    (max_entries,),
+                )
+
+                return int(cursor.rowcount)
+
+        except sqlite3.Error as exc:
+            raise SQLitePersistenceError(
+                "failed to prune governance logs"
+            ) from exc
+
+    def prune_older_than(self, cutoff: datetime) -> int:
+        try:
+            with self._database.transaction(
+                immediate=True
+            ) as connection:
+                cursor = connection.execute(
+                    f"""
+                    DELETE FROM
+                        {DEPLOYMENT_GOVERNANCE_LOGS_TABLE}
+                    WHERE
+                        timestamp < :cutoff
+                    """,
+                    {
+                        "cutoff": self._datetime_to_storage(
+                            cutoff
+                        ),
+                    },
+                )
+
+                return int(cursor.rowcount)
+
+        except sqlite3.Error as exc:
+            raise SQLitePersistenceError(
+                "failed to prune governance logs by age"
             ) from exc
 
     def _query(

@@ -50,6 +50,8 @@ from backend.observability.deployment_governance_logging_cli import (
     run_deployment_governance_logging_tail,
     run_deployment_governance_logging_list,
     run_deployment_governance_logging_clear,
+    run_deployment_governance_logging_rotate,
+    run_deployment_governance_logging_rotation_status,
 )
 from backend.observability.deployment_governance_audit_session_cli import (
     run_deployment_governance_audit_session,
@@ -868,6 +870,78 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     logs_clear_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    logs_rotate_parser = logs_subparsers.add_parser(
+        "rotate",
+        help="Run governance log rotation now.",
+        description=(
+            "Run governance log rotation now, discarding entries "
+            "outside the configured policy (oldest first, then "
+            "anything older than the configured max age).\n\n"
+            "--max-entries/--max-age override the configured policy "
+            "for this invocation only.\n\n"
+            "Exit codes: 0 rotation ran (even if nothing was "
+            "discarded), 2 it could not run."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    logs_rotate_parser.add_argument(
+        "--max-entries",
+        type=int,
+        default=None,
+        dest="max_entries",
+        help="Override the configured max entry count for this run.",
+    )
+    logs_rotate_parser.add_argument(
+        "--max-age",
+        type=int,
+        default=None,
+        dest="max_age",
+        help=(
+            "Override the configured max age in days for this run. "
+            "Default: use the configured policy."
+        ),
+    )
+    logs_rotate_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    logs_rotation_parser = logs_subparsers.add_parser(
+        "rotation",
+        help="Show the configured governance log rotation policy.",
+        description=(
+            "Show the configured governance log rotation policy, "
+            "without discarding anything.\n\n"
+            "--max-entries/--max-age preview a different policy for "
+            "this invocation only; no entries are discarded.\n\n"
+            "Exit codes: 0 the policy was retrieved, 2 it could not "
+            "be."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    logs_rotation_parser.add_argument(
+        "--max-entries",
+        type=int,
+        default=None,
+        dest="max_entries",
+        help="Preview the policy with this max entry count instead.",
+    )
+    logs_rotation_parser.add_argument(
+        "--max-age",
+        type=int,
+        default=None,
+        dest="max_age",
+        help="Preview the policy with this max age in days instead.",
+    )
+    logs_rotation_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -4544,6 +4618,22 @@ def main():
                 if args.logs_command == "clear":
                     exit_code = run_deployment_governance_logging_clear(
                         json_output=args.json_output,
+                    )
+                    sys.exit(exit_code)
+                if args.logs_command == "rotate":
+                    exit_code = run_deployment_governance_logging_rotate(
+                        max_entries=args.max_entries,
+                        max_age=args.max_age,
+                        json_output=args.json_output,
+                    )
+                    sys.exit(exit_code)
+                if args.logs_command == "rotation":
+                    exit_code = (
+                        run_deployment_governance_logging_rotation_status(
+                            max_entries=args.max_entries,
+                            max_age=args.max_age,
+                            json_output=args.json_output,
+                        )
                     )
                     sys.exit(exit_code)
             if getattr(args, "audits_command", None) == "session":

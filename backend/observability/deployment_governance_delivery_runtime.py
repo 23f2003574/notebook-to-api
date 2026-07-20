@@ -34,6 +34,9 @@ from .deployment_governance_logging import (
 from .deployment_governance_log_repository import (
     GovernanceLogRepository,
 )
+from .deployment_governance_log_rotation import (
+    GovernanceLogRotationService,
+)
 
 
 class GovernanceIntegrityRuntimeState(
@@ -80,7 +83,8 @@ class GovernanceIntegrityDeliveryRuntime:
         config_service: Optional[GovernanceIntegrityMetricsConfigService] = None,
         metrics_bootstrap: Optional[GovernanceIntegrityMetricsBootstrap] = None,
         logger: Optional[GovernanceIntegrityLogger] = None,
-        log_repository: Optional[GovernanceLogRepository] = None
+        log_repository: Optional[GovernanceLogRepository] = None,
+        log_rotation_service: Optional[GovernanceLogRotationService] = None
     ):
         self.worker = worker
         self.scheduler = scheduler
@@ -88,6 +92,7 @@ class GovernanceIntegrityDeliveryRuntime:
         self.clock = clock
         self.logger = logger
         self.log_repository = log_repository
+        self.log_rotation_service = log_rotation_service
 
         # A given metrics_bootstrap replaces the previous pattern of
         # wiring each metrics-related dependency independently: any
@@ -312,6 +317,10 @@ class GovernanceIntegrityDeliveryRuntime:
 
             self.metrics_collector.start()
 
+        if self.log_rotation_service is not None:
+
+            self.log_rotation_service.rotate()
+
         self._state = (
             GovernanceIntegrityRuntimeState.RUNNING
         )
@@ -434,7 +443,8 @@ def build_integrity_delivery_runtime(
     config_service=None,
     metrics_bootstrap=None,
     logger=None,
-    log_repository=None
+    log_repository=None,
+    log_rotation_service=None
 ) -> GovernanceIntegrityDeliveryRuntime:
 
     if clock is None:
@@ -507,5 +517,8 @@ def build_integrity_delivery_runtime(
             logger,
 
         log_repository=
-            log_repository
+            log_repository,
+
+        log_rotation_service=
+            log_rotation_service
     )

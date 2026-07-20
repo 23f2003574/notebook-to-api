@@ -119,6 +119,9 @@ from .deployment_governance_log_repository import (
     GovernanceLogRepository,
     InMemoryGovernanceLogRepository,
 )
+from .deployment_governance_log_rotation import (
+    GovernanceLogRotationService,
+)
 from .deployment_governance_integrity_audit import (
     DeploymentGovernanceIntegrityAuditService,
     DeploymentGovernanceTraceIntegrityAuditSource,
@@ -624,14 +627,30 @@ class DeploymentGovernancePersistenceRuntime:
         default_factory=InMemoryGovernanceLogRepository
     )
 
+    log_rotation_service: GovernanceLogRotationService = field(
+        init=False
+    )
+
     def __post_init__(self) -> None:
         # metrics_service and logger are each constructed
         # independently by their own default_factory above, so the
         # cross-wiring is attached here rather than threaded through
-        # at construction time.
+        # at construction time. log_rotation_service depends on
+        # log_repository, so it cannot be a plain default_factory
+        # field either: it is built here instead.
         self.metrics_service.set_logger(self.logger)
 
         self.logger.set_repository(self.log_repository)
+
+        object.__setattr__(
+            self,
+            "log_rotation_service",
+            GovernanceLogRotationService(self.log_repository),
+        )
+
+        self.log_repository.set_rotation_service(
+            self.log_rotation_service
+        )
 
     @property
     def durable(
@@ -1543,6 +1562,22 @@ class DeploymentGovernancePersistenceRuntime:
         """
 
         return self.log_repository
+
+    def build_integrity_log_rotation_service(
+        self,
+    ) -> GovernanceLogRotationService:
+        """
+        Return the shared governance log rotation service.
+
+        Like build_integrity_log_repository, this returns the
+        runtime's single stored instance. It is already attached to
+        the log repository (see __post_init__), so it runs
+        automatically after every log append; this accessor exists
+        for callers that want to inspect its policy or trigger a
+        rotation explicitly (e.g. the CLI or runtime startup).
+        """
+
+        return self.log_rotation_service
 
     def build_integrity_retry_orchestrator(
         self,

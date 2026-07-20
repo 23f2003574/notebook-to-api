@@ -156,6 +156,138 @@ def run_deployment_governance_logging_clear(
     return 0
 
 
+def run_deployment_governance_logging_rotate(
+    *,
+    max_entries: int | None = None,
+    max_age: int | None = None,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and run governance log rotation now,
+    discarding entries outside the configured policy.
+
+    --max-entries/--max-age override the configured policy for this
+    invocation only; the change is not persisted beyond it. Exit
+    codes: 0 rotation ran (even if nothing was discarded), 2 it
+    could not run.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        rotation_service = (
+            runtime.build_integrity_log_rotation_service()
+        )
+
+        if max_entries is not None:
+            rotation_service.reconfigure(max_entries=max_entries)
+
+        if max_age is not None:
+            rotation_service.reconfigure(max_age_days=max_age)
+
+        discarded = rotation_service.rotate()
+
+    except Exception as exc:
+        _render_logging_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            {"discarded": discarded},
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write(
+            f"Governance log rotation discarded {discarded} "
+            f"entr{'y' if discarded == 1 else 'ies'}.\n"
+        )
+
+    return 0
+
+
+def run_deployment_governance_logging_rotation_status(
+    *,
+    max_entries: int | None = None,
+    max_age: int | None = None,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and show the configured governance log
+    rotation policy, without discarding anything.
+
+    --max-entries/--max-age preview a different policy for this
+    invocation only; the change is not persisted and rotation never
+    runs. Exit codes: 0 the policy was retrieved, 2 it could not be.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        rotation_service = (
+            runtime.build_integrity_log_rotation_service()
+        )
+
+        if max_entries is not None:
+            rotation_service.reconfigure(max_entries=max_entries)
+
+        if max_age is not None:
+            rotation_service.reconfigure(max_age_days=max_age)
+
+        policy = rotation_service.policy()
+
+    except Exception as exc:
+        _render_logging_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            policy.to_dict(),
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write("Governance Log Rotation Policy\n\n")
+
+        stdout.write(f"Max Entries: {policy.max_entries}\n")
+
+        stdout.write(
+            "Max Age (days): "
+            + (
+                "disabled"
+                if policy.max_age_days is None
+                else str(policy.max_age_days)
+            )
+            + "\n"
+        )
+
+    return 0
+
+
 def _render_logging_human(
     entries: tuple[GovernanceLogEntry, ...],
     *,
