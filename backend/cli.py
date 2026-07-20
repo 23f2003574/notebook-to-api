@@ -52,6 +52,7 @@ from backend.observability.deployment_governance_logging_cli import (
     run_deployment_governance_logging_clear,
     run_deployment_governance_logging_rotate,
     run_deployment_governance_logging_rotation_status,
+    run_deployment_governance_logging_search,
 )
 from backend.observability.deployment_governance_audit_session_cli import (
     run_deployment_governance_audit_session,
@@ -942,6 +943,86 @@ def main():
         help="Preview the policy with this max age in days instead.",
     )
     logs_rotation_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    logs_search_parser = logs_subparsers.add_parser(
+        "search",
+        help="Search the durable governance log history.",
+        description=(
+            "Search the durable governance log history (via the "
+            "configured log repository), newest first.\n\n"
+            "Every given filter combines with AND; --from/--to form "
+            "an inclusive time range.\n\n"
+            "Exit codes: 0 the search was produced (even if empty), "
+            "2 it could not be (including an invalid --level or "
+            "timestamp)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    logs_search_parser.add_argument(
+        "--level",
+        type=str,
+        default=None,
+        dest="level",
+        help=(
+            "Only show entries at this level (debug, info, warning, "
+            "error). Default: all levels."
+        ),
+    )
+    logs_search_parser.add_argument(
+        "--component",
+        type=str,
+        default=None,
+        dest="component",
+        help="Only show entries from this component. Default: all.",
+    )
+    logs_search_parser.add_argument(
+        "--event",
+        type=str,
+        default=None,
+        dest="event",
+        help="Only show entries with this event name. Default: all.",
+    )
+    logs_search_parser.add_argument(
+        "--from",
+        default=None,
+        dest="since",
+        help=(
+            "Only show entries at or after this ISO-8601 timestamp "
+            "(inclusive)."
+        ),
+    )
+    logs_search_parser.add_argument(
+        "--to",
+        default=None,
+        dest="until",
+        help=(
+            "Only show entries at or before this ISO-8601 timestamp "
+            "(inclusive)."
+        ),
+    )
+    logs_search_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        dest="limit",
+        help="Maximum number of log entries to return. Default: all.",
+    )
+    logs_search_parser.add_argument(
+        "--offset",
+        type=int,
+        default=None,
+        dest="offset",
+        help=(
+            "Number of newest-first matching entries to skip before "
+            "returning results. Default: 0."
+        ),
+    )
+    logs_search_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -4634,6 +4715,28 @@ def main():
                             max_age=args.max_age,
                             json_output=args.json_output,
                         )
+                    )
+                    sys.exit(exit_code)
+                if args.logs_command == "search":
+                    try:
+                        since = parse_governance_audit_timestamp(
+                            args.since
+                        )
+                        until = parse_governance_audit_timestamp(
+                            args.until
+                        )
+                    except ValueError as exc:
+                        parser.error(str(exc))
+                        return
+                    exit_code = run_deployment_governance_logging_search(
+                        level=args.level,
+                        component=args.component,
+                        event=args.event,
+                        since=since,
+                        until=until,
+                        limit=args.limit,
+                        offset=args.offset,
+                        json_output=args.json_output,
                     )
                     sys.exit(exit_code)
             if getattr(args, "audits_command", None) == "session":

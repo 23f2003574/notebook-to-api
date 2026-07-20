@@ -199,11 +199,23 @@ class GovernanceIntegrityLogger:
         self,
         limit: int | None = None,
         level: str | None = None,
+        *,
+        component: str | None = None,
+        event: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
     ) -> tuple[GovernanceLogEntry, ...]:
         """
         Return buffered log entries, newest first, optionally
-        filtered to one level and/or capped to the most recent
-        limit entries.
+        filtered by level, component, and/or event (filters combine
+        with AND), and/or restricted to an inclusive [since, until]
+        time range, and/or capped to the most recent limit entries.
+
+        This filters the logger's own in-process buffer; it does not
+        consult a configured repository, so it only reflects recent
+        activity in this process. For durable, indexed search across
+        the full persisted history, use GovernanceLogSearchService
+        against the repository instead.
         """
 
         if level is not None and level not in _VALID_LEVELS:
@@ -221,6 +233,34 @@ class GovernanceIntegrityLogger:
                 entry
                 for entry in snapshot
                 if entry.level == level
+            ]
+
+        if component is not None:
+            snapshot = [
+                entry
+                for entry in snapshot
+                if entry.component == component
+            ]
+
+        if event is not None:
+            snapshot = [
+                entry
+                for entry in snapshot
+                if entry.event == event
+            ]
+
+        if since is not None:
+            snapshot = [
+                entry
+                for entry in snapshot
+                if entry.timestamp >= since
+            ]
+
+        if until is not None:
+            snapshot = [
+                entry
+                for entry in snapshot
+                if entry.timestamp <= until
             ]
 
         if limit is not None:

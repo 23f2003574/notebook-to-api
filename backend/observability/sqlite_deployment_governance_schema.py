@@ -145,6 +145,7 @@ class DeploymentGovernanceSQLiteSchema:
             DeploymentGovernanceSQLiteSchema._create_governance_metrics_migration(),
             DeploymentGovernanceSQLiteSchema._create_governance_metrics_history_migration(),
             DeploymentGovernanceSQLiteSchema._create_governance_logs_migration(),
+            DeploymentGovernanceSQLiteSchema._create_governance_logs_event_index_migration(),
         )
 
     @staticmethod
@@ -1584,6 +1585,33 @@ class DeploymentGovernanceSQLiteSchema:
                 ON {DEPLOYMENT_GOVERNANCE_LOGS_TABLE}
                 (
                     component
+                )
+                """,
+            ),
+        )
+
+    @staticmethod
+    def _create_governance_logs_event_index_migration() -> (
+        SQLiteMigration
+    ):
+        """
+        Migration 24 adds an index on governance_logs.event, so
+        GovernanceLogSearchService.by_event() (and any event-filtered
+        search()/count() call) is index-backed like the existing
+        timestamp/level/component filters
+        (backend/observability/deployment_governance_log_search.py).
+        """
+
+        return SQLiteMigration(
+            version=24,
+            name="create governance logs event index",
+            statements=(
+                f"""
+                CREATE INDEX
+                idx_governance_logs_event
+                ON {DEPLOYMENT_GOVERNANCE_LOGS_TABLE}
+                (
+                    event
                 )
                 """,
             ),

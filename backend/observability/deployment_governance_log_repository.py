@@ -92,6 +92,38 @@ class GovernanceLogRepository(Protocol):
         Returns the number of entries discarded.
         """
 
+    def search(
+        self,
+        *,
+        level: str | None = None,
+        component: str | None = None,
+        event: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> tuple[GovernanceLogEntry, ...]:
+        """
+        Return log entries newest first, matching every given filter
+        (filters combine with AND). since/until form an inclusive
+        time range. limit/offset paginate the newest-first result
+        set.
+        """
+
+    def count(
+        self,
+        *,
+        level: str | None = None,
+        component: str | None = None,
+        event: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> int:
+        """
+        Return how many entries match the given filters, ignoring
+        pagination.
+        """
+
 
 class InMemoryGovernanceLogRepository:
     """
@@ -221,6 +253,66 @@ class InMemoryGovernanceLogRepository:
 
             return discarded
 
+    def search(
+        self,
+        *,
+        level: str | None = None,
+        component: str | None = None,
+        event: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> tuple[GovernanceLogEntry, ...]:
+        _validate_level(level)
+
+        if limit is not None and limit < 0:
+            raise ValueError(
+                "limit must not be negative"
+            )
+
+        if offset is not None and offset < 0:
+            raise ValueError(
+                "offset must not be negative"
+            )
+
+        with self._lock:
+            matches = [
+                entry
+                for entry in reversed(self._entries)
+                if self._matches_search(
+                    entry, level, component, event, since, until
+                )
+            ]
+
+        if offset is not None:
+            matches = matches[offset:]
+
+        if limit is not None:
+            matches = matches[:limit]
+
+        return tuple(matches)
+
+    def count(
+        self,
+        *,
+        level: str | None = None,
+        component: str | None = None,
+        event: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> int:
+        _validate_level(level)
+
+        with self._lock:
+            return sum(
+                1
+                for entry in self._entries
+                if self._matches_search(
+                    entry, level, component, event, since, until
+                )
+            )
+
     @staticmethod
     def _matches(
         entry: GovernanceLogEntry,
@@ -231,6 +323,32 @@ class InMemoryGovernanceLogRepository:
             return False
 
         if component is not None and entry.component != component:
+            return False
+
+        return True
+
+    @staticmethod
+    def _matches_search(
+        entry: GovernanceLogEntry,
+        level: str | None,
+        component: str | None,
+        event: str | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> bool:
+        if level is not None and entry.level != level:
+            return False
+
+        if component is not None and entry.component != component:
+            return False
+
+        if event is not None and entry.event != event:
+            return False
+
+        if since is not None and entry.timestamp < since:
+            return False
+
+        if until is not None and entry.timestamp > until:
             return False
 
         return True
@@ -418,21 +536,82 @@ class SQLiteGovernanceLogRepository:
                 "failed to prune governance logs by age"
             ) from exc
 
-    def _query(
+    def search(
         self,
         *,
-        order: str,
-        level: str | None,
-        component: str | None,
-        limit: int | None,
+        level: str | None = None,
+        component: str | None = None,
+        event: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
     ) -> tuple[GovernanceLogEntry, ...]:
+        return self._query(
+            order="id DESC",
+            level=level,
+            component=component,
+            event=event,
+            since=since,
+            until=until,
+            limit=limit,
+            offset=offset,
+        )
+
+    def count(
+        self,
+        *,
+        level: str | None = None,
+        component: str | None = None,
+        event: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> int:
         _validate_level(level)
 
-        if limit is not None and limit < 0:
-            raise ValueError(
-                "limit must not be negative"
+        conditions, parameters = self._build_conditions(
+            level=level,
+            component=component,
+            event=event,
+            since=since,
+            until=until,
+        )
+
+        where_clause = (
+            "WHERE " + " AND ".join(conditions)
+            if conditions
+            else ""
+        )
+
+        query = f"""
+            SELECT
+                COUNT(*) AS matching_count
+            FROM
+                {DEPLOYMENT_GOVERNANCE_LOGS_TABLE}
+            {where_clause}
+        """
+
+        try:
+            row = self._database.query_one(
+                query, tuple(parameters)
             )
 
+        except sqlite3.Error as exc:
+            raise SQLitePersistenceError(
+                "failed to count governance logs"
+            ) from exc
+
+        return int(row["matching_count"])
+
+    def _build_conditions(
+        self,
+        *,
+        level: str | None,
+        component: str | None,
+        event: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> tuple[list[str], list[Any]]:
         conditions: list[str] = []
 
         parameters: list[Any] = []
@@ -444,6 +623,52 @@ class SQLiteGovernanceLogRepository:
         if component is not None:
             conditions.append("component = ?")
             parameters.append(component)
+
+        if event is not None:
+            conditions.append("event = ?")
+            parameters.append(event)
+
+        if since is not None:
+            conditions.append("timestamp >= ?")
+            parameters.append(self._datetime_to_storage(since))
+
+        if until is not None:
+            conditions.append("timestamp <= ?")
+            parameters.append(self._datetime_to_storage(until))
+
+        return conditions, parameters
+
+    def _query(
+        self,
+        *,
+        order: str,
+        level: str | None,
+        component: str | None,
+        event: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int | None,
+        offset: int | None = None,
+    ) -> tuple[GovernanceLogEntry, ...]:
+        _validate_level(level)
+
+        if limit is not None and limit < 0:
+            raise ValueError(
+                "limit must not be negative"
+            )
+
+        if offset is not None and offset < 0:
+            raise ValueError(
+                "offset must not be negative"
+            )
+
+        conditions, parameters = self._build_conditions(
+            level=level,
+            component=component,
+            event=event,
+            since=since,
+            until=until,
+        )
 
         where_clause = (
             "WHERE " + " AND ".join(conditions)
@@ -464,6 +689,16 @@ class SQLiteGovernanceLogRepository:
         if limit is not None:
             query += " LIMIT ?"
             parameters.append(limit)
+
+            if offset is not None:
+                query += " OFFSET ?"
+                parameters.append(offset)
+
+        elif offset is not None:
+            # SQLite requires a LIMIT clause to use OFFSET; -1 means
+            # "no limit".
+            query += " LIMIT -1 OFFSET ?"
+            parameters.append(offset)
 
         try:
             rows = self._database.query_all(

@@ -118,7 +118,7 @@ def test_governance_doctor_cli_sqlite_deep_json(
 
     assert (
         payload["schema"]["current_version"]
-        == 23
+        == 24
     )
 
     assert (

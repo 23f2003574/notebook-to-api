@@ -233,6 +233,52 @@ class TestGovernanceIntegrityLoggerLevelFiltering:
         with pytest.raises(ValueError):
             logger.entries(level="TRACE")
 
+    def test_entries_filtered_by_component(self):
+        logger = GovernanceIntegrityLogger(clock=lambda: BASE_TIME)
+
+        logger.info("metrics", "metrics_event")
+        engine_entry = logger.info(
+            "delivery_engine", "engine_event"
+        )
+
+        assert logger.entries(component="delivery_engine") == (
+            engine_entry,
+        )
+
+    def test_entries_filtered_by_event(self):
+        logger = GovernanceIntegrityLogger(clock=lambda: BASE_TIME)
+
+        logger.info("metrics", "record_success")
+        retry_entry = logger.info("metrics", "record_retry")
+
+        assert logger.entries(event="record_retry") == (retry_entry,)
+
+    def test_entries_filtered_by_inclusive_time_range(self):
+        from datetime import timedelta
+
+        timestamps = iter(
+            [
+                BASE_TIME,
+                BASE_TIME + timedelta(minutes=1),
+                BASE_TIME + timedelta(minutes=2),
+            ]
+        )
+
+        logger = GovernanceIntegrityLogger(
+            clock=lambda: next(timestamps)
+        )
+
+        logger.info("metrics", "first")
+        middle_entry = logger.info("metrics", "second")
+        logger.info("metrics", "third")
+
+        result = logger.entries(
+            since=BASE_TIME + timedelta(minutes=1),
+            until=BASE_TIME + timedelta(minutes=1),
+        )
+
+        assert result == (middle_entry,)
+
     def test_buffer_is_bounded(self):
         logger = GovernanceIntegrityLogger(
             clock=lambda: BASE_TIME, buffer_size=2

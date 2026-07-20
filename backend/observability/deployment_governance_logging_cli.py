@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime
 from typing import TextIO
 
 from .deployment_governance_logging import GovernanceLogEntry
@@ -284,6 +285,65 @@ def run_deployment_governance_logging_rotation_status(
             )
             + "\n"
         )
+
+    return 0
+
+
+def run_deployment_governance_logging_search(
+    *,
+    level: str | None = None,
+    component: str | None = None,
+    event: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and search the durable governance log
+    history, newest first.
+
+    Every given filter combines with AND; since/until form an
+    inclusive time range. This is a read-only inspection command: it
+    never emits a new log entry and never mutates logged history.
+    Exit codes: 0 the search was produced (even if empty), 2 it
+    could not be (including an invalid --level).
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        search_service = (
+            runtime.build_integrity_log_search_service()
+        )
+
+        entries = search_service.search(
+            level=None if level is None else level.upper(),
+            component=component,
+            event=event,
+            since=since,
+            until=until,
+            limit=limit,
+            offset=offset,
+        )
+
+    except Exception as exc:
+        _render_logging_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        _render_logging_json(entries, stdout=stdout)
+
+    else:
+        _render_logging_human(entries, stdout=stdout)
 
     return 0
 
