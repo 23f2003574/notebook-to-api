@@ -37,6 +37,13 @@ class GovernanceLogRepository(Protocol):
     """
     Persistence contract for the append-only history of structured
     governance log entries.
+
+    Volume reduction (see
+    deployment_governance_log_sampling.GovernanceLogSamplingService)
+    happens entirely on the caller's side, before append() is ever
+    invoked: a sampled-out entry simply never reaches this
+    repository at all. Implementations have no sampling awareness of
+    their own and always durably persist whatever they are given.
     """
 
     def append(

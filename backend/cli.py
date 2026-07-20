@@ -60,6 +60,8 @@ from backend.observability.deployment_governance_logging_cli import (
     run_deployment_governance_logging_redaction_test,
     run_deployment_governance_logging_context,
     run_deployment_governance_logging_trace,
+    run_deployment_governance_logging_sampling_show,
+    run_deployment_governance_logging_sampling_update,
 )
 from backend.observability.deployment_governance_audit_session_cli import (
     run_deployment_governance_audit_session,
@@ -1225,6 +1227,85 @@ def main():
         help="The correlation id to trace.",
     )
     logs_trace_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    logs_sampling_parser = logs_subparsers.add_parser(
+        "sampling",
+        help="Inspect and update governance log sampling policy.",
+        description=(
+            "Inspect and update the policy governance log sampling "
+            "uses to decide which entries are worth persisting "
+            "durably."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sampling_subparsers = logs_sampling_parser.add_subparsers(
+        dest="sampling_command", required=True
+    )
+
+    sampling_show_parser = sampling_subparsers.add_parser(
+        "show",
+        help="Show the configured sampling policy.",
+        description=(
+            "Show the configured governance log sampling policy.\n\n"
+            "Exit codes: 0 the policy was retrieved, 2 it could not "
+            "be."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sampling_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    sampling_update_parser = sampling_subparsers.add_parser(
+        "update",
+        help="Update the sampling policy.",
+        description=(
+            "Update the governance log sampling policy. "
+            "--default-rate replaces the default rate; "
+            "--level/--rate (given together) set or replace one "
+            "per-level override. Any value not given is carried "
+            "over unchanged from the current policy.\n\n"
+            "Exit codes: 0 the policy was updated, 2 it could not "
+            "be (including an invalid rate or level)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sampling_update_parser.add_argument(
+        "--default-rate",
+        type=float,
+        default=None,
+        dest="default_rate",
+        help="Replace the default sampling rate (0.0-1.0).",
+    )
+    sampling_update_parser.add_argument(
+        "--level",
+        type=str,
+        default=None,
+        dest="level",
+        help=(
+            "The level (debug, info, warning, error) to set a "
+            "per-level rate override for. Must be given with --rate."
+        ),
+    )
+    sampling_update_parser.add_argument(
+        "--rate",
+        type=float,
+        default=None,
+        dest="rate",
+        help=(
+            "The sampling rate (0.0-1.0) for --level. Must be given "
+            "with --level."
+        ),
+    )
+    sampling_update_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -5001,6 +5082,24 @@ def main():
                         json_output=args.json_output,
                     )
                     sys.exit(exit_code)
+                if args.logs_command == "sampling":
+                    if args.sampling_command == "show":
+                        exit_code = (
+                            run_deployment_governance_logging_sampling_show(
+                                json_output=args.json_output,
+                            )
+                        )
+                        sys.exit(exit_code)
+                    if args.sampling_command == "update":
+                        exit_code = (
+                            run_deployment_governance_logging_sampling_update(
+                                default_rate=args.default_rate,
+                                level=args.level,
+                                rate=args.rate,
+                                json_output=args.json_output,
+                            )
+                        )
+                        sys.exit(exit_code)
             if getattr(args, "audits_command", None) == "session":
                 exit_code = run_deployment_governance_audit_session(
                     limit=args.limit,

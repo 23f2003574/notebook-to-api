@@ -8,10 +8,15 @@ from typing import Callable, TextIO
 
 from .deployment_governance_logging import GovernanceLogEntry
 from .deployment_governance_log_context import GovernanceLogContext
+from .deployment_governance_log_sampling import (
+    GovernanceLogSamplingPolicy,
+)
 from .deployment_governance_persistence import (
     build_deployment_governance_persistence,
     deployment_governance_persistence_config_from_env,
 )
+
+_VALID_SAMPLING_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
 _REDACTION_TEST_SAMPLE_FIELDS = {
     "password": "hunter2",
@@ -819,6 +824,178 @@ def run_deployment_governance_logging_trace(
         _render_logging_human(entries, stdout=stdout)
 
     return 0
+
+
+def run_deployment_governance_logging_sampling_show(
+    *,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and show the configured governance log
+    sampling policy.
+
+    This is a read-only inspection command: it never changes the
+    policy. Exit codes: 0 the policy was retrieved, 2 it could not
+    be.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        policy = (
+            runtime.build_integrity_log_sampling_service().policy()
+        )
+
+    except Exception as exc:
+        _render_logging_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            policy.to_dict(),
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        _render_sampling_policy_human(policy, stdout=stdout)
+
+    return 0
+
+
+def run_deployment_governance_logging_sampling_update(
+    *,
+    default_rate: float | None = None,
+    level: str | None = None,
+    rate: float | None = None,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and update the governance log sampling
+    policy.
+
+    --default-rate replaces the default rate. --level/--rate (given
+    together) set or replace one per-level override. Any value not
+    given on this invocation (including always_log_events, which
+    this command cannot set) is carried over unchanged from the
+    currently configured policy. Exit codes: 0 the policy was
+    updated, 2 it could not be (including an invalid rate, an
+    unrecognized --level, or --level given without --rate or vice
+    versa).
+    """
+
+    try:
+        if (level is None) != (rate is None):
+            raise ValueError(
+                "--level and --rate must be given together"
+            )
+
+        normalized_level = (
+            None if level is None else level.upper()
+        )
+
+        if (
+            normalized_level is not None
+            and normalized_level not in _VALID_SAMPLING_LEVELS
+        ):
+            raise ValueError(
+                "--level must be one of "
+                f"{', '.join(_VALID_SAMPLING_LEVELS)}"
+            )
+
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        sampling_service = (
+            runtime.build_integrity_log_sampling_service()
+        )
+
+        current = sampling_service.policy()
+
+        per_level = dict(current.per_level)
+
+        if normalized_level is not None:
+            per_level[normalized_level] = rate
+
+        policy = GovernanceLogSamplingPolicy(
+            default_rate=(
+                current.default_rate
+                if default_rate is None
+                else default_rate
+            ),
+            per_level=per_level,
+            always_log_events=current.always_log_events,
+        )
+
+        sampling_service.update_policy(policy)
+
+    except Exception as exc:
+        _render_logging_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        json.dump(
+            policy.to_dict(),
+            stdout,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        stdout.write("\n")
+
+    else:
+        stdout.write("Governance log sampling policy updated.\n\n")
+
+        _render_sampling_policy_human(policy, stdout=stdout)
+
+    return 0
+
+
+def _render_sampling_policy_human(
+    policy: GovernanceLogSamplingPolicy,
+    *,
+    stdout: TextIO,
+) -> None:
+    stdout.write("Governance Log Sampling Policy\n\n")
+
+    stdout.write(f"Default Rate: {policy.default_rate}\n")
+
+    if policy.per_level:
+        stdout.write("Per-Level Overrides:\n")
+
+        for level, level_rate in sorted(policy.per_level.items()):
+            stdout.write(f"  {level}: {level_rate}\n")
+
+    else:
+        stdout.write("Per-Level Overrides: none\n")
+
+    if policy.always_log_events:
+        stdout.write(
+            "Always-Log Events: "
+            + ", ".join(sorted(policy.always_log_events))
+            + "\n"
+        )
+
+    else:
+        stdout.write("Always-Log Events: none\n")
 
 
 def _render_logging_human(

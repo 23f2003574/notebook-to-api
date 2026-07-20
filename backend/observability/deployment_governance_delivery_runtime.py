@@ -44,6 +44,9 @@ from .deployment_governance_log_context import (
     GovernanceLogContext,
     GovernanceLogContextService,
 )
+from .deployment_governance_log_sampling import (
+    GovernanceLogSamplingService,
+)
 
 
 class GovernanceIntegrityRuntimeState(
@@ -93,7 +96,8 @@ class GovernanceIntegrityDeliveryRuntime:
         log_repository: Optional[GovernanceLogRepository] = None,
         log_rotation_service: Optional[GovernanceLogRotationService] = None,
         redaction_service: Optional[GovernanceLogRedactionService] = None,
-        context_service: Optional[GovernanceLogContextService] = None
+        context_service: Optional[GovernanceLogContextService] = None,
+        sampling_service: Optional[GovernanceLogSamplingService] = None
     ):
         self.worker = worker
         self.scheduler = scheduler
@@ -104,6 +108,7 @@ class GovernanceIntegrityDeliveryRuntime:
         self.log_rotation_service = log_rotation_service
         self.redaction_service = redaction_service
         self.context_service = context_service
+        self.sampling_service = sampling_service
 
         # Wired immediately, not deferred to start(): redaction is a
         # security property of the logger and should take effect as
@@ -483,7 +488,8 @@ def build_integrity_delivery_runtime(
     log_repository=None,
     log_rotation_service=None,
     redaction_service=None,
-    context_service=None
+    context_service=None,
+    sampling_service=None
 ) -> GovernanceIntegrityDeliveryRuntime:
 
     if clock is None:
@@ -565,5 +571,8 @@ def build_integrity_delivery_runtime(
             redaction_service,
 
         context_service=
-            context_service
+            context_service,
+
+        sampling_service=
+            sampling_service
     )

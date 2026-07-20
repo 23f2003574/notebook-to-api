@@ -131,6 +131,9 @@ from .deployment_governance_log_context import (
 from .deployment_governance_log_correlation import (
     GovernanceCorrelationService,
 )
+from .deployment_governance_log_sampling import (
+    GovernanceLogSamplingService,
+)
 from .deployment_governance_log_search import (
     GovernanceLogSearchService,
 )
@@ -658,6 +661,10 @@ class DeploymentGovernancePersistenceRuntime:
         default_factory=GovernanceCorrelationService
     )
 
+    sampling_service: GovernanceLogSamplingService = field(
+        default_factory=GovernanceLogSamplingService
+    )
+
     def __post_init__(self) -> None:
         # metrics_service and logger are each constructed
         # independently by their own default_factory above, so the
@@ -674,6 +681,8 @@ class DeploymentGovernancePersistenceRuntime:
         self.logger.set_context_service(self.context_service)
 
         self.logger.set_correlation_service(self.correlation_service)
+
+        self.logger.set_sampling_service(self.sampling_service)
 
         object.__setattr__(
             self,
@@ -1671,6 +1680,21 @@ class DeploymentGovernancePersistenceRuntime:
         """
 
         return self.correlation_service
+
+    def build_integrity_log_sampling_service(
+        self,
+    ) -> GovernanceLogSamplingService:
+        """
+        Return the shared governance log sampling service.
+
+        Like build_integrity_logger, this returns the runtime's
+        single stored instance. It is already attached to the
+        logger (see __post_init__), so a policy update here takes
+        effect for every future logged entry too: a sampled-out
+        entry is never durably persisted.
+        """
+
+        return self.sampling_service
 
     def build_integrity_log_export_service(
         self,

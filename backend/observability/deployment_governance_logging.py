@@ -22,6 +22,9 @@ if TYPE_CHECKING:
     from .deployment_governance_log_correlation import (
         GovernanceCorrelationService,
     )
+    from .deployment_governance_log_sampling import (
+        GovernanceLogSamplingService,
+    )
 
 _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
@@ -113,6 +116,9 @@ class GovernanceIntegrityLogger:
         correlation_service: (
             "GovernanceCorrelationService | None"
         ) = None,
+        sampling_service: (
+            "GovernanceLogSamplingService | None"
+        ) = None,
     ) -> None:
         if buffer_size < 1:
             raise ValueError(
@@ -140,6 +146,8 @@ class GovernanceIntegrityLogger:
         self._context_service = context_service
 
         self._correlation_service = correlation_service
+
+        self._sampling_service = sampling_service
 
     def debug(
         self,
@@ -354,6 +362,18 @@ class GovernanceIntegrityLogger:
         with self._lock:
             self._correlation_service = correlation_service
 
+    def set_sampling_service(
+        self,
+        sampling_service: "GovernanceLogSamplingService | None",
+    ) -> None:
+        """
+        Attach (or detach) a GovernanceLogSamplingService after
+        construction, without recreating the logger.
+        """
+
+        with self._lock:
+            self._sampling_service = sampling_service
+
     def _log(
         self,
         level: str,
@@ -423,7 +443,11 @@ class GovernanceIntegrityLogger:
 
             repository = self._repository
 
-        if repository is not None:
+            sampling_service = self._sampling_service
+
+        if repository is not None and self._should_persist(
+            sampling_service, entry
+        ):
             repository.append(entry)
 
         self._sink.log(
@@ -434,3 +458,20 @@ class GovernanceIntegrityLogger:
         )
 
         return entry
+
+    @staticmethod
+    def _should_persist(
+        sampling_service: "GovernanceLogSamplingService | None",
+        entry: GovernanceLogEntry,
+    ) -> bool:
+        if sampling_service is None:
+            return True
+
+        try:
+            return sampling_service.should_log(entry)
+
+        except Exception:
+            # A broken sampling policy must never block a log entry
+            # from being persisted, or affect the caller in any way:
+            # fail open and keep the entry.
+            return True
