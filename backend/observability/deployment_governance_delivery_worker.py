@@ -8,6 +8,10 @@ from .deployment_governance_log_context import (
     GovernanceLogContext,
     GovernanceLogContextService,
 )
+from .deployment_governance_log_correlation import (
+    GovernanceCorrelationContext,
+    GovernanceCorrelationService,
+)
 
 if TYPE_CHECKING:
     from .deployment_governance_delivery_engine import (
@@ -93,6 +97,9 @@ class GovernanceIntegrityDeliveryWorker:
         retry_orchestrator: "GovernanceIntegrityRetryOrchestrator",
         clock: Callable[[], datetime] | None = None,
         context_service: GovernanceLogContextService | None = None,
+        correlation_service: (
+            GovernanceCorrelationService | None
+        ) = None,
     ) -> None:
         self._scheduler = scheduler
 
@@ -105,6 +112,21 @@ class GovernanceIntegrityDeliveryWorker:
         )
 
         self._context_service = context_service
+
+        self._correlation_service = correlation_service
+
+        # A dispatch's root correlation must be reused across every
+        # attempt at delivering it (including retries), but
+        # GovernanceCorrelationService only tracks whichever
+        # correlation is currently active -- it has no memory of its
+        # own across separate process_dispatch() calls. This worker
+        # holds that memory instead, keyed by dispatch id, and drops
+        # an entry once its dispatch reaches a terminal outcome so it
+        # does not grow unbounded over a long-running worker's
+        # lifetime.
+        self._dispatch_root_correlations: dict[
+            str, GovernanceCorrelationContext
+        ] = {}
 
         self._last_summary: GovernanceIntegrityWorkerRunSummary | None = (
             None
@@ -129,15 +151,41 @@ class GovernanceIntegrityDeliveryWorker:
 
         self._scheduler.mark_running(dispatch.dispatch_id)
 
+        dispatch_key = str(dispatch.dispatch_id)
+
         if self._context_service is not None:
             self._context_service.push(
                 GovernanceLogContext(
                     request_id=None,
-                    dispatch_id=str(dispatch.dispatch_id),
+                    dispatch_id=dispatch_key,
                     provider=None,
                     component="delivery_worker",
                 )
             )
+
+        if self._correlation_service is not None:
+            root_correlation = self._dispatch_root_correlations.get(
+                dispatch_key
+            )
+
+            if root_correlation is None:
+                # First attempt at this dispatch: start a new root
+                # correlation and remember it for any retry.
+                root_correlation = self._correlation_service.create()
+
+                self._dispatch_root_correlations[dispatch_key] = (
+                    root_correlation
+                )
+
+            else:
+                # A retry of a dispatch already seen: reuse the same
+                # root correlation rather than starting a new one, so
+                # every attempt traces back to one correlation_id.
+                self._correlation_service.attach(root_correlation)
+
+            # The provider invocation itself gets its own child
+            # correlation, nested under the dispatch's root.
+            self._correlation_service.child()
 
         try:
             try:
@@ -148,10 +196,18 @@ class GovernanceIntegrityDeliveryWorker:
             except Exception:
                 self._scheduler.mark_completed(dispatch.dispatch_id)
 
+                self._dispatch_root_correlations.pop(
+                    dispatch_key, None
+                )
+
                 return "failed"
 
             if result.status == "success":
                 self._scheduler.mark_completed(dispatch.dispatch_id)
+
+                self._dispatch_root_correlations.pop(
+                    dispatch_key, None
+                )
 
                 return "succeeded"
 
@@ -172,11 +228,16 @@ class GovernanceIntegrityDeliveryWorker:
 
             self._scheduler.mark_completed(dispatch.dispatch_id)
 
+            self._dispatch_root_correlations.pop(dispatch_key, None)
+
             return "failed"
 
         finally:
             if self._context_service is not None:
                 self._context_service.pop()
+
+            if self._correlation_service is not None:
+                self._correlation_service.clear()
 
     def process_ready_dispatches(
         self,

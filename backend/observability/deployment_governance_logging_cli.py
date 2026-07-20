@@ -761,6 +761,66 @@ def run_deployment_governance_logging_context(
     return 0
 
 
+def run_deployment_governance_logging_trace(
+    *,
+    correlation_id: str,
+    json_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """
+    Bootstrap persistence and show every durable log entry belonging
+    to one traced operation, oldest first (chronological order, the
+    natural way to read a trace).
+
+    A match is either an entry whose own correlation_id equals
+    correlation_id, or one whose parent_correlation_id does: passing
+    a dispatch's root correlation_id returns every attempt's entries
+    (each attempt gets its own child correlation under that root),
+    while passing one specific attempt's correlation_id returns just
+    that attempt's own entries. This scans the full durable log
+    history, since correlation_id is not an indexed repository
+    column. Exit codes: 0 the trace was produced (even if empty), 2
+    it could not be.
+    """
+
+    try:
+        runtime = build_deployment_governance_persistence(
+            deployment_governance_persistence_config_from_env()
+        )
+
+        search_service = (
+            runtime.build_integrity_log_search_service()
+        )
+
+        matches = tuple(
+            entry
+            for entry in search_service.iter_search()
+            if entry.fields.get("correlation_id") == correlation_id
+            or entry.fields.get("parent_correlation_id")
+            == correlation_id
+        )
+
+        # iter_search() yields newest first; a trace reads naturally
+        # oldest first, in the order the operation actually happened.
+        entries = tuple(reversed(matches))
+
+    except Exception as exc:
+        _render_logging_failure(
+            exc, json_output=json_output, stderr=stderr
+        )
+
+        return 2
+
+    if json_output:
+        _render_logging_json(entries, stdout=stdout)
+
+    else:
+        _render_logging_human(entries, stdout=stdout)
+
+    return 0
+
+
 def _render_logging_human(
     entries: tuple[GovernanceLogEntry, ...],
     *,

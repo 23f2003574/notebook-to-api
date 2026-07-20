@@ -128,6 +128,9 @@ from .deployment_governance_log_redaction import (
 from .deployment_governance_log_context import (
     GovernanceLogContextService,
 )
+from .deployment_governance_log_correlation import (
+    GovernanceCorrelationService,
+)
 from .deployment_governance_log_search import (
     GovernanceLogSearchService,
 )
@@ -651,6 +654,10 @@ class DeploymentGovernancePersistenceRuntime:
         default_factory=GovernanceLogContextService
     )
 
+    correlation_service: GovernanceCorrelationService = field(
+        default_factory=GovernanceCorrelationService
+    )
+
     def __post_init__(self) -> None:
         # metrics_service and logger are each constructed
         # independently by their own default_factory above, so the
@@ -665,6 +672,8 @@ class DeploymentGovernancePersistenceRuntime:
         self.logger.set_redaction_service(self.redaction_service)
 
         self.logger.set_context_service(self.context_service)
+
+        self.logger.set_correlation_service(self.correlation_service)
 
         object.__setattr__(
             self,
@@ -1648,6 +1657,21 @@ class DeploymentGovernancePersistenceRuntime:
 
         return self.context_service
 
+    def build_integrity_log_correlation_service(
+        self,
+    ) -> GovernanceCorrelationService:
+        """
+        Return the shared governance log correlation service.
+
+        Like build_integrity_logger, this returns the runtime's
+        single stored instance. It is already attached to the
+        logger (see __post_init__), so correlation_id and
+        parent_correlation_id are automatically merged into every
+        log entry produced while a correlation is active.
+        """
+
+        return self.correlation_service
+
     def build_integrity_log_export_service(
         self,
     ) -> GovernanceLogExportService:
@@ -1753,6 +1777,9 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_delivery_engine(),
             self.build_integrity_retry_orchestrator(),
             context_service=self.build_integrity_log_context_service(),
+            correlation_service=(
+                self.build_integrity_log_correlation_service()
+            ),
         )
 
     def build_integrity_delivery_history_service(

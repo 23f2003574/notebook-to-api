@@ -19,6 +19,9 @@ if TYPE_CHECKING:
     from .deployment_governance_log_context import (
         GovernanceLogContextService,
     )
+    from .deployment_governance_log_correlation import (
+        GovernanceCorrelationService,
+    )
 
 _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
@@ -107,6 +110,9 @@ class GovernanceIntegrityLogger:
         context_service: (
             "GovernanceLogContextService | None"
         ) = None,
+        correlation_service: (
+            "GovernanceCorrelationService | None"
+        ) = None,
     ) -> None:
         if buffer_size < 1:
             raise ValueError(
@@ -132,6 +138,8 @@ class GovernanceIntegrityLogger:
         self._redaction_service = redaction_service
 
         self._context_service = context_service
+
+        self._correlation_service = correlation_service
 
     def debug(
         self,
@@ -334,6 +342,18 @@ class GovernanceIntegrityLogger:
         with self._lock:
             self._context_service = context_service
 
+    def set_correlation_service(
+        self,
+        correlation_service: "GovernanceCorrelationService | None",
+    ) -> None:
+        """
+        Attach (or detach) a GovernanceCorrelationService after
+        construction, without recreating the logger.
+        """
+
+        with self._lock:
+            self._correlation_service = correlation_service
+
     def _log(
         self,
         level: str,
@@ -343,6 +363,8 @@ class GovernanceIntegrityLogger:
     ) -> GovernanceLogEntry:
         with self._lock:
             context_service = self._context_service
+
+            correlation_service = self._correlation_service
 
         merged_fields = dict(fields)
 
@@ -357,6 +379,27 @@ class GovernanceIntegrityLogger:
                         continue
 
                     merged_fields.setdefault(key, value)
+
+        if correlation_service is not None:
+            correlation = correlation_service.current()
+
+            if correlation is not None:
+                # Unlike context values, parent_correlation_id is
+                # always included even when None (a root correlation
+                # has no parent, but that absence is itself
+                # meaningful information for tracing).
+                merged_fields.setdefault(
+                    "correlation_id", str(correlation.correlation_id)
+                )
+
+                merged_fields.setdefault(
+                    "parent_correlation_id",
+                    (
+                        None
+                        if correlation.parent_correlation_id is None
+                        else str(correlation.parent_correlation_id)
+                    ),
+                )
 
         entry = GovernanceLogEntry(
             timestamp=self._clock(),

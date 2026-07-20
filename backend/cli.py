@@ -59,6 +59,7 @@ from backend.observability.deployment_governance_logging_cli import (
     run_deployment_governance_logging_redaction_rules,
     run_deployment_governance_logging_redaction_test,
     run_deployment_governance_logging_context,
+    run_deployment_governance_logging_trace,
 )
 from backend.observability.deployment_governance_audit_session_cli import (
     run_deployment_governance_audit_session,
@@ -1192,6 +1193,38 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     logs_context_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON output.",
+    )
+
+    logs_trace_parser = logs_subparsers.add_parser(
+        "trace",
+        help=(
+            "Show every durable log entry belonging to one traced "
+            "operation."
+        ),
+        description=(
+            "Show every durable log entry belonging to one traced "
+            "operation (matches by correlation_id or "
+            "parent_correlation_id), oldest first.\n\n"
+            "Pass a dispatch's root correlation_id to see every "
+            "attempt; pass one attempt's own correlation_id to see "
+            "just that attempt.\n\n"
+            "Exit codes: 0 the trace was produced (even if empty), "
+            "2 it could not be."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    logs_trace_parser.add_argument(
+        "--correlation-id",
+        type=str,
+        required=True,
+        dest="correlation_id",
+        help="The correlation id to trace.",
+    )
+    logs_trace_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -4959,6 +4992,12 @@ def main():
                         sys.exit(exit_code)
                 if args.logs_command == "context":
                     exit_code = run_deployment_governance_logging_context(
+                        json_output=args.json_output,
+                    )
+                    sys.exit(exit_code)
+                if args.logs_command == "trace":
+                    exit_code = run_deployment_governance_logging_trace(
+                        correlation_id=args.correlation_id,
                         json_output=args.json_output,
                     )
                     sys.exit(exit_code)

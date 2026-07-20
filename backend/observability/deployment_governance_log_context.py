@@ -15,6 +15,16 @@ class GovernanceLogContext:
     provider, and/or inbound request a log entry was produced
     during), automatically merged into every GovernanceLogEntry's
     fields while the scope that pushed it is active.
+
+    Deliberately orthogonal to GovernanceCorrelationContext (see
+    deployment_governance_log_correlation.py): this describes WHERE
+    in the pipeline a log call happened (which component, which
+    dispatch/provider), a nested push/pop stack that can hold
+    several active scopes at once, while correlation describes WHICH
+    logical operation it belongs to, a single active value that
+    nested operations inherit unless they explicitly start a new
+    one. GovernanceIntegrityLogger merges both independently into
+    every entry's fields.
     """
 
     request_id: str | None
