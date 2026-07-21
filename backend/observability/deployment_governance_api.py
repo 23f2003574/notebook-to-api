@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Query
@@ -307,3 +308,119 @@ async def get_governance_event_subscribers():
     subscriptions = runtime.build_integrity_event_bus().subscribers()
 
     return [subscription.to_dict() for subscription in subscriptions]
+
+
+def _build_event_query(
+    *,
+    event_type: "str | None",
+    source: "str | None",
+    start_time: "datetime | None",
+    end_time: "datetime | None",
+    limit: int,
+):
+    from .deployment_governance_event_history import EventQuery
+
+    return EventQuery(
+        event_type=event_type,
+        source=source,
+        start_time=start_time,
+        end_time=end_time,
+        limit=limit,
+    )
+
+
+@health_router.get("/events")
+async def get_governance_events(
+    event_type: str | None = Query(default=None),
+    source: str | None = Query(default=None),
+    start_time: datetime | None = Query(default=None),
+    end_time: datetime | None = Query(default=None),
+    limit: int = Query(default=100, gt=0),
+):
+    """
+    Return stored governance events, newest first, filtered by event
+    type, source, and/or time range.
+    """
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    query = _build_event_query(
+        event_type=event_type,
+        source=source,
+        start_time=start_time,
+        end_time=end_time,
+        limit=limit,
+    )
+
+    stored = runtime.build_integrity_event_history().query(query)
+
+    return [entry.to_dict() for entry in stored]
+
+
+@health_router.get("/events/latest")
+async def get_governance_events_latest(
+    limit: int = Query(default=10, gt=0),
+):
+    """
+    Return the most recently stored governance events, newest first.
+    """
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    stored = runtime.build_integrity_event_history().latest(limit)
+
+    return [entry.to_dict() for entry in stored]
+
+
+@health_router.post("/events/replay")
+async def post_governance_events_replay(
+    event_type: str | None = Query(default=None),
+    source: str | None = Query(default=None),
+    start_time: datetime | None = Query(default=None),
+    end_time: datetime | None = Query(default=None),
+    limit: int = Query(default=100, gt=0),
+):
+    """
+    Replay stored governance events matching the given filters back
+    onto the event bus's current subscribers, in the order they
+    originally occurred, without persisting them again.
+    """
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    query = _build_event_query(
+        event_type=event_type,
+        source=source,
+        start_time=start_time,
+        end_time=end_time,
+        limit=limit,
+    )
+
+    history = runtime.build_integrity_event_history()
+    bus = runtime.build_integrity_event_bus()
+
+    replayed = history.replay(query, bus)
+
+    return [event.to_dict() for event in replayed]
+
+
+@health_router.delete("/events")
+async def delete_governance_events():
+    """
+    Purge every stored governance event, returning how many were
+    removed.
+    """
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    purged = runtime.build_integrity_event_history().purge()
+
+    return {"purged": purged}

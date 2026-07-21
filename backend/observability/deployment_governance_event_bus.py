@@ -107,6 +107,8 @@ class GovernanceEventBus:
     the published event to the caller.
     """
 
+    WILDCARD_EVENT_TYPE = "*"
+
     def __init__(
         self,
         *,
@@ -144,6 +146,19 @@ class GovernanceEventBus:
 
         return subscription
 
+    def subscribe_all(
+        self,
+        handler: "Callable[[GovernanceEvent], None]",
+    ) -> EventSubscription:
+        """
+        Register handler to be called for every published event,
+        regardless of event_type. Used by GovernanceEventHistory to
+        automatically persist every event without needing to know the
+        full set of event types in advance.
+        """
+
+        return self.subscribe(self.WILDCARD_EVENT_TYPE, handler)
+
     def unsubscribe(self, subscription: EventSubscription) -> None:
         """
         Remove a previously returned subscription.
@@ -174,11 +189,12 @@ class GovernanceEventBus:
         Construct and dispatch one event: a fresh UUID event_id and
         the current UTC time are assigned here, not by the caller.
 
-        Every subscriber currently registered for event_type is
-        called, in subscription order. A handler that raises is
-        isolated — logged nowhere (this bus has no logging
-        dependency of its own) but never allowed to stop the
-        remaining handlers or propagate back to the publisher.
+        Every subscriber currently registered for event_type (plus
+        every wildcard subscriber) is called, in subscription order.
+        A handler that raises is isolated — logged nowhere (this bus
+        has no logging dependency of its own) but never allowed to
+        stop the remaining handlers or propagate back to the
+        publisher.
         """
 
         event = GovernanceEvent(
@@ -189,14 +205,41 @@ class GovernanceEventBus:
             occurred_at=self._clock(),
         )
 
-        for subscription in self._subscriptions.get(event_type, ()):
+        self.dispatch(event)
+
+        return event
+
+    def dispatch(self, event: GovernanceEvent) -> None:
+        """
+        Call every subscriber registered for event.event_type, plus
+        every wildcard subscriber, in that order, for an already-
+        constructed event.
+
+        Used internally by publish() for a freshly minted event, and
+        available to callers (e.g. GovernanceEventHistory.replay())
+        that want to re-notify current subscribers about an existing
+        event without minting a new one or otherwise going through
+        publish()'s event-construction step.
+        """
+
+        for subscription in self._subscriptions.get(
+            event.event_type, ()
+        ):
             try:
                 subscription.handler(event)
 
             except Exception:
                 pass
 
-        return event
+        if event.event_type != self.WILDCARD_EVENT_TYPE:
+            for subscription in self._subscriptions.get(
+                self.WILDCARD_EVENT_TYPE, ()
+            ):
+                try:
+                    subscription.handler(event)
+
+                except Exception:
+                    pass
 
     def publish_batch(
         self,

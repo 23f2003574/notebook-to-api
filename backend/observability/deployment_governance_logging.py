@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from .deployment_governance_log_batcher import (
         GovernanceLogBatcher,
     )
+    from .deployment_governance_event_bus import GovernanceEvent
 
 _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
@@ -562,3 +563,29 @@ class GovernanceIntegrityLogger:
             # from being persisted, or affect the caller in any way:
             # fail open and keep the entry.
             return True
+
+
+def event_bus_log_handler(
+    logger: GovernanceIntegrityLogger,
+) -> "Callable[[GovernanceEvent], None]":
+    """
+    Build a governance event bus handler that mirrors every event
+    into logger at INFO level, so the audit trail a
+    GovernanceEventHistory keeps is also visible in the structured
+    log stream.
+
+    Meant to be passed to GovernanceEventBus.subscribe_all():
+
+        bus.subscribe_all(event_bus_log_handler(logger))
+    """
+
+    def _handle(event: "GovernanceEvent") -> None:
+        logger.info(
+            "event_bus",
+            event.event_type,
+            event_id=event.event_id,
+            source=event.source,
+            occurred_at=event.occurred_at.isoformat(),
+        )
+
+    return _handle
