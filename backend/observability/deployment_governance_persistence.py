@@ -1628,6 +1628,45 @@ class DeploymentGovernancePersistenceRuntime:
 
         return get_liveness_service()
 
+    def build_integrity_diagnostics_service(
+        self,
+    ) -> "GovernanceDiagnosticsService":
+        """
+        Build a GovernanceDiagnosticsService for the persistence-
+        backed components a stateless request can observe: the
+        provider registry.
+
+        There is no live delivery runtime or scheduler in this
+        context, so runtime_state always reports "not_running" and
+        pending_dispatches is always 0 — unlike
+        GovernanceIntegrityDeliveryRuntime.build_diagnostics_service,
+        which reads live state from a running worker process.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_diagnostics import (
+            GovernanceDiagnosticsService,
+        )
+        from .deployment_governance_readiness import (
+            count_registered_providers,
+        )
+
+        def _registered_providers() -> int:
+            count = count_registered_providers(
+                self.build_integrity_provider_registry()
+            )
+
+            return count if count is not None else 0
+
+        return GovernanceDiagnosticsService(
+            runtime_state=lambda: "not_running",
+            active_dispatches=lambda: 0,
+            pending_dispatches=lambda: 0,
+            registered_providers=_registered_providers,
+        )
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

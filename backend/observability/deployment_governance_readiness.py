@@ -12,6 +12,54 @@ from .deployment_governance_health import (
 GovernanceReadinessCheck = Callable[[], HealthCheckResult]
 
 
+def count_registered_providers(provider_registry: object) -> "int | None":
+    """
+    Return how many providers are registered on provider_registry,
+    tolerating either the real GovernanceIntegrityProviderRegistry's
+    list() or the list_providers() duck-typed protocol some delivery
+    runtime callers use in its place.
+
+    Returns None (rather than 0) if provider_registry is None or
+    exposes neither method, since that means "unknown" and not "zero
+    providers registered" — callers that need a plain count (e.g.
+    diagnostics) should treat None as 0; callers making a readiness
+    judgment should treat it as unverifiable and not automatically
+    unready.
+    """
+
+    if provider_registry is None:
+        return None
+
+    if hasattr(provider_registry, "list"):
+        registrations = provider_registry.list()
+
+    elif hasattr(provider_registry, "list_providers"):
+        registrations = provider_registry.list_providers()
+
+    else:
+        return None
+
+    return len(registrations) if registrations is not None else 0
+
+
+def diagnostics_readiness_check(diagnostics_service) -> HealthCheckResult:
+    """
+    Adapt a GovernanceDiagnosticsService into a readiness check
+    result: diagnostics can only be generated once the runtime state
+    it reads from (scheduler, provider registry) is wired in, so a
+    successful snapshot implies those components are ready to be
+    introspected.
+    """
+
+    try:
+        diagnostics_service.snapshot()
+
+    except Exception as exc:
+        return False, str(exc)
+
+    return True
+
+
 @dataclass(frozen=True)
 class GovernanceReadinessStatus:
     """

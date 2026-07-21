@@ -180,3 +180,21 @@ async def get_governance_liveness():
     )
 
     return runtime.build_integrity_liveness_service().check().to_dict()
+
+
+@health_router.get("/diagnostics")
+async def get_governance_diagnostics():
+    """
+    Return a read-only governance runtime diagnostics snapshot for
+    debugging.
+    """
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return (
+        runtime.build_integrity_diagnostics_service()
+        .snapshot()
+        .to_dict()
+    )

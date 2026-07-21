@@ -367,6 +367,7 @@ class GovernanceIntegrityDeliveryRuntime:
 
         from .deployment_governance_health import (
             GovernanceHealthService,
+            diagnostics_health_check,
             liveness_health_check,
         )
 
@@ -391,6 +392,13 @@ class GovernanceIntegrityDeliveryRuntime:
         service.register(
             "liveness",
             lambda: liveness_health_check(self.liveness_service),
+        )
+
+        service.register(
+            "diagnostics",
+            lambda: diagnostics_health_check(
+                self.build_diagnostics_service()
+            ),
         )
 
         return service
@@ -497,6 +505,7 @@ class GovernanceIntegrityDeliveryRuntime:
 
         from .deployment_governance_readiness import (
             GovernanceReadinessService,
+            diagnostics_readiness_check,
         )
 
         service = GovernanceReadinessService(clock=self.clock.now)
@@ -516,6 +525,13 @@ class GovernanceIntegrityDeliveryRuntime:
 
         service.register(
             "delivery_runtime", self._check_delivery_runtime_readiness
+        )
+
+        service.register(
+            "diagnostics",
+            lambda: diagnostics_readiness_check(
+                self.build_diagnostics_service()
+            ),
         )
 
         return service
@@ -548,19 +564,19 @@ class GovernanceIntegrityDeliveryRuntime:
 
             return False, "provider registry is not configured"
 
-        if hasattr(self.provider_registry, "list"):
+        from .deployment_governance_readiness import (
+            count_registered_providers,
+        )
 
-            registrations = self.provider_registry.list()
+        count = count_registered_providers(self.provider_registry)
 
-        elif hasattr(self.provider_registry, "list_providers"):
+        if count is None:
 
-            registrations = self.provider_registry.list_providers()
-
-        else:
-
+            # Neither list() nor list_providers() is available: this
+            # cannot be verified, so it is not treated as unready.
             return True
 
-        if not registrations:
+        if count == 0:
 
             return False, "provider registry has no registered providers"
 
@@ -575,6 +591,57 @@ class GovernanceIntegrityDeliveryRuntime:
             return True
 
         return False, f"delivery runtime is {self._state.value}"
+
+    def build_diagnostics_service(
+        self
+    ) -> "GovernanceDiagnosticsService":
+        """
+        Build a GovernanceDiagnosticsService reading from this
+        runtime's own status, scheduler, and provider registry: the
+        same already-wired components build_health_service and
+        build_readiness_service inspect, just surfaced as raw
+        read-only data instead of a pass/fail check.
+        """
+
+        from .deployment_governance_diagnostics import (
+            GovernanceDiagnosticsService,
+        )
+
+        return GovernanceDiagnosticsService(
+            runtime_state=lambda: self.status().state.value,
+            active_dispatches=lambda: self.status().active_dispatches,
+            pending_dispatches=self._count_pending_dispatches,
+            registered_providers=self._count_registered_providers,
+            clock=self.clock.now,
+        )
+
+    def _count_pending_dispatches(
+        self
+    ) -> int:
+
+        if self.scheduler is None:
+
+            return 0
+
+        if not hasattr(self.scheduler, "pending_dispatches"):
+
+            return 0
+
+        pending = self.scheduler.pending_dispatches()
+
+        return len(pending) if pending is not None else 0
+
+    def _count_registered_providers(
+        self
+    ) -> int:
+
+        from .deployment_governance_readiness import (
+            count_registered_providers,
+        )
+
+        count = count_registered_providers(self.provider_registry)
+
+        return count if count is not None else 0
 
     def reload_config(
         self

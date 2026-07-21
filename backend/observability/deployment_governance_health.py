@@ -6,6 +6,9 @@ from typing import Callable, TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
     from .deployment_governance_liveness import GovernanceLivenessService
+    from .deployment_governance_diagnostics import (
+        GovernanceDiagnosticsService,
+    )
 
 HealthCheckResult = Union[bool, "tuple[bool, str | None]"]
 
@@ -28,6 +31,25 @@ def liveness_health_check(
         return True
 
     return False, "liveness service has not been started"
+
+
+def diagnostics_health_check(
+    diagnostics_service: "GovernanceDiagnosticsService",
+) -> HealthCheckResult:
+    """
+    Adapt a GovernanceDiagnosticsService into a health check result:
+    diagnostics generation is read-only and should never fail while
+    the runtime it reads from is otherwise sound, so any exception
+    raised while building a snapshot is treated as unhealthy.
+    """
+
+    try:
+        diagnostics_service.snapshot()
+
+    except Exception as exc:
+        return False, str(exc)
+
+    return True
 
 
 def evaluate_component_check(
