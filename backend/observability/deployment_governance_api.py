@@ -510,3 +510,60 @@ async def delete_governance_route(name: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return {"removed": name}
+
+
+def _build_audit_service():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_audit_trail_service()
+
+
+@health_router.get("/audit")
+async def get_governance_audit(
+    action: str | None = Query(default=None),
+    actor: str | None = Query(default=None),
+    resource: str | None = Query(default=None),
+    limit: int = Query(default=100, gt=0),
+):
+    """
+    Return governance audit trail records, newest first, filtered by
+    action, actor, and/or resource.
+    """
+
+    from .deployment_governance_audit import AuditQuery
+
+    query = AuditQuery(
+        action=action, actor=actor, resource=resource, limit=limit
+    )
+
+    records = _build_audit_service().query(query)
+
+    return [record.to_dict() for record in records]
+
+
+@health_router.get("/audit/latest")
+async def get_governance_audit_latest(
+    limit: int = Query(default=10, gt=0),
+):
+    """
+    Return the most recent governance audit trail records, newest
+    first.
+    """
+
+    records = _build_audit_service().latest(limit)
+
+    return [record.to_dict() for record in records]
+
+
+@health_router.get("/audit/verify")
+async def get_governance_audit_verify():
+    """
+    Verify the governance audit trail's hash chain, returning whether
+    it is intact and, if not, the first broken record.
+    """
+
+    result = _build_audit_service().verify_chain()
+
+    return result.to_dict()

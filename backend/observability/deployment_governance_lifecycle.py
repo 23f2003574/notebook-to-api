@@ -8,6 +8,7 @@ from .deployment_governance_dependency_graph import GovernanceDependencyGraph
 
 if TYPE_CHECKING:
     from .deployment_governance_event_bus import GovernanceEventBus
+    from .deployment_governance_audit import GovernanceAuditService
 
 
 @dataclass(frozen=True)
@@ -104,6 +105,7 @@ class GovernanceLifecycleManager:
         *,
         clock: Callable[[], datetime] | None = None,
         event_bus: "GovernanceEventBus | None" = None,
+        audit_service: "GovernanceAuditService | None" = None,
     ) -> None:
         self._components: "dict[str, _RegisteredComponent]" = {}
 
@@ -114,6 +116,8 @@ class GovernanceLifecycleManager:
         )
 
         self._event_bus = event_bus
+
+        self._audit_service = audit_service
 
     def register(
         self,
@@ -203,6 +207,7 @@ class GovernanceLifecycleManager:
         )
 
         self._publish_lifecycle_completed(report)
+        self._record_audit("lifecycle_start", report)
 
         return report
 
@@ -261,6 +266,7 @@ class GovernanceLifecycleManager:
         )
 
         self._publish_lifecycle_completed(report)
+        self._record_audit("lifecycle_stop", report)
 
         return report
 
@@ -278,7 +284,7 @@ class GovernanceLifecycleManager:
         shutdown_report = self.shutdown()
         startup_report = self.startup()
 
-        return LifecycleReport(
+        report = LifecycleReport(
             started=startup_report.started,
             stopped=shutdown_report.stopped,
             failed=(
@@ -286,6 +292,10 @@ class GovernanceLifecycleManager:
             ),
             completed_at=startup_report.completed_at,
         )
+
+        self._record_audit("lifecycle_restart", report)
+
+        return report
 
     def reload(self) -> LifecycleReport:
         """
@@ -344,6 +354,7 @@ class GovernanceLifecycleManager:
         )
 
         self._publish_lifecycle_completed(report)
+        self._record_audit("configuration_reload", report)
 
         return report
 
@@ -417,6 +428,20 @@ class GovernanceLifecycleManager:
             payload=report.to_dict(),
         )
 
+    def _record_audit(
+        self, action: str, report: LifecycleReport
+    ) -> None:
+        if self._audit_service is None:
+            return
+
+        self._audit_service.record(
+            action=action,
+            actor="system",
+            resource="lifecycle_manager",
+            outcome="success" if not report.failed else "failure",
+            metadata=report.to_dict(),
+        )
+
 
 def build_default_governance_lifecycle_manager() -> (
     GovernanceLifecycleManager
@@ -449,15 +474,22 @@ def build_default_governance_lifecycle_manager() -> (
     component_started/component_stopped/component_failed/
     lifecycle_completed event described by this manager's operations
     is actually published, not just a documented possibility.
+
+    Also wired to the process-wide governance audit service, so every
+    startup/shutdown/restart/reload is recorded in the tamper-evident
+    audit trail, not just published as an ephemeral event.
     """
 
+    from .deployment_governance_audit import get_audit_service
     from .deployment_governance_bootstrap import (
         _COMPONENT_DEPENDENCIES,
     )
     from .deployment_governance_event_bus import get_event_bus
     from .deployment_governance_liveness import get_liveness_service
 
-    manager = GovernanceLifecycleManager(event_bus=get_event_bus())
+    manager = GovernanceLifecycleManager(
+        event_bus=get_event_bus(), audit_service=get_audit_service()
+    )
 
     def _noop() -> None:
         return None

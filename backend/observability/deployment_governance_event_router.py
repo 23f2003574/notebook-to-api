@@ -6,6 +6,7 @@ from typing import Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .deployment_governance_event_bus import GovernanceEvent
+    from .deployment_governance_audit import GovernanceAuditService
 
 WILDCARD = "*"
 
@@ -123,10 +124,13 @@ class GovernanceEventRouter:
         self,
         *,
         on_match: "Callable[[str, GovernanceEvent], None] | None" = None,
+        audit_service: "GovernanceAuditService | None" = None,
     ) -> None:
         self._routes: "dict[str, EventRoute]" = {}
 
         self._on_match = on_match or (lambda name, event: None)
+
+        self._audit_service = audit_service
 
     def register_route(
         self,
@@ -156,6 +160,8 @@ class GovernanceEventRouter:
 
         self._routes[name] = route
 
+        self._record_audit("route_create", route)
+
         return route
 
     def remove_route(self, name: str) -> None:
@@ -168,7 +174,11 @@ class GovernanceEventRouter:
         if name not in self._routes:
             raise KeyError(f"route '{name}' is not registered")
 
+        route = self._routes[name]
+
         del self._routes[name]
+
+        self._record_audit("route_delete", route)
 
     def enable_route(self, name: str) -> EventRoute:
         """
@@ -279,12 +289,27 @@ class GovernanceEventRouter:
 
         self._routes[name] = updated
 
+        self._record_audit("route_update", updated)
+
         return updated
+
+    def _record_audit(self, action: str, route: EventRoute) -> None:
+        if self._audit_service is None:
+            return
+
+        self._audit_service.record(
+            action=action,
+            actor="system",
+            resource=f"route:{route.name}",
+            outcome="success",
+            metadata=route.to_dict(),
+        )
 
 
 def build_default_governance_event_router(
     *,
     on_match: "Callable[[str, GovernanceEvent], None] | None" = None,
+    audit_service: "GovernanceAuditService | None" = None,
 ) -> GovernanceEventRouter:
     """
     Build the governance event router's default route set: lifecycle
@@ -305,7 +330,9 @@ def build_default_governance_event_router(
     replacing those direct subscriptions.
     """
 
-    router = GovernanceEventRouter(on_match=on_match)
+    router = GovernanceEventRouter(
+        on_match=on_match, audit_service=audit_service
+    )
 
     router.register_route(
         "failure_events_to_alert_pipeline",
@@ -359,8 +386,16 @@ def build_default_governance_event_router(
 
 # Shared for the lifetime of the process: routing rules registered
 # through the API need to be visible to whatever is consuming events
-# off the process-wide event bus, and vice versa.
-_event_router = build_default_governance_event_router()
+# off the process-wide event bus, and vice versa. Wired to the
+# process-wide audit service (a plain top-level import, not deferred:
+# deployment_governance_audit has no dependency on this module, so
+# there is no circular import to avoid) so every route
+# create/update/delete is recorded in the tamper-evident audit trail.
+from .deployment_governance_audit import get_audit_service  # noqa: E402
+
+_event_router = build_default_governance_event_router(
+    audit_service=get_audit_service()
+)
 
 
 def get_event_router() -> GovernanceEventRouter:

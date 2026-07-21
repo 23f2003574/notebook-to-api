@@ -1774,6 +1774,33 @@ class DeploymentGovernancePersistenceRuntime:
 
         return get_event_router()
 
+    def build_governance_audit_trail_service(
+        self,
+    ) -> "GovernanceAuditService":
+        """
+        Return the process-wide governance audit trail service.
+
+        Named distinctly from the build_integrity_audit_* family
+        above (which all belong to the deployment trace integrity
+        audit subsystem — a different, pre-existing concept): this is
+        the tamper-evident hash-chained log of high-value governance
+        actions (lifecycle transitions, route changes, and so on),
+        introduced separately from that subsystem.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: every action recorded by the lifecycle
+        manager, event router, and event history singletons needs to
+        reach the same audit trail, which a persistence runtime built
+        fresh per request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_audit import get_audit_service
+
+        return get_audit_service()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

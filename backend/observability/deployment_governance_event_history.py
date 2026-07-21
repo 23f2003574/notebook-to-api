@@ -11,6 +11,7 @@ from .deployment_governance_event_bus import (
 
 if TYPE_CHECKING:
     from .deployment_governance_event_router import EventRoute
+    from .deployment_governance_audit import GovernanceAuditService
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,7 @@ class GovernanceEventHistory:
         *,
         max_entries: "int | None" = None,
         clock: "Callable[[], datetime] | None" = None,
+        audit_service: "GovernanceAuditService | None" = None,
     ) -> None:
         self._entries: "dict[int, StoredGovernanceEvent]" = {}
 
@@ -109,6 +111,8 @@ class GovernanceEventHistory:
         self._clock = clock or (
             lambda: datetime.now(timezone.utc)
         )
+
+        self._audit_service = audit_service
 
         # Guards against replay() re-persisting the events it
         # re-dispatches: _handle_bus_event (the bus subscriber this
@@ -230,6 +234,11 @@ class GovernanceEventHistory:
         is suppressed for the duration of the call, so replayed
         events are dispatched to every other current subscriber
         without being appended again.
+
+        Records an "event_replay" audit entry, if this history was
+        constructed with an audit_service: a manual replay is exactly
+        the kind of high-value administrative action the audit trail
+        exists to capture.
         """
 
         query = query or EventQuery()
@@ -252,7 +261,22 @@ class GovernanceEventHistory:
         finally:
             self._replaying = False
 
-        return tuple(stored.event for stored in matches)
+        replayed = tuple(stored.event for stored in matches)
+
+        if self._audit_service is not None:
+            self._audit_service.record(
+                action="event_replay",
+                actor="system",
+                resource="event_history",
+                outcome="success",
+                metadata={
+                    "count": len(replayed),
+                    "event_type": query.event_type,
+                    "source": query.source,
+                },
+            )
+
+        return replayed
 
     def purge(self) -> int:
         """
@@ -292,8 +316,14 @@ class GovernanceEventHistory:
 # Shared for the lifetime of the process: every event published on
 # the process-wide event bus needs to reach the same history so
 # GET /governance/events (and friends) can see it, regardless of
-# which request happened to publish it.
-_event_history = GovernanceEventHistory()
+# which request happened to publish it. Wired to the process-wide
+# audit service (a plain top-level import, not deferred:
+# deployment_governance_audit has no dependency on this module, so
+# there is no circular import to avoid) so replay() records an
+# "event_replay" audit entry.
+from .deployment_governance_audit import get_audit_service  # noqa: E402
+
+_event_history = GovernanceEventHistory(audit_service=get_audit_service())
 
 
 def get_event_history() -> GovernanceEventHistory:
