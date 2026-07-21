@@ -7,6 +7,7 @@ from typing import Callable, TYPE_CHECKING
 if TYPE_CHECKING:
     from .deployment_governance_event_bus import GovernanceEvent
     from .deployment_governance_audit import GovernanceAuditService
+    from .deployment_governance_policy import GovernancePolicyEngine
 
 WILDCARD = "*"
 
@@ -125,12 +126,15 @@ class GovernanceEventRouter:
         *,
         on_match: "Callable[[str, GovernanceEvent], None] | None" = None,
         audit_service: "GovernanceAuditService | None" = None,
+        policy_engine: "GovernancePolicyEngine | None" = None,
     ) -> None:
         self._routes: "dict[str, EventRoute]" = {}
 
         self._on_match = on_match or (lambda name, event: None)
 
         self._audit_service = audit_service
+
+        self._policy_engine = policy_engine
 
     def register_route(
         self,
@@ -145,7 +149,14 @@ class GovernanceEventRouter:
         Register a new named route.
 
         Raises ValueError if name is already registered.
+
+        Raises GovernancePolicyViolation if this router was
+        constructed with a policy_engine and a policy denies
+        "route_create" — checked before the name-uniqueness check, so
+        a denied attempt is never reported as a duplicate.
         """
+
+        self._enforce_policy("route_create")
 
         if name in self._routes:
             raise ValueError(f"route '{name}' is already registered")
@@ -169,7 +180,12 @@ class GovernanceEventRouter:
         Remove a registered route.
 
         Raises KeyError if name is not registered.
+
+        Raises GovernancePolicyViolation if a policy denies
+        "route_delete".
         """
+
+        self._enforce_policy("route_delete")
 
         if name not in self._routes:
             raise KeyError(f"route '{name}' is not registered")
@@ -280,6 +296,8 @@ class GovernanceEventRouter:
         return RouteMatch(route=route.name, matched=True, reason=None)
 
     def _set_enabled(self, name: str, enabled: bool) -> EventRoute:
+        self._enforce_policy("route_update")
+
         route = self._routes.get(name)
 
         if route is None:
@@ -292,6 +310,28 @@ class GovernanceEventRouter:
         self._record_audit("route_update", updated)
 
         return updated
+
+    def _enforce_policy(self, operation: str) -> None:
+        if self._policy_engine is None:
+            return
+
+        from .deployment_governance_policy import (
+            GovernancePolicyViolation,
+        )
+
+        decision = self._policy_engine.evaluate(operation)
+
+        if self._audit_service is not None:
+            from .deployment_governance_audit import (
+                record_policy_decision,
+            )
+
+            record_policy_decision(
+                self._audit_service, operation, decision
+            )
+
+        if not decision.allowed:
+            raise GovernancePolicyViolation(decision)
 
     def _record_audit(self, action: str, route: EventRoute) -> None:
         if self._audit_service is None:
@@ -310,6 +350,7 @@ def build_default_governance_event_router(
     *,
     on_match: "Callable[[str, GovernanceEvent], None] | None" = None,
     audit_service: "GovernanceAuditService | None" = None,
+    policy_engine: "GovernancePolicyEngine | None" = None,
 ) -> GovernanceEventRouter:
     """
     Build the governance event router's default route set: lifecycle
@@ -331,7 +372,9 @@ def build_default_governance_event_router(
     """
 
     router = GovernanceEventRouter(
-        on_match=on_match, audit_service=audit_service
+        on_match=on_match,
+        audit_service=audit_service,
+        policy_engine=policy_engine,
     )
 
     router.register_route(
@@ -391,10 +434,14 @@ def build_default_governance_event_router(
 # deployment_governance_audit has no dependency on this module, so
 # there is no circular import to avoid) so every route
 # create/update/delete is recorded in the tamper-evident audit trail.
+# Also wired to the process-wide policy engine, so every route
+# create/update/delete is a policy-protected operation.
 from .deployment_governance_audit import get_audit_service  # noqa: E402
+from .deployment_governance_policy import get_policy_engine  # noqa: E402
 
 _event_router = build_default_governance_event_router(
-    audit_service=get_audit_service()
+    audit_service=get_audit_service(),
+    policy_engine=get_policy_engine(),
 )
 
 

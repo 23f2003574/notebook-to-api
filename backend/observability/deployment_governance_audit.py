@@ -5,7 +5,13 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Any, Callable
+from typing import Any, Callable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .deployment_governance_policy import (
+        GovernancePolicyEngine,
+        PolicyDecision,
+    )
 
 # The hash a chain's first record's previous_hash points at: there is
 # no real predecessor, so a fixed, obviously-synthetic sentinel (64
@@ -229,6 +235,7 @@ class GovernanceAuditService:
         self,
         *,
         clock: "Callable[[], datetime] | None" = None,
+        policy_engine: "GovernancePolicyEngine | None" = None,
     ) -> None:
         self._records: "dict[int, AuditRecord]" = {}
 
@@ -239,6 +246,8 @@ class GovernanceAuditService:
         self._clock = clock or (
             lambda: datetime.now(timezone.utc)
         )
+
+        self._policy_engine = policy_engine
 
     def record(
         self,
@@ -446,11 +455,37 @@ class GovernanceAuditService:
         exactly the kind of history-hiding a tamper-evident audit
         trail exists to prevent. The next recorded action still
         chains onto the (now-invisible) history that came before it.
+
+        If this service was constructed with a policy_engine, purging
+        is itself a policy-protected operation ("audit_purge"): a
+        denying policy raises GovernancePolicyViolation before
+        anything is removed. Either way the decision is recorded —
+        on denial, immediately (nothing was cleared, so it simply
+        appends); on approval, after the clear completes, so the
+        record documenting that this purge was authorized is not
+        itself wiped by the purge it authorized.
         """
+
+        decision = None
+
+        if self._policy_engine is not None:
+            from .deployment_governance_policy import (
+                GovernancePolicyViolation,
+            )
+
+            decision = self._policy_engine.evaluate("audit_purge", {})
+
+            if not decision.allowed:
+                record_policy_decision(self, "audit_purge", decision)
+
+                raise GovernancePolicyViolation(decision)
 
         count = len(self._records)
 
         self._records.clear()
+
+        if decision is not None:
+            record_policy_decision(self, "audit_purge", decision)
 
         return count
 
@@ -462,12 +497,47 @@ class GovernanceAuditService:
         return len(self._records)
 
 
+def record_policy_decision(
+    audit_service: GovernanceAuditService,
+    operation: str,
+    decision: "PolicyDecision",
+) -> None:
+    """
+    Record a PolicyDecision as a "policy_evaluation" audit entry.
+
+    Shared by every component that enforces
+    GovernancePolicyEngine.evaluate() results through this audit
+    trail (the lifecycle manager, the event router, and this
+    service's own purge()), so the same decision is always recorded
+    in the same shape regardless of which operation it came from.
+    """
+
+    audit_service.record(
+        action="policy_evaluation",
+        actor="system",
+        resource=f"policy:{operation}",
+        outcome="success" if decision.allowed else "denied",
+        metadata={
+            "operation": operation,
+            "policy": decision.policy,
+            "reason": decision.reason,
+            "allowed": decision.allowed,
+        },
+    )
+
+
 # Shared for the lifetime of the process: every governance action
 # recorded by the lifecycle manager, event router, and event history
 # singletons needs to reach the same audit trail so
 # GET /governance/audit (and friends) can see it, regardless of which
-# request happened to trigger the action.
-_audit_service = GovernanceAuditService()
+# request happened to trigger the action. Wired to the process-wide
+# policy engine (a plain top-level import, not deferred:
+# deployment_governance_policy has no dependency on this module, so
+# there is no circular import to avoid) so purge() is itself
+# policy-protected.
+from .deployment_governance_policy import get_policy_engine  # noqa: E402
+
+_audit_service = GovernanceAuditService(policy_engine=get_policy_engine())
 
 
 def get_audit_service() -> GovernanceAuditService:

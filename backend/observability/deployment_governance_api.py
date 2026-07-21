@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -567,3 +568,127 @@ async def get_governance_audit_verify():
     result = _build_audit_service().verify_chain()
 
     return result.to_dict()
+
+
+def _build_policy_engine():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_policy_engine()
+
+
+def _parse_json_object(value: str, *, field_name: str) -> dict:
+    try:
+        parsed = json.loads(value)
+
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field_name} must be valid JSON: {exc}",
+        ) from exc
+
+    if not isinstance(parsed, dict):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field_name} must be a JSON object",
+        )
+
+    return parsed
+
+
+@health_router.get("/policies")
+async def get_governance_policies():
+    """
+    Return every registered governance policy, ordered by priority
+    then name.
+    """
+
+    policies = _build_policy_engine().list()
+
+    return [policy.to_dict() for policy in policies]
+
+
+@health_router.post("/policies")
+async def post_governance_policy(
+    name: str = Query(...),
+    operation: str = Query(...),
+    priority: int = Query(default=0),
+    enabled: bool = Query(default=True),
+    conditions: str = Query(default="{}"),
+):
+    """
+    Register a new governance policy. conditions is a JSON object
+    (as a query string) of context keys that must all match for the
+    policy to deny an operation.
+    """
+
+    parsed_conditions = _parse_json_object(
+        conditions, field_name="conditions"
+    )
+
+    try:
+        policy = _build_policy_engine().register(
+            name,
+            operation=operation,
+            priority=priority,
+            enabled=enabled,
+            conditions=parsed_conditions,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return policy.to_dict()
+
+
+@health_router.patch("/policies/{name}")
+async def patch_governance_policy(
+    name: str,
+    enabled: bool = Query(...),
+):
+    """
+    Enable or disable a registered governance policy.
+    """
+
+    engine = _build_policy_engine()
+
+    try:
+        policy = engine.enable(name) if enabled else engine.disable(name)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return policy.to_dict()
+
+
+@health_router.delete("/policies/{name}")
+async def delete_governance_policy(name: str):
+    """
+    Remove a registered governance policy.
+    """
+
+    try:
+        _build_policy_engine().remove(name)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"removed": name}
+
+
+@health_router.post("/policies/evaluate")
+async def post_governance_policy_evaluate(
+    operation: str = Query(...),
+    context: str = Query(default="{}"),
+):
+    """
+    Evaluate operation against every registered policy, returning the
+    resulting decision. context is a JSON object (as a query string).
+    """
+
+    parsed_context = _parse_json_object(context, field_name="context")
+
+    decision = _build_policy_engine().evaluate(operation, parsed_context)
+
+    return decision.to_dict()

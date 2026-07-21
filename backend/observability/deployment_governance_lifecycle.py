@@ -9,6 +9,7 @@ from .deployment_governance_dependency_graph import GovernanceDependencyGraph
 if TYPE_CHECKING:
     from .deployment_governance_event_bus import GovernanceEventBus
     from .deployment_governance_audit import GovernanceAuditService
+    from .deployment_governance_policy import GovernancePolicyEngine
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,7 @@ class GovernanceLifecycleManager:
         clock: Callable[[], datetime] | None = None,
         event_bus: "GovernanceEventBus | None" = None,
         audit_service: "GovernanceAuditService | None" = None,
+        policy_engine: "GovernancePolicyEngine | None" = None,
     ) -> None:
         self._components: "dict[str, _RegisteredComponent]" = {}
 
@@ -118,6 +120,8 @@ class GovernanceLifecycleManager:
         self._event_bus = event_bus
 
         self._audit_service = audit_service
+
+        self._policy_engine = policy_engine
 
     def register(
         self,
@@ -168,7 +172,14 @@ class GovernanceLifecycleManager:
         is invalid (a missing or circular dependency) — that is
         aborted before any component is touched, not reported via
         failed.
+
+        Raises GovernancePolicyViolation if this manager was
+        constructed with a policy_engine and a policy denies
+        "lifecycle_start" — checked before the dependency graph is
+        even validated, since policy is the outermost gate.
         """
+
+        self._enforce_policy("lifecycle_start")
 
         from .deployment_governance_bootstrap import (
             GovernanceBootstrapError,
@@ -227,7 +238,13 @@ class GovernanceLifecycleManager:
         attempted, whether or not that attempt raised, since shutdown
         is best-effort and a component stuck reporting "started"
         forever after a failed stop would make restart() unusable.
+
+        Raises GovernancePolicyViolation if this manager was
+        constructed with a policy_engine and a policy denies
+        "lifecycle_stop", checked before any component is touched.
         """
+
+        self._enforce_policy("lifecycle_stop")
 
         try:
             order = self._build_graph().shutdown_order()
@@ -279,7 +296,16 @@ class GovernanceLifecycleManager:
         no behavior of its own beyond running those two idempotent
         operations back to back, so bugs fixed in either are
         automatically reflected here too.
+
+        Raises GovernancePolicyViolation if a policy denies
+        "lifecycle_restart" specifically, checked before shutdown()
+        and startup() even run their own "lifecycle_stop"/
+        "lifecycle_start" checks — a policy can restrict restart
+        without necessarily restricting plain stop or start, or vice
+        versa.
         """
+
+        self._enforce_policy("lifecycle_restart")
 
         shutdown_report = self.shutdown()
         startup_report = self.startup()
@@ -442,6 +468,28 @@ class GovernanceLifecycleManager:
             metadata=report.to_dict(),
         )
 
+    def _enforce_policy(self, operation: str) -> None:
+        if self._policy_engine is None:
+            return
+
+        from .deployment_governance_policy import (
+            GovernancePolicyViolation,
+        )
+
+        decision = self._policy_engine.evaluate(operation)
+
+        if self._audit_service is not None:
+            from .deployment_governance_audit import (
+                record_policy_decision,
+            )
+
+            record_policy_decision(
+                self._audit_service, operation, decision
+            )
+
+        if not decision.allowed:
+            raise GovernancePolicyViolation(decision)
+
 
 def build_default_governance_lifecycle_manager() -> (
     GovernanceLifecycleManager
@@ -478,6 +526,11 @@ def build_default_governance_lifecycle_manager() -> (
     Also wired to the process-wide governance audit service, so every
     startup/shutdown/restart/reload is recorded in the tamper-evident
     audit trail, not just published as an ephemeral event.
+
+    Also wired to the process-wide governance policy engine, so every
+    startup/shutdown/restart is a policy-protected operation: a
+    registered denying policy aborts it before any component is
+    touched.
     """
 
     from .deployment_governance_audit import get_audit_service
@@ -486,9 +539,12 @@ def build_default_governance_lifecycle_manager() -> (
     )
     from .deployment_governance_event_bus import get_event_bus
     from .deployment_governance_liveness import get_liveness_service
+    from .deployment_governance_policy import get_policy_engine
 
     manager = GovernanceLifecycleManager(
-        event_bus=get_event_bus(), audit_service=get_audit_service()
+        event_bus=get_event_bus(),
+        audit_service=get_audit_service(),
+        policy_engine=get_policy_engine(),
     )
 
     def _noop() -> None:
