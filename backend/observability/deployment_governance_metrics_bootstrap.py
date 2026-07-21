@@ -48,6 +48,17 @@ class GovernanceIntegrityMetricsBootstrapHealth:
 
     active_alerts: int
 
+    @property
+    def is_healthy(self) -> bool:
+        """
+        Whether the subsystem has completed its full lifecycle
+        (built and initialized). Does not consider active_alerts:
+        those reflect the metrics being recorded, not the bootstrap's
+        own operability.
+        """
+
+        return self.built and self.initialized
+
     def to_dict(self) -> dict[str, object]:
         return {
             "built": self.built,

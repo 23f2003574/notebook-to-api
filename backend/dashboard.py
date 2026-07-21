@@ -20,6 +20,7 @@ from backend.routes.upload import router as upload_router
 from backend.observability.deployment_governance_api import (
     register_governance_metrics_middleware,
     router as governance_metrics_router,
+    health_router as governance_health_router,
 )
 
 app = FastAPI(
@@ -43,6 +44,7 @@ register_governance_metrics_middleware(app)
 # Include API routes
 app.include_router(upload_router)
 app.include_router(governance_metrics_router)
+app.include_router(governance_health_router)
 
 
 @app.get("/")

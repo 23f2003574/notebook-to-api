@@ -1515,6 +1515,62 @@ class DeploymentGovernancePersistenceRuntime:
             self.build_integrity_provider_registry()
         )
 
+    def build_integrity_health_service(
+        self,
+    ) -> "GovernanceHealthService":
+        """
+        Build a GovernanceHealthService with checks registered for
+        the persistence-backed components a stateless request can
+        observe: the provider registry and the shared metrics
+        service.
+
+        Unlike GovernanceIntegrityDeliveryRuntime.build_health_service,
+        this has no long-lived delivery runtime or bootstraps to
+        check: those are only wired together for a running worker
+        process, not for a persistence runtime built fresh per
+        request.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_health import GovernanceHealthService
+        from .deployment_governance_provider_health import (
+            GovernanceIntegrityProviderHealthStatus,
+        )
+
+        service = GovernanceHealthService()
+
+        def _check_provider_registry():
+            statuses = (
+                self.build_integrity_provider_health_service()
+                .check_all()
+            )
+
+            unhealthy = [
+                status.channel_type.value
+                for status in statuses
+                if status.status
+                is not GovernanceIntegrityProviderHealthStatus.HEALTHY
+            ]
+
+            if unhealthy:
+                return False, (
+                    "unhealthy providers: " + ", ".join(sorted(unhealthy))
+                )
+
+            return True
+
+        def _check_metrics_service():
+            self.build_integrity_metrics_service().snapshot()
+
+            return True
+
+        service.register("provider_registry", _check_provider_registry)
+        service.register("metrics_service", _check_metrics_service)
+
+        return service
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

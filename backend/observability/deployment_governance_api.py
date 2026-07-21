@@ -24,6 +24,11 @@ router = APIRouter(
     tags=["governance-metrics"],
 )
 
+health_router = APIRouter(
+    prefix="/governance",
+    tags=["governance-health"],
+)
+
 # Shared for the lifetime of the process: the middleware records into
 # this collector on every request, and get_request_metrics_collector()
 # below reads from the same instance. A separate process (e.g. a CLI
@@ -133,3 +138,17 @@ async def get_governance_metrics_alerts():
     alerts = _build_metrics_api().alerts()
 
     return [alert.to_dict() for alert in alerts]
+
+
+@health_router.get("/health")
+async def get_governance_health():
+    """
+    Return the overall governance health status plus the health of
+    each individually checked component.
+    """
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_integrity_health_service().summary().to_dict()

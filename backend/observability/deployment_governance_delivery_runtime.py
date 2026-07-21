@@ -334,6 +334,130 @@ class GovernanceIntegrityDeliveryRuntime:
 
         return self._logging_bootstrap
 
+    def build_health_service(
+        self
+    ) -> "GovernanceHealthService":
+        """
+        Build a GovernanceHealthService with checks registered for
+        this runtime's own state and for the metrics bootstrap,
+        logging bootstrap, and provider registry it wires together.
+
+        Each check reflects whatever this runtime was constructed
+        with: a component that was never wired in (e.g. no
+        metrics_bootstrap passed to __init__) is reported unhealthy
+        rather than omitted, since check_all()/summary() are meant to
+        surface exactly the components a caller expected to be
+        present.
+        """
+
+        from .deployment_governance_health import (
+            GovernanceHealthService,
+        )
+
+        service = GovernanceHealthService(clock=self.clock.now)
+
+        service.register(
+            "delivery_runtime", self._check_delivery_runtime_health
+        )
+
+        service.register(
+            "metrics_bootstrap", self._check_metrics_bootstrap_health
+        )
+
+        service.register(
+            "logging_bootstrap", self._check_logging_bootstrap_health
+        )
+
+        service.register(
+            "provider_registry", self._check_provider_registry_health
+        )
+
+        return service
+
+    def _check_delivery_runtime_health(
+        self
+    ):
+
+        if self.is_running():
+
+            return True
+
+        return False, f"delivery runtime is {self._state.value}"
+
+    def _check_metrics_bootstrap_health(
+        self
+    ):
+
+        if self._metrics_bootstrap is None:
+
+            return False, "metrics bootstrap is not configured"
+
+        health = self._metrics_bootstrap.health()
+
+        if health.is_healthy:
+
+            return True
+
+        return False, (
+            f"metrics bootstrap built={health.built} "
+            f"initialized={health.initialized}"
+        )
+
+    def _check_logging_bootstrap_health(
+        self
+    ):
+
+        if self._logging_bootstrap is None:
+
+            return False, "logging bootstrap is not configured"
+
+        health = self._logging_bootstrap.health()
+
+        if (
+            health.built
+            and health.initialized
+            and health.dependencies_valid
+        ):
+
+            return True
+
+        return False, (
+            f"logging bootstrap built={health.built} "
+            f"initialized={health.initialized} "
+            f"dependencies_valid={health.dependencies_valid}"
+        )
+
+    def _check_provider_registry_health(
+        self
+    ):
+
+        if self.provider_registry is None:
+
+            return False, "provider registry is not configured"
+
+        if not hasattr(self.provider_registry, "health_all"):
+
+            return True
+
+        from .deployment_governance_provider_health import (
+            GovernanceIntegrityProviderHealthStatus,
+        )
+
+        unhealthy = [
+            status.channel_type.value
+            for status in self.provider_registry.health_all()
+            if status.status
+            is not GovernanceIntegrityProviderHealthStatus.HEALTHY
+        ]
+
+        if unhealthy:
+
+            return False, (
+                "unhealthy providers: " + ", ".join(sorted(unhealthy))
+            )
+
+        return True
+
     def reload_config(
         self
     ) -> Optional[GovernanceIntegrityMetricsConfig]:
