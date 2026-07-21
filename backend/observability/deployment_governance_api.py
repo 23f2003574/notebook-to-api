@@ -198,3 +198,34 @@ async def get_governance_diagnostics():
         .snapshot()
         .to_dict()
     )
+
+
+@health_router.get("/dependencies")
+async def get_governance_dependencies():
+    """
+    Return the governance runtime's component dependency graph:
+    every registered component, its startup order, its dependency
+    map, and whether the graph currently validates.
+    """
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    graph = runtime.build_integrity_dependency_graph()
+    result = graph.validate()
+    components = graph.components()
+
+    return {
+        "components": [
+            component.to_dict() for component in components
+        ],
+        "startup_order": list(result.startup_order),
+        "dependency_map": {
+            component.name: list(component.dependencies)
+            for component in components
+        },
+        "valid": result.valid,
+        "cycles": [list(cycle) for cycle in result.cycles],
+        "missing": list(result.missing),
+    }

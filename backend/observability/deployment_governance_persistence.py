@@ -1667,6 +1667,28 @@ class DeploymentGovernancePersistenceRuntime:
             registered_providers=_registered_providers,
         )
 
+    def build_integrity_dependency_graph(
+        self,
+    ) -> "GovernanceDependencyGraph":
+        """
+        Build the governance runtime's component dependency graph.
+
+        This is the same fixed, declarative graph
+        bootstrap_governance_runtime() validates before startup; this
+        accessor exists so a stateless request (e.g. the
+        GET /governance/dependencies endpoint) can inspect it without
+        needing a running delivery runtime.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_bootstrap import (
+            build_governance_dependency_graph,
+        )
+
+        return build_governance_dependency_graph()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

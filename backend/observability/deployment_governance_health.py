@@ -9,6 +9,9 @@ if TYPE_CHECKING:
     from .deployment_governance_diagnostics import (
         GovernanceDiagnosticsService,
     )
+    from .deployment_governance_dependency_graph import (
+        DependencyValidationResult,
+    )
 
 HealthCheckResult = Union[bool, "tuple[bool, str | None]"]
 
@@ -50,6 +53,32 @@ def diagnostics_health_check(
         return False, str(exc)
 
     return True
+
+
+def dependency_graph_health_check(
+    result: "DependencyValidationResult",
+) -> HealthCheckResult:
+    """
+    Adapt a DependencyValidationResult into a health check result, so
+    a governance dependency graph's validity can be registered as one
+    more component on a GovernanceHealthService.
+    """
+
+    if result.valid:
+        return True
+
+    reasons = []
+
+    if result.missing:
+        reasons.append("missing: " + ", ".join(result.missing))
+
+    if result.cycles:
+        reasons.append(
+            "cycles: "
+            + "; ".join(" -> ".join(cycle) for cycle in result.cycles)
+        )
+
+    return False, "; ".join(reasons)
 
 
 def evaluate_component_check(
