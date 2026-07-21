@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Callable, TYPE_CHECKING
 
 from .deployment_governance_dependency_graph import GovernanceDependencyGraph
+
+if TYPE_CHECKING:
+    from .deployment_governance_event_bus import GovernanceEventBus
 
 
 @dataclass(frozen=True)
@@ -100,6 +103,7 @@ class GovernanceLifecycleManager:
         self,
         *,
         clock: Callable[[], datetime] | None = None,
+        event_bus: "GovernanceEventBus | None" = None,
     ) -> None:
         self._components: "dict[str, _RegisteredComponent]" = {}
 
@@ -108,6 +112,8 @@ class GovernanceLifecycleManager:
         self._clock = clock or (
             lambda: datetime.now(timezone.utc)
         )
+
+        self._event_bus = event_bus
 
     def register(
         self,
@@ -181,18 +187,24 @@ class GovernanceLifecycleManager:
 
             except Exception:
                 failed.append(name)
+                self._publish("component_failed", name, {"phase": "startup"})
                 break
 
             else:
                 self._started[name] = True
                 started.append(name)
+                self._publish("component_started", name)
 
-        return LifecycleReport(
+        report = LifecycleReport(
             started=tuple(started),
             stopped=(),
             failed=tuple(failed),
             completed_at=self._clock(),
         )
+
+        self._publish_lifecycle_completed(report)
+
+        return report
 
     def shutdown(self) -> LifecycleReport:
         """
@@ -232,19 +244,25 @@ class GovernanceLifecycleManager:
 
             except Exception:
                 failed.append(name)
+                self._publish("component_failed", name, {"phase": "shutdown"})
 
             else:
                 stopped.append(name)
+                self._publish("component_stopped", name)
 
             finally:
                 self._started[name] = False
 
-        return LifecycleReport(
+        report = LifecycleReport(
             started=(),
             stopped=tuple(stopped),
             failed=tuple(failed),
             completed_at=self._clock(),
         )
+
+        self._publish_lifecycle_completed(report)
+
+        return report
 
     def restart(self) -> LifecycleReport:
         """
@@ -313,16 +331,21 @@ class GovernanceLifecycleManager:
 
             except Exception:
                 failed.append(name)
+                self._publish("component_failed", name, {"phase": "reload"})
 
             else:
                 reloaded.append(name)
 
-        return LifecycleReport(
+        report = LifecycleReport(
             started=tuple(reloaded),
             stopped=(),
             failed=tuple(failed),
             completed_at=self._clock(),
         )
+
+        self._publish_lifecycle_completed(report)
+
+        return report
 
     def status(self) -> "tuple[LifecycleComponent, ...]":
         """
@@ -369,6 +392,31 @@ class GovernanceLifecycleManager:
 
         return graph
 
+    def _publish(
+        self,
+        event_type: str,
+        component_name: str,
+        payload: "dict[str, object] | None" = None,
+    ) -> None:
+        if self._event_bus is None:
+            return
+
+        self._event_bus.publish(
+            event_type, source=component_name, payload=payload
+        )
+
+    def _publish_lifecycle_completed(
+        self, report: LifecycleReport
+    ) -> None:
+        if self._event_bus is None:
+            return
+
+        self._event_bus.publish(
+            "lifecycle_completed",
+            source="lifecycle_manager",
+            payload=report.to_dict(),
+        )
+
 
 def build_default_governance_lifecycle_manager() -> (
     GovernanceLifecycleManager
@@ -396,14 +444,20 @@ def build_default_governance_lifecycle_manager() -> (
     deployment_governance_bootstrap.build_governance_lifecycle_manager
     instead, which wires delivery_runtime (and liveness_service) to
     that live runtime's own start()/stop().
+
+    Wired to the process-wide governance event bus, so every
+    component_started/component_stopped/component_failed/
+    lifecycle_completed event described by this manager's operations
+    is actually published, not just a documented possibility.
     """
 
     from .deployment_governance_bootstrap import (
         _COMPONENT_DEPENDENCIES,
     )
+    from .deployment_governance_event_bus import get_event_bus
     from .deployment_governance_liveness import get_liveness_service
 
-    manager = GovernanceLifecycleManager()
+    manager = GovernanceLifecycleManager(event_bus=get_event_bus())
 
     def _noop() -> None:
         return None

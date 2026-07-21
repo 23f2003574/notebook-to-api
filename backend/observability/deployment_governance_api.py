@@ -279,3 +279,31 @@ async def get_governance_lifecycle_status():
     components = _build_lifecycle_manager().status()
 
     return [component.to_dict() for component in components]
+
+
+@health_router.get("/events/types")
+async def get_governance_event_types():
+    """
+    Return the well-known governance event types published by the
+    lifecycle manager, health service, and metrics bootstrap.
+    """
+
+    from .deployment_governance_event_bus import GOVERNANCE_EVENT_TYPES
+
+    return list(GOVERNANCE_EVENT_TYPES)
+
+
+@health_router.get("/events/subscribers")
+async def get_governance_event_subscribers():
+    """
+    Return every subscription currently registered on the governance
+    event bus.
+    """
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    subscriptions = runtime.build_integrity_event_bus().subscribers()
+
+    return [subscription.to_dict() for subscription in subscriptions]

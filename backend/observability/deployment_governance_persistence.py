@@ -1711,6 +1711,27 @@ class DeploymentGovernancePersistenceRuntime:
 
         return get_lifecycle_manager()
 
+    def build_integrity_event_bus(
+        self,
+    ) -> "GovernanceEventBus":
+        """
+        Return the process-wide governance event bus.
+
+        Like build_integrity_liveness_service, this does not
+        construct a fresh instance: subscribers need to reach the
+        same bus publishers (the lifecycle manager singleton, and any
+        health/metrics service that opts in) publish to, which a
+        persistence runtime built fresh per request cannot provide on
+        its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_event_bus import get_event_bus
+
+        return get_event_bus()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

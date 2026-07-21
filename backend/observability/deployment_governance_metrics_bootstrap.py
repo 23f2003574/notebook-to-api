@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from .deployment_governance_persistence import (
         DeploymentGovernancePersistenceRuntime,
     )
+    from .deployment_governance_event_bus import GovernanceEventBus
 
 
 @dataclass(frozen=True)
@@ -91,6 +92,7 @@ class GovernanceIntegrityMetricsBootstrap:
         persistence_runtime: "DeploymentGovernancePersistenceRuntime",
         *,
         app: "FastAPI | None" = None,
+        event_bus: "GovernanceEventBus | None" = None,
     ) -> None:
         if persistence_runtime is None:
             raise ValueError(
@@ -100,6 +102,8 @@ class GovernanceIntegrityMetricsBootstrap:
         self._persistence_runtime = persistence_runtime
 
         self._app = app
+
+        self._event_bus = event_bus
 
         self._built = False
 
@@ -185,6 +189,10 @@ class GovernanceIntegrityMetricsBootstrap:
         start the background collector, and register the request
         metrics middleware if an app was provided.
 
+        Publishes a "metrics_snapshot_created" event for the snapshot
+        loaded from durable storage, if this bootstrap was
+        constructed with an event_bus.
+
         Raises RuntimeError if build() has not run yet, or if
         already initialized.
         """
@@ -215,7 +223,16 @@ class GovernanceIntegrityMetricsBootstrap:
 
         self.metrics_service.load()
 
-        self.alert_service.evaluate(self.metrics_service.snapshot())
+        snapshot = self.metrics_service.snapshot()
+
+        self.alert_service.evaluate(snapshot)
+
+        if self._event_bus is not None:
+            self._event_bus.publish(
+                "metrics_snapshot_created",
+                source="metrics_bootstrap",
+                payload=snapshot.to_dict(),
+            )
 
         self.metrics_collector.start()
 

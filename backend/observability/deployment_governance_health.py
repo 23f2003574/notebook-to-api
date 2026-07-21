@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from .deployment_governance_lifecycle import (
         GovernanceLifecycleManager,
     )
+    from .deployment_governance_event_bus import GovernanceEventBus
 
 HealthCheckResult = Union[bool, "tuple[bool, str | None]"]
 
@@ -222,12 +223,15 @@ class GovernanceHealthService:
         self,
         *,
         clock: Callable[[], datetime] | None = None,
+        event_bus: "GovernanceEventBus | None" = None,
     ) -> None:
         self._checks: dict[str, GovernanceHealthCheck] = {}
 
         self._clock = clock or (
             lambda: datetime.now(timezone.utc)
         )
+
+        self._event_bus = event_bus
 
     def register(
         self,
@@ -281,15 +285,30 @@ class GovernanceHealthService:
         Run every registered health check and return the aggregated
         result: overall healthy is True only if every component is
         healthy.
+
+        Publishes a "health_check_completed" event if this service
+        was constructed with an event_bus.
         """
 
         statuses = self.check_all()
 
-        return GovernanceHealthSummary(
+        summary = GovernanceHealthSummary(
             healthy=all(status.healthy for status in statuses),
             components=statuses,
             checked_at=self._clock(),
         )
+
+        if self._event_bus is not None:
+            self._event_bus.publish(
+                "health_check_completed",
+                source="health_service",
+                payload={
+                    "healthy": summary.healthy,
+                    "component_count": len(summary.components),
+                },
+            )
+
+        return summary
 
     def _run_check(
         self,
