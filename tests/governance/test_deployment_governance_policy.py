@@ -98,6 +98,7 @@ class TestGovernancePolicy:
             "priority": 3,
             "enabled": False,
             "conditions": {"k": "v"},
+            "rule": None,
         }
 
 
@@ -328,9 +329,9 @@ class TestPriorityEvaluation:
         evaluated = []
 
         class _TrackingEngine(GovernancePolicyEngine):
-            def _conditions_match(self, conditions, context):
-                evaluated.append(conditions)
-                return super()._conditions_match(conditions, context)
+            def _policy_matches(self, policy, operation, context):
+                evaluated.append(policy.name)
+                return super()._policy_matches(policy, operation, context)
 
         engine = _TrackingEngine(clock=_clock)
         engine.register("a", operation="x", priority=0)

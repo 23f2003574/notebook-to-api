@@ -6,19 +6,27 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Callable
 
+from .deployment_governance_rules import (
+    GovernanceRuleEngine,
+    conditions_match,
+    get_rule_engine,
+)
+
 WILDCARD_OPERATION = "*"
 
 
 @dataclass(frozen=True)
 class GovernancePolicy:
     """
-    A named policy rule: if an operation's conditions all match the
-    context an operation is evaluated with, that operation is denied.
+    A named policy rule: an operation is denied if this policy
+    matches it, either because a named rule (evaluated through the
+    rule engine) fails, or — with no rule attached — because
+    conditions all match the given context.
 
     There is no separate "allow" policy: the engine is default-allow,
     and a policy exists only to carve out a deny rule against that
-    default. conditions being empty means the policy denies every
-    context for its operation unconditionally.
+    default. conditions being empty (with no rule attached) means the
+    policy denies every context for its operation unconditionally.
     """
 
     name: str
@@ -30,6 +38,8 @@ class GovernancePolicy:
     enabled: bool = True
 
     conditions: "dict[str, Any]" = dataclasses.field(default_factory=dict)
+
+    rule: "str | None" = None
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -49,6 +59,7 @@ class GovernancePolicy:
             "priority": self.priority,
             "enabled": self.enabled,
             "conditions": dict(self.conditions),
+            "rule": self.rule,
         }
 
 
@@ -123,21 +134,30 @@ class GovernancePolicyEngine:
 
     Evaluation is default-allow: an operation is denied only if some
     enabled policy registered for it (or for the "*" wildcard
-    operation) has conditions that all match the given context. The
-    first such policy, in priority-then-name order, wins and stops
-    evaluation there.
+    operation) matches the given context. The first such policy, in
+    priority-then-name order, wins and stops evaluation there.
+
+    A policy matches in one of two ways: if it has a rule attached
+    and this engine was constructed with a rule_engine, it matches
+    when that named rule fails (policies consume rule results rather
+    than implementing their own evaluation logic); otherwise it falls
+    back to conditions — all matching the context — the same inline
+    check this engine used before the rule engine existed.
     """
 
     def __init__(
         self,
         *,
         clock: "Callable[[], datetime] | None" = None,
+        rule_engine: "GovernanceRuleEngine | None" = None,
     ) -> None:
         self._policies: "dict[str, GovernancePolicy]" = {}
 
         self._clock = clock or (
             lambda: datetime.now(timezone.utc)
         )
+
+        self._rule_engine = rule_engine
 
     def register(
         self,
@@ -147,6 +167,7 @@ class GovernancePolicyEngine:
         priority: int = 0,
         enabled: bool = True,
         conditions: "dict[str, Any] | None" = None,
+        rule: "str | None" = None,
     ) -> GovernancePolicy:
         """
         Register a new named policy.
@@ -163,6 +184,7 @@ class GovernancePolicyEngine:
             priority=priority,
             enabled=enabled,
             conditions=conditions or {},
+            rule=rule,
         )
 
         self._policies[name] = policy
@@ -222,10 +244,10 @@ class GovernancePolicyEngine:
         for it (or for the "*" wildcard operation), in priority-then-
         name order.
 
-        Returns a deny decision for the first policy whose conditions
-        all match context, without evaluating any further policy.
-        Returns an allow decision if none match (including when no
-        policies are registered at all: this engine is default-allow).
+        Returns a deny decision for the first policy that matches,
+        without evaluating any further policy. Returns an allow
+        decision if none match (including when no policies are
+        registered at all: this engine is default-allow).
         """
 
         context = context or {}
@@ -240,14 +262,15 @@ class GovernancePolicyEngine:
             ):
                 continue
 
-            if self._conditions_match(policy.conditions, context):
+            matched, reason = self._policy_matches(
+                policy, operation, context
+            )
+
+            if matched:
                 return PolicyDecision(
                     allowed=False,
                     policy=policy.name,
-                    reason=(
-                        f"operation '{operation}' matched policy "
-                        f"'{policy.name}'"
-                    ),
+                    reason=reason,
                     evaluated_at=self._clock(),
                 )
 
@@ -265,14 +288,31 @@ class GovernancePolicyEngine:
 
         self._policies.clear()
 
-    @staticmethod
-    def _conditions_match(
-        conditions: "dict[str, Any]", context: "dict[str, Any]"
-    ) -> bool:
-        return all(
-            context.get(key) == value
-            for key, value in conditions.items()
-        )
+    def _policy_matches(
+        self,
+        policy: GovernancePolicy,
+        operation: str,
+        context: "dict[str, Any]",
+    ) -> "tuple[bool, str | None]":
+        if policy.rule is not None and self._rule_engine is not None:
+            result = self._rule_engine.evaluate(policy.rule, context)
+
+            if result.passed:
+                return False, None
+
+            return True, (
+                f"operation '{operation}' matched policy "
+                f"'{policy.name}': rule '{policy.rule}' failed"
+                + (f" ({result.reason})" if result.reason else "")
+            )
+
+        if conditions_match(policy.conditions, context):
+            return True, (
+                f"operation '{operation}' matched policy "
+                f"'{policy.name}'"
+            )
+
+        return False, None
 
     def _set_enabled(self, name: str, enabled: bool) -> GovernancePolicy:
         policy = self._policies.get(name)
@@ -289,8 +329,12 @@ class GovernancePolicyEngine:
 
 # Shared for the lifetime of the process: policies registered through
 # the API need to be enforced by whichever component (lifecycle
-# manager, event router, audit service) evaluates against them.
-_policy_engine = GovernancePolicyEngine()
+# manager, event router, audit service) evaluates against them. Wired
+# to the process-wide rule engine (deployment_governance_rules has no
+# dependency on this module, so a plain top-level import is safe —
+# no circularity to avoid) so a policy can consume a named rule's
+# result instead of implementing its own evaluation logic.
+_policy_engine = GovernancePolicyEngine(rule_engine=get_rule_engine())
 
 
 def get_policy_engine() -> GovernancePolicyEngine:

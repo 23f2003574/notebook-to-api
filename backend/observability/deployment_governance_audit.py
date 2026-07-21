@@ -12,6 +12,7 @@ if TYPE_CHECKING:
         GovernancePolicyEngine,
         PolicyDecision,
     )
+    from .deployment_governance_rules import RuleEvaluationResult
 
 # The hash a chain's first record's previous_hash points at: there is
 # no real predecessor, so a fixed, obviously-synthetic sentinel (64
@@ -523,6 +524,32 @@ def record_policy_decision(
             "reason": decision.reason,
             "allowed": decision.allowed,
         },
+    )
+
+
+def record_rule_evaluation(
+    audit_service: GovernanceAuditService,
+    result: "RuleEvaluationResult",
+) -> None:
+    """
+    Record a RuleEvaluationResult as a "rule_evaluation" audit entry.
+
+    GovernanceRuleEngine has no audit dependency of its own (it stays
+    a standalone, reusable predicate engine); callers that want a
+    rule's outcome captured in the tamper-evident audit trail — the
+    GET/POST /governance/rules/evaluate endpoint, or a policy
+    consulting a named rule — call this explicitly with their own
+    audit_service, the same way record_policy_decision is called by
+    whichever component enforces a policy rather than by the policy
+    engine itself.
+    """
+
+    audit_service.record(
+        action="rule_evaluation",
+        actor="system",
+        resource=f"rule:{result.rule}",
+        outcome="success" if result.passed else "failure",
+        metadata=result.to_dict(),
     )
 
 

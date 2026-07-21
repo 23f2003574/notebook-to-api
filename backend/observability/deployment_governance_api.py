@@ -692,3 +692,124 @@ async def post_governance_policy_evaluate(
     decision = _build_policy_engine().evaluate(operation, parsed_context)
 
     return decision.to_dict()
+
+
+def _build_rule_engine():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_rule_engine()
+
+
+@health_router.get("/rules")
+async def get_governance_rules():
+    """
+    Return every registered governance rule, ordered by priority then
+    name.
+    """
+
+    rules = _build_rule_engine().list()
+
+    return [rule.to_dict() for rule in rules]
+
+
+@health_router.post("/rules")
+async def post_governance_rule(
+    name: str = Query(...),
+    operation: str = Query(default="*"),
+    priority: int = Query(default=0),
+    enabled: bool = Query(default=True),
+    conditions: str = Query(default="{}"),
+):
+    """
+    Register a new governance rule that passes when every key/value
+    in conditions (a JSON object, as a query string) matches the
+    evaluation context. The built-in system-state rules are
+    registered with real predicates in code and cannot be recreated
+    through this endpoint, only enabled/disabled/removed.
+    """
+
+    from .deployment_governance_rules import conditions_match
+
+    parsed_conditions = _parse_json_object(
+        conditions, field_name="conditions"
+    )
+
+    def _check(context: dict) -> bool:
+        return conditions_match(parsed_conditions, context)
+
+    try:
+        rule = _build_rule_engine().register(
+            name,
+            operation=operation,
+            priority=priority,
+            enabled=enabled,
+            check=_check,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return rule.to_dict()
+
+
+@health_router.patch("/rules/{name}")
+async def patch_governance_rule(
+    name: str,
+    enabled: bool = Query(...),
+):
+    """
+    Enable or disable a registered governance rule.
+    """
+
+    engine = _build_rule_engine()
+
+    try:
+        rule = engine.enable(name) if enabled else engine.disable(name)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return rule.to_dict()
+
+
+@health_router.delete("/rules/{name}")
+async def delete_governance_rule(name: str):
+    """
+    Remove a registered governance rule.
+    """
+
+    try:
+        _build_rule_engine().remove(name)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"removed": name}
+
+
+@health_router.post("/rules/evaluate")
+async def post_governance_rule_evaluate(
+    name: str = Query(...),
+    context: str = Query(default="{}"),
+):
+    """
+    Evaluate a named governance rule directly, returning the
+    resulting evaluation. Records the outcome in the governance audit
+    trail.
+    """
+
+    from .deployment_governance_audit import record_rule_evaluation
+
+    parsed_context = _parse_json_object(context, field_name="context")
+
+    try:
+        result = _build_rule_engine().evaluate(name, parsed_context)
+
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    record_rule_evaluation(_build_audit_service(), result)
+
+    return result.to_dict()

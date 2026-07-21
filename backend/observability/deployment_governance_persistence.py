@@ -1822,6 +1822,26 @@ class DeploymentGovernancePersistenceRuntime:
 
         return get_policy_engine()
 
+    def build_governance_rule_engine(
+        self,
+    ) -> "GovernanceRuleEngine":
+        """
+        Return the process-wide governance rule engine.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: rules registered through the API need to be
+        visible to whatever evaluates them (the policy engine, or a
+        direct API caller), which a persistence runtime built fresh
+        per request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_rules import get_rule_engine
+
+        return get_rule_engine()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":
