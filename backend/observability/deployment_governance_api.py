@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from .deployment_governance_metrics_api import (
     GovernanceIntegrityMetricsApi,
@@ -424,3 +424,89 @@ async def delete_governance_events():
     purged = runtime.build_integrity_event_history().purge()
 
     return {"purged": purged}
+
+
+def _build_event_router():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_integrity_event_router()
+
+
+@health_router.get("/routes")
+async def get_governance_routes():
+    """
+    Return every registered governance event route, ordered by
+    priority then name.
+    """
+
+    routes = _build_event_router().routes()
+
+    return [route.to_dict() for route in routes]
+
+
+@health_router.post("/routes")
+async def post_governance_route(
+    name: str = Query(...),
+    event_types: list[str] = Query(default=["*"]),
+    sources: list[str] = Query(default=["*"]),
+    priority: int = Query(default=0),
+    enabled: bool = Query(default=True),
+):
+    """
+    Register a new governance event route.
+    """
+
+    try:
+        route = _build_event_router().register_route(
+            name,
+            event_types=tuple(event_types),
+            sources=tuple(sources),
+            priority=priority,
+            enabled=enabled,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return route.to_dict()
+
+
+@health_router.patch("/routes/{name}")
+async def patch_governance_route(
+    name: str,
+    enabled: bool = Query(...),
+):
+    """
+    Enable or disable a registered governance event route.
+    """
+
+    router = _build_event_router()
+
+    try:
+        route = (
+            router.enable_route(name)
+            if enabled
+            else router.disable_route(name)
+        )
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return route.to_dict()
+
+
+@health_router.delete("/routes/{name}")
+async def delete_governance_route(name: str):
+    """
+    Remove a registered governance event route.
+    """
+
+    try:
+        _build_event_router().remove_route(name)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"removed": name}

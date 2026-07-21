@@ -1754,6 +1754,26 @@ class DeploymentGovernancePersistenceRuntime:
 
         return get_event_history()
 
+    def build_integrity_event_router(
+        self,
+    ) -> "GovernanceEventRouter":
+        """
+        Return the process-wide governance event router.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: routes registered through the API need to be
+        visible to whatever is consuming events off the process-wide
+        event bus, which a persistence runtime built fresh per
+        request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_event_router import get_event_router
+
+        return get_event_router()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

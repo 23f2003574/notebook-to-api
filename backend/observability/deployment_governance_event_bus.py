@@ -3,8 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, TYPE_CHECKING
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from .deployment_governance_event_router import GovernanceEventRouter
 
 # The well-known governance runtime event types, published by the
 # lifecycle manager, health service, and metrics bootstrap. Not
@@ -158,6 +161,17 @@ class GovernanceEventBus:
         """
 
         return self.subscribe(self.WILDCARD_EVENT_TYPE, handler)
+
+    def route_through(
+        self, router: "GovernanceEventRouter"
+    ) -> EventSubscription:
+        """
+        Convenience for wiring a GovernanceEventRouter as a wildcard
+        subscriber: every published event is evaluated against
+        router's registered routes.
+        """
+
+        return self.subscribe_all(router.handle_event)
 
     def unsubscribe(self, subscription: EventSubscription) -> None:
         """

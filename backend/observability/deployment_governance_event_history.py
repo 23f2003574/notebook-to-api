@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Callable, TYPE_CHECKING
 
 from .deployment_governance_event_bus import (
     GovernanceEvent,
     GovernanceEventBus,
 )
+
+if TYPE_CHECKING:
+    from .deployment_governance_event_router import EventRoute
 
 
 @dataclass(frozen=True)
@@ -182,6 +185,35 @@ class GovernanceEventHistory:
         """
 
         return self.query(EventQuery(limit=limit))
+
+    def matching(
+        self, route: "EventRoute"
+    ) -> "tuple[StoredGovernanceEvent, ...]":
+        """
+        Return every stored event whose event_type/source match
+        route's criteria (honoring the "*" wildcard the same way
+        GovernanceEventRouter.route() does), newest first.
+
+        Ignores route.enabled: this asks what route's criteria would
+        have selected historically, which is meaningful regardless of
+        whether the route happens to be active right now.
+        """
+
+        from .deployment_governance_event_router import route_matches
+
+        matches = [
+            stored
+            for stored in self._entries.values()
+            if route_matches(
+                route,
+                event_type=stored.event.event_type,
+                source=stored.event.source,
+            )
+        ]
+
+        matches.sort(key=lambda stored: stored.sequence, reverse=True)
+
+        return tuple(matches)
 
     def replay(
         self,
