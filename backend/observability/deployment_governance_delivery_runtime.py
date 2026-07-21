@@ -458,6 +458,103 @@ class GovernanceIntegrityDeliveryRuntime:
 
         return True
 
+    def build_readiness_service(
+        self
+    ) -> "GovernanceReadinessService":
+        """
+        Build a GovernanceReadinessService with checks registered for
+        whether this runtime can accept work: the delivery worker and
+        scheduler were wired in, the provider registry is populated,
+        and the runtime has completed start().
+
+        Deliberately independent of build_health_service(): these
+        checks look at wiring and lifecycle state directly rather
+        than delegating to the health checks above, since a component
+        can be healthy without yet being ready (e.g. before start()
+        has run).
+        """
+
+        from .deployment_governance_readiness import (
+            GovernanceReadinessService,
+        )
+
+        service = GovernanceReadinessService(clock=self.clock.now)
+
+        service.register(
+            "delivery_worker", self._check_delivery_worker_readiness
+        )
+
+        service.register(
+            "scheduler", self._check_scheduler_readiness
+        )
+
+        service.register(
+            "provider_registry",
+            self._check_provider_registry_readiness,
+        )
+
+        service.register(
+            "delivery_runtime", self._check_delivery_runtime_readiness
+        )
+
+        return service
+
+    def _check_delivery_worker_readiness(
+        self
+    ):
+
+        if self.worker is None:
+
+            return False, "delivery worker is not initialized"
+
+        return True
+
+    def _check_scheduler_readiness(
+        self
+    ):
+
+        if self.scheduler is None:
+
+            return False, "scheduler is not available"
+
+        return True
+
+    def _check_provider_registry_readiness(
+        self
+    ):
+
+        if self.provider_registry is None:
+
+            return False, "provider registry is not configured"
+
+        if hasattr(self.provider_registry, "list"):
+
+            registrations = self.provider_registry.list()
+
+        elif hasattr(self.provider_registry, "list_providers"):
+
+            registrations = self.provider_registry.list_providers()
+
+        else:
+
+            return True
+
+        if not registrations:
+
+            return False, "provider registry has no registered providers"
+
+        return True
+
+    def _check_delivery_runtime_readiness(
+        self
+    ):
+
+        if self.is_running():
+
+            return True
+
+        return False, f"delivery runtime is {self._state.value}"
+
     def reload_config(
         self
     ) -> Optional[GovernanceIntegrityMetricsConfig]:

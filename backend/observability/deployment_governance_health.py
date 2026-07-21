@@ -9,6 +9,42 @@ HealthCheckResult = Union[bool, "tuple[bool, str | None]"]
 GovernanceHealthCheck = Callable[[], HealthCheckResult]
 
 
+def evaluate_component_check(
+    component: str,
+    check: Callable[[], HealthCheckResult],
+    *,
+    default_message: str,
+) -> "tuple[bool, str | None]":
+    """
+    Run a zero-argument component check callable and normalize its
+    result to an (ok, message) pair.
+
+    The check may return a bool, or a (bool, message) tuple. A check
+    that raises is treated as not-ok (with the exception text as the
+    message) rather than propagating, so one failing component never
+    prevents the others from being checked. Shared between
+    GovernanceHealthService and GovernanceReadinessService, whose
+    check-running semantics are otherwise identical.
+    """
+
+    try:
+        result = check()
+
+    except Exception as exc:
+        return False, str(exc)
+
+    if isinstance(result, tuple):
+        ok, message = result
+
+    else:
+        ok, message = bool(result), None
+
+    if not ok and message is None:
+        message = default_message
+
+    return ok, message
+
+
 @dataclass(frozen=True)
 class GovernanceHealthStatus:
     """
@@ -166,25 +202,11 @@ class GovernanceHealthService:
     ) -> GovernanceHealthStatus:
         checked_at = self._clock()
 
-        try:
-            result = check()
-
-        except Exception as exc:
-            return GovernanceHealthStatus(
-                component=component,
-                healthy=False,
-                message=str(exc),
-                checked_at=checked_at,
-            )
-
-        if isinstance(result, tuple):
-            healthy, message = result
-
-        else:
-            healthy, message = bool(result), None
-
-        if not healthy and message is None:
-            message = f"{component} reported unhealthy"
+        healthy, message = evaluate_component_check(
+            component,
+            check,
+            default_message=f"{component} reported unhealthy",
+        )
 
         return GovernanceHealthStatus(
             component=component,

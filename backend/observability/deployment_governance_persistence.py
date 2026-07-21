@@ -1571,6 +1571,42 @@ class DeploymentGovernancePersistenceRuntime:
 
         return service
 
+    def build_integrity_readiness_service(
+        self,
+    ) -> "GovernanceReadinessService":
+        """
+        Build a GovernanceReadinessService with checks registered for
+        the persistence-backed components a stateless request can
+        observe: whether the provider registry is populated.
+
+        Unlike GovernanceIntegrityDeliveryRuntime.build_readiness_service,
+        this has no long-lived delivery worker, scheduler, or running
+        state to check: those only exist for a running worker
+        process, not for a persistence runtime built fresh per
+        request.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_readiness import (
+            GovernanceReadinessService,
+        )
+
+        service = GovernanceReadinessService()
+
+        def _check_provider_registry():
+            registrations = self.build_integrity_provider_registry().list()
+
+            if not registrations:
+                return False, "provider registry has no registered providers"
+
+            return True
+
+        service.register("provider_registry", _check_provider_registry)
+
+        return service
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

@@ -152,3 +152,17 @@ async def get_governance_health():
     )
 
     return runtime.build_integrity_health_service().summary().to_dict()
+
+
+@health_router.get("/ready")
+async def get_governance_readiness():
+    """
+    Return the overall governance readiness status plus the
+    readiness of each individually checked component.
+    """
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_integrity_readiness_service().summary().to_dict()
