@@ -4,13 +4,16 @@ import dataclasses
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Any, Callable
+from typing import Any, Callable, TYPE_CHECKING
 
 from .deployment_governance_rules import (
     GovernanceRuleEngine,
     conditions_match,
     get_rule_engine,
 )
+
+if TYPE_CHECKING:
+    from .deployment_governance_audit import GovernanceAuditService
 
 WILDCARD_OPERATION = "*"
 
@@ -287,6 +290,40 @@ class GovernancePolicyEngine:
         """
 
         self._policies.clear()
+
+    def authorize(
+        self,
+        operation: str,
+        context: "dict[str, Any] | None" = None,
+        *,
+        audit_service: "GovernanceAuditService | None" = None,
+    ) -> PolicyDecision:
+        """
+        Evaluate operation and raise GovernancePolicyViolation if
+        denied; otherwise return the (allowing) decision.
+
+        Optionally records the decision through audit_service either
+        way. This is the evaluate-record-enforce sequence every
+        policy-protected operation in this codebase already repeats
+        (the lifecycle manager, the event router, the audit
+        service's own purge()); new callers — the recovery manager,
+        and any future one — can use this instead of duplicating that
+        sequence again themselves.
+        """
+
+        decision = self.evaluate(operation, context)
+
+        if audit_service is not None:
+            from .deployment_governance_audit import (
+                record_policy_decision,
+            )
+
+            record_policy_decision(audit_service, operation, decision)
+
+        if not decision.allowed:
+            raise GovernancePolicyViolation(decision)
+
+        return decision
 
     def _policy_matches(
         self,

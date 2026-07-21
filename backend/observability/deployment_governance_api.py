@@ -813,3 +813,70 @@ async def post_governance_rule_evaluate(
     record_rule_evaluation(_build_audit_service(), result)
 
     return result.to_dict()
+
+
+def _build_recovery_manager():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_recovery_manager()
+
+
+@health_router.get("/recovery")
+async def get_governance_recovery():
+    """
+    Return every registered governance recovery plan, ordered by
+    component name.
+    """
+
+    plans = _build_recovery_manager().status()
+
+    return [plan.to_dict() for plan in plans]
+
+
+@health_router.get("/recovery/history")
+async def get_governance_recovery_history(
+    component: str | None = Query(default=None),
+    limit: int = Query(default=100, gt=0),
+):
+    """
+    Return recorded recovery results, newest first, optionally
+    filtered to one component.
+    """
+
+    results = _build_recovery_manager().history(component, limit)
+
+    return [result.to_dict() for result in results]
+
+
+@health_router.post("/recovery/all")
+async def post_governance_recovery_all():
+    """
+    Attempt to recover every component with a registered recovery
+    plan, in deterministic order.
+
+    Registered before /recovery/{component}: FastAPI matches path
+    routes in registration order, and "all" would otherwise be
+    captured as a literal component name by that route first.
+    """
+
+    results = _build_recovery_manager().recover_all()
+
+    return [result.to_dict() for result in results]
+
+
+@health_router.post("/recovery/{component}")
+async def post_governance_recovery(component: str):
+    """
+    Attempt to recover one component according to its registered
+    recovery plan.
+    """
+
+    try:
+        result = _build_recovery_manager().recover(component)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return result.to_dict()

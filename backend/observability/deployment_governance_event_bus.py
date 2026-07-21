@@ -10,10 +10,11 @@ if TYPE_CHECKING:
     from .deployment_governance_event_router import GovernanceEventRouter
 
 # The well-known governance runtime event types, published by the
-# lifecycle manager, health service, and metrics bootstrap. Not
-# enforced by the bus itself (publish() accepts any event_type
-# string), but this is the vocabulary GET /governance/events/types
-# advertises and every current publisher uses.
+# lifecycle manager, health service, metrics bootstrap, and recovery
+# manager. Not enforced by the bus itself (publish() accepts any
+# event_type string), but this is the vocabulary
+# GET /governance/events/types advertises and every current publisher
+# uses.
 GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "component_started",
     "component_stopped",
@@ -22,6 +23,11 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "readiness_check_completed",
     "lifecycle_completed",
     "metrics_snapshot_created",
+    "recovery_started",
+    "recovery_retry",
+    "recovery_succeeded",
+    "recovery_failed",
+    "recovery_aborted",
 )
 
 

@@ -421,6 +421,72 @@ class GovernanceLifecycleManager:
             )
         )
 
+    def restart_component(self, name: str) -> None:
+        """
+        Stop then start a single named component directly, without
+        touching any other component or requiring a valid dependency
+        graph. Used by GovernanceRecoveryManager's "restart_component"
+        strategy to recover one failed component without a full
+        lifecycle restart().
+
+        Skips the stop phase if the component is not currently marked
+        started. Raises KeyError if name is not registered; any
+        exception from the component's own stop()/start() propagates
+        to the caller rather than being swallowed here.
+        """
+
+        if name not in self._components:
+            raise KeyError(f"component '{name}' is not registered")
+
+        component = self._components[name]
+
+        if self._started.get(name):
+            component.stop()
+            self._started[name] = False
+            self._publish("component_stopped", name)
+
+        component.start()
+        self._started[name] = True
+        self._publish("component_started", name)
+
+    def reload_component(self, name: str) -> None:
+        """
+        Call a single named component's reload callable directly, if
+        it registered one and is currently started. A no-op
+        otherwise.
+
+        Raises KeyError if name is not registered.
+        """
+
+        if name not in self._components:
+            raise KeyError(f"component '{name}' is not registered")
+
+        component = self._components[name]
+
+        if component.reload is not None and self._started.get(name):
+            component.reload()
+
+    def reinitialize_component(self, name: str) -> None:
+        """
+        Unconditionally stop then start a single named component,
+        regardless of its currently tracked started state — a harder
+        reset than restart_component(), which skips the stop phase
+        for a component not currently marked started.
+
+        Raises KeyError if name is not registered.
+        """
+
+        if name not in self._components:
+            raise KeyError(f"component '{name}' is not registered")
+
+        component = self._components[name]
+
+        component.stop()
+
+        component.start()
+        self._started[name] = True
+        self._publish("component_started", name)
+
     def _build_graph(self) -> GovernanceDependencyGraph:
         graph = GovernanceDependencyGraph()
 

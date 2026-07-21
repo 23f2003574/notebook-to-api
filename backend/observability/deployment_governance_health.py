@@ -16,6 +16,10 @@ if TYPE_CHECKING:
         GovernanceLifecycleManager,
     )
     from .deployment_governance_event_bus import GovernanceEventBus
+    from .deployment_governance_recovery import (
+        GovernanceRecoveryManager,
+        RecoveryResult,
+    )
 
 HealthCheckResult = Union[bool, "tuple[bool, str | None]"]
 
@@ -224,6 +228,7 @@ class GovernanceHealthService:
         *,
         clock: Callable[[], datetime] | None = None,
         event_bus: "GovernanceEventBus | None" = None,
+        recovery_manager: "GovernanceRecoveryManager | None" = None,
     ) -> None:
         self._checks: dict[str, GovernanceHealthCheck] = {}
 
@@ -232,6 +237,8 @@ class GovernanceHealthService:
         )
 
         self._event_bus = event_bus
+
+        self._recovery_manager = recovery_manager
 
     def register(
         self,
@@ -279,6 +286,47 @@ class GovernanceHealthService:
             self._run_check(name, self._checks[name])
             for name in sorted(self._checks)
         )
+
+    def trigger_recovery(self) -> "tuple[RecoveryResult, ...]":
+        """
+        Run check_all() and attempt recovery, via recovery_manager,
+        for every component reporting unhealthy that also has a
+        registered recovery plan.
+
+        This is deliberately not automatic on every check()/
+        check_all()/summary() call: a health check's job is to report
+        state, not to unilaterally act on it every time something
+        merely asks how healthy the system is (which would make
+        recovery attempts as frequent, and as easy to trigger
+        accidentally, as GET /governance/health itself). Call this
+        explicitly when you actually want unhealthy components acted
+        on.
+
+        A component with no registered recovery plan is skipped
+        rather than treated as an error: triggering recovery is
+        opportunistic, not a requirement that every unhealthy
+        component be recoverable. Returns an empty tuple if this
+        service was constructed without a recovery_manager.
+        """
+
+        if self._recovery_manager is None:
+            return ()
+
+        results = []
+
+        for status in self.check_all():
+            if status.healthy:
+                continue
+
+            try:
+                results.append(
+                    self._recovery_manager.recover(status.component)
+                )
+
+            except KeyError:
+                continue
+
+        return tuple(results)
 
     def summary(self) -> GovernanceHealthSummary:
         """

@@ -1842,6 +1842,26 @@ class DeploymentGovernancePersistenceRuntime:
 
         return get_rule_engine()
 
+    def build_governance_recovery_manager(
+        self,
+    ) -> "GovernanceRecoveryManager":
+        """
+        Return the process-wide governance recovery manager.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: recovery plans registered through the API
+        need to be visible to whatever triggers recovery (the health
+        service, or a direct API caller), which a persistence runtime
+        built fresh per request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_recovery import get_recovery_manager
+
+        return get_recovery_manager()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

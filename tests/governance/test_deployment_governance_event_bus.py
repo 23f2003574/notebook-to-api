@@ -383,6 +383,11 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "readiness_check_completed",
         "lifecycle_completed",
         "metrics_snapshot_created",
+        "recovery_started",
+        "recovery_retry",
+        "recovery_succeeded",
+        "recovery_failed",
+        "recovery_aborted",
     }
 
 

@@ -13,6 +13,7 @@ if TYPE_CHECKING:
         PolicyDecision,
     )
     from .deployment_governance_rules import RuleEvaluationResult
+    from .deployment_governance_recovery import RecoveryResult
 
 # The hash a chain's first record's previous_hash points at: there is
 # no real predecessor, so a fixed, obviously-synthetic sentinel (64
@@ -549,6 +550,33 @@ def record_rule_evaluation(
         actor="system",
         resource=f"rule:{result.rule}",
         outcome="success" if result.passed else "failure",
+        metadata=result.to_dict(),
+    )
+
+
+def record_recovery_result(
+    audit_service: GovernanceAuditService,
+    action: str,
+    result: "RecoveryResult",
+) -> None:
+    """
+    Record a RecoveryResult as an audit entry under action (typically
+    "recovery_succeeded", "recovery_failed", or "recovery_aborted" —
+    passed explicitly rather than derived from result.success, since
+    an aborted recovery and a failed one are both success=False but
+    are meaningfully different outcomes worth distinguishing in the
+    audit trail).
+
+    Mirrors record_policy_decision and record_rule_evaluation: a
+    shared, reusable recording shape rather than each caller building
+    its own metadata dict.
+    """
+
+    audit_service.record(
+        action=action,
+        actor="system",
+        resource=f"component:{result.component}",
+        outcome="success" if result.success else "failure",
         metadata=result.to_dict(),
     )
 
