@@ -199,6 +199,18 @@ class GovernanceDependencyGraph:
 
         return result.startup_order
 
+    def shutdown_order(self) -> "tuple[str, ...]":
+        """
+        Return the deterministic shutdown order: the exact reverse of
+        startup_order(), so a component is only torn down after
+        everything that depends on it has already stopped.
+
+        Raises ValueError if the graph is not valid, matching
+        startup_order().
+        """
+
+        return tuple(reversed(self.startup_order()))
+
     def _missing_dependencies(self) -> "tuple[str, ...]":
         missing = {
             dependency

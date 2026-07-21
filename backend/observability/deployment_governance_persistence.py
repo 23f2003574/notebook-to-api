@@ -1689,6 +1689,28 @@ class DeploymentGovernancePersistenceRuntime:
 
         return build_governance_dependency_graph()
 
+    def build_integrity_lifecycle_manager(
+        self,
+    ) -> "GovernanceLifecycleManager":
+        """
+        Return the process-wide governance lifecycle manager.
+
+        Like build_integrity_liveness_service, this does not
+        construct a fresh instance: lifecycle state (which components
+        are currently started) is inherently process-wide, not
+        something a persistence runtime built fresh per request can
+        meaningfully re-derive.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_lifecycle import (
+            get_lifecycle_manager,
+        )
+
+        return get_lifecycle_manager()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

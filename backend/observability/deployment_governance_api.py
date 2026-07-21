@@ -229,3 +229,53 @@ async def get_governance_dependencies():
         "cycles": [list(cycle) for cycle in result.cycles],
         "missing": list(result.missing),
     }
+
+
+def _build_lifecycle_manager():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_integrity_lifecycle_manager()
+
+
+@health_router.post("/lifecycle/start")
+async def post_governance_lifecycle_start():
+    """
+    Start every registered governance component that is not already
+    started, in validated dependency order.
+    """
+
+    return _build_lifecycle_manager().startup().to_dict()
+
+
+@health_router.post("/lifecycle/stop")
+async def post_governance_lifecycle_stop():
+    """
+    Stop every currently started governance component, in reverse
+    startup order.
+    """
+
+    return _build_lifecycle_manager().shutdown().to_dict()
+
+
+@health_router.post("/lifecycle/restart")
+async def post_governance_lifecycle_restart():
+    """
+    Stop every currently started governance component, then start
+    every registered component back up.
+    """
+
+    return _build_lifecycle_manager().restart().to_dict()
+
+
+@health_router.get("/lifecycle/status")
+async def get_governance_lifecycle_status():
+    """
+    Return every registered governance component's current lifecycle
+    status.
+    """
+
+    components = _build_lifecycle_manager().status()
+
+    return [component.to_dict() for component in components]

@@ -12,6 +12,9 @@ if TYPE_CHECKING:
     from .deployment_governance_dependency_graph import (
         DependencyValidationResult,
     )
+    from .deployment_governance_lifecycle import (
+        GovernanceLifecycleManager,
+    )
 
 HealthCheckResult = Union[bool, "tuple[bool, str | None]"]
 
@@ -79,6 +82,27 @@ def dependency_graph_health_check(
         )
 
     return False, "; ".join(reasons)
+
+
+def lifecycle_health_check(
+    manager: "GovernanceLifecycleManager",
+) -> HealthCheckResult:
+    """
+    Adapt a GovernanceLifecycleManager into a health check result:
+    healthy only if every one of its registered components currently
+    reports started.
+    """
+
+    not_started = [
+        component.name
+        for component in manager.status()
+        if not component.started
+    ]
+
+    if not_started:
+        return False, "not started: " + ", ".join(sorted(not_started))
+
+    return True
 
 
 def evaluate_component_check(
