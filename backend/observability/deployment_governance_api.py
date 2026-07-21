@@ -166,3 +166,17 @@ async def get_governance_readiness():
     )
 
     return runtime.build_integrity_readiness_service().summary().to_dict()
+
+
+@health_router.get("/live")
+async def get_governance_liveness():
+    """
+    Return whether the governance runtime process is alive, plus its
+    current uptime.
+    """
+
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_integrity_liveness_service().check().to_dict()

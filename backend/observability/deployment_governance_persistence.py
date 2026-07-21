@@ -1607,6 +1607,27 @@ class DeploymentGovernancePersistenceRuntime:
 
         return service
 
+    def build_integrity_liveness_service(
+        self,
+    ) -> "GovernanceLivenessService":
+        """
+        Return the process-wide governance liveness service.
+
+        Unlike build_integrity_health_service/
+        build_integrity_readiness_service, this does not construct a
+        fresh instance: liveness answers "is this process alive",
+        which is inherently process-wide state, not something a
+        persistence runtime built fresh per request can meaningfully
+        re-derive.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_liveness import get_liveness_service
+
+        return get_liveness_service()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

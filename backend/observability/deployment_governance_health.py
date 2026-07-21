@@ -2,11 +2,32 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, Union
+from typing import Callable, TYPE_CHECKING, Union
+
+if TYPE_CHECKING:
+    from .deployment_governance_liveness import GovernanceLivenessService
 
 HealthCheckResult = Union[bool, "tuple[bool, str | None]"]
 
 GovernanceHealthCheck = Callable[[], HealthCheckResult]
+
+
+def liveness_health_check(
+    liveness_service: "GovernanceLivenessService",
+) -> HealthCheckResult:
+    """
+    Adapt a GovernanceLivenessService into a health check result, so
+    process liveness can be registered as one more component on a
+    GovernanceHealthService without every caller re-deriving the same
+    alive -> (ok, message) mapping.
+    """
+
+    status = liveness_service.check()
+
+    if status.alive:
+        return True
+
+    return False, "liveness service has not been started"
 
 
 def evaluate_component_check(

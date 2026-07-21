@@ -110,12 +110,26 @@ class GovernanceIntegrityDeliveryRuntime:
         sampling_service: Optional[GovernanceLogSamplingService] = None,
         batcher: Optional[GovernanceLogBatcher] = None,
         log_config_service: Optional[GovernanceLogConfigService] = None,
-        logging_bootstrap: Optional[GovernanceLoggingBootstrap] = None
+        logging_bootstrap: Optional[GovernanceLoggingBootstrap] = None,
+        liveness_service=None
     ):
         self.worker = worker
         self.scheduler = scheduler
         self.provider_registry = provider_registry
         self.clock = clock
+
+        # Defaults to the process-wide singleton (not a fresh
+        # instance): liveness answers "is this process alive", which
+        # only makes sense as shared, process-wide state. An explicit
+        # value is still accepted so tests can inject a fake one.
+        if liveness_service is None:
+            from .deployment_governance_liveness import (
+                get_liveness_service,
+            )
+
+            liveness_service = get_liveness_service()
+
+        self.liveness_service = liveness_service
 
         # A given logging_bootstrap replaces the previous pattern of
         # wiring each logging-related dependency independently: any
@@ -340,7 +354,8 @@ class GovernanceIntegrityDeliveryRuntime:
         """
         Build a GovernanceHealthService with checks registered for
         this runtime's own state and for the metrics bootstrap,
-        logging bootstrap, and provider registry it wires together.
+        logging bootstrap, provider registry, and liveness service it
+        wires together.
 
         Each check reflects whatever this runtime was constructed
         with: a component that was never wired in (e.g. no
@@ -352,6 +367,7 @@ class GovernanceIntegrityDeliveryRuntime:
 
         from .deployment_governance_health import (
             GovernanceHealthService,
+            liveness_health_check,
         )
 
         service = GovernanceHealthService(clock=self.clock.now)
@@ -370,6 +386,11 @@ class GovernanceIntegrityDeliveryRuntime:
 
         service.register(
             "provider_registry", self._check_provider_registry_health
+        )
+
+        service.register(
+            "liveness",
+            lambda: liveness_health_check(self.liveness_service),
         )
 
         return service
@@ -690,6 +711,10 @@ class GovernanceIntegrityDeliveryRuntime:
 
         self._started_at = self.clock.now()
 
+        if self.liveness_service is not None:
+
+            self.liveness_service.start()
+
         if self.logger is not None:
 
             self.logger.info(
@@ -723,6 +748,10 @@ class GovernanceIntegrityDeliveryRuntime:
         )
 
         self._started_at = None
+
+        if self.liveness_service is not None:
+
+            self.liveness_service.reset()
 
         if self.logger is not None:
 
@@ -848,7 +877,8 @@ def build_integrity_delivery_runtime(
     sampling_service=None,
     batcher=None,
     log_config_service=None,
-    logging_bootstrap=None
+    logging_bootstrap=None,
+    liveness_service=None
 ) -> GovernanceIntegrityDeliveryRuntime:
 
     if clock is None:
@@ -942,5 +972,8 @@ def build_integrity_delivery_runtime(
             log_config_service,
 
         logging_bootstrap=
-            logging_bootstrap
+            logging_bootstrap,
+
+        liveness_service=
+            liveness_service
     )
