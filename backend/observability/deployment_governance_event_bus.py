@@ -36,6 +36,10 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "job_registry_removed",
     "job_enabled",
     "job_disabled",
+    "trigger_registered",
+    "trigger_removed",
+    "trigger_fired",
+    "trigger_rescheduled",
 )
 
 

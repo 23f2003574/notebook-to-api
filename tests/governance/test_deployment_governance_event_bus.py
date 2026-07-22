@@ -396,6 +396,10 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "job_registry_removed",
         "job_enabled",
         "job_disabled",
+        "trigger_registered",
+        "trigger_removed",
+        "trigger_fired",
+        "trigger_rescheduled",
     }
 
 

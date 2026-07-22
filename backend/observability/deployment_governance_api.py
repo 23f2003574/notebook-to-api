@@ -1032,3 +1032,105 @@ async def delete_governance_job(job_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return {"removed": job_id}
+
+
+def _build_trigger_engine():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_trigger_engine()
+
+
+@health_router.get("/triggers")
+async def get_governance_triggers():
+    """
+    Return every registered governance trigger, ordered by next_run
+    then trigger_id.
+    """
+
+    triggers = _build_trigger_engine().list()
+
+    return [trigger.to_dict() for trigger in triggers]
+
+
+@health_router.get("/triggers/{trigger_id}")
+async def get_governance_trigger(trigger_id: str):
+    """
+    Return one registered governance trigger by trigger_id.
+    """
+
+    trigger = next(
+        (
+            trigger
+            for trigger in _build_trigger_engine().list()
+            if trigger.trigger_id == trigger_id
+        ),
+        None,
+    )
+
+    if trigger is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"trigger '{trigger_id}' is not registered",
+        )
+
+    return trigger.to_dict()
+
+
+@health_router.post("/triggers")
+async def post_governance_trigger(
+    job_id: str = Query(...),
+    trigger_type: str = Query(...),
+    next_run: datetime | None = Query(default=None),
+    enabled: bool = Query(default=True),
+):
+    """
+    Register a new governance trigger for job_id.
+    """
+
+    try:
+        trigger = _build_trigger_engine().register(
+            job_id,
+            trigger_type=trigger_type,
+            next_run=next_run,
+            enabled=enabled,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return trigger.to_dict()
+
+
+@health_router.patch("/triggers/{trigger_id}")
+async def patch_governance_trigger(
+    trigger_id: str,
+    next_run: datetime = Query(...),
+):
+    """
+    Reschedule a registered governance trigger's next_run.
+    """
+
+    try:
+        trigger = _build_trigger_engine().reschedule(trigger_id, next_run)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return trigger.to_dict()
+
+
+@health_router.delete("/triggers/{trigger_id}")
+async def delete_governance_trigger(trigger_id: str):
+    """
+    Remove a registered governance trigger.
+    """
+
+    try:
+        _build_trigger_engine().remove(trigger_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"removed": trigger_id}

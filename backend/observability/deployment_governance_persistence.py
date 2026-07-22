@@ -1902,6 +1902,28 @@ class DeploymentGovernancePersistenceRuntime:
 
         return get_job_registry()
 
+    def build_governance_trigger_engine(
+        self,
+    ) -> "GovernanceTriggerEngine":
+        """
+        Return the process-wide governance trigger engine.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: triggers registered through the scheduler need
+        to be visible to whatever queries the engine directly, which a
+        persistence runtime built fresh per request cannot provide on
+        its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_trigger_engine import (
+            get_trigger_engine,
+        )
+
+        return get_trigger_engine()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

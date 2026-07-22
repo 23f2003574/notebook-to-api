@@ -7,6 +7,7 @@ from typing import Callable, TYPE_CHECKING
 from uuid import uuid4
 
 from .deployment_governance_job_registry import GovernanceJobRegistry
+from .deployment_governance_trigger_engine import GovernanceTriggerEngine
 
 if TYPE_CHECKING:
     from .deployment_governance_event_bus import GovernanceEventBus
@@ -118,6 +119,14 @@ class GovernanceScheduler:
     none is given, so a standalone GovernanceScheduler in a test is
     fully self-contained.
 
+    Eligibility itself — whether a scheduled next_run is actually due
+    — is likewise delegated to a GovernanceTriggerEngine: every
+    registered job gets a matching "interval" trigger, kept in sync by
+    register()/unregister()/schedule(), completing the Scheduler Tick
+    -> Trigger Engine -> Eligible Jobs pipeline an eventual dispatch
+    loop (the execution manager) will drive. A fresh private engine is
+    likewise created if none is given.
+
     Thread-safe: every mutation of the job registry is guarded by an
     internal lock, since jobs may be registered, cancelled, or queried
     from multiple threads (an API request thread and a dispatch loop,
@@ -130,12 +139,15 @@ class GovernanceScheduler:
         clock: Callable[[], datetime] | None = None,
         event_bus: "GovernanceEventBus | None" = None,
         job_registry: "GovernanceJobRegistry | None" = None,
+        trigger_engine: "GovernanceTriggerEngine | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
         self._jobs: "dict[str, ScheduledJob]" = {}
 
         self._next_run: "dict[str, datetime]" = {}
+
+        self._triggers: "dict[str, str]" = {}
 
         self._running = False
 
@@ -147,6 +159,10 @@ class GovernanceScheduler:
 
         self._job_registry = job_registry or GovernanceJobRegistry(
             clock=self._clock
+        )
+
+        self._trigger_engine = trigger_engine or GovernanceTriggerEngine(
+            clock=self._clock, job_registry=self._job_registry
         )
 
     def start(self) -> None:
@@ -229,10 +245,23 @@ class GovernanceScheduler:
 
             self._jobs[job_id] = job
 
+            initial_next_run = None
+
             if enabled:
-                self._next_run[job_id] = job.created_at + timedelta(
+                initial_next_run = job.created_at + timedelta(
                     seconds=interval_seconds
                 )
+                self._next_run[job_id] = initial_next_run
+
+        trigger = self._trigger_engine.register(
+            job_id,
+            trigger_type="interval",
+            next_run=initial_next_run,
+            enabled=enabled,
+        )
+
+        with self._lock:
+            self._triggers[job_id] = trigger.trigger_id
 
         self._publish(
             "job_registered", job.job_id, {"name": name}
@@ -243,8 +272,8 @@ class GovernanceScheduler:
     def unregister(self, job_id: str) -> None:
         """
         Remove a registered job and any pending scheduled execution
-        for it, from both this scheduler and the underlying job
-        registry.
+        for it, from this scheduler and the underlying job registry
+        and trigger engine alike.
 
         Raises KeyError if job_id is not registered.
         """
@@ -258,8 +287,12 @@ class GovernanceScheduler:
                 )
 
             self._next_run.pop(job_id, None)
+            trigger_id = self._triggers.pop(job_id, None)
 
         self._job_registry.unregister(job_id)
+
+        if trigger_id is not None:
+            self._trigger_engine.remove(trigger_id)
 
         self._publish(
             "job_unregistered", job_id, {"name": job.name}
@@ -268,7 +301,8 @@ class GovernanceScheduler:
     def schedule(self, job_id: str) -> datetime:
         """
         (Re)compute job_id's next execution time as now plus its
-        registered interval, and return it.
+        registered interval, apply the same next_run to its
+        underlying trigger, and return it.
 
         Used both to advance a job past an execution that already ran
         and to reschedule a job previously cancel()'d.
@@ -289,8 +323,12 @@ class GovernanceScheduler:
             )
 
             self._next_run[job_id] = next_run
+            trigger_id = self._triggers.get(job_id)
 
-            return next_run
+        if trigger_id is not None:
+            self._trigger_engine.reschedule(trigger_id, next_run)
+
+        return next_run
 
     def cancel(self, job_id: str) -> None:
         """
@@ -368,16 +406,22 @@ def build_default_governance_scheduler() -> GovernanceScheduler:
     Build the process-wide governance scheduler, wired to the
     process-wide governance event bus (so scheduler_started/
     scheduler_stopped/job_registered/job_unregistered events are
-    actually published) and the process-wide governance job registry
-    (so job metadata registered through the scheduler is visible to
-    whatever queries the registry directly, and vice versa).
+    actually published), the process-wide governance job registry (so
+    job metadata registered through the scheduler is visible to
+    whatever queries the registry directly, and vice versa), and the
+    process-wide governance trigger engine (so eligibility computed
+    for jobs registered through the scheduler is visible to whatever
+    queries the engine directly).
     """
 
     from .deployment_governance_event_bus import get_event_bus
     from .deployment_governance_job_registry import get_job_registry
+    from .deployment_governance_trigger_engine import get_trigger_engine
 
     return GovernanceScheduler(
-        event_bus=get_event_bus(), job_registry=get_job_registry()
+        event_bus=get_event_bus(),
+        job_registry=get_job_registry(),
+        trigger_engine=get_trigger_engine(),
     )
 
 
