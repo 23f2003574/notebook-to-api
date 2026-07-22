@@ -67,6 +67,9 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "lock_renewed",
     "lock_expired",
     "lock_contention",
+    "scheduler_metrics_snapshot",
+    "scheduler_metrics_reset",
+    "scheduler_metrics_threshold_exceeded",
 )
 
 

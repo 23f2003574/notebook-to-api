@@ -12,6 +12,9 @@ if TYPE_CHECKING:
         ExecutionResult,
         GovernanceExecutionManager,
     )
+    from .deployment_governance_scheduler_metrics import (
+        GovernanceSchedulerMetrics,
+    )
 
 # The backoff strategies this engine understands natively. A custom
 # strategy not in this tuple may still be registered by passing an
@@ -182,6 +185,7 @@ class GovernanceRetryEngine:
         clock: Callable[[], datetime] | None = None,
         event_bus: "GovernanceEventBus | None" = None,
         random_func: Callable[[float, float], float] | None = None,
+        metrics: "GovernanceSchedulerMetrics | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
@@ -212,6 +216,8 @@ class GovernanceRetryEngine:
         self._event_bus = event_bus
 
         self._random = random_func or random.uniform
+
+        self._metrics = metrics
 
     def register_policy(
         self,
@@ -356,6 +362,9 @@ class GovernanceRetryEngine:
                 "scheduled_at": scheduled_at.isoformat(),
             },
         )
+
+        if self._metrics is not None:
+            self._metrics.record_retry(delay_ms=delay * 1000)
 
         return retry_attempt
 
@@ -580,8 +589,13 @@ def build_default_governance_retry_engine() -> GovernanceRetryEngine:
     """
 
     from .deployment_governance_event_bus import get_event_bus
+    from .deployment_governance_scheduler_metrics import (
+        get_scheduler_metrics,
+    )
 
-    return GovernanceRetryEngine(event_bus=get_event_bus())
+    return GovernanceRetryEngine(
+        event_bus=get_event_bus(), metrics=get_scheduler_metrics(),
+    )
 
 
 # Shared for the lifetime of the process: retries scheduled through

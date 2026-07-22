@@ -1653,3 +1653,42 @@ async def post_governance_locks_cleanup():
     removed = _build_scheduler_lock_manager().cleanup()
 
     return {"removed": removed}
+
+
+def _build_scheduler_metrics():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_scheduler_metrics()
+
+
+@health_router.get("/scheduler/metrics")
+async def get_governance_scheduler_metrics_snapshot():
+    """
+    Return the scheduler pipeline's current counters and gauges.
+    """
+
+    return _build_scheduler_metrics().snapshot().to_dict()
+
+
+@health_router.get("/scheduler/metrics/summary")
+async def get_governance_scheduler_metrics_summary():
+    """
+    Return the scheduler pipeline's derived performance indicators:
+    rolling averages and ratios.
+    """
+
+    return _build_scheduler_metrics().summary().to_dict()
+
+
+@health_router.post("/scheduler/metrics/reset")
+async def post_governance_scheduler_metrics_reset():
+    """
+    Reset every governance scheduler metric counter, gauge, and
+    rolling-average timer.
+    """
+
+    _build_scheduler_metrics().reset()
+
+    return {"reset": True}

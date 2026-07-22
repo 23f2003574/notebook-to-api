@@ -11,6 +11,9 @@ from typing import Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .deployment_governance_event_bus import GovernanceEventBus
+    from .deployment_governance_scheduler_metrics import (
+        GovernanceSchedulerMetrics,
+    )
 
 
 @dataclass(frozen=True)
@@ -270,6 +273,7 @@ class GovernanceSchedulerLockManager:
         event_bus: "GovernanceEventBus | None" = None,
         provider: "LockProvider | None" = None,
         lease_seconds: int = 30,
+        metrics: "GovernanceSchedulerMetrics | None" = None,
     ) -> None:
         if lease_seconds <= 0:
             raise ValueError("lease_seconds must be > 0")
@@ -285,6 +289,8 @@ class GovernanceSchedulerLockManager:
         self._provider = provider or InMemoryLockProvider()
 
         self._lease_seconds = lease_seconds
+
+        self._metrics = metrics
 
     @property
     def provider(self) -> LockProvider:
@@ -360,6 +366,9 @@ class GovernanceSchedulerLockManager:
             job_id,
             {"owner_id": owner_id, "held_by": existing.owner_id},
         )
+
+        if self._metrics is not None:
+            self._metrics.record_lock_contention()
 
         return LockAcquisitionResult(
             acquired=False,
@@ -591,8 +600,13 @@ def build_default_governance_scheduler_lock_manager() -> (
     """
 
     from .deployment_governance_event_bus import get_event_bus
+    from .deployment_governance_scheduler_metrics import (
+        get_scheduler_metrics,
+    )
 
-    return GovernanceSchedulerLockManager(event_bus=get_event_bus())
+    return GovernanceSchedulerLockManager(
+        event_bus=get_event_bus(), metrics=get_scheduler_metrics(),
+    )
 
 
 # Shared for the lifetime of the process: locks acquired through the

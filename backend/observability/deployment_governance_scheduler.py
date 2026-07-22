@@ -21,6 +21,9 @@ if TYPE_CHECKING:
     from .deployment_governance_scheduler_locks import (
         GovernanceSchedulerLockManager,
     )
+    from .deployment_governance_scheduler_metrics import (
+        GovernanceSchedulerMetrics,
+    )
 
 
 @dataclass(frozen=True)
@@ -151,6 +154,7 @@ class GovernanceScheduler:
         job_registry: "GovernanceJobRegistry | None" = None,
         trigger_engine: "GovernanceTriggerEngine | None" = None,
         owner_id: "str | None" = None,
+        metrics: "GovernanceSchedulerMetrics | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
@@ -182,6 +186,8 @@ class GovernanceScheduler:
         # instances (e.g. two processes/nodes pointed at the same
         # lock provider) never collide by accident.
         self._owner_id = owner_id or str(uuid4())
+
+        self._metrics = metrics
 
     def start(self) -> None:
         """
@@ -284,6 +290,16 @@ class GovernanceScheduler:
         self._publish(
             "job_registered", job.job_id, {"name": name}
         )
+
+        if self._metrics is not None:
+            with self._lock:
+                registered_count = len(self._jobs)
+                pending_count = len(self._next_run)
+
+            self._metrics.record_schedule(
+                registered_jobs=registered_count,
+                pending_jobs=pending_count,
+            )
 
         return job
 
@@ -447,6 +463,8 @@ class GovernanceScheduler:
         same on/off switch as every other scheduler-driven activity.
         """
 
+        tick_started_at = self._clock()
+
         with self._lock:
             running = self._running
             job_ids = set(self._jobs)
@@ -489,6 +507,20 @@ class GovernanceScheduler:
         for job_id in due_job_ids:
             self.schedule(job_id)
 
+        if self._metrics is not None:
+            tick_duration_ms = max(
+                0.0,
+                (
+                    self._clock() - tick_started_at
+                ).total_seconds() * 1000,
+            )
+
+            self._metrics.record_dispatch(
+                count=len(due_job_ids),
+                active_jobs=len(due_job_ids),
+                tick_duration_ms=tick_duration_ms,
+            )
+
         return results
 
     def _publish(
@@ -520,12 +552,16 @@ def build_default_governance_scheduler() -> GovernanceScheduler:
 
     from .deployment_governance_event_bus import get_event_bus
     from .deployment_governance_job_registry import get_job_registry
+    from .deployment_governance_scheduler_metrics import (
+        get_scheduler_metrics,
+    )
     from .deployment_governance_trigger_engine import get_trigger_engine
 
     return GovernanceScheduler(
         event_bus=get_event_bus(),
         job_registry=get_job_registry(),
         trigger_engine=get_trigger_engine(),
+        metrics=get_scheduler_metrics(),
     )
 
 

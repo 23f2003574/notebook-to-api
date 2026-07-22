@@ -2054,6 +2054,29 @@ class DeploymentGovernancePersistenceRuntime:
 
         return get_scheduler_lock_manager()
 
+    def build_governance_scheduler_metrics(
+        self,
+    ) -> "GovernanceSchedulerMetrics":
+        """
+        Return the process-wide governance scheduler metrics
+        collector.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: every instrumented component (Scheduler,
+        Execution Manager, Retry Engine, Lock Manager) needs to record
+        into the same collector, which a persistence runtime built
+        fresh per request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_scheduler_metrics import (
+            get_scheduler_metrics,
+        )
+
+        return get_scheduler_metrics()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

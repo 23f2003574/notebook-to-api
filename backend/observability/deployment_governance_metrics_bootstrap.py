@@ -30,6 +30,9 @@ if TYPE_CHECKING:
         DeploymentGovernancePersistenceRuntime,
     )
     from .deployment_governance_event_bus import GovernanceEventBus
+    from .deployment_governance_scheduler_metrics import (
+        GovernanceSchedulerMetrics,
+    )
 
 
 @dataclass(frozen=True)
@@ -133,6 +136,10 @@ class GovernanceIntegrityMetricsBootstrap:
 
         self.api: GovernanceIntegrityMetricsApi | None = None
 
+        self.scheduler_metrics: (
+            "GovernanceSchedulerMetrics | None"
+        ) = None
+
     def build(self) -> "GovernanceIntegrityMetricsBootstrap":
         """
         Construct every metrics service and wire their dependencies
@@ -177,6 +184,21 @@ class GovernanceIntegrityMetricsBootstrap:
             self.metrics_service,
             alert_service=self.alert_service,
         )
+
+        # A separate, independent metrics collector (Scheduler, Job
+        # Registry, Trigger Engine, Execution Manager, Retry Engine,
+        # Lock Manager all record into it directly) exposed alongside
+        # this bootstrap's own deployment-trace-integrity metrics
+        # rather than merged into them — the two track unrelated
+        # concepts and already have their own dedicated API routers
+        # (GET /governance/scheduler/metrics* vs this bootstrap's own
+        # metrics_api). Imported locally to avoid a circular import,
+        # matching every other lazy import in this module.
+        from .deployment_governance_scheduler_metrics import (
+            get_scheduler_metrics,
+        )
+
+        self.scheduler_metrics = get_scheduler_metrics()
 
         self._built = True
 

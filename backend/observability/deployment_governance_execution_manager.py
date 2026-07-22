@@ -10,6 +10,9 @@ if TYPE_CHECKING:
     from .deployment_governance_audit import GovernanceAuditService
     from .deployment_governance_event_bus import GovernanceEventBus
     from .deployment_governance_retry import GovernanceRetryEngine
+    from .deployment_governance_scheduler_metrics import (
+        GovernanceSchedulerMetrics,
+    )
     from .deployment_governance_trigger_engine import GovernanceTriggerEngine
 
 # The lifecycle every execution passes through: PENDING the instant it
@@ -201,6 +204,7 @@ class GovernanceExecutionManager:
         retry_engine: "GovernanceRetryEngine | None" = None,
         retry_policy_id: "str | None" = None,
         max_concurrent: int = 5,
+        metrics: "GovernanceSchedulerMetrics | None" = None,
     ) -> None:
         if max_concurrent < 1:
             raise ValueError("max_concurrent must be >= 1")
@@ -236,6 +240,8 @@ class GovernanceExecutionManager:
         self._retry_engine = retry_engine
 
         self._retry_policy_id = retry_policy_id
+
+        self._metrics = metrics
 
         self._max_concurrent = max_concurrent
 
@@ -521,11 +527,27 @@ class GovernanceExecutionManager:
 
         self._publish(event_type, execution_id, payload)
         self._record_audit(event_type, job_id, result)
+        self._record_metrics(status, duration_ms)
 
         if status == "FAILED":
             self._schedule_retry_if_configured(execution_id, job_id, error)
 
         return result
+
+    def _record_metrics(self, status: str, duration_ms: int) -> None:
+        if self._metrics is None:
+            return
+
+        if status == "SUCCEEDED":
+            self._metrics.record_completion(execution_ms=duration_ms)
+
+        elif status == "FAILED":
+            self._metrics.record_failure(execution_ms=duration_ms)
+
+        else:
+            self._metrics.record_failure(
+                execution_ms=duration_ms, cancelled=True
+            )
 
     def _schedule_retry_if_configured(
         self,
@@ -611,6 +633,9 @@ def build_default_governance_execution_manager() -> (
     from .deployment_governance_audit import get_audit_service
     from .deployment_governance_event_bus import get_event_bus
     from .deployment_governance_retry import get_retry_engine
+    from .deployment_governance_scheduler_metrics import (
+        get_scheduler_metrics,
+    )
     from .deployment_governance_trigger_engine import get_trigger_engine
 
     return GovernanceExecutionManager(
@@ -618,6 +643,7 @@ def build_default_governance_execution_manager() -> (
         audit_service=get_audit_service(),
         trigger_engine=get_trigger_engine(),
         retry_engine=get_retry_engine(),
+        metrics=get_scheduler_metrics(),
     )
 
 
