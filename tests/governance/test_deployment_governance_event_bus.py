@@ -434,6 +434,8 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "scheduler_policy_denied",
         "scheduler_policy_registered",
         "scheduler_policy_removed",
+        "scheduler_dashboard_generated",
+        "scheduler_dashboard_refreshed",
     }
 
 

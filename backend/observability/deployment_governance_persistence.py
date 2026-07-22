@@ -2099,6 +2099,30 @@ class DeploymentGovernancePersistenceRuntime:
 
         return get_scheduler_policy_engine()
 
+    def build_governance_scheduler_dashboard(
+        self,
+    ) -> "GovernanceSchedulerDashboard":
+        """
+        Return the process-wide governance scheduler dashboard.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance — not that a fresh one would compute anything
+        differently (the dashboard holds no state of its own beyond
+        references to the other scheduling singletons), but so a
+        persistence runtime built fresh per request still hands back
+        one consistent object, matching every other get_*() accessor
+        in this codebase.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_scheduler_dashboard import (
+            get_scheduler_dashboard,
+        )
+
+        return get_scheduler_dashboard()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

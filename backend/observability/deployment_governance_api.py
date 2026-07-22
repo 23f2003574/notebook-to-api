@@ -1800,3 +1800,77 @@ async def post_governance_scheduler_policy_evaluate(
     )
 
     return decision.to_dict()
+
+
+def _build_scheduler_dashboard():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_scheduler_dashboard()
+
+
+@health_router.get("/scheduler/dashboard")
+async def get_governance_scheduler_dashboard():
+    """
+    Return the aggregated governance scheduler dashboard.
+    """
+
+    return _build_scheduler_dashboard().dashboard().to_dict()
+
+
+@health_router.get("/scheduler/dashboard/summary")
+async def get_governance_scheduler_dashboard_summary():
+    """
+    Return the compact governance scheduler dashboard summary.
+    """
+
+    return _build_scheduler_dashboard().summary().to_dict()
+
+
+@health_router.get("/scheduler/dashboard/jobs")
+async def get_governance_scheduler_dashboard_jobs():
+    """
+    Return every registered job, as seen by the governance scheduler
+    dashboard.
+    """
+
+    jobs = _build_scheduler_dashboard().jobs()
+
+    return [job.to_dict() for job in jobs]
+
+
+@health_router.get("/scheduler/dashboard/executions")
+async def get_governance_scheduler_dashboard_executions():
+    """
+    Return recorded execution history, as seen by the governance
+    scheduler dashboard.
+    """
+
+    executions = _build_scheduler_dashboard().executions()
+
+    return [execution.to_dict() for execution in executions]
+
+
+@health_router.get("/scheduler/dashboard/retries")
+async def get_governance_scheduler_dashboard_retries():
+    """
+    Return every currently pending retry attempt, as seen by the
+    governance scheduler dashboard.
+    """
+
+    retries = _build_scheduler_dashboard().retries()
+
+    return [retry.to_dict() for retry in retries]
+
+
+@health_router.get("/scheduler/dashboard/locks")
+async def get_governance_scheduler_dashboard_locks():
+    """
+    Return every currently stored lock, as seen by the governance
+    scheduler dashboard.
+    """
+
+    locks = _build_scheduler_dashboard().locks()
+
+    return [lock.to_dict() for lock in locks]

@@ -74,6 +74,8 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "scheduler_policy_denied",
     "scheduler_policy_registered",
     "scheduler_policy_removed",
+    "scheduler_dashboard_generated",
+    "scheduler_dashboard_refreshed",
 )
 
 
