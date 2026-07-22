@@ -404,6 +404,11 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "execution_completed",
         "execution_failed",
         "execution_cancelled",
+        "retry_scheduled",
+        "retry_started",
+        "retry_succeeded",
+        "retry_exhausted",
+        "retry_cancelled",
     }
 
 

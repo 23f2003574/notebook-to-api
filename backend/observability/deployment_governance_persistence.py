@@ -1946,6 +1946,26 @@ class DeploymentGovernancePersistenceRuntime:
 
         return get_execution_manager()
 
+    def build_governance_retry_engine(
+        self,
+    ) -> "GovernanceRetryEngine":
+        """
+        Return the process-wide governance retry engine.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: retries scheduled through the execution
+        manager need to be visible to whatever queries the engine
+        directly, which a persistence runtime built fresh per request
+        cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_retry import get_retry_engine
+
+        return get_retry_engine()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

@@ -9,6 +9,7 @@ from uuid import uuid4
 if TYPE_CHECKING:
     from .deployment_governance_audit import GovernanceAuditService
     from .deployment_governance_event_bus import GovernanceEventBus
+    from .deployment_governance_retry import GovernanceRetryEngine
     from .deployment_governance_trigger_engine import GovernanceTriggerEngine
 
 # The lifecycle every execution passes through: PENDING the instant it
@@ -177,6 +178,15 @@ class GovernanceExecutionManager:
     trail as well. status() plays the analogous role for metrics: a
     live rollup of counts, updated as executions complete.
 
+    If constructed with both a retry_engine and a retry_policy_id,
+    every FAILED execution is forwarded to
+    retry_engine.schedule_retry() automatically. This is the only
+    coupling to retry logic this manager has: both are optional
+    (default None means no forwarding at all), so retry policy never
+    has to be understood here — the Execution Manager -> Retry Engine
+    step in the execution flow is a dependency the caller opts into,
+    not a hard-wired behavior.
+
     Thread-safe: every mutation of active/history state is guarded by
     an internal lock.
     """
@@ -188,6 +198,8 @@ class GovernanceExecutionManager:
         event_bus: "GovernanceEventBus | None" = None,
         audit_service: "GovernanceAuditService | None" = None,
         trigger_engine: "GovernanceTriggerEngine | None" = None,
+        retry_engine: "GovernanceRetryEngine | None" = None,
+        retry_policy_id: "str | None" = None,
         max_concurrent: int = 5,
     ) -> None:
         if max_concurrent < 1:
@@ -220,6 +232,10 @@ class GovernanceExecutionManager:
         self._audit_service = audit_service
 
         self._trigger_engine = trigger_engine
+
+        self._retry_engine = retry_engine
+
+        self._retry_policy_id = retry_policy_id
 
         self._max_concurrent = max_concurrent
 
@@ -506,7 +522,47 @@ class GovernanceExecutionManager:
         self._publish(event_type, execution_id, payload)
         self._record_audit(event_type, job_id, result)
 
+        if status == "FAILED":
+            self._schedule_retry_if_configured(execution_id, job_id, error)
+
         return result
+
+    def _schedule_retry_if_configured(
+        self,
+        execution_id: str,
+        job_id: str,
+        error: "str | None",
+    ) -> None:
+        """
+        If this manager was configured with both a retry_engine and a
+        retry_policy_id, ask the retry engine to schedule the next
+        attempt for this failed execution.
+
+        A no-op otherwise — this is the manager's only awareness that
+        a retry engine exists at all, kept fully optional and
+        dependency-injected so retry logic never has to be understood
+        by (or coupled into) job execution itself.
+
+        Swallows KeyError/ValueError from the retry engine (an unknown
+        policy, or attempts already exhausted): the retry engine has
+        already published its own event for that outcome, and a
+        rejected retry must never turn an otherwise-recorded FAILED
+        execution into a raised exception here.
+        """
+
+        if self._retry_engine is None or self._retry_policy_id is None:
+            return
+
+        try:
+            self._retry_engine.schedule_retry(
+                execution_id,
+                self._retry_policy_id,
+                job_id=job_id,
+                reason=error,
+            )
+
+        except (KeyError, ValueError):
+            pass
 
     def _record_audit(
         self, action: str, job_id: str, result: ExecutionResult
@@ -543,18 +599,25 @@ def build_default_governance_execution_manager() -> (
 ):
     """
     Build the process-wide governance execution manager, wired to the
-    process-wide governance event bus, audit service, and trigger
-    engine.
+    process-wide governance event bus, audit service, trigger engine,
+    and retry engine.
+
+    No retry_policy_id is configured by default — there is no
+    globally meaningful "default" retry policy, so automatic
+    forwarding to the retry engine stays off until a caller registers
+    a policy and configures one explicitly.
     """
 
     from .deployment_governance_audit import get_audit_service
     from .deployment_governance_event_bus import get_event_bus
+    from .deployment_governance_retry import get_retry_engine
     from .deployment_governance_trigger_engine import get_trigger_engine
 
     return GovernanceExecutionManager(
         event_bus=get_event_bus(),
         audit_service=get_audit_service(),
         trigger_engine=get_trigger_engine(),
+        retry_engine=get_retry_engine(),
     )
 
 

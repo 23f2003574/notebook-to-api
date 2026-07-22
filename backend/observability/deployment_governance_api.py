@@ -1237,3 +1237,69 @@ async def delete_governance_execution(execution_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return result.to_dict()
+
+
+def _build_retry_engine():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_retry_engine()
+
+
+@health_router.get("/retries")
+async def get_governance_retries(
+    limit: int = Query(default=100, gt=0),
+):
+    """
+    Return recorded governance retry attempts, newest first.
+    """
+
+    attempts = _build_retry_engine().history(limit=limit)
+
+    return [attempt.to_dict() for attempt in attempts]
+
+
+@health_router.get("/retries/pending")
+async def get_governance_retries_pending():
+    """
+    Return every currently pending governance retry attempt, ordered
+    by scheduled_at then execution_id.
+    """
+
+    attempts = _build_retry_engine().pending()
+
+    return [attempt.to_dict() for attempt in attempts]
+
+
+@health_router.post("/retries/{execution_id}")
+async def post_governance_retry(execution_id: str):
+    """
+    Dispatch execution_id's pending retry attempt now, through the
+    governance execution manager.
+    """
+
+    try:
+        result = _build_retry_engine().retry(
+            execution_id, _build_execution_manager()
+        )
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return result.to_dict()
+
+
+@health_router.delete("/retries/{execution_id}")
+async def delete_governance_retry(execution_id: str):
+    """
+    Cancel execution_id's entire pending retry chain.
+    """
+
+    try:
+        _build_retry_engine().cancel_retry(execution_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"cancelled": execution_id}
