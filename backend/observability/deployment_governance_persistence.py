@@ -2009,6 +2009,29 @@ class DeploymentGovernancePersistenceRuntime:
 
         return get_cron_scheduler()
 
+    def build_governance_job_dependency_manager(
+        self,
+    ) -> "GovernanceJobDependencyManager":
+        """
+        Return the process-wide governance job dependency manager.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: dependencies registered through the API need
+        to be visible to whatever queries the manager directly (the
+        scheduler's own tick, or a direct API caller), which a
+        persistence runtime built fresh per request cannot provide on
+        its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_job_dependencies import (
+            get_job_dependency_manager,
+        )
+
+        return get_job_dependency_manager()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

@@ -14,6 +14,9 @@ if TYPE_CHECKING:
     from .deployment_governance_execution_manager import (
         GovernanceExecutionManager,
     )
+    from .deployment_governance_job_dependencies import (
+        GovernanceJobDependencyManager,
+    )
     from .deployment_governance_job_registry import GovernanceJobRegistry
     from .deployment_governance_retry import GovernanceRetryEngine
     from .deployment_governance_scheduler import GovernanceScheduler
@@ -150,6 +153,9 @@ class GovernanceJobPersistence:
         scheduler: "GovernanceScheduler | None" = None,
         execution_manager: "GovernanceExecutionManager | None" = None,
         cron_scheduler: "GovernanceCronScheduler | None" = None,
+        dependency_manager: (
+            "GovernanceJobDependencyManager | None"
+        ) = None,
         path: "str | Path | None" = None,
         include_execution_history: bool = False,
     ) -> None:
@@ -172,6 +178,8 @@ class GovernanceJobPersistence:
         self._execution_manager = execution_manager
 
         self._cron_scheduler = cron_scheduler
+
+        self._dependency_manager = dependency_manager
 
         self._path = Path(path) if path is not None else None
 
@@ -408,12 +416,16 @@ class GovernanceJobPersistence:
         restored_triggers = self._restore_triggers(triggers)
         restored_retries = self._restore_pending_retries(pending_retries)
 
-        # cron_triggers was added after this document format's first
-        # version; a v1 document saved before it existed simply has no
-        # such key, and that must load exactly as successfully as one
-        # that does — hence .get(), not required-field indexing.
+        # cron_triggers and dependencies were both added after this
+        # document format's first version; a v1 document saved before
+        # either existed simply has no such key, and that must load
+        # exactly as successfully as one that does — hence .get(), not
+        # required-field indexing.
         restored_cron = self._restore_cron_triggers(
             document.get("cron_triggers", [])
+        )
+        restored_dependencies = self._restore_dependencies(
+            document.get("dependencies", [])
         )
 
         if self._scheduler is not None and document.get(
@@ -424,7 +436,8 @@ class GovernanceJobPersistence:
         return True, (
             f"restored {restored_jobs} job(s), {restored_triggers} "
             f"trigger(s), {restored_retries} pending retry(ies), "
-            f"{restored_cron} cron trigger(s)"
+            f"{restored_cron} cron trigger(s), {restored_dependencies} "
+            "dependency definition(s)"
         )
 
     def _build_document(self) -> "dict[str, object]":
@@ -435,6 +448,7 @@ class GovernanceJobPersistence:
             "triggers": self._serialize_triggers(),
             "pending_retries": self._serialize_pending_retries(),
             "cron_triggers": self._serialize_cron_triggers(),
+            "dependencies": self._serialize_dependencies(),
             "scheduler_running": (
                 self._scheduler.status().running
                 if self._scheduler is not None
@@ -461,6 +475,7 @@ class GovernanceJobPersistence:
             "triggers": [],
             "pending_retries": [],
             "cron_triggers": [],
+            "dependencies": [],
             "scheduler_running": False,
         }
 
@@ -529,6 +544,48 @@ class GovernanceJobPersistence:
                     expression=entry["expression"],
                     timezone=entry.get("timezone", "UTC"),
                     enabled=entry.get("enabled", True),
+                )
+
+                restored += 1
+
+            except (KeyError, TypeError, ValueError):
+                continue
+
+        return restored
+
+    def _serialize_dependencies(self) -> "list[dict[str, object]]":
+        if self._dependency_manager is None:
+            return []
+
+        entries = []
+
+        for job_id in self._dependency_manager.validate().startup_order:
+            try:
+                depends_on = self._dependency_manager.dependencies(job_id)
+
+            except KeyError:
+                # A leaf job pulled in by validate()'s startup_order
+                # purely because something else depends on it, with no
+                # JobDependency entry of its own — nothing to persist.
+                continue
+
+            entries.append(
+                {"job_id": job_id, "depends_on": list(depends_on)}
+            )
+
+        return sorted(entries, key=lambda entry: entry["job_id"])
+
+    def _restore_dependencies(self, entries: "list[object]") -> int:
+        if self._dependency_manager is None:
+            return 0
+
+        restored = 0
+
+        for entry in entries:
+            try:
+                self._dependency_manager.register(
+                    entry["job_id"],
+                    depends_on=tuple(entry.get("depends_on", ())),
                 )
 
                 restored += 1
@@ -744,6 +801,9 @@ def build_default_governance_job_persistence() -> GovernanceJobPersistence:
     from .deployment_governance_execution_manager import (
         get_execution_manager,
     )
+    from .deployment_governance_job_dependencies import (
+        get_job_dependency_manager,
+    )
     from .deployment_governance_job_registry import get_job_registry
     from .deployment_governance_retry import get_retry_engine
     from .deployment_governance_scheduler import get_scheduler
@@ -757,6 +817,7 @@ def build_default_governance_job_persistence() -> GovernanceJobPersistence:
         scheduler=get_scheduler(),
         execution_manager=get_execution_manager(),
         cron_scheduler=get_cron_scheduler(),
+        dependency_manager=get_job_dependency_manager(),
     )
 
 

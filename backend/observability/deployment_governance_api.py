@@ -1468,3 +1468,99 @@ async def post_governance_cron_validate(
     valid = _build_cron_scheduler().validate(expression)
 
     return {"expression": expression, "valid": valid}
+
+
+def _build_job_dependency_manager():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_job_dependency_manager()
+
+
+@health_router.get("/job-dependencies")
+async def get_governance_job_dependencies():
+    """
+    Return every registered job dependency definition, ordered by
+    job_id.
+
+    A job pulled into the dependency graph purely because something
+    else depends on it, with no JobDependency entry of its own, is not
+    included here — GET /governance/job-dependencies/{job_id} still
+    returns 404 for it, matching dependencies() raising KeyError.
+    """
+
+    manager = _build_job_dependency_manager()
+    entries = []
+
+    for job_id in manager.validate().startup_order:
+        try:
+            depends_on = manager.dependencies(job_id)
+
+        except KeyError:
+            continue
+
+        entries.append({"job_id": job_id, "depends_on": list(depends_on)})
+
+    return sorted(entries, key=lambda entry: entry["job_id"])
+
+
+@health_router.get("/job-dependencies/{job_id}")
+async def get_governance_job_dependency(job_id: str):
+    """
+    Return one job's registered dependencies.
+    """
+
+    try:
+        depends_on = _build_job_dependency_manager().dependencies(job_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"job_id": job_id, "depends_on": list(depends_on)}
+
+
+@health_router.post("/job-dependencies")
+async def post_governance_job_dependency(
+    job_id: str = Query(...),
+    depends_on: "list[str]" = Query(default=[]),
+):
+    """
+    Register job_id's prerequisites.
+    """
+
+    try:
+        dependency = _build_job_dependency_manager().register(
+            job_id, depends_on=tuple(depends_on),
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return dependency.to_dict()
+
+
+@health_router.delete("/job-dependencies/{job_id}")
+async def delete_governance_job_dependency(job_id: str):
+    """
+    Remove job_id's registered dependencies.
+    """
+
+    try:
+        _build_job_dependency_manager().remove(job_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"removed": job_id}
+
+
+@health_router.post("/job-dependencies/validate")
+async def post_governance_job_dependencies_validate():
+    """
+    Validate the currently registered job dependency graph: missing
+    references, circular dependencies, and the resulting deterministic
+    topological order if valid.
+    """
+
+    return _build_job_dependency_manager().validate().to_dict()

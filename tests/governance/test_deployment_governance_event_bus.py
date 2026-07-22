@@ -417,6 +417,11 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "cron_removed",
         "cron_triggered",
         "cron_rescheduled",
+        "dependency_registered",
+        "dependency_removed",
+        "dependency_blocked",
+        "dependency_resolved",
+        "dependency_cycle_detected",
     }
 
 

@@ -15,6 +15,9 @@ if TYPE_CHECKING:
         ExecutionResult,
         GovernanceExecutionManager,
     )
+    from .deployment_governance_job_dependencies import (
+        GovernanceJobDependencyManager,
+    )
 
 
 @dataclass(frozen=True)
@@ -396,14 +399,27 @@ class GovernanceScheduler:
         execution_manager: "GovernanceExecutionManager",
         *,
         run: "Callable[[str], None] | None" = None,
+        dependency_manager: (
+            "GovernanceJobDependencyManager | None"
+        ) = None,
     ) -> "tuple[ExecutionResult, ...]":
         """
-        The concrete Scheduler Tick -> Trigger Engine -> Execution
-        Manager pipeline: while this scheduler is running, evaluate
-        this scheduler's own trigger engine for currently-eligible
-        jobs, dispatch each through execution_manager (in the same
+        The concrete Scheduler Tick -> Trigger Engine -> Dependency
+        Manager -> Execution Manager pipeline: while this scheduler is
+        running, evaluate this scheduler's own trigger engine for
+        currently-eligible jobs, optionally filter out any that
+        dependency_manager reports as not yet ready (its prerequisites
+        have not all succeeded — "blocked jobs never dispatched"),
+        dispatch the rest through execution_manager (in the same
         deterministic order execute_batch() itself uses), then
         reschedule each dispatched job's next execution.
+
+        dependency_manager is entirely optional: omitting it preserves
+        the exact trigger-only behavior from before dependency-aware
+        scheduling existed, and the Execution Manager itself is never
+        made aware dependencies exist at all — only this method
+        consults dependency_manager, and only to decide what to
+        dispatch.
 
         A no-op returning an empty tuple if the scheduler is not
         currently running (see start()) — dispatch is gated on the
@@ -428,6 +444,13 @@ class GovernanceScheduler:
             if evaluation.should_run
             and triggers_by_id.get(evaluation.trigger_id) in job_ids
         ]
+
+        if dependency_manager is not None:
+            due_job_ids = [
+                job_id
+                for job_id in due_job_ids
+                if dependency_manager.evaluate(job_id).ready
+            ]
 
         results = execution_manager.execute_batch(due_job_ids, run=run)
 
