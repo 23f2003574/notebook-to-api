@@ -81,6 +81,38 @@ class PersistenceSnapshot:
 
 
 @dataclass(frozen=True)
+class RestoreCounts:
+    """
+    How many of each kind of record the most recent load()/_do_load()
+    call actually restored, as opposed to PersistenceSnapshot (which
+    describes the stored document, not what a restore did with it).
+
+    Exists specifically so a caller like GovernanceSchedulerBootstrap
+    can report restored_jobs/restored_triggers/restored_retry_queue
+    counts in its own bootstrap report without parsing load()'s
+    human-readable PersistenceResult.message string.
+    """
+
+    jobs: int
+
+    triggers: int
+
+    pending_retries: int
+
+    def __post_init__(self) -> None:
+        for field_name in ("jobs", "triggers", "pending_retries"):
+            if getattr(self, field_name) < 0:
+                raise ValueError(f"{field_name} must be >= 0")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "jobs": self.jobs,
+            "triggers": self.triggers,
+            "pending_retries": self.pending_retries,
+        }
+
+
+@dataclass(frozen=True)
 class PersistenceResult:
     """
     The immutable outcome of one persistence operation.
@@ -202,6 +234,8 @@ class GovernanceJobPersistence:
         self._memory_document: "dict[str, object] | None" = None
 
         self._include_execution_history = include_execution_history
+
+        self._last_restore: "RestoreCounts | None" = None
 
     def save(self) -> PersistenceResult:
         """
@@ -389,6 +423,19 @@ class GovernanceJobPersistence:
             pending_retries=len(document.get("pending_retries", []) or []),
         )
 
+    def last_restore(self) -> "RestoreCounts | None":
+        """
+        Return how many jobs/triggers/pending retries the most recent
+        load() call restored, or None if load() has never run.
+
+        Unlike snapshot() (which re-reads the stored document fresh
+        on every call), this returns a value cached from the last
+        actual restore — a fresh reader would have nothing to report
+        without repeating the restore itself.
+        """
+
+        return self._last_restore
+
     def clear(self) -> None:
         """
         Delete the stored snapshot, if any. A subsequent load() then
@@ -411,6 +458,10 @@ class GovernanceJobPersistence:
                 return False, f"corrupted snapshot: {exc}"
 
         if document is None:
+            self._last_restore = RestoreCounts(
+                jobs=0, triggers=0, pending_retries=0
+            )
+
             return True, "no snapshot found"
 
         try:
@@ -420,9 +471,17 @@ class GovernanceJobPersistence:
             pending_retries = document["pending_retries"]
 
         except (KeyError, TypeError) as exc:
+            self._last_restore = RestoreCounts(
+                jobs=0, triggers=0, pending_retries=0
+            )
+
             return False, f"corrupted snapshot: missing field {exc}"
 
         if not isinstance(version, int) or version > CURRENT_SCHEMA_VERSION:
+            self._last_restore = RestoreCounts(
+                jobs=0, triggers=0, pending_retries=0
+            )
+
             return (
                 False,
                 f"unsupported snapshot schema version {version!r}",
@@ -431,6 +490,12 @@ class GovernanceJobPersistence:
         restored_jobs = self._restore_jobs(jobs)
         restored_triggers = self._restore_triggers(triggers)
         restored_retries = self._restore_pending_retries(pending_retries)
+
+        self._last_restore = RestoreCounts(
+            jobs=restored_jobs,
+            triggers=restored_triggers,
+            pending_retries=restored_retries,
+        )
 
         # cron_triggers and dependencies were both added after this
         # document format's first version; a v1 document saved before

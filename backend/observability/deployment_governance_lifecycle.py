@@ -573,12 +573,17 @@ def build_default_governance_lifecycle_manager() -> (
     graph, startup order, and status() stay complete and honest about
     every component that conceptually exists.
 
-    liveness_service and scheduler are the two exceptions: they are
-    wired to the real process-wide GovernanceLivenessService and
-    GovernanceScheduler singletons, so starting/stopping this
-    manager's liveness_service/scheduler components genuinely
-    starts/resets process liveness tracking and starts/stops the
-    governance scheduler.
+    liveness_service and scheduler are the two exceptions: liveness_
+    service is wired to the real process-wide GovernanceLivenessService
+    singleton, and scheduler is wired to the real process-wide
+    GovernanceSchedulerBootstrap singleton's initialize()/shutdown()
+    (not the bare GovernanceScheduler's own start()/stop() — the
+    bootstrap's pipeline validates the scheduling component graph and
+    restores persisted state before starting the scheduler itself, and
+    saves state back on shutdown), so starting/stopping this manager's
+    liveness_service/scheduler components genuinely starts/resets
+    process liveness tracking and bootstraps/tears down the whole
+    scheduling subsystem.
 
     A process that does construct a real delivery runtime (a worker
     process, not this API server) should use
@@ -608,7 +613,9 @@ def build_default_governance_lifecycle_manager() -> (
     from .deployment_governance_event_bus import get_event_bus
     from .deployment_governance_liveness import get_liveness_service
     from .deployment_governance_policy import get_policy_engine
-    from .deployment_governance_scheduler import get_scheduler
+    from .deployment_governance_scheduler_bootstrap import (
+        get_scheduler_bootstrap,
+    )
 
     manager = GovernanceLifecycleManager(
         event_bus=get_event_bus(),
@@ -644,13 +651,13 @@ def build_default_governance_lifecycle_manager() -> (
         stop=liveness_service.reset,
     )
 
-    scheduler = get_scheduler()
+    scheduler_bootstrap = get_scheduler_bootstrap()
 
     manager.register(
         "scheduler",
         dependencies=_COMPONENT_DEPENDENCIES["scheduler"],
-        start=scheduler.start,
-        stop=scheduler.stop,
+        start=scheduler_bootstrap.initialize,
+        stop=scheduler_bootstrap.shutdown,
     )
 
     return manager

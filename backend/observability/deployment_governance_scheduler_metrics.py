@@ -164,6 +164,8 @@ class GovernanceSchedulerMetrics:
         self._lock_contentions = 0
         self._policy_allowed = 0
         self._policy_denied = 0
+        self._bootstrap_completed = 0
+        self._bootstrap_failed = 0
 
         self._active_jobs = 0
         self._pending_jobs = 0
@@ -324,6 +326,34 @@ class GovernanceSchedulerMetrics:
             else:
                 self._policy_denied += 1
 
+    def record_bootstrap(self, *, initialized: bool) -> None:
+        """
+        Record one GovernanceSchedulerBootstrap initialize() outcome —
+        added alongside that bootstrap (the same reason
+        record_policy_decision exists alongside
+        GovernanceSchedulerPolicyEngine), not part of the original
+        counters this class shipped with.
+        """
+
+        with self._lock:
+            if initialized:
+                self._bootstrap_completed += 1
+
+            else:
+                self._bootstrap_failed += 1
+
+    @property
+    def bootstrap_counts(self) -> "dict[str, int]":
+        """
+        Return the current tally of scheduler bootstrap outcomes.
+        """
+
+        with self._lock:
+            return {
+                "completed": self._bootstrap_completed,
+                "failed": self._bootstrap_failed,
+            }
+
     @property
     def policy_decisions(self) -> "dict[str, int]":
         """
@@ -409,6 +439,8 @@ class GovernanceSchedulerMetrics:
             self._lock_contentions = 0
             self._policy_allowed = 0
             self._policy_denied = 0
+            self._bootstrap_completed = 0
+            self._bootstrap_failed = 0
             self._active_jobs = 0
             self._pending_jobs = 0
             self._registered_jobs = 0

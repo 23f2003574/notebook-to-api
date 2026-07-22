@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TextIO
 
 from .deployment_governance_metrics import (
@@ -1040,8 +1040,12 @@ def run_deployment_governance_metrics_retention_status(
             deployment_governance_persistence_config_from_env()
         )
 
+        metrics_config = GovernanceIntegrityMetricsConfigService().load()
+
         retention_service = GovernanceIntegrityMetricsRetentionService(
-            runtime.build_integrity_metrics_history_repository()
+            runtime.build_integrity_metrics_history_repository(),
+            max_age=timedelta(days=metrics_config.max_history_age_days),
+            max_entries=metrics_config.max_history_entries,
         )
 
         policy = retention_service.retention_policy()
@@ -1116,8 +1120,12 @@ def run_deployment_governance_metrics_retention_run(
             deployment_governance_persistence_config_from_env()
         )
 
+        metrics_config = GovernanceIntegrityMetricsConfigService().load()
+
         retention_service = GovernanceIntegrityMetricsRetentionService(
-            runtime.build_integrity_metrics_history_repository()
+            runtime.build_integrity_metrics_history_repository(),
+            max_age=timedelta(days=metrics_config.max_history_age_days),
+            max_entries=metrics_config.max_history_entries,
         )
 
         discarded = retention_service.prune()

@@ -210,6 +210,13 @@ class GovernanceIntegrityRetryOrchestrator:
         GovernanceIntegrityDeliveryResult, not the raw provider
         outcome. max_attempts is a worker-wide default retry ceiling,
         independent of any per-channel policy retry_limit.
+
+        Does not record to a configured metrics_service: the delivery
+        engine's deliver() call that produced delivery_result already
+        called evaluate() and recorded the retry there when a policy
+        was resolvable. Recording again here would double-count the
+        same retry for every dispatch processed through the delivery
+        worker, since the worker always calls this after deliver().
         """
 
         if delivery_result.status == "success":
@@ -231,9 +238,6 @@ class GovernanceIntegrityRetryOrchestrator:
             )
 
         delay_seconds = self._compute_delay_seconds(attempt)
-
-        if self._metrics_service is not None:
-            self._metrics_service.record_retry()
 
         return GovernanceIntegrityRetryDecision(
             should_retry=True,

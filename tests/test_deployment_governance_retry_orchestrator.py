@@ -4,8 +4,15 @@ from datetime import datetime, timezone
 
 import pytest
 
+from backend.observability.deployment_governance_delivery_engine import (
+    GovernanceIntegrityDeliveryResult,
+    GovernanceIntegrityDeliveryStatus,
+)
 from backend.observability.deployment_governance_delivery_policies import (
     GovernanceIntegrityDeliveryPolicy,
+)
+from backend.observability.deployment_governance_metrics import (
+    GovernanceIntegrityMetricsService,
 )
 from backend.observability.deployment_governance_provider_responses import (
     GovernanceIntegrityProviderResponseOutcome,
@@ -211,3 +218,64 @@ def test_none_strategy_uses_zero_delay() -> None:
     )
 
     assert decision.delay_seconds == 0
+
+
+# --- Metrics recording ----------------------------------------------------
+
+
+def _failed_delivery_result() -> GovernanceIntegrityDeliveryResult:
+    return GovernanceIntegrityDeliveryResult(
+        dispatch_id="dispatch-1",
+        channel_name="email",
+        status=GovernanceIntegrityDeliveryStatus.FAILED,
+        delivered_at=BASE_TIME,
+        error="boom",
+    )
+
+
+def test_evaluate_records_retry_metric() -> None:
+    metrics_service = GovernanceIntegrityMetricsService()
+
+    orchestrator = GovernanceIntegrityRetryOrchestrator(
+        clock=lambda: BASE_TIME, metrics_service=metrics_service
+    )
+
+    orchestrator.evaluate(
+        _failure_outcome(retryable=True), _policy(retry_limit=3), 0
+    )
+
+    assert metrics_service.snapshot().retry_dispatches == 1
+
+
+def test_evaluate_delivery_result_does_not_double_count_retry_metric() -> None:
+    """
+    The delivery worker always calls evaluate_delivery_result() after
+    the delivery engine's deliver() already ran (and, when a policy
+    was resolvable, already called evaluate() and recorded the
+    retry). evaluate_delivery_result() must not record again, or
+    every worker-driven retry would inflate retry_dispatches by 2x.
+    """
+
+    metrics_service = GovernanceIntegrityMetricsService()
+
+    engine_orchestrator = GovernanceIntegrityRetryOrchestrator(
+        clock=lambda: BASE_TIME, metrics_service=metrics_service
+    )
+
+    worker_orchestrator = GovernanceIntegrityRetryOrchestrator(
+        clock=lambda: BASE_TIME, metrics_service=metrics_service
+    )
+
+    # Simulates engine.deliver(): evaluates and records once.
+    engine_orchestrator.evaluate(
+        _failure_outcome(retryable=True), _policy(retry_limit=3), 0
+    )
+
+    # Simulates worker.process_dispatch() re-evaluating the same
+    # failure from the engine's already-final result.
+    decision = worker_orchestrator.evaluate_delivery_result(
+        _failed_delivery_result(), 0
+    )
+
+    assert decision.should_retry is True
+    assert metrics_service.snapshot().retry_dispatches == 1

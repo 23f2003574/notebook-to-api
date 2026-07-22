@@ -366,6 +366,9 @@ if TYPE_CHECKING:
     from .deployment_governance_persistence_diagnostics import (
         DeploymentGovernancePersistenceDiagnosticsService,
     )
+    from .deployment_governance_scheduler_bootstrap import (
+        GovernanceSchedulerBootstrap,
+    )
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2122,6 +2125,29 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return get_scheduler_dashboard()
+
+    def build_governance_scheduler_bootstrap(
+        self,
+    ) -> "GovernanceSchedulerBootstrap":
+        """
+        Return the process-wide governance scheduler bootstrap.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: whether the scheduling subsystem has completed
+        initialization needs to be visible to whatever queries it (the
+        lifecycle manager's "scheduler" component, or a direct API
+        caller), which a persistence runtime built fresh per request
+        cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_scheduler_bootstrap import (
+            get_scheduler_bootstrap,
+        )
+
+        return get_scheduler_bootstrap()
 
     def build_integrity_provider_configuration_service(
         self,

@@ -17,6 +17,9 @@ from .deployment_governance_persistence import (
     build_deployment_governance_persistence,
     deployment_governance_persistence_config_from_env,
 )
+from .deployment_governance_scheduler_bootstrap import (
+    GovernanceSchedulerBootstrapError,
+)
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -1874,3 +1877,55 @@ async def get_governance_scheduler_dashboard_locks():
     locks = _build_scheduler_dashboard().locks()
 
     return [lock.to_dict() for lock in locks]
+
+
+def _build_scheduler_bootstrap():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_scheduler_bootstrap()
+
+
+@health_router.get("/scheduler/bootstrap")
+async def get_governance_scheduler_bootstrap():
+    """
+    Return the governance scheduler bootstrap's current lifecycle
+    state.
+    """
+
+    return _build_scheduler_bootstrap().status().to_dict()
+
+
+@health_router.post("/scheduler/bootstrap")
+async def post_governance_scheduler_bootstrap():
+    """
+    Run the governance scheduler bootstrap's initialization pipeline:
+    validate the scheduling component dependency graph, restore
+    persisted scheduler state, and start the scheduler. Idempotent —
+    a no-op returning the original report if already initialized.
+    """
+
+    try:
+        report = _build_scheduler_bootstrap().initialize()
+
+    except GovernanceSchedulerBootstrapError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return report.to_dict()
+
+
+@health_router.post("/scheduler/restart")
+async def post_governance_scheduler_restart():
+    """
+    Shut down (if currently initialized) and re-run the governance
+    scheduler bootstrap's initialization pipeline.
+    """
+
+    try:
+        report = _build_scheduler_bootstrap().restart()
+
+    except GovernanceSchedulerBootstrapError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return report.to_dict()

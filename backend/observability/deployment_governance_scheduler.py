@@ -406,6 +406,27 @@ class GovernanceScheduler:
             )
         )
 
+    def pending_dispatches(self) -> "tuple[str, ...]":
+        """
+        Return the job_id of every job with a currently pending
+        scheduled execution, ordered by next execution time then
+        job_id (jobs() itself, without the ones that have no pending
+        execution at all).
+
+        Added for GovernanceSchedulerBootstrap's diagnostics
+        exposure, which needs a plain pending-work count the same
+        shape as GovernanceIntegrityDeliveryRuntime's own scheduler
+        duck-type already exposes for the (unrelated) delivery
+        scheduler.
+        """
+
+        with self._lock:
+            pending_ids = set(self._next_run)
+
+        return tuple(
+            job.job_id for job in self.jobs() if job.job_id in pending_ids
+        )
+
     def status(self) -> SchedulerStatus:
         """
         Return the scheduler's current running state, how many jobs

@@ -30,6 +30,7 @@ BUILT_IN_SCHEDULER_POLICIES: "tuple[str, ...]" = (
     "lock_acquired",
     "retry_limit_not_exceeded",
     "execution_window_allowed",
+    "bootstrap_ready",
 )
 
 SchedulerPolicyEvaluator = Callable[
@@ -398,6 +399,7 @@ class GovernanceSchedulerPolicyEngine:
             "execution_window_allowed": (
                 self._evaluate_execution_window_allowed
             ),
+            "bootstrap_ready": self._evaluate_bootstrap_ready,
         }
 
     def _evaluate_max_concurrent_jobs(
@@ -465,6 +467,26 @@ class GovernanceSchedulerPolicyEngine:
                 f"retry attempt {attempt} has reached max_attempts "
                 f"{max_attempts}"
             )
+
+        return False, None
+
+    def _evaluate_bootstrap_ready(
+        self, policy: SchedulerPolicy, context: "dict[str, Any]"
+    ) -> "tuple[bool, str | None]":
+        """
+        Deny while the scheduler bootstrap has not finished restoring
+        persisted state and starting the scheduler yet — the concrete
+        enforcement of the "restore persisted state before accepting
+        work" rule GovernanceSchedulerBootstrap otherwise has no way
+        to impose on run_due()'s own dispatch decisions.
+
+        context["bootstrap_initialized"] defaults to True (allow) so
+        a caller that never wires bootstrap status into its context
+        sees identical behavior to before this policy type existed.
+        """
+
+        if not context.get("bootstrap_initialized", True):
+            return True, "scheduler bootstrap has not completed yet"
 
         return False, None
 

@@ -175,11 +175,13 @@ class GovernanceIntegrityMetricsMiddleware(BaseHTTPMiddleware):
 
     Health endpoints are excluded: they are polled frequently by
     infrastructure and would otherwise dominate the collected
-    metrics without reflecting meaningful traffic. Latency is always
-    recorded, including for excluded and failed requests, so timing
-    data is never silently dropped. Exceptions raised downstream are
-    recorded and re-raised rather than swallowed: this middleware
-    observes failures, it does not handle them.
+    metrics without reflecting meaningful traffic. Excluded requests
+    are not timed or recorded at all. For every other request,
+    latency is always recorded, including for failed requests, so
+    timing data is never silently dropped for real traffic.
+    Exceptions raised downstream are recorded and re-raised rather
+    than swallowed: this middleware observes failures, it does not
+    handle them.
     """
 
     def __init__(

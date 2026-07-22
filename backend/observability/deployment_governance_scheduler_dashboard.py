@@ -32,6 +32,10 @@ if TYPE_CHECKING:
     from .deployment_governance_scheduler_metrics import (
         GovernanceSchedulerMetrics,
     )
+    from .deployment_governance_scheduler_bootstrap import (
+        GovernanceSchedulerBootstrap,
+        SchedulerBootstrapStatus,
+    )
 
 _EMPTY_SCHEDULER_STATUS = SchedulerStatus(
     running=False, active_jobs=0, next_execution=None
@@ -171,6 +175,7 @@ class GovernanceSchedulerDashboard:
         retry_engine: "GovernanceRetryEngine | None" = None,
         lock_manager: "GovernanceSchedulerLockManager | None" = None,
         metrics: "GovernanceSchedulerMetrics | None" = None,
+        bootstrap: "GovernanceSchedulerBootstrap | None" = None,
     ) -> None:
         self._clock = clock or (
             lambda: datetime.now(timezone.utc)
@@ -189,6 +194,27 @@ class GovernanceSchedulerDashboard:
         self._lock_manager = lock_manager
 
         self._metrics = metrics
+
+        self._bootstrap = bootstrap
+
+    def bootstrap_status(self) -> "SchedulerBootstrapStatus | None":
+        """
+        Return the wired GovernanceSchedulerBootstrap's current status,
+        or None if this dashboard was not given one.
+
+        Not wired by build_default_governance_scheduler_dashboard():
+        the bootstrap singleton is what wires *this* dashboard in (as
+        the pipeline's final "Expose Dashboard" step), so wiring the
+        reverse reference here too would make each module's default
+        factory depend on the other still being mid-construction the
+        first time either is imported. A caller that wants both wired
+        together passes bootstrap explicitly.
+        """
+
+        if self._bootstrap is None:
+            return None
+
+        return self._bootstrap.status()
 
     def dashboard(self) -> SchedulerDashboard:
         """

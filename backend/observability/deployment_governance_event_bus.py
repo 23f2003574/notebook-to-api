@@ -76,6 +76,11 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "scheduler_policy_removed",
     "scheduler_dashboard_generated",
     "scheduler_dashboard_refreshed",
+    "scheduler_bootstrap_started",
+    "scheduler_bootstrap_completed",
+    "scheduler_bootstrap_failed",
+    "scheduler_runtime_ready",
+    "scheduler_runtime_shutdown",
 )
 
 
