@@ -1862,6 +1862,26 @@ class DeploymentGovernancePersistenceRuntime:
 
         return get_recovery_manager()
 
+    def build_governance_scheduler(
+        self,
+    ) -> "GovernanceScheduler":
+        """
+        Return the process-wide governance scheduler.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: jobs registered through the API need to be
+        visible to whatever queries the scheduler (the lifecycle
+        manager, or a direct API caller), which a persistence runtime
+        built fresh per request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_scheduler import get_scheduler
+
+        return get_scheduler()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

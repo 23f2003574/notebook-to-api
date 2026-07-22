@@ -534,6 +534,7 @@ def build_default_governance_recovery_manager() -> GovernanceRecoveryManager:
         "readiness_service",
         "liveness_service",
         "diagnostics_service",
+        "scheduler",
     ):
         manager.register(
             component,

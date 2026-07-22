@@ -28,6 +28,10 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "recovery_succeeded",
     "recovery_failed",
     "recovery_aborted",
+    "scheduler_started",
+    "scheduler_stopped",
+    "job_registered",
+    "job_unregistered",
 )
 
 

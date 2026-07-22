@@ -573,10 +573,12 @@ def build_default_governance_lifecycle_manager() -> (
     graph, startup order, and status() stay complete and honest about
     every component that conceptually exists.
 
-    liveness_service is the one exception: it is wired to the real
-    process-wide GovernanceLivenessService singleton, so
-    starting/stopping this manager's liveness_service component
-    genuinely starts/resets process liveness tracking.
+    liveness_service and scheduler are the two exceptions: they are
+    wired to the real process-wide GovernanceLivenessService and
+    GovernanceScheduler singletons, so starting/stopping this
+    manager's liveness_service/scheduler components genuinely
+    starts/resets process liveness tracking and starts/stops the
+    governance scheduler.
 
     A process that does construct a real delivery runtime (a worker
     process, not this API server) should use
@@ -606,6 +608,7 @@ def build_default_governance_lifecycle_manager() -> (
     from .deployment_governance_event_bus import get_event_bus
     from .deployment_governance_liveness import get_liveness_service
     from .deployment_governance_policy import get_policy_engine
+    from .deployment_governance_scheduler import get_scheduler
 
     manager = GovernanceLifecycleManager(
         event_bus=get_event_bus(),
@@ -639,6 +642,15 @@ def build_default_governance_lifecycle_manager() -> (
         dependencies=_COMPONENT_DEPENDENCIES["liveness_service"],
         start=liveness_service.start,
         stop=liveness_service.reset,
+    )
+
+    scheduler = get_scheduler()
+
+    manager.register(
+        "scheduler",
+        dependencies=_COMPONENT_DEPENDENCIES["scheduler"],
+        start=scheduler.start,
+        stop=scheduler.stop,
     )
 
     return manager

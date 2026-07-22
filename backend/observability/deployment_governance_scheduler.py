@@ -1,0 +1,364 @@
+from __future__ import annotations
+
+import threading
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Callable, TYPE_CHECKING
+from uuid import uuid4
+
+if TYPE_CHECKING:
+    from .deployment_governance_event_bus import GovernanceEventBus
+
+
+@dataclass(frozen=True)
+class ScheduledJob:
+    """
+    A single job registered with the governance scheduler: what it is
+    called, how often it recurs, and whether it is currently eligible
+    to run.
+    """
+
+    job_id: str
+
+    name: str
+
+    interval_seconds: int
+
+    enabled: bool
+
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        if not self.job_id:
+            raise ValueError("job_id must not be empty")
+
+        if not self.name:
+            raise ValueError("name must not be empty")
+
+        if self.interval_seconds <= 0:
+            raise ValueError(
+                "interval_seconds must be greater than zero"
+            )
+
+        if self.created_at.tzinfo is None:
+            raise ValueError(
+                "created_at must be timezone-aware"
+            )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "job_id": self.job_id,
+            "name": self.name,
+            "interval_seconds": self.interval_seconds,
+            "enabled": self.enabled,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+@dataclass(frozen=True)
+class SchedulerStatus:
+    """
+    A snapshot of the scheduler's current state: whether it is
+    running, how many jobs are registered, and when the soonest
+    scheduled job is next due.
+    """
+
+    running: bool
+
+    active_jobs: int
+
+    next_execution: "datetime | None"
+
+    def __post_init__(self) -> None:
+        if self.active_jobs < 0:
+            raise ValueError("active_jobs must be >= 0")
+
+        if (
+            self.next_execution is not None
+            and self.next_execution.tzinfo is None
+        ):
+            raise ValueError(
+                "next_execution must be timezone-aware"
+            )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "running": self.running,
+            "active_jobs": self.active_jobs,
+            "next_execution": (
+                self.next_execution.isoformat()
+                if self.next_execution is not None
+                else None
+            ),
+        }
+
+
+class GovernanceScheduler:
+    """
+    Registers, schedules, and coordinates governance jobs, replacing
+    ad hoc per-caller timers with one central authority every other
+    governance component can query for what is registered and when it
+    is next due.
+
+    register() adds a named job definition (raising ValueError on a
+    duplicate name) and immediately schedules its first execution;
+    schedule() recomputes a job's next execution time on demand (for
+    example, after it has run) and cancel() clears a job's pending
+    execution without unregistering it. jobs() and status() both order
+    deterministically by (next_run, job_id) / earliest next_run, so
+    repeated calls with no intervening change return identical output.
+
+    Thread-safe: every mutation of the job registry is guarded by an
+    internal lock, since jobs may be registered, cancelled, or queried
+    from multiple threads (an API request thread and a dispatch loop,
+    for instance) concurrently.
+    """
+
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], datetime] | None = None,
+        event_bus: "GovernanceEventBus | None" = None,
+    ) -> None:
+        self._lock = threading.Lock()
+
+        self._jobs: "dict[str, ScheduledJob]" = {}
+
+        self._names: "set[str]" = set()
+
+        self._next_run: "dict[str, datetime]" = {}
+
+        self._running = False
+
+        self._clock = clock or (
+            lambda: datetime.now(timezone.utc)
+        )
+
+        self._event_bus = event_bus
+
+    def start(self) -> None:
+        """
+        Mark the scheduler running and publish "scheduler_started".
+
+        Idempotent: calling start() while already running is a no-op
+        and publishes nothing further.
+        """
+
+        with self._lock:
+            if self._running:
+                return
+
+            self._running = True
+
+        self._publish("scheduler_started", "scheduler")
+
+    def stop(self) -> None:
+        """
+        Mark the scheduler stopped and publish "scheduler_stopped".
+
+        Idempotent: calling stop() while already stopped is a no-op
+        and publishes nothing further. Registered jobs are left
+        untouched — stopping the scheduler pauses dispatch, it does
+        not clear the registry.
+        """
+
+        with self._lock:
+            if not self._running:
+                return
+
+            self._running = False
+
+        self._publish("scheduler_stopped", "scheduler")
+
+    def register(
+        self,
+        name: str,
+        *,
+        interval_seconds: int,
+        enabled: bool = True,
+    ) -> ScheduledJob:
+        """
+        Register a new job under a fresh, unique job_id and, if
+        enabled, schedule its first execution interval_seconds from
+        now.
+
+        Raises ValueError if name is already registered — job names
+        are unique the same way component names are unique across the
+        lifecycle manager and recovery manager.
+        """
+
+        with self._lock:
+            if name in self._names:
+                raise ValueError(
+                    f"job '{name}' is already registered"
+                )
+
+            job = ScheduledJob(
+                job_id=str(uuid4()),
+                name=name,
+                interval_seconds=interval_seconds,
+                enabled=enabled,
+                created_at=self._clock(),
+            )
+
+            self._jobs[job.job_id] = job
+            self._names.add(name)
+
+            if enabled:
+                self._next_run[job.job_id] = job.created_at + timedelta(
+                    seconds=interval_seconds
+                )
+
+        self._publish(
+            "job_registered", job.job_id, {"name": name}
+        )
+
+        return job
+
+    def unregister(self, job_id: str) -> None:
+        """
+        Remove a registered job and any pending scheduled execution
+        for it.
+
+        Raises KeyError if job_id is not registered.
+        """
+
+        with self._lock:
+            job = self._jobs.pop(job_id, None)
+
+            if job is None:
+                raise KeyError(
+                    f"job '{job_id}' is not registered"
+                )
+
+            self._names.discard(job.name)
+            self._next_run.pop(job_id, None)
+
+        self._publish(
+            "job_unregistered", job_id, {"name": job.name}
+        )
+
+    def schedule(self, job_id: str) -> datetime:
+        """
+        (Re)compute job_id's next execution time as now plus its
+        registered interval, and return it.
+
+        Used both to advance a job past an execution that already ran
+        and to reschedule a job previously cancel()'d.
+
+        Raises KeyError if job_id is not registered.
+        """
+
+        with self._lock:
+            job = self._jobs.get(job_id)
+
+            if job is None:
+                raise KeyError(
+                    f"job '{job_id}' is not registered"
+                )
+
+            next_run = self._clock() + timedelta(
+                seconds=job.interval_seconds
+            )
+
+            self._next_run[job_id] = next_run
+
+            return next_run
+
+    def cancel(self, job_id: str) -> None:
+        """
+        Clear job_id's pending scheduled execution, if any, without
+        unregistering the job itself.
+
+        Raises KeyError if job_id is not registered.
+        """
+
+        with self._lock:
+            if job_id not in self._jobs:
+                raise KeyError(
+                    f"job '{job_id}' is not registered"
+                )
+
+            self._next_run.pop(job_id, None)
+
+    def jobs(self) -> "tuple[ScheduledJob, ...]":
+        """
+        Return every registered job, ordered by next execution time
+        (jobs with no pending execution sort last) and then job_id,
+        for deterministic output.
+        """
+
+        with self._lock:
+            jobs = list(self._jobs.values())
+            next_run = dict(self._next_run)
+
+        sentinel = datetime.max.replace(tzinfo=timezone.utc)
+
+        return tuple(
+            sorted(
+                jobs,
+                key=lambda job: (
+                    next_run.get(job.job_id, sentinel),
+                    job.job_id,
+                ),
+            )
+        )
+
+    def status(self) -> SchedulerStatus:
+        """
+        Return the scheduler's current running state, how many jobs
+        are registered, and the soonest pending next execution across
+        every job (None if no job currently has one scheduled).
+        """
+
+        with self._lock:
+            running = self._running
+            active_jobs = len(self._jobs)
+            pending = list(self._next_run.values())
+
+        return SchedulerStatus(
+            running=running,
+            active_jobs=active_jobs,
+            next_execution=min(pending) if pending else None,
+        )
+
+    def _publish(
+        self,
+        event_type: str,
+        source: str,
+        payload: "dict[str, object] | None" = None,
+    ) -> None:
+        if self._event_bus is None:
+            return
+
+        self._event_bus.publish(
+            event_type, source=source, payload=payload
+        )
+
+
+def build_default_governance_scheduler() -> GovernanceScheduler:
+    """
+    Build the process-wide governance scheduler, wired to the
+    process-wide governance event bus so scheduler_started/
+    scheduler_stopped/job_registered/job_unregistered events are
+    actually published, not just a documented possibility.
+    """
+
+    from .deployment_governance_event_bus import get_event_bus
+
+    return GovernanceScheduler(event_bus=get_event_bus())
+
+
+# Shared for the lifetime of the process: registered jobs need to be
+# visible to whatever queries the scheduler (the lifecycle manager's
+# start/stop, or a direct API caller), which a persistence runtime
+# built fresh per request cannot provide on its own.
+_scheduler = build_default_governance_scheduler()
+
+
+def get_scheduler() -> GovernanceScheduler:
+    """
+    Return the process-wide governance scheduler.
+    """
+
+    return _scheduler

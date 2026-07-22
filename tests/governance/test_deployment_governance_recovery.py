@@ -742,7 +742,7 @@ class TestRecoverySingleton:
 
         assert get_recovery_manager() is get_recovery_manager()
 
-    def test_default_manager_has_plans_for_all_eight_components(self):
+    def test_default_manager_has_plans_for_all_nine_components(self):
         from backend.observability.deployment_governance_recovery import (
             get_recovery_manager,
         )
@@ -758,6 +758,7 @@ class TestRecoverySingleton:
             "readiness_service",
             "liveness_service",
             "diagnostics_service",
+            "scheduler",
         }
 
 
@@ -806,7 +807,7 @@ class TestGovernanceRecoveryApi:
 
         payload = response.json()
 
-        assert len(payload) == 8
+        assert len(payload) == 9
         assert all(entry["success"] for entry in payload)
 
     def test_history_endpoint_reflects_recovery_attempts(

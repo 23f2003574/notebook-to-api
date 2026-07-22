@@ -293,7 +293,7 @@ class TestGovernanceBootstrap:
 
         assert result.valid is True
 
-    def test_default_component_graph_includes_all_eight_components(self):
+    def test_default_component_graph_includes_all_nine_components(self):
         from backend.observability.deployment_governance_bootstrap import (
             build_governance_dependency_graph,
         )
@@ -312,6 +312,7 @@ class TestGovernanceBootstrap:
             "readiness_service",
             "liveness_service",
             "diagnostics_service",
+            "scheduler",
         }
 
     def test_bootstrap_governance_runtime_returns_valid_result(self):

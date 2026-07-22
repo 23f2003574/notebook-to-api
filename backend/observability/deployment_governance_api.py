@@ -880,3 +880,57 @@ async def post_governance_recovery(component: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return result.to_dict()
+
+
+def _build_scheduler():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_scheduler()
+
+
+@health_router.get("/scheduler")
+async def get_governance_scheduler():
+    """
+    Return the governance scheduler's current running state, active
+    job count, and soonest next execution.
+    """
+
+    return _build_scheduler().status().to_dict()
+
+
+@health_router.get("/scheduler/jobs")
+async def get_governance_scheduler_jobs():
+    """
+    Return every job registered with the governance scheduler,
+    ordered by next execution time.
+    """
+
+    jobs = _build_scheduler().jobs()
+
+    return [job.to_dict() for job in jobs]
+
+
+@health_router.post("/scheduler/start")
+async def post_governance_scheduler_start():
+    """
+    Start the governance scheduler.
+    """
+
+    scheduler = _build_scheduler()
+    scheduler.start()
+
+    return scheduler.status().to_dict()
+
+
+@health_router.post("/scheduler/stop")
+async def post_governance_scheduler_stop():
+    """
+    Stop the governance scheduler.
+    """
+
+    scheduler = _build_scheduler()
+    scheduler.stop()
+
+    return scheduler.status().to_dict()
