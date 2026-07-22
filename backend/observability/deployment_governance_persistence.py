@@ -1989,6 +1989,26 @@ class DeploymentGovernancePersistenceRuntime:
 
         return get_job_persistence()
 
+    def build_governance_cron_scheduler(
+        self,
+    ) -> "GovernanceCronScheduler":
+        """
+        Return the process-wide governance cron scheduler.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: cron triggers registered through the API need
+        to be visible to whatever queries the scheduler directly,
+        which a persistence runtime built fresh per request cannot
+        provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_cron import get_cron_scheduler
+
+        return get_cron_scheduler()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

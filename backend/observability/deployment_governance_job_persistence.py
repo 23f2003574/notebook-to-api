@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .deployment_governance_cron import GovernanceCronScheduler
     from .deployment_governance_event_bus import GovernanceEventBus
     from .deployment_governance_execution_manager import (
         GovernanceExecutionManager,
@@ -148,6 +149,7 @@ class GovernanceJobPersistence:
         retry_engine: "GovernanceRetryEngine | None" = None,
         scheduler: "GovernanceScheduler | None" = None,
         execution_manager: "GovernanceExecutionManager | None" = None,
+        cron_scheduler: "GovernanceCronScheduler | None" = None,
         path: "str | Path | None" = None,
         include_execution_history: bool = False,
     ) -> None:
@@ -168,6 +170,8 @@ class GovernanceJobPersistence:
         self._scheduler = scheduler
 
         self._execution_manager = execution_manager
+
+        self._cron_scheduler = cron_scheduler
 
         self._path = Path(path) if path is not None else None
 
@@ -404,6 +408,14 @@ class GovernanceJobPersistence:
         restored_triggers = self._restore_triggers(triggers)
         restored_retries = self._restore_pending_retries(pending_retries)
 
+        # cron_triggers was added after this document format's first
+        # version; a v1 document saved before it existed simply has no
+        # such key, and that must load exactly as successfully as one
+        # that does — hence .get(), not required-field indexing.
+        restored_cron = self._restore_cron_triggers(
+            document.get("cron_triggers", [])
+        )
+
         if self._scheduler is not None and document.get(
             "scheduler_running"
         ):
@@ -411,7 +423,8 @@ class GovernanceJobPersistence:
 
         return True, (
             f"restored {restored_jobs} job(s), {restored_triggers} "
-            f"trigger(s), {restored_retries} pending retry(ies)"
+            f"trigger(s), {restored_retries} pending retry(ies), "
+            f"{restored_cron} cron trigger(s)"
         )
 
     def _build_document(self) -> "dict[str, object]":
@@ -421,6 +434,7 @@ class GovernanceJobPersistence:
             "jobs": self._serialize_jobs(),
             "triggers": self._serialize_triggers(),
             "pending_retries": self._serialize_pending_retries(),
+            "cron_triggers": self._serialize_cron_triggers(),
             "scheduler_running": (
                 self._scheduler.status().running
                 if self._scheduler is not None
@@ -446,6 +460,7 @@ class GovernanceJobPersistence:
             "jobs": [],
             "triggers": [],
             "pending_retries": [],
+            "cron_triggers": [],
             "scheduler_running": False,
         }
 
@@ -488,6 +503,40 @@ class GovernanceJobPersistence:
             entries.append(entry)
 
         return sorted(entries, key=lambda entry: entry["execution_id"])
+
+    def _serialize_cron_triggers(self) -> "list[dict[str, object]]":
+        if self._cron_scheduler is None:
+            return []
+
+        return sorted(
+            (
+                trigger.to_dict()
+                for trigger in self._cron_scheduler.list()
+            ),
+            key=lambda entry: entry["trigger_id"],
+        )
+
+    def _restore_cron_triggers(self, entries: "list[object]") -> int:
+        if self._cron_scheduler is None:
+            return 0
+
+        restored = 0
+
+        for entry in entries:
+            try:
+                self._cron_scheduler.register(
+                    entry["job_id"],
+                    expression=entry["expression"],
+                    timezone=entry.get("timezone", "UTC"),
+                    enabled=entry.get("enabled", True),
+                )
+
+                restored += 1
+
+            except (KeyError, TypeError, ValueError):
+                continue
+
+        return restored
 
     def _restore_jobs(self, entries: "list[object]") -> int:
         if self._job_registry is None:
@@ -690,6 +739,7 @@ def build_default_governance_job_persistence() -> GovernanceJobPersistence:
     so importing this module never performs file I/O on its own.
     """
 
+    from .deployment_governance_cron import get_cron_scheduler
     from .deployment_governance_event_bus import get_event_bus
     from .deployment_governance_execution_manager import (
         get_execution_manager,
@@ -706,6 +756,7 @@ def build_default_governance_job_persistence() -> GovernanceJobPersistence:
         retry_engine=get_retry_engine(),
         scheduler=get_scheduler(),
         execution_manager=get_execution_manager(),
+        cron_scheduler=get_cron_scheduler(),
     )
 
 

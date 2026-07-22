@@ -53,6 +53,10 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "persistence_saved",
     "persistence_failed",
     "snapshot_created",
+    "cron_registered",
+    "cron_removed",
+    "cron_triggered",
+    "cron_rescheduled",
 )
 
 

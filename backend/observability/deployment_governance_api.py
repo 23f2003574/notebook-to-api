@@ -1352,3 +1352,119 @@ async def delete_governance_persistence():
     _build_job_persistence().clear()
 
     return {"cleared": True}
+
+
+def _build_cron_scheduler():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_cron_scheduler()
+
+
+@health_router.get("/cron")
+async def get_governance_cron_triggers():
+    """
+    Return every registered governance cron trigger, ordered by
+    next_run then trigger_id.
+    """
+
+    triggers = _build_cron_scheduler().list()
+
+    return [trigger.to_dict() for trigger in triggers]
+
+
+@health_router.get("/cron/{trigger_id}")
+async def get_governance_cron_trigger(trigger_id: str):
+    """
+    Return one registered governance cron trigger by trigger_id.
+    """
+
+    trigger = next(
+        (
+            trigger
+            for trigger in _build_cron_scheduler().list()
+            if trigger.trigger_id == trigger_id
+        ),
+        None,
+    )
+
+    if trigger is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"cron trigger '{trigger_id}' is not registered",
+        )
+
+    return trigger.to_dict()
+
+
+@health_router.post("/cron")
+async def post_governance_cron_trigger(
+    job_id: str = Query(...),
+    expression: str = Query(...),
+    timezone: str = Query(default="UTC"),
+    enabled: bool = Query(default=True),
+):
+    """
+    Register a new governance cron trigger for job_id.
+    """
+
+    try:
+        trigger = _build_cron_scheduler().register(
+            job_id,
+            expression=expression,
+            timezone=timezone,
+            enabled=enabled,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return trigger.to_dict()
+
+
+@health_router.patch("/cron/{trigger_id}")
+async def patch_governance_cron_trigger(
+    trigger_id: str,
+    at: "datetime | None" = Query(default=None),
+):
+    """
+    Recompute and store a registered governance cron trigger's
+    next_run, as of at (default now).
+    """
+
+    try:
+        trigger = _build_cron_scheduler().reschedule(trigger_id, at=at)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return trigger.to_dict()
+
+
+@health_router.delete("/cron/{trigger_id}")
+async def delete_governance_cron_trigger(trigger_id: str):
+    """
+    Remove a registered governance cron trigger.
+    """
+
+    try:
+        _build_cron_scheduler().remove(trigger_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"removed": trigger_id}
+
+
+@health_router.post("/cron/validate")
+async def post_governance_cron_validate(
+    expression: str = Query(...),
+):
+    """
+    Validate a cron expression without registering anything.
+    """
+
+    valid = _build_cron_scheduler().validate(expression)
+
+    return {"expression": expression, "valid": valid}
