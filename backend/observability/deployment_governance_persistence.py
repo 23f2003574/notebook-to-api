@@ -1882,6 +1882,26 @@ class DeploymentGovernancePersistenceRuntime:
 
         return get_scheduler()
 
+    def build_governance_job_registry(
+        self,
+    ) -> "GovernanceJobRegistry":
+        """
+        Return the process-wide governance job registry.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: job metadata registered through the scheduler
+        (or directly through this registry's own API) needs to be
+        visible to both, which a persistence runtime built fresh per
+        request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_job_registry import get_job_registry
+
+        return get_job_registry()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

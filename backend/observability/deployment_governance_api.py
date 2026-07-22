@@ -934,3 +934,101 @@ async def post_governance_scheduler_stop():
     scheduler.stop()
 
     return scheduler.status().to_dict()
+
+
+def _build_job_registry():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_job_registry()
+
+
+@health_router.get("/jobs")
+async def get_governance_jobs():
+    """
+    Return every registered governance job, ordered by namespace,
+    then name, then job_id.
+    """
+
+    jobs = _build_job_registry().list()
+
+    return [job.to_dict() for job in jobs]
+
+
+@health_router.get("/jobs/namespace/{namespace}")
+async def get_governance_jobs_namespace(namespace: str):
+    """
+    Return every registered governance job in namespace, ordered by
+    name then job_id.
+
+    Registered before /jobs/{job_id}: FastAPI matches routes by exact
+    path shape, and this route has one more path segment than
+    /jobs/{job_id}, so the two never actually collide regardless of
+    registration order — registered here anyway for readability
+    alongside the job_id routes below.
+    """
+
+    jobs = _build_job_registry().list_namespace(namespace)
+
+    return [job.to_dict() for job in jobs]
+
+
+@health_router.get("/jobs/{job_id}")
+async def get_governance_job(job_id: str):
+    """
+    Return one registered governance job by job_id.
+    """
+
+    try:
+        job = _build_job_registry().get(job_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return job.to_dict()
+
+
+@health_router.patch("/jobs/{job_id}/enable")
+async def patch_governance_job_enable(job_id: str):
+    """
+    Mark a registered governance job enabled.
+    """
+
+    try:
+        job = _build_job_registry().enable(job_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return job.to_dict()
+
+
+@health_router.patch("/jobs/{job_id}/disable")
+async def patch_governance_job_disable(job_id: str):
+    """
+    Mark a registered governance job disabled.
+    """
+
+    try:
+        job = _build_job_registry().disable(job_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return job.to_dict()
+
+
+@health_router.delete("/jobs/{job_id}")
+async def delete_governance_job(job_id: str):
+    """
+    Remove a registered governance job.
+    """
+
+    try:
+        _build_job_registry().unregister(job_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"removed": job_id}

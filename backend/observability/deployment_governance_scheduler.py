@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, TYPE_CHECKING
 from uuid import uuid4
 
+from .deployment_governance_job_registry import GovernanceJobRegistry
+
 if TYPE_CHECKING:
     from .deployment_governance_event_bus import GovernanceEventBus
 
@@ -100,13 +102,21 @@ class GovernanceScheduler:
     governance component can query for what is registered and when it
     is next due.
 
-    register() adds a named job definition (raising ValueError on a
-    duplicate name) and immediately schedules its first execution;
-    schedule() recomputes a job's next execution time on demand (for
-    example, after it has run) and cancel() clears a job's pending
-    execution without unregistering it. jobs() and status() both order
-    deterministically by (next_run, job_id) / earliest next_run, so
-    repeated calls with no intervening change return identical output.
+    register() adds a named job definition (rejecting a duplicate name
+    the same way the underlying job registry does) and immediately
+    schedules its first execution; schedule() recomputes a job's next
+    execution time on demand (for example, after it has run) and
+    cancel() clears a job's pending execution without unregistering
+    it. jobs() and status() both order deterministically by
+    (next_run, job_id) / earliest next_run, so repeated calls with no
+    intervening change return identical output.
+
+    All job metadata (name, namespace, description, enabled) is
+    delegated to a GovernanceJobRegistry rather than stored here: this
+    class owns only execution and timing (interval_seconds and each
+    job's next scheduled run). A fresh private registry is created if
+    none is given, so a standalone GovernanceScheduler in a test is
+    fully self-contained.
 
     Thread-safe: every mutation of the job registry is guarded by an
     internal lock, since jobs may be registered, cancelled, or queried
@@ -119,12 +129,11 @@ class GovernanceScheduler:
         *,
         clock: Callable[[], datetime] | None = None,
         event_bus: "GovernanceEventBus | None" = None,
+        job_registry: "GovernanceJobRegistry | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
         self._jobs: "dict[str, ScheduledJob]" = {}
-
-        self._names: "set[str]" = set()
 
         self._next_run: "dict[str, datetime]" = {}
 
@@ -135,6 +144,10 @@ class GovernanceScheduler:
         )
 
         self._event_bus = event_bus
+
+        self._job_registry = job_registry or GovernanceJobRegistry(
+            clock=self._clock
+        )
 
     def start(self) -> None:
         """
@@ -176,36 +189,48 @@ class GovernanceScheduler:
         *,
         interval_seconds: int,
         enabled: bool = True,
+        namespace: str = "default",
+        description: str = "",
     ) -> ScheduledJob:
         """
         Register a new job under a fresh, unique job_id and, if
         enabled, schedule its first execution interval_seconds from
         now.
 
-        Raises ValueError if name is already registered — job names
-        are unique the same way component names are unique across the
-        lifecycle manager and recovery manager.
+        Name/namespace metadata and duplicate-name validation are
+        delegated to the job registry; this only raises ValueError if
+        the registry rejects the registration (wrapping its reason,
+        most commonly an already-registered name within namespace).
         """
 
-        with self._lock:
-            if name in self._names:
-                raise ValueError(
-                    f"job '{name}' is already registered"
-                )
+        job_id = str(uuid4())
 
+        result = self._job_registry.register(
+            job_id,
+            name,
+            namespace=namespace,
+            description=description,
+            enabled=enabled,
+        )
+
+        if not result.accepted:
+            raise ValueError(result.reason)
+
+        registered = self._job_registry.get(job_id)
+
+        with self._lock:
             job = ScheduledJob(
-                job_id=str(uuid4()),
+                job_id=job_id,
                 name=name,
                 interval_seconds=interval_seconds,
                 enabled=enabled,
-                created_at=self._clock(),
+                created_at=registered.created_at,
             )
 
-            self._jobs[job.job_id] = job
-            self._names.add(name)
+            self._jobs[job_id] = job
 
             if enabled:
-                self._next_run[job.job_id] = job.created_at + timedelta(
+                self._next_run[job_id] = job.created_at + timedelta(
                     seconds=interval_seconds
                 )
 
@@ -218,7 +243,8 @@ class GovernanceScheduler:
     def unregister(self, job_id: str) -> None:
         """
         Remove a registered job and any pending scheduled execution
-        for it.
+        for it, from both this scheduler and the underlying job
+        registry.
 
         Raises KeyError if job_id is not registered.
         """
@@ -231,8 +257,9 @@ class GovernanceScheduler:
                     f"job '{job_id}' is not registered"
                 )
 
-            self._names.discard(job.name)
             self._next_run.pop(job_id, None)
+
+        self._job_registry.unregister(job_id)
 
         self._publish(
             "job_unregistered", job_id, {"name": job.name}
@@ -339,14 +366,19 @@ class GovernanceScheduler:
 def build_default_governance_scheduler() -> GovernanceScheduler:
     """
     Build the process-wide governance scheduler, wired to the
-    process-wide governance event bus so scheduler_started/
+    process-wide governance event bus (so scheduler_started/
     scheduler_stopped/job_registered/job_unregistered events are
-    actually published, not just a documented possibility.
+    actually published) and the process-wide governance job registry
+    (so job metadata registered through the scheduler is visible to
+    whatever queries the registry directly, and vice versa).
     """
 
     from .deployment_governance_event_bus import get_event_bus
+    from .deployment_governance_job_registry import get_job_registry
 
-    return GovernanceScheduler(event_bus=get_event_bus())
+    return GovernanceScheduler(
+        event_bus=get_event_bus(), job_registry=get_job_registry()
+    )
 
 
 # Shared for the lifetime of the process: registered jobs need to be

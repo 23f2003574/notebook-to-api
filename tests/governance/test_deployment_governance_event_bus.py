@@ -392,6 +392,10 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "scheduler_stopped",
         "job_registered",
         "job_unregistered",
+        "job_registry_registered",
+        "job_registry_removed",
+        "job_enabled",
+        "job_disabled",
     }
 
 
