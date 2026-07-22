@@ -1966,6 +1966,29 @@ class DeploymentGovernancePersistenceRuntime:
 
         return get_retry_engine()
 
+    def build_governance_job_persistence(
+        self,
+    ) -> "GovernanceJobPersistence":
+        """
+        Return the process-wide governance job persistence layer.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: a save()/load() triggered through the API
+        needs to act on the same live job registry/trigger engine/
+        retry engine/scheduler every other request or component sees,
+        which a persistence runtime built fresh per request cannot
+        provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_job_persistence import (
+            get_job_persistence,
+        )
+
+        return get_job_persistence()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

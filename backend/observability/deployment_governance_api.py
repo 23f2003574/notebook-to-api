@@ -1303,3 +1303,52 @@ async def delete_governance_retry(execution_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return {"cancelled": execution_id}
+
+
+def _build_job_persistence():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_job_persistence()
+
+
+@health_router.get("/persistence")
+async def get_governance_persistence():
+    """
+    Return a summary of the currently stored governance job
+    persistence snapshot.
+    """
+
+    return _build_job_persistence().snapshot().to_dict()
+
+
+@health_router.post("/persistence/save")
+async def post_governance_persistence_save():
+    """
+    Save every registered job, trigger, and pending retry into a
+    versioned snapshot.
+    """
+
+    return _build_job_persistence().save().to_dict()
+
+
+@health_router.post("/persistence/load")
+async def post_governance_persistence_load():
+    """
+    Restore jobs, triggers, and pending retries from the stored
+    governance job persistence snapshot.
+    """
+
+    return _build_job_persistence().load().to_dict()
+
+
+@health_router.delete("/persistence")
+async def delete_governance_persistence():
+    """
+    Delete the stored governance job persistence snapshot.
+    """
+
+    _build_job_persistence().clear()
+
+    return {"cleared": True}

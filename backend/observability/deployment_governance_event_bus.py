@@ -49,6 +49,10 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "retry_succeeded",
     "retry_exhausted",
     "retry_cancelled",
+    "persistence_loaded",
+    "persistence_saved",
+    "persistence_failed",
+    "snapshot_created",
 )
 
 

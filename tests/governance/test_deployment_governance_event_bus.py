@@ -409,6 +409,10 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "retry_succeeded",
         "retry_exhausted",
         "retry_cancelled",
+        "persistence_loaded",
+        "persistence_saved",
+        "persistence_failed",
+        "snapshot_created",
     }
 
 

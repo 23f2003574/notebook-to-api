@@ -454,6 +454,34 @@ class GovernanceRetryEngine:
             "retry_cancelled", execution_id, {"job_id": job_id}
         )
 
+    def pending_context(
+        self, execution_id: str
+    ) -> "tuple[str, str] | None":
+        """
+        Return (job_id, policy_id) for a currently-pending retry
+        execution_id, or None if it has none.
+
+        A support accessor for GovernanceJobPersistence: RetryAttempt
+        itself intentionally carries neither field (a caller of
+        schedule_retry()/retry() already knows its own job_id and
+        policy_id without needing them echoed back), but persisting
+        and later restoring a pending retry chain needs both, so this
+        exists purely to make that round-trip possible without
+        widening RetryAttempt's own public shape.
+        """
+
+        with self._lock:
+            if execution_id not in self._pending:
+                return None
+
+            job_id = self._job_ids.get(execution_id)
+            policy_id = self._policy_ids.get(execution_id)
+
+        if job_id is None or policy_id is None:
+            return None
+
+        return job_id, policy_id
+
     def pending(self) -> "tuple[RetryAttempt, ...]":
         """
         Return every currently pending retry attempt, ordered by
