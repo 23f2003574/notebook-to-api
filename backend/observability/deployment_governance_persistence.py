@@ -2032,6 +2032,28 @@ class DeploymentGovernancePersistenceRuntime:
 
         return get_job_dependency_manager()
 
+    def build_governance_scheduler_lock_manager(
+        self,
+    ) -> "GovernanceSchedulerLockManager":
+        """
+        Return the process-wide governance scheduler lock manager.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: locks acquired through the scheduler's own
+        tick need to be visible to whatever queries the manager
+        directly, which a persistence runtime built fresh per request
+        cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_scheduler_locks import (
+            get_scheduler_lock_manager,
+        )
+
+        return get_scheduler_lock_manager()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

@@ -18,6 +18,9 @@ if TYPE_CHECKING:
     from .deployment_governance_job_dependencies import (
         GovernanceJobDependencyManager,
     )
+    from .deployment_governance_scheduler_locks import (
+        GovernanceSchedulerLockManager,
+    )
 
 
 @dataclass(frozen=True)
@@ -147,6 +150,7 @@ class GovernanceScheduler:
         event_bus: "GovernanceEventBus | None" = None,
         job_registry: "GovernanceJobRegistry | None" = None,
         trigger_engine: "GovernanceTriggerEngine | None" = None,
+        owner_id: "str | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
@@ -171,6 +175,13 @@ class GovernanceScheduler:
         self._trigger_engine = trigger_engine or GovernanceTriggerEngine(
             clock=self._clock, job_registry=self._job_registry
         )
+
+        # This scheduler instance's own identity when acquiring
+        # distributed locks in run_due() — stable for the life of this
+        # object, defaulting to a fresh UUID so two GovernanceScheduler
+        # instances (e.g. two processes/nodes pointed at the same
+        # lock provider) never collide by accident.
+        self._owner_id = owner_id or str(uuid4())
 
     def start(self) -> None:
         """
@@ -402,24 +413,34 @@ class GovernanceScheduler:
         dependency_manager: (
             "GovernanceJobDependencyManager | None"
         ) = None,
+        lock_manager: (
+            "GovernanceSchedulerLockManager | None"
+        ) = None,
     ) -> "tuple[ExecutionResult, ...]":
         """
         The concrete Scheduler Tick -> Trigger Engine -> Dependency
-        Manager -> Execution Manager pipeline: while this scheduler is
-        running, evaluate this scheduler's own trigger engine for
-        currently-eligible jobs, optionally filter out any that
-        dependency_manager reports as not yet ready (its prerequisites
-        have not all succeeded — "blocked jobs never dispatched"),
-        dispatch the rest through execution_manager (in the same
-        deterministic order execute_batch() itself uses), then
-        reschedule each dispatched job's next execution.
+        Manager -> Lock Manager -> Execution Manager pipeline: while
+        this scheduler is running, evaluate this scheduler's own
+        trigger engine for currently-eligible jobs, optionally filter
+        out any that dependency_manager reports as not yet ready (its
+        prerequisites have not all succeeded), then optionally acquire
+        this scheduler's own distributed lock (its owner_id) for each
+        remaining job via lock_manager — a job whose lock could not be
+        acquired (another node already holds it) is skipped until the
+        next tick, exactly like a not-yet-eligible or not-yet-ready
+        one. Whatever is left is dispatched through execution_manager
+        (in the same deterministic order execute_batch() itself
+        uses), its lock released immediately after (this scheduler's
+        own dispatch is synchronous, so there is no window where
+        holding the lock past the call matters), and each dispatched
+        job's next execution is rescheduled.
 
-        dependency_manager is entirely optional: omitting it preserves
-        the exact trigger-only behavior from before dependency-aware
-        scheduling existed, and the Execution Manager itself is never
-        made aware dependencies exist at all — only this method
-        consults dependency_manager, and only to decide what to
-        dispatch.
+        dependency_manager and lock_manager are both entirely
+        optional: omitting either preserves the exact behavior from
+        before that stage existed. Neither the Dependency Manager nor
+        the Lock Manager ever makes the Execution Manager itself aware
+        they exist — only this method consults them, purely to decide
+        what to dispatch.
 
         A no-op returning an empty tuple if the scheduler is not
         currently running (see start()) — dispatch is gated on the
@@ -452,7 +473,18 @@ class GovernanceScheduler:
                 if dependency_manager.evaluate(job_id).ready
             ]
 
+        if lock_manager is not None:
+            due_job_ids = [
+                job_id
+                for job_id in due_job_ids
+                if lock_manager.acquire(job_id, self._owner_id).acquired
+            ]
+
         results = execution_manager.execute_batch(due_job_ids, run=run)
+
+        if lock_manager is not None:
+            for job_id in due_job_ids:
+                lock_manager.release(job_id, self._owner_id)
 
         for job_id in due_job_ids:
             self.schedule(job_id)

@@ -62,6 +62,11 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "dependency_blocked",
     "dependency_resolved",
     "dependency_cycle_detected",
+    "lock_acquired",
+    "lock_released",
+    "lock_renewed",
+    "lock_expired",
+    "lock_contention",
 )
 
 

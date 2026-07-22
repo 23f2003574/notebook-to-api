@@ -20,6 +20,9 @@ if TYPE_CHECKING:
     from .deployment_governance_job_registry import GovernanceJobRegistry
     from .deployment_governance_retry import GovernanceRetryEngine
     from .deployment_governance_scheduler import GovernanceScheduler
+    from .deployment_governance_scheduler_locks import (
+        GovernanceSchedulerLockManager,
+    )
     from .deployment_governance_trigger_engine import GovernanceTriggerEngine
 
 # The current on-disk/in-memory document shape this module writes and
@@ -138,6 +141,14 @@ class GovernanceJobPersistence:
     identity — job_id, trigger's job_id, and job name/namespace — is
     what is preserved, not every original timestamp or generated ID).
 
+    A wired GovernanceSchedulerLockManager is the one exception to
+    "everything here is restorable": save() records its provider's
+    config() (e.g. "file, at this path") purely for observability, and
+    load() never acts on it — active lock state is explicitly out of
+    scope for this layer (a lease is meant to expire and be reclaimed,
+    not be resurrected from a stale snapshot), and there is no manager
+    method for swapping a live provider out safely regardless.
+
     Thread-safe: every read/write of the stored document is guarded by
     an internal lock.
     """
@@ -155,6 +166,9 @@ class GovernanceJobPersistence:
         cron_scheduler: "GovernanceCronScheduler | None" = None,
         dependency_manager: (
             "GovernanceJobDependencyManager | None"
+        ) = None,
+        lock_manager: (
+            "GovernanceSchedulerLockManager | None"
         ) = None,
         path: "str | Path | None" = None,
         include_execution_history: bool = False,
@@ -180,6 +194,8 @@ class GovernanceJobPersistence:
         self._cron_scheduler = cron_scheduler
 
         self._dependency_manager = dependency_manager
+
+        self._lock_manager = lock_manager
 
         self._path = Path(path) if path is not None else None
 
@@ -433,6 +449,15 @@ class GovernanceJobPersistence:
         ):
             self._scheduler.start()
 
+        # lock_provider_config is deliberately never acted on here: it
+        # is persisted for observability only ("what provider was this
+        # configured with when last saved"), not active lock state —
+        # reconstructing and swapping a live GovernanceSchedulerLock-
+        # Manager's provider out from under it has no corresponding
+        # manager method, and silently rebuilding one here would risk
+        # discarding in-flight locks a real multi-node deployment is
+        # relying on.
+
         return True, (
             f"restored {restored_jobs} job(s), {restored_triggers} "
             f"trigger(s), {restored_retries} pending retry(ies), "
@@ -453,6 +478,11 @@ class GovernanceJobPersistence:
                 self._scheduler.status().running
                 if self._scheduler is not None
                 else False
+            ),
+            "lock_provider_config": (
+                self._lock_manager.provider.config()
+                if self._lock_manager is not None
+                else None
             ),
             **(
                 {
@@ -477,6 +507,7 @@ class GovernanceJobPersistence:
             "cron_triggers": [],
             "dependencies": [],
             "scheduler_running": False,
+            "lock_provider_config": None,
         }
 
     def _serialize_jobs(self) -> "list[dict[str, object]]":
@@ -807,6 +838,9 @@ def build_default_governance_job_persistence() -> GovernanceJobPersistence:
     from .deployment_governance_job_registry import get_job_registry
     from .deployment_governance_retry import get_retry_engine
     from .deployment_governance_scheduler import get_scheduler
+    from .deployment_governance_scheduler_locks import (
+        get_scheduler_lock_manager,
+    )
     from .deployment_governance_trigger_engine import get_trigger_engine
 
     return GovernanceJobPersistence(
@@ -818,6 +852,7 @@ def build_default_governance_job_persistence() -> GovernanceJobPersistence:
         execution_manager=get_execution_manager(),
         cron_scheduler=get_cron_scheduler(),
         dependency_manager=get_job_dependency_manager(),
+        lock_manager=get_scheduler_lock_manager(),
     )
 
 

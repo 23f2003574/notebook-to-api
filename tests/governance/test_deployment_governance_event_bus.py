@@ -422,6 +422,11 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "dependency_blocked",
         "dependency_resolved",
         "dependency_cycle_detected",
+        "lock_acquired",
+        "lock_released",
+        "lock_renewed",
+        "lock_expired",
+        "lock_contention",
     }
 
 

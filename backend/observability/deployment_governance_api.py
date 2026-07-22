@@ -1564,3 +1564,92 @@ async def post_governance_job_dependencies_validate():
     """
 
     return _build_job_dependency_manager().validate().to_dict()
+
+
+def _build_scheduler_lock_manager():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_scheduler_lock_manager()
+
+
+@health_router.get("/locks")
+async def get_governance_locks():
+    """
+    Return every currently stored governance scheduler lock (expired
+    or not), ordered by job_id.
+    """
+
+    locks = _build_scheduler_lock_manager().list()
+
+    return [lock.to_dict() for lock in locks]
+
+
+@health_router.get("/locks/{job_id}")
+async def get_governance_lock(job_id: str):
+    """
+    Return job_id's currently stored governance scheduler lock.
+    """
+
+    lock = next(
+        (
+            lock
+            for lock in _build_scheduler_lock_manager().list()
+            if lock.job_id == job_id
+        ),
+        None,
+    )
+
+    if lock is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no lock stored for job '{job_id}'",
+        )
+
+    return lock.to_dict()
+
+
+@health_router.post("/locks/{job_id}/acquire")
+async def post_governance_lock_acquire(
+    job_id: str,
+    owner_id: str = Query(...),
+    lease_seconds: "int | None" = Query(default=None),
+):
+    """
+    Attempt to acquire job_id's governance scheduler lock for
+    owner_id.
+    """
+
+    result = _build_scheduler_lock_manager().acquire(
+        job_id, owner_id, lease_seconds=lease_seconds,
+    )
+
+    return result.to_dict()
+
+
+@health_router.post("/locks/{job_id}/release")
+async def post_governance_lock_release(
+    job_id: str,
+    owner_id: str = Query(...),
+):
+    """
+    Release job_id's governance scheduler lock, if owner_id currently
+    holds it. Idempotent: a no-op if it does not.
+    """
+
+    released = _build_scheduler_lock_manager().release(job_id, owner_id)
+
+    return {"released": released}
+
+
+@health_router.post("/locks/cleanup")
+async def post_governance_locks_cleanup():
+    """
+    Remove every expired governance scheduler lock, returning how many
+    were removed.
+    """
+
+    removed = _build_scheduler_lock_manager().cleanup()
+
+    return {"removed": removed}
