@@ -400,6 +400,10 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "trigger_removed",
         "trigger_fired",
         "trigger_rescheduled",
+        "execution_started",
+        "execution_completed",
+        "execution_failed",
+        "execution_cancelled",
     }
 
 

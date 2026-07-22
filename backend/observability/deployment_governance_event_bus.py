@@ -40,6 +40,10 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "trigger_removed",
     "trigger_fired",
     "trigger_rescheduled",
+    "execution_started",
+    "execution_completed",
+    "execution_failed",
+    "execution_cancelled",
 )
 
 

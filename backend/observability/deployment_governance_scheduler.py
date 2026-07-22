@@ -11,6 +11,10 @@ from .deployment_governance_trigger_engine import GovernanceTriggerEngine
 
 if TYPE_CHECKING:
     from .deployment_governance_event_bus import GovernanceEventBus
+    from .deployment_governance_execution_manager import (
+        ExecutionResult,
+        GovernanceExecutionManager,
+    )
 
 
 @dataclass(frozen=True)
@@ -386,6 +390,51 @@ class GovernanceScheduler:
             active_jobs=active_jobs,
             next_execution=min(pending) if pending else None,
         )
+
+    def run_due(
+        self,
+        execution_manager: "GovernanceExecutionManager",
+        *,
+        run: "Callable[[str], None] | None" = None,
+    ) -> "tuple[ExecutionResult, ...]":
+        """
+        The concrete Scheduler Tick -> Trigger Engine -> Execution
+        Manager pipeline: while this scheduler is running, evaluate
+        this scheduler's own trigger engine for currently-eligible
+        jobs, dispatch each through execution_manager (in the same
+        deterministic order execute_batch() itself uses), then
+        reschedule each dispatched job's next execution.
+
+        A no-op returning an empty tuple if the scheduler is not
+        currently running (see start()) — dispatch is gated on the
+        same on/off switch as every other scheduler-driven activity.
+        """
+
+        with self._lock:
+            running = self._running
+            job_ids = set(self._jobs)
+
+        if not running:
+            return ()
+
+        triggers_by_id = {
+            trigger.trigger_id: trigger.job_id
+            for trigger in self._trigger_engine.list()
+        }
+
+        due_job_ids = [
+            triggers_by_id[evaluation.trigger_id]
+            for evaluation in self._trigger_engine.evaluate_all()
+            if evaluation.should_run
+            and triggers_by_id.get(evaluation.trigger_id) in job_ids
+        ]
+
+        results = execution_manager.execute_batch(due_job_ids, run=run)
+
+        for job_id in due_job_ids:
+            self.schedule(job_id)
+
+        return results
 
     def _publish(
         self,

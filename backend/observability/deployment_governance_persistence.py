@@ -1924,6 +1924,28 @@ class DeploymentGovernancePersistenceRuntime:
 
         return get_trigger_engine()
 
+    def build_governance_execution_manager(
+        self,
+    ) -> "GovernanceExecutionManager":
+        """
+        Return the process-wide governance execution manager.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: executions triggered through the API need to
+        be visible to whatever queries the manager directly, which a
+        persistence runtime built fresh per request cannot provide on
+        its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_execution_manager import (
+            get_execution_manager,
+        )
+
+        return get_execution_manager()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":

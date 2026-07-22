@@ -1134,3 +1134,106 @@ async def delete_governance_trigger(trigger_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return {"removed": trigger_id}
+
+
+def _build_execution_manager():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_execution_manager()
+
+
+@health_router.get("/executions")
+async def get_governance_executions(
+    limit: int = Query(default=100, gt=0),
+):
+    """
+    Return recorded governance execution results, newest first.
+    """
+
+    results = _build_execution_manager().history(limit=limit)
+
+    return [result.to_dict() for result in results]
+
+
+@health_router.get("/executions/active")
+async def get_governance_executions_active():
+    """
+    Return every currently active governance execution.
+    """
+
+    executions = _build_execution_manager().active()
+
+    return [execution.to_dict() for execution in executions]
+
+
+@health_router.get("/executions/{execution_id}")
+async def get_governance_execution(execution_id: str):
+    """
+    Return one governance execution (active or completed) by
+    execution_id.
+    """
+
+    manager = _build_execution_manager()
+
+    active = next(
+        (
+            execution
+            for execution in manager.active()
+            if execution.execution_id == execution_id
+        ),
+        None,
+    )
+
+    if active is not None:
+        return active.to_dict()
+
+    completed = next(
+        (
+            result
+            for result in manager.history()
+            if result.execution_id == execution_id
+        ),
+        None,
+    )
+
+    if completed is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"execution '{execution_id}' is not registered",
+        )
+
+    return completed.to_dict()
+
+
+@health_router.post("/executions/{job_id}")
+async def post_governance_execution(job_id: str):
+    """
+    Run job_id's execution (a no-op callable, since this API server
+    has no live job callable of its own to invoke), recording exactly
+    one execution.
+    """
+
+    try:
+        result = _build_execution_manager().execute(job_id)
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return result.to_dict()
+
+
+@health_router.delete("/executions/{execution_id}")
+async def delete_governance_execution(execution_id: str):
+    """
+    Cancel a currently active governance execution.
+    """
+
+    try:
+        result = _build_execution_manager().cancel(execution_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return result.to_dict()
