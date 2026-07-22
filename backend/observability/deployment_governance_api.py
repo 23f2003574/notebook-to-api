@@ -1692,3 +1692,111 @@ async def post_governance_scheduler_metrics_reset():
     _build_scheduler_metrics().reset()
 
     return {"reset": True}
+
+
+def _build_scheduler_policy_engine():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_scheduler_policy_engine()
+
+
+@health_router.get("/scheduler/policies")
+async def get_governance_scheduler_policies():
+    """
+    Return every registered governance scheduler policy, ordered by
+    priority then name.
+    """
+
+    policies = _build_scheduler_policy_engine().list()
+
+    return [policy.to_dict() for policy in policies]
+
+
+@health_router.post("/scheduler/policies")
+async def post_governance_scheduler_policy(
+    name: str = Query(...),
+    priority: int = Query(default=0),
+    enabled: bool = Query(default=True),
+    conditions: str = Query(default="{}"),
+    policy_type: str | None = Query(default=None),
+):
+    """
+    Register a new governance scheduler policy. conditions is a JSON
+    object (as a query string). If policy_type names one of the
+    built-in scheduling checks, it is used instead of plain
+    conditions-matching.
+    """
+
+    parsed_conditions = _parse_json_object(
+        conditions, field_name="conditions"
+    )
+
+    try:
+        policy = _build_scheduler_policy_engine().register(
+            name,
+            priority=priority,
+            enabled=enabled,
+            conditions=parsed_conditions,
+            policy_type=policy_type,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return policy.to_dict()
+
+
+@health_router.patch("/scheduler/policies/{name}")
+async def patch_governance_scheduler_policy(
+    name: str,
+    enabled: bool = Query(...),
+):
+    """
+    Enable or disable a registered governance scheduler policy.
+    """
+
+    engine = _build_scheduler_policy_engine()
+
+    try:
+        policy = engine.enable(name) if enabled else engine.disable(name)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return policy.to_dict()
+
+
+@health_router.delete("/scheduler/policies/{name}")
+async def delete_governance_scheduler_policy(name: str):
+    """
+    Remove a registered governance scheduler policy.
+    """
+
+    try:
+        _build_scheduler_policy_engine().remove(name)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"removed": name}
+
+
+@health_router.post("/scheduler/policies/evaluate")
+async def post_governance_scheduler_policy_evaluate(
+    job_id: str = Query(...),
+    context: str = Query(default="{}"),
+):
+    """
+    Evaluate job_id against every registered governance scheduler
+    policy. context is a JSON object (as a query string).
+    """
+
+    parsed_context = _parse_json_object(context, field_name="context")
+
+    decision = _build_scheduler_policy_engine().evaluate(
+        job_id, parsed_context
+    )
+
+    return decision.to_dict()

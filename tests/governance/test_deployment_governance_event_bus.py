@@ -430,6 +430,10 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "scheduler_metrics_snapshot",
         "scheduler_metrics_reset",
         "scheduler_metrics_threshold_exceeded",
+        "scheduler_policy_allowed",
+        "scheduler_policy_denied",
+        "scheduler_policy_registered",
+        "scheduler_policy_removed",
     }
 
 

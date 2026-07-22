@@ -162,6 +162,8 @@ class GovernanceSchedulerMetrics:
         self._jobs_cancelled = 0
         self._jobs_retried = 0
         self._lock_contentions = 0
+        self._policy_allowed = 0
+        self._policy_denied = 0
 
         self._active_jobs = 0
         self._pending_jobs = 0
@@ -306,6 +308,34 @@ class GovernanceSchedulerMetrics:
 
         self._queue_wait.append(wait_ms)
 
+    def record_policy_decision(self, *, allowed: bool) -> None:
+        """
+        Record one GovernanceSchedulerPolicyEngine decision outcome —
+        added alongside that engine (which the "Update ...
+        deployment_governance_scheduler_metrics.py" instruction for
+        that commit exists specifically to accommodate), not part of
+        the original counters this class shipped with.
+        """
+
+        with self._lock:
+            if allowed:
+                self._policy_allowed += 1
+
+            else:
+                self._policy_denied += 1
+
+    @property
+    def policy_decisions(self) -> "dict[str, int]":
+        """
+        Return the current tally of scheduler policy decisions.
+        """
+
+        with self._lock:
+            return {
+                "allowed": self._policy_allowed,
+                "denied": self._policy_denied,
+            }
+
     def snapshot(self) -> SchedulerMetrics:
         """
         Return the current counters and gauges, publishing
@@ -377,6 +407,8 @@ class GovernanceSchedulerMetrics:
             self._jobs_cancelled = 0
             self._jobs_retried = 0
             self._lock_contentions = 0
+            self._policy_allowed = 0
+            self._policy_denied = 0
             self._active_jobs = 0
             self._pending_jobs = 0
             self._registered_jobs = 0

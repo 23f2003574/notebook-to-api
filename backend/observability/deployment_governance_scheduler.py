@@ -24,6 +24,9 @@ if TYPE_CHECKING:
     from .deployment_governance_scheduler_metrics import (
         GovernanceSchedulerMetrics,
     )
+    from .deployment_governance_scheduler_policy import (
+        GovernanceSchedulerPolicyEngine,
+    )
 
 
 @dataclass(frozen=True)
@@ -432,31 +435,39 @@ class GovernanceScheduler:
         lock_manager: (
             "GovernanceSchedulerLockManager | None"
         ) = None,
+        policy_engine: (
+            "GovernanceSchedulerPolicyEngine | None"
+        ) = None,
     ) -> "tuple[ExecutionResult, ...]":
         """
         The concrete Scheduler Tick -> Trigger Engine -> Dependency
-        Manager -> Lock Manager -> Execution Manager pipeline: while
-        this scheduler is running, evaluate this scheduler's own
-        trigger engine for currently-eligible jobs, optionally filter
-        out any that dependency_manager reports as not yet ready (its
-        prerequisites have not all succeeded), then optionally acquire
-        this scheduler's own distributed lock (its owner_id) for each
-        remaining job via lock_manager — a job whose lock could not be
-        acquired (another node already holds it) is skipped until the
-        next tick, exactly like a not-yet-eligible or not-yet-ready
-        one. Whatever is left is dispatched through execution_manager
-        (in the same deterministic order execute_batch() itself
-        uses), its lock released immediately after (this scheduler's
-        own dispatch is synchronous, so there is no window where
-        holding the lock past the call matters), and each dispatched
-        job's next execution is rescheduled.
+        Manager -> Lock Manager -> Scheduler Policy Engine -> Execution
+        Manager pipeline: while this scheduler is running, evaluate
+        this scheduler's own trigger engine for currently-eligible
+        jobs, optionally filter out any that dependency_manager reports
+        as not yet ready (its prerequisites have not all succeeded),
+        then optionally acquire this scheduler's own distributed lock
+        (its owner_id) for each remaining job via lock_manager — a job
+        whose lock could not be acquired (another node already holds
+        it) is skipped until the next tick, exactly like a
+        not-yet-eligible or not-yet-ready one — then optionally
+        consult policy_engine for each remaining job (a context
+        describing how many jobs are about to run, whether this job
+        is enabled, and that it already passed the dependency/lock
+        stages); a job policy_engine denies has its lock released
+        immediately (it was never going to run this tick after all)
+        and is likewise skipped. Whatever is left is dispatched through
+        execution_manager (in the same deterministic order
+        execute_batch() itself uses), its lock released immediately
+        after (this scheduler's own dispatch is synchronous, so there
+        is no window where holding the lock past the call matters),
+        and each dispatched job's next execution is rescheduled.
 
-        dependency_manager and lock_manager are both entirely
-        optional: omitting either preserves the exact behavior from
-        before that stage existed. Neither the Dependency Manager nor
-        the Lock Manager ever makes the Execution Manager itself aware
-        they exist — only this method consults them, purely to decide
-        what to dispatch.
+        dependency_manager, lock_manager, and policy_engine are all
+        entirely optional: omitting any of them preserves the exact
+        behavior from before that stage existed. None of them ever
+        make the Execution Manager itself aware they exist — only this
+        method consults them, purely to decide what to dispatch.
 
         A no-op returning an empty tuple if the scheduler is not
         currently running (see start()) — dispatch is gated on the
@@ -497,6 +508,30 @@ class GovernanceScheduler:
                 for job_id in due_job_ids
                 if lock_manager.acquire(job_id, self._owner_id).acquired
             ]
+
+        if policy_engine is not None:
+            with self._lock:
+                jobs_snapshot = dict(self._jobs)
+
+            allowed_job_ids = []
+
+            for job_id in due_job_ids:
+                job = jobs_snapshot.get(job_id)
+
+                context = {
+                    "active_jobs": len(due_job_ids),
+                    "job_enabled": job.enabled if job is not None else True,
+                    "dependency_ready": True,
+                    "lock_acquired": True,
+                }
+
+                if policy_engine.evaluate(job_id, context).allowed:
+                    allowed_job_ids.append(job_id)
+
+                elif lock_manager is not None:
+                    lock_manager.release(job_id, self._owner_id)
+
+            due_job_ids = allowed_job_ids
 
         results = execution_manager.execute_batch(due_job_ids, run=run)
 

@@ -2077,6 +2077,28 @@ class DeploymentGovernancePersistenceRuntime:
 
         return get_scheduler_metrics()
 
+    def build_governance_scheduler_policy_engine(
+        self,
+    ) -> "GovernanceSchedulerPolicyEngine":
+        """
+        Return the process-wide governance scheduler policy engine.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: policies registered through the API need to be
+        enforced by the same scheduler tick every other request or
+        component sees, which a persistence runtime built fresh per
+        request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_scheduler_policy import (
+            get_scheduler_policy_engine,
+        )
+
+        return get_scheduler_policy_engine()
+
     def build_integrity_provider_configuration_service(
         self,
     ) -> "GovernanceIntegrityProviderConfigurationService":
