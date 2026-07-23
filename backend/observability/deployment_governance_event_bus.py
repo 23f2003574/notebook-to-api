@@ -97,6 +97,13 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "traffic_switched",
     "blue_green_completed",
     "blue_green_rollback",
+    "canary_started",
+    "canary_promoted",
+    "canary_paused",
+    "canary_resumed",
+    "canary_completed",
+    "canary_failed",
+    "canary_rolled_back",
 )
 
 

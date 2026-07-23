@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from .deployment_governance_blue_green import (
         BlueGreenDeploymentEngine,
     )
+    from .deployment_governance_canary import CanaryDeploymentEngine
     from .deployment_governance_event_bus import GovernanceEventBus
     from .deployment_governance_version_registry import (
         DeploymentVersionRegistry,
@@ -165,6 +166,7 @@ class DeploymentRolloutManager:
         event_bus: "GovernanceEventBus | None" = None,
         version_registry: "DeploymentVersionRegistry | None" = None,
         blue_green_engine: "BlueGreenDeploymentEngine | None" = None,
+        canary_engine: "CanaryDeploymentEngine | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
@@ -183,6 +185,8 @@ class DeploymentRolloutManager:
         self._version_registry = version_registry
 
         self._blue_green_engine = blue_green_engine
+
+        self._canary_engine = canary_engine
 
     def create(
         self, deployment_id: str, strategy: str
@@ -398,10 +402,17 @@ class DeploymentRolloutManager:
         also asks that engine to switch traffic
         (BlueGreenDeploymentEngine.switch) for this rollout's
         deployment_id — completing a Blue/Green rollout is what
-        actually cuts traffic over. If the engine has nothing staged
-        for this deployment_id (it was never deploy()'d/validate()'d
-        through the engine directly), that delegation is silently
-        skipped rather than failing rollout completion.
+        actually cuts traffic over. Likewise, for a strategy="CANARY"
+        rollout with a canary_engine wired in, completing it for the
+        first time asks that engine to advance one stage
+        (CanaryDeploymentEngine.promote) — a canary's remaining
+        progression (further promote()/evaluate() cycles) is still
+        driven externally; this only takes the one step completing
+        the rollout represents. Either way, if the relevant engine has
+        nothing staged for this deployment_id, or isn't ready for that
+        step (e.g. the canary hasn't passed a health evaluation yet),
+        that delegation is silently skipped rather than failing
+        rollout completion.
         """
 
         was_already_completed = self.status(rollout_id).state == (
@@ -416,16 +427,28 @@ class DeploymentRolloutManager:
             event_type="rollout_completed",
         )
 
-        if (
-            not was_already_completed
-            and rollout.strategy == "BLUE_GREEN"
-            and self._blue_green_engine is not None
-        ):
-            try:
-                self._blue_green_engine.switch(rollout.deployment_id)
+        if not was_already_completed:
+            if (
+                rollout.strategy == "BLUE_GREEN"
+                and self._blue_green_engine is not None
+            ):
+                try:
+                    self._blue_green_engine.switch(
+                        rollout.deployment_id
+                    )
 
-            except (KeyError, ValueError):
-                pass
+                except (KeyError, ValueError):
+                    pass
+
+            elif (
+                rollout.strategy == "CANARY"
+                and self._canary_engine is not None
+            ):
+                try:
+                    self._canary_engine.promote(rollout.deployment_id)
+
+                except (KeyError, ValueError):
+                    pass
 
         return rollout
 
@@ -539,10 +562,11 @@ def build_default_governance_rollout_manager() -> (
     """
     Build the process-wide governance rollout manager, wired to the
     process-wide governance event bus, deployment version registry,
-    and Blue/Green deployment engine.
+    Blue/Green deployment engine, and canary deployment engine.
     """
 
     from .deployment_governance_blue_green import get_blue_green_engine
+    from .deployment_governance_canary import get_canary_engine
     from .deployment_governance_event_bus import get_event_bus
     from .deployment_governance_version_registry import (
         get_version_registry,
@@ -552,6 +576,7 @@ def build_default_governance_rollout_manager() -> (
         event_bus=get_event_bus(),
         version_registry=get_version_registry(),
         blue_green_engine=get_blue_green_engine(),
+        canary_engine=get_canary_engine(),
     )
 
 

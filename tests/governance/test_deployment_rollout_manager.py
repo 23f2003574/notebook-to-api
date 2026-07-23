@@ -345,6 +345,92 @@ class TestBlueGreenIntegration:
         assert engine.list() == ()
 
 
+class TestCanaryIntegration:
+
+    def test_complete_with_no_engine_wired_is_a_plain_completion(self):
+        manager = _manager()
+        rollout = manager.create("dep-1", "CANARY")
+        manager.start(rollout.rollout_id)
+
+        completed = manager.complete(rollout.rollout_id)
+
+        assert completed.state == "COMPLETED"
+
+    def test_complete_delegates_a_single_promote_to_an_evaluated_canary(
+        self,
+    ):
+        from backend.observability.deployment_governance_canary import (
+            CanaryDeploymentEngine,
+        )
+
+        engine = CanaryDeploymentEngine(clock=_clock)
+        engine.deploy("dep-1", "1.1.0", stable_version="1.0.0")
+        engine.evaluate("dep-1")
+
+        manager = DeploymentRolloutManager(
+            clock=_clock, canary_engine=engine
+        )
+        rollout = manager.create("dep-1", "CANARY")
+        manager.start(rollout.rollout_id)
+
+        manager.complete(rollout.rollout_id)
+
+        assert engine.status("dep-1").stage == 1
+
+    def test_complete_with_nothing_staged_in_the_engine_does_not_fail(self):
+        from backend.observability.deployment_governance_canary import (
+            CanaryDeploymentEngine,
+        )
+
+        engine = CanaryDeploymentEngine(clock=_clock)
+
+        manager = DeploymentRolloutManager(
+            clock=_clock, canary_engine=engine
+        )
+        rollout = manager.create("dep-1", "CANARY")
+        manager.start(rollout.rollout_id)
+
+        completed = manager.complete(rollout.rollout_id)
+
+        assert completed.state == "COMPLETED"
+
+    def test_complete_with_unevaluated_canary_does_not_fail(self):
+        from backend.observability.deployment_governance_canary import (
+            CanaryDeploymentEngine,
+        )
+
+        engine = CanaryDeploymentEngine(clock=_clock)
+        engine.deploy("dep-1", "1.1.0", stable_version="1.0.0")
+
+        manager = DeploymentRolloutManager(
+            clock=_clock, canary_engine=engine
+        )
+        rollout = manager.create("dep-1", "CANARY")
+        manager.start(rollout.rollout_id)
+
+        completed = manager.complete(rollout.rollout_id)
+
+        assert completed.state == "COMPLETED"
+        assert engine.status("dep-1").stage == 0
+
+    def test_non_canary_strategy_never_touches_the_engine(self):
+        from backend.observability.deployment_governance_canary import (
+            CanaryDeploymentEngine,
+        )
+
+        engine = CanaryDeploymentEngine(clock=_clock)
+
+        manager = DeploymentRolloutManager(
+            clock=_clock, canary_engine=engine
+        )
+        rollout = manager.create("dep-1", "BLUE_GREEN")
+        manager.start(rollout.rollout_id)
+
+        manager.complete(rollout.rollout_id)
+
+        assert engine.list() == ()
+
+
 # --- Lifecycle transitions -----------------------------------------------
 
 

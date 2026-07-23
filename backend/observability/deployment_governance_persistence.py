@@ -378,6 +378,7 @@ if TYPE_CHECKING:
     from .deployment_governance_blue_green import (
         BlueGreenDeploymentEngine,
     )
+    from .deployment_governance_canary import CanaryDeploymentEngine
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2226,6 +2227,27 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return get_blue_green_engine()
+
+    def build_governance_canary_engine(
+        self,
+    ) -> "CanaryDeploymentEngine":
+        """
+        Return the process-wide canary deployment engine.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: which deployments have an active canary, and
+        their progression/history, needs to be visible to every
+        caller (including the rollout manager delegating strategy=
+        "CANARY" completion to it), which a persistence runtime built
+        fresh per request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_canary import get_canary_engine
+
+        return get_canary_engine()
 
     def build_integrity_provider_configuration_service(
         self,

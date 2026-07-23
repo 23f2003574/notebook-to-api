@@ -2322,3 +2322,179 @@ async def post_governance_blue_green_rollback(deployment_id: str):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return result.to_dict()
+
+
+def _build_canary_engine():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_canary_engine()
+
+
+@health_router.get("/canary")
+async def get_governance_canary_deployments():
+    """
+    Return every currently tracked canary deployment, ordered by
+    deployment_id.
+    """
+
+    deployments = _build_canary_engine().list()
+
+    return [deployment.to_dict() for deployment in deployments]
+
+
+@health_router.get("/canary/{deployment_id}")
+async def get_governance_canary_deployment(deployment_id: str):
+    """
+    Return one deployment's current canary state.
+    """
+
+    try:
+        status = _build_canary_engine().status(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return status.to_dict()
+
+
+@health_router.post("/canary/{deployment_id}/deploy")
+async def post_governance_canary_deploy(
+    deployment_id: str,
+    canary_version: str = Query(...),
+    stable_version: "str | None" = Query(default=None),
+    stages: "list[int] | None" = Query(default=None),
+):
+    """
+    Start a new canary rollout for deployment_id at its first
+    configured stage. If stable_version is omitted, it is resolved
+    from the Version Registry.
+    """
+
+    engine = _build_canary_engine()
+
+    try:
+        deployment = engine.deploy(
+            deployment_id,
+            canary_version,
+            stable_version=stable_version,
+            stages=tuple(stages) if stages is not None else None,
+        )
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return deployment.to_dict()
+
+
+@health_router.post("/canary/{deployment_id}/evaluate")
+async def post_governance_canary_evaluate(deployment_id: str):
+    """
+    Run one health evaluation for deployment_id's canary. Not part of
+    the originally specified endpoint set, but added alongside it:
+    promote() unconditionally requires a passing evaluation since the
+    last promotion, so without this there would be no way to ever
+    successfully call POST .../promote over the API. A failing
+    evaluation automatically rolls the canary back.
+    """
+
+    engine = _build_canary_engine()
+
+    try:
+        evaluation = engine.evaluate(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return evaluation.to_dict()
+
+
+@health_router.post("/canary/{deployment_id}/promote")
+async def post_governance_canary_promote(deployment_id: str):
+    """
+    Advance deployment_id's canary to the next configured stage.
+    Requires a prior, passing POST .../evaluate call since the last
+    promotion.
+    """
+
+    engine = _build_canary_engine()
+
+    try:
+        deployment = engine.promote(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return deployment.to_dict()
+
+
+@health_router.post("/canary/{deployment_id}/pause")
+async def post_governance_canary_pause(deployment_id: str):
+    """
+    Pause deployment_id's canary, blocking further promotion until
+    resumed.
+    """
+
+    engine = _build_canary_engine()
+
+    try:
+        deployment = engine.pause(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return deployment.to_dict()
+
+
+@health_router.post("/canary/{deployment_id}/resume")
+async def post_governance_canary_resume(deployment_id: str):
+    """
+    Resume deployment_id's paused canary.
+    """
+
+    engine = _build_canary_engine()
+
+    try:
+        deployment = engine.resume(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return deployment.to_dict()
+
+
+@health_router.post("/canary/{deployment_id}/rollback")
+async def post_governance_canary_rollback(deployment_id: str):
+    """
+    Roll deployment_id's canary back to 0% traffic and mark it
+    terminal.
+    """
+
+    engine = _build_canary_engine()
+
+    try:
+        deployment = engine.rollback(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return deployment.to_dict()
