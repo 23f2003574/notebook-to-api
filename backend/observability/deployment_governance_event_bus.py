@@ -131,6 +131,11 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "rollback_completed",
     "rollback_failed",
     "rollback_cancelled",
+    "rollout_health_evaluated",
+    "rollout_health_degraded",
+    "rollout_health_unhealthy",
+    "rollout_health_critical",
+    "rollout_health_restored",
 )
 
 

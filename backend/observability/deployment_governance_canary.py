@@ -10,6 +10,9 @@ from .deployment_governance_version_registry import is_semantic_version
 
 if TYPE_CHECKING:
     from .deployment_governance_event_bus import GovernanceEventBus
+    from .deployment_governance_rollout_health import (
+        DeploymentRolloutHealthEngine,
+    )
     from .deployment_governance_scheduler import GovernanceScheduler
     from .deployment_governance_scheduler_metrics import (
         GovernanceSchedulerMetrics,
@@ -189,6 +192,7 @@ class CanaryDeploymentEngine:
         scheduler: "GovernanceScheduler | None" = None,
         metrics: "GovernanceSchedulerMetrics | None" = None,
         traffic_router: "DeploymentTrafficRouter | None" = None,
+        health_engine: "DeploymentRolloutHealthEngine | None" = None,
         default_stages: "tuple[int, ...] | None" = None,
         evaluation_interval_seconds: int = 60,
     ) -> None:
@@ -225,6 +229,8 @@ class CanaryDeploymentEngine:
         self._metrics = metrics
 
         self._traffic_router = traffic_router
+
+        self._health_engine = health_engine
 
         self._default_stages = default_stages
 
@@ -332,7 +338,11 @@ class CanaryDeploymentEngine:
         current traffic percentage.
 
         check, if given, is called with no arguments and its return
-        value determines success; omitted, evaluation always
+        value determines success. Omitted, and with a health_engine
+        wired in, success instead comes from consulting it — healthy
+        unless its decision_for() this canary's current
+        RolloutHealthSnapshot.status is "ROLLBACK" or "PAUSE".
+        Omitted with no health_engine wired either, evaluation always
         succeeds. A failing evaluation automatically rolls the canary
         back (see rollback()) — this engine never leaves an unhealthy
         canary receiving traffic.
@@ -360,7 +370,23 @@ class CanaryDeploymentEngine:
 
         started = time.monotonic()
 
-        healthy = True if check is None else bool(check())
+        if check is not None:
+            healthy = bool(check())
+
+        elif self._health_engine is not None:
+            health_snapshot = self._health_engine.evaluate(
+                deployment_id
+            )
+
+            healthy = (
+                self._health_engine.decision_for(
+                    health_snapshot.status
+                )
+                == "CONTINUE"
+            )
+
+        else:
+            healthy = True
 
         execution_ms = (time.monotonic() - started) * 1000
 
@@ -641,6 +667,23 @@ class CanaryDeploymentEngine:
             self._evaluated.clear()
             self._history.clear()
             self._scheduler_jobs.clear()
+
+    def set_health_engine(
+        self, health_engine: "DeploymentRolloutHealthEngine"
+    ) -> None:
+        """
+        Wire health_engine in after construction.
+
+        Exists because the process-wide rollout health engine and
+        the process-wide canary engine singletons cannot wire each
+        other via constructor injection without a circular dependency
+        (the health engine's own singleton depends on the rollback
+        engine, which depends on this one) — see
+        build_default_governance_rollout_health_engine, which calls
+        this once both singletons already exist.
+        """
+
+        self._health_engine = health_engine
 
     def _unregister_scheduler_job(self, deployment_id: str) -> None:
         if self._scheduler is None:

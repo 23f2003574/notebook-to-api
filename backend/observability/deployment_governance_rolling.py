@@ -11,6 +11,9 @@ from .deployment_governance_version_registry import is_semantic_version
 
 if TYPE_CHECKING:
     from .deployment_governance_event_bus import GovernanceEventBus
+    from .deployment_governance_rollout_health import (
+        DeploymentRolloutHealthEngine,
+    )
     from .deployment_governance_scheduler import GovernanceScheduler
     from .deployment_governance_scheduler_metrics import (
         GovernanceSchedulerMetrics,
@@ -166,6 +169,7 @@ class RollingDeploymentEngine:
         scheduler: "GovernanceScheduler | None" = None,
         metrics: "GovernanceSchedulerMetrics | None" = None,
         traffic_router: "DeploymentTrafficRouter | None" = None,
+        health_engine: "DeploymentRolloutHealthEngine | None" = None,
         default_batch_percentage: int = 25,
         batch_interval_seconds: int = 60,
     ) -> None:
@@ -203,6 +207,8 @@ class RollingDeploymentEngine:
         self._metrics = metrics
 
         self._traffic_router = traffic_router
+
+        self._health_engine = health_engine
 
         self._default_batch_percentage = default_batch_percentage
 
@@ -406,7 +412,10 @@ class RollingDeploymentEngine:
         Validate the most recently applied batch's health.
 
         check, if given, is called with no arguments and its return
-        value determines success; omitted, validation always
+        value determines success. Omitted, and with a health_engine
+        wired in, success instead comes from consulting it (see
+        CanaryDeploymentEngine.evaluate() for the exact rule).
+        Omitted with no health_engine wired either, validation always
         succeeds. A failing validation pauses the rollout (see
         pause()) rather than rolling it back automatically. Reaching a
         fully-updated, healthy state marks the rollout COMPLETED.
@@ -446,7 +455,23 @@ class RollingDeploymentEngine:
 
         started = time.monotonic()
 
-        healthy = True if check is None else bool(check())
+        if check is not None:
+            healthy = bool(check())
+
+        elif self._health_engine is not None:
+            health_snapshot = self._health_engine.evaluate(
+                deployment_id
+            )
+
+            healthy = (
+                self._health_engine.decision_for(
+                    health_snapshot.status
+                )
+                == "CONTINUE"
+            )
+
+        else:
+            healthy = True
 
         execution_ms = (time.monotonic() - started) * 1000
 
@@ -673,6 +698,17 @@ class RollingDeploymentEngine:
             self._batch_number.clear()
             self._history.clear()
             self._scheduler_jobs.clear()
+
+    def set_health_engine(
+        self, health_engine: "DeploymentRolloutHealthEngine"
+    ) -> None:
+        """
+        Wire health_engine in after construction — see
+        CanaryDeploymentEngine.set_health_engine for why this exists
+        instead of a constructor-injected singleton.
+        """
+
+        self._health_engine = health_engine
 
     def _unregister_scheduler_job(self, deployment_id: str) -> None:
         if self._scheduler is None:

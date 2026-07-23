@@ -141,10 +141,11 @@ class DeploymentRollbackEngine:
     actually has something active there.
 
     If an event_bus is wired in, this engine subscribes itself to
-    "rollout_failed" events and automatically plans + executes a
-    rollback in response — the "continuously monitors rollout
-    outcomes" behavior described in this engine's purpose — rather
-    than DeploymentRolloutManager calling into this engine directly.
+    "rollout_failed" and "rollout_health_critical" events and
+    automatically plans + executes a rollback in response — the
+    "continuously monitors rollout outcomes" behavior described in
+    this engine's purpose — rather than DeploymentRolloutManager or
+    DeploymentRolloutHealthEngine calling into this engine directly.
     That direction was deliberate: DeploymentRolloutManager is a
     dependency of this engine (for cancelling in-flight rollouts), so
     having it also depend on this engine for construction would be a
@@ -211,7 +212,10 @@ class DeploymentRollbackEngine:
 
         if self._event_bus is not None:
             self._event_bus.subscribe(
-                "rollout_failed", self._on_rollout_failed
+                "rollout_failed", self._on_automatic_rollback_trigger
+            )
+            self._event_bus.subscribe(
+                "rollout_health_critical", self._on_automatic_rollback_trigger
             )
 
     def register_trigger(self, name: str) -> None:
@@ -629,7 +633,16 @@ class DeploymentRollbackEngine:
             metadata=result.to_dict(),
         )
 
-    def _on_rollout_failed(self, event: Any) -> None:
+    def _on_automatic_rollback_trigger(self, event: Any) -> None:
+        """
+        Shared handler for both subscriptions in __init__:
+        "rollout_failed" (published by DeploymentRolloutManager.fail())
+        and "rollout_health_critical" (published by
+        DeploymentRolloutHealthEngine) both mean the same thing to
+        this engine — plan and execute an automatic rollback for
+        whatever deployment_id the event names.
+        """
+
         deployment_id = event.payload.get("deployment_id")
 
         if not deployment_id:

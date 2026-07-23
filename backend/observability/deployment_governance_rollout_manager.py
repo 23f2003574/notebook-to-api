@@ -204,6 +204,12 @@ class DeploymentRolloutManager:
 
         self._traffic_router = traffic_router
 
+        if self._event_bus is not None:
+            self._event_bus.subscribe(
+                "rollout_health_critical",
+                self._on_rollout_health_critical,
+            )
+
     def create(
         self, deployment_id: str, strategy: str
     ) -> Rollout:
@@ -619,6 +625,38 @@ class DeploymentRolloutManager:
 
         except (KeyError, ValueError):
             pass
+
+    def _on_rollout_health_critical(self, event: Any) -> None:
+        """
+        React to DeploymentRolloutHealthEngine publishing
+        "rollout_health_critical" for one of this manager's
+        deployments: fail() whichever of its rollouts are still
+        non-terminal, the same "unexpected condition" framing fail()
+        already carries — which in turn (via fail()'s own
+        traffic-reset/automatic-rollback handling) sets the recovery
+        path in motion.
+        """
+
+        deployment_id = event.payload.get("deployment_id")
+
+        if not deployment_id:
+            return
+
+        for rollout in self.list():
+            if rollout.deployment_id != deployment_id:
+                continue
+
+            if rollout.state in _TERMINAL_STATES:
+                continue
+
+            try:
+                self.fail(
+                    rollout.rollout_id,
+                    reason="rollout_health_critical",
+                )
+
+            except (KeyError, ValueError):
+                pass
 
     def _publish(
         self,

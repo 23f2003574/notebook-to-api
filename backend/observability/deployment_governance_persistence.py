@@ -387,6 +387,9 @@ if TYPE_CHECKING:
         DeploymentTrafficRouter,
     )
     from .deployment_governance_rollback import DeploymentRollbackEngine
+    from .deployment_governance_rollout_health import (
+        DeploymentRolloutHealthEngine,
+    )
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2343,6 +2346,27 @@ class DeploymentGovernancePersistenceRuntime:
         from .deployment_governance_rollback import get_rollback_engine
 
         return get_rollback_engine()
+
+    def build_governance_rollout_health_engine(
+        self,
+    ) -> "DeploymentRolloutHealthEngine":
+        """
+        Return the process-wide rollout health engine.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: every deployment's evaluation history needs to
+        be visible to every caller, which a persistence runtime built
+        fresh per request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_rollout_health import (
+            get_rollout_health_engine,
+        )
+
+        return get_rollout_health_engine()
 
     def build_integrity_provider_configuration_service(
         self,

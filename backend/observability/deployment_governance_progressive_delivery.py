@@ -13,6 +13,9 @@ if TYPE_CHECKING:
     from .deployment_governance_canary import CanaryDeploymentEngine
     from .deployment_governance_event_bus import GovernanceEventBus
     from .deployment_governance_rolling import RollingDeploymentEngine
+    from .deployment_governance_rollout_health import (
+        DeploymentRolloutHealthEngine,
+    )
     from .deployment_governance_scheduler import GovernanceScheduler
     from .deployment_governance_traffic_router import (
         DeploymentTrafficRouter,
@@ -188,6 +191,7 @@ class ProgressiveDeliveryEngine:
         blue_green_engine: "BlueGreenDeploymentEngine | None" = None,
         scheduler: "GovernanceScheduler | None" = None,
         traffic_router: "DeploymentTrafficRouter | None" = None,
+        health_engine: "DeploymentRolloutHealthEngine | None" = None,
         stage_interval_seconds: int = 60,
     ) -> None:
         self._lock = threading.Lock()
@@ -221,6 +225,8 @@ class ProgressiveDeliveryEngine:
         self._scheduler = scheduler
 
         self._traffic_router = traffic_router
+
+        self._health_engine = health_engine
 
         self._stage_interval_seconds = stage_interval_seconds
 
@@ -327,8 +333,12 @@ class ProgressiveDeliveryEngine:
         approved, this transitions the deployment to
         AWAITING_APPROVAL (publishing approval_requested, once) and
         raises ValueError — call approve() first. Otherwise, check (if
-        given) determines the stage's health; a failure automatically
-        rolls the whole deployment back. On success, the current
+        given) determines the stage's health; omitted, and with a
+        health_engine wired in, health instead comes from consulting
+        it (see CanaryDeploymentEngine.evaluate() for the exact
+        rule); omitted with no health_engine wired either, health
+        always passes. A failure automatically rolls the whole
+        deployment back. On success, the current
         stage's matching engine (if any) is delegated one incremental
         step, the stage is marked completed in history, and the
         pipeline either enters its next stage or, if that was the
@@ -390,7 +400,23 @@ class ProgressiveDeliveryEngine:
                 "advancing"
             )
 
-        healthy = True if check is None else bool(check())
+        if check is not None:
+            healthy = bool(check())
+
+        elif self._health_engine is not None:
+            health_snapshot = self._health_engine.evaluate(
+                deployment_id
+            )
+
+            healthy = (
+                self._health_engine.decision_for(
+                    health_snapshot.status
+                )
+                == "CONTINUE"
+            )
+
+        else:
+            healthy = True
 
         if not healthy:
             self._publish("progressive_failed", deployment_id, {
@@ -710,6 +736,17 @@ class ProgressiveDeliveryEngine:
             self._approved.clear()
             self._history.clear()
             self._scheduler_jobs.clear()
+
+    def set_health_engine(
+        self, health_engine: "DeploymentRolloutHealthEngine"
+    ) -> None:
+        """
+        Wire health_engine in after construction — see
+        CanaryDeploymentEngine.set_health_engine for why this exists
+        instead of a constructor-injected singleton.
+        """
+
+        self._health_engine = health_engine
 
     def _delegate_to_strategy_engine(
         self, strategy: str, deployment_id: str

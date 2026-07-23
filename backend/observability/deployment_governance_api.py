@@ -3041,3 +3041,50 @@ async def delete_governance_rollback(deployment_id: str):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return plan.to_dict()
+
+
+def _build_rollout_health_engine():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_rollout_health_engine()
+
+
+@health_router.get("/rollout-health")
+async def get_governance_rollout_health_snapshots():
+    """
+    Return every tracked deployment's most recent health snapshot,
+    ordered by deployment_id.
+    """
+
+    snapshots = _build_rollout_health_engine().list()
+
+    return [snapshot.to_dict() for snapshot in snapshots]
+
+
+@health_router.get("/rollout-health/{deployment_id}")
+async def get_governance_rollout_health_snapshot(deployment_id: str):
+    """
+    Return one deployment's most recent health snapshot.
+    """
+
+    try:
+        snapshot = _build_rollout_health_engine().latest(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return snapshot.to_dict()
+
+
+@health_router.post("/rollout-health/{deployment_id}/evaluate")
+async def post_governance_rollout_health_evaluate(deployment_id: str):
+    """
+    Evaluate every registered health indicator for deployment_id and
+    return the resulting snapshot.
+    """
+
+    snapshot = _build_rollout_health_engine().evaluate(deployment_id)
+
+    return snapshot.to_dict()
