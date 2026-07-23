@@ -486,6 +486,11 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "routing_rebalanced",
         "routing_reset",
         "routing_validation_failed",
+        "rollback_planned",
+        "rollback_started",
+        "rollback_completed",
+        "rollback_failed",
+        "rollback_cancelled",
     }
 
 

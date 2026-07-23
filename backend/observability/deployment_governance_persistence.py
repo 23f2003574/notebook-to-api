@@ -386,6 +386,7 @@ if TYPE_CHECKING:
     from .deployment_governance_traffic_router import (
         DeploymentTrafficRouter,
     )
+    from .deployment_governance_rollback import DeploymentRollbackEngine
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2322,6 +2323,26 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return get_traffic_router()
+
+    def build_governance_rollback_engine(
+        self,
+    ) -> "DeploymentRollbackEngine":
+        """
+        Return the process-wide automated rollback engine.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: which deployments have an active rollback
+        plan, and their execution history, needs to be visible to
+        every caller, which a persistence runtime built fresh per
+        request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_rollback import get_rollback_engine
+
+        return get_rollback_engine()
 
     def build_integrity_provider_configuration_service(
         self,

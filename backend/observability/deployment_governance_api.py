@@ -2960,3 +2960,84 @@ async def post_governance_routing_reset(deployment_id: str):
     snapshot = _build_traffic_router().reset(deployment_id)
 
     return snapshot.to_dict()
+
+
+def _build_rollback_engine():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_rollback_engine()
+
+
+@health_router.get("/rollbacks")
+async def get_governance_rollbacks():
+    """
+    Return every currently tracked deployment's rollback plan, ordered
+    by deployment_id.
+    """
+
+    plans = _build_rollback_engine().list()
+
+    return [plan.to_dict() for plan in plans]
+
+
+@health_router.get("/rollbacks/{deployment_id}")
+async def get_governance_rollback(deployment_id: str):
+    """
+    Return one deployment's current (or most recent) rollback plan.
+    """
+
+    try:
+        plan = _build_rollback_engine().status(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return plan.to_dict()
+
+
+@health_router.post("/rollbacks/{deployment_id}")
+async def post_governance_rollback(
+    deployment_id: str,
+    target_version: "str | None" = Query(default=None),
+    trigger: str = Query(default="MANUAL_ROLLBACK_REQUEST"),
+):
+    """
+    Plan and immediately execute a rollback for deployment_id. If
+    target_version is omitted, it is resolved as the version
+    registered immediately before deployment_id's current one.
+    """
+
+    engine = _build_rollback_engine()
+
+    try:
+        engine.create_plan(
+            deployment_id, target_version=target_version,
+            trigger=trigger,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    result = engine.execute(deployment_id)
+
+    return result.to_dict()
+
+
+@health_router.delete("/rollbacks/{deployment_id}")
+async def delete_governance_rollback(deployment_id: str):
+    """
+    Cancel deployment_id's active rollback plan without executing it.
+    """
+
+    try:
+        plan = _build_rollback_engine().cancel(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return plan.to_dict()

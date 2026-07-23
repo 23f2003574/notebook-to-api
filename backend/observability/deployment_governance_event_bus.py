@@ -126,6 +126,11 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "routing_rebalanced",
     "routing_reset",
     "routing_validation_failed",
+    "rollback_planned",
+    "rollback_started",
+    "rollback_completed",
+    "rollback_failed",
+    "rollback_cancelled",
 )
 
 
