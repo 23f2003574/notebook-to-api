@@ -7,6 +7,9 @@ from typing import Any, Callable, Sequence, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .deployment_governance_event_bus import GovernanceEventBus
+    from .deployment_governance_rollout_policy import (
+        DeploymentRolloutPolicyEngine,
+    )
     from .deployment_governance_scheduler_metrics import (
         GovernanceSchedulerMetrics,
     )
@@ -162,6 +165,7 @@ class DeploymentTrafficRouter:
         clock: Callable[[], datetime] | None = None,
         event_bus: "GovernanceEventBus | None" = None,
         metrics: "GovernanceSchedulerMetrics | None" = None,
+        policy_engine: "DeploymentRolloutPolicyEngine | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
@@ -184,6 +188,19 @@ class DeploymentTrafficRouter:
         self._event_bus = event_bus
 
         self._metrics = metrics
+
+        self._policy_engine = policy_engine
+
+    def set_policy_engine(
+        self, policy_engine: "DeploymentRolloutPolicyEngine"
+    ) -> None:
+        """
+        Wire policy_engine in after construction — see
+        CanaryDeploymentEngine.set_health_engine for why this exists
+        instead of a constructor-injected singleton.
+        """
+
+        self._policy_engine = policy_engine
 
     def register_strategy(
         self,
@@ -289,8 +306,9 @@ class DeploymentTrafficRouter:
         of whatever is left; if every other version was previously at
         0, the remainder is split evenly across them instead).
 
-        Raises KeyError if deployment_id has never been configured, or
-        ValueError if percentage is out of [0, 100].
+        Raises KeyError if deployment_id has never been configured,
+        ValueError if percentage is out of [0, 100], or ValueError if
+        a wired policy_engine denies the "traffic_shift" action.
 
         Reads the current snapshot and writes the recomputed one
         within a single lock acquisition — unlike configure()/
@@ -303,6 +321,13 @@ class DeploymentTrafficRouter:
 
         if not 0 <= percentage <= 100:
             raise ValueError("percentage must be between 0 and 100")
+
+        with self._lock:
+            strategy = self._strategy.get(deployment_id)
+
+        self._check_policy(
+            deployment_id, {"strategy": strategy, "version": version}
+        )
 
         return self._recompute(
             deployment_id,
@@ -537,6 +562,8 @@ class DeploymentTrafficRouter:
         strategy: str,
         event_type: str,
     ) -> RoutingSnapshot:
+        self._check_policy(deployment_id, {"strategy": strategy})
+
         built = tuple(
             sorted(
                 (
@@ -586,6 +613,28 @@ class DeploymentTrafficRouter:
         )
 
         return snapshot
+
+    def _check_policy(
+        self, deployment_id: str, context: "dict[str, Any]"
+    ) -> None:
+        """
+        Raise ValueError if a wired policy_engine denies the
+        "traffic_shift" action for deployment_id. A no-op if no
+        policy_engine is wired.
+        """
+
+        if self._policy_engine is None:
+            return
+
+        decision = self._policy_engine.evaluate(
+            deployment_id, "traffic_shift", context
+        )
+
+        if not decision.allowed:
+            raise ValueError(
+                f"traffic_shift denied by policy '{decision.policy}': "
+                f"{decision.reason}"
+            )
 
     def _publish(
         self,

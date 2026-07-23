@@ -500,6 +500,10 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "rollout_trend_changed",
         "rollout_kpi_threshold_exceeded",
         "rollout_snapshot_created",
+        "rollout_policy_registered",
+        "rollout_policy_removed",
+        "rollout_policy_allowed",
+        "rollout_policy_denied",
     }
 
 

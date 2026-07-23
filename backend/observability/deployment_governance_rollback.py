@@ -21,6 +21,9 @@ if TYPE_CHECKING:
     from .deployment_governance_rollout_manager import (
         DeploymentRolloutManager,
     )
+    from .deployment_governance_rollout_policy import (
+        DeploymentRolloutPolicyEngine,
+    )
     from .deployment_governance_traffic_router import (
         DeploymentTrafficRouter,
     )
@@ -175,6 +178,7 @@ class DeploymentRollbackEngine:
         rolling_engine: "RollingDeploymentEngine | None" = None,
         progressive_engine: "ProgressiveDeliveryEngine | None" = None,
         audit_service: "GovernanceAuditService | None" = None,
+        policy_engine: "DeploymentRolloutPolicyEngine | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
@@ -209,6 +213,8 @@ class DeploymentRollbackEngine:
         self._progressive_engine = progressive_engine
 
         self._audit_service = audit_service
+
+        self._policy_engine = policy_engine
 
         if self._event_bus is not None:
             self._event_bus.subscribe(
@@ -334,6 +340,32 @@ class DeploymentRollbackEngine:
             if revision.state in _NON_REMOVED_STATES
         )
 
+    def set_policy_engine(
+        self, policy_engine: "DeploymentRolloutPolicyEngine"
+    ) -> None:
+        """
+        Wire policy_engine in after construction — see
+        CanaryDeploymentEngine.set_health_engine for why this exists
+        instead of a constructor-injected singleton (the process-wide
+        rollout policy engine's own singleton depends, transitively
+        through the analytics engine, on this one).
+        """
+
+        self._policy_engine = policy_engine
+
+    def _policy_allows_execution(
+        self, deployment_id: str, plan: RollbackPlan
+    ) -> bool:
+        if self._policy_engine is None:
+            return True
+
+        decision = self._policy_engine.evaluate(
+            deployment_id, "rollback_execution",
+            {"trigger": plan.trigger, "automatic": plan.automatic},
+        )
+
+        return decision.allowed
+
     def execute(self, deployment_id: str) -> RollbackResult:
         """
         Execute deployment_id's current rollback plan.
@@ -341,6 +373,14 @@ class DeploymentRollbackEngine:
         Idempotent: calling this again after a plan has already been
         executed returns the same RollbackResult without repeating any
         of the coordination below.
+
+        A wired policy_engine denying the "rollback_execution" action
+        is treated the same as an invalid target: a FAILED
+        RollbackResult is recorded and returned rather than raised —
+        this engine is meant to be usable unattended (see the
+        automatic-trigger event subscriptions above), so a caller
+        needs a result object to inspect either way, not an exception
+        to catch.
 
         Raises KeyError if deployment_id has no rollback plan, or
         ValueError if its plan is not active (already cancelled).
@@ -376,9 +416,13 @@ class DeploymentRollbackEngine:
             deployment_id, plan.target_version
         )
 
+        policy_allowed = self._policy_allows_execution(
+            deployment_id, plan
+        )
+
         now = self._clock()
 
-        if not target_valid:
+        if not target_valid or not policy_allowed:
             result = RollbackResult(
                 deployment_id=deployment_id,
                 previous_version=previous_version,

@@ -393,6 +393,9 @@ if TYPE_CHECKING:
     from .deployment_governance_rollout_analytics import (
         DeploymentRolloutAnalytics,
     )
+    from .deployment_governance_rollout_policy import (
+        DeploymentRolloutPolicyEngine,
+    )
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2392,6 +2395,28 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return get_rollout_analytics()
+
+    def build_governance_rollout_policy_engine(
+        self,
+    ) -> "DeploymentRolloutPolicyEngine":
+        """
+        Return the process-wide rollout policy engine.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: policies registered through the API need to be
+        enforced identically by every rollout lifecycle checkpoint,
+        which a persistence runtime built fresh per request cannot
+        provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_rollout_policy import (
+            get_rollout_policy_engine,
+        )
+
+        return get_rollout_policy_engine()
 
     def build_integrity_provider_configuration_service(
         self,

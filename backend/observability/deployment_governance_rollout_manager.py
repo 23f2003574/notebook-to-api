@@ -16,6 +16,9 @@ if TYPE_CHECKING:
         ProgressiveDeliveryEngine,
     )
     from .deployment_governance_rolling import RollingDeploymentEngine
+    from .deployment_governance_rollout_policy import (
+        DeploymentRolloutPolicyEngine,
+    )
     from .deployment_governance_traffic_router import (
         DeploymentTrafficRouter,
     )
@@ -177,6 +180,7 @@ class DeploymentRolloutManager:
         rolling_engine: "RollingDeploymentEngine | None" = None,
         progressive_engine: "ProgressiveDeliveryEngine | None" = None,
         traffic_router: "DeploymentTrafficRouter | None" = None,
+        policy_engine: "DeploymentRolloutPolicyEngine | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
@@ -204,6 +208,8 @@ class DeploymentRolloutManager:
 
         self._traffic_router = traffic_router
 
+        self._policy_engine = policy_engine
+
         if self._event_bus is not None:
             self._event_bus.subscribe(
                 "rollout_health_critical",
@@ -224,6 +230,8 @@ class DeploymentRolloutManager:
         wired in, deployment_id is accepted as given, unresolved
         against anything: the manager tracks rollout lifecycle either
         way, it just cannot vouch that the deployment itself exists.
+        Also raises ValueError if a wired policy_engine denies the
+        "rollout_creation" action.
         """
 
         if not deployment_id:
@@ -237,6 +245,14 @@ class DeploymentRolloutManager:
                 f"deployment '{deployment_id}' is not registered in "
                 "the version registry"
             )
+
+        with self._lock:
+            active_rollouts = len(self._active_deployment_ids)
+
+        self._check_policy(
+            deployment_id, "rollout_creation",
+            {"strategy": strategy, "active_rollouts": active_rollouts},
+        )
 
         with self._lock:
             if deployment_id in self._active_deployment_ids:
@@ -355,9 +371,19 @@ class DeploymentRolloutManager:
         Transition rollout_id from PENDING to RUNNING.
 
         Idempotent: a no-op returning the unchanged Rollout if already
-        RUNNING. Raises KeyError if rollout_id is not registered, or
-        ValueError if the current state cannot transition to RUNNING.
+        RUNNING (a wired policy_engine is not re-consulted in that
+        case). Raises KeyError if rollout_id is not registered, or
+        ValueError if the current state cannot transition to RUNNING
+        or a wired policy_engine denies the "rollout_start" action.
         """
+
+        rollout = self.get(rollout_id)
+
+        if rollout.state != "RUNNING":
+            self._check_policy(
+                rollout.deployment_id, "rollout_start",
+                {"strategy": rollout.strategy},
+            )
 
         return self._transition(
             rollout_id,
@@ -455,11 +481,34 @@ class DeploymentRolloutManager:
         the progressive deployment's current stage is awaiting
         approval), that delegation is silently skipped rather than
         failing rollout completion.
+
+        Before any of that, on a real (non-idempotent) completion, a
+        wired policy_engine is consulted for both "rollout_completion"
+        and — depending on strategy — "traffic_shift" (BLUE_GREEN) or
+        "rollout_promotion" (every other strategy); either denial
+        raises ValueError and leaves the rollout untouched.
         """
 
-        was_already_completed = self.status(rollout_id).state == (
-            "COMPLETED"
-        )
+        rollout_before = self.get(rollout_id)
+
+        was_already_completed = rollout_before.state == "COMPLETED"
+
+        if not was_already_completed:
+            self._check_policy(
+                rollout_before.deployment_id, "rollout_completion",
+                {"strategy": rollout_before.strategy},
+            )
+
+            promotion_action = (
+                "traffic_shift"
+                if rollout_before.strategy == "BLUE_GREEN"
+                else "rollout_promotion"
+            )
+
+            self._check_policy(
+                rollout_before.deployment_id, promotion_action,
+                {"strategy": rollout_before.strategy},
+            )
 
         rollout = self._transition(
             rollout_id,
@@ -615,6 +664,43 @@ class DeploymentRolloutManager:
             self._rollouts.clear()
             self._status.clear()
             self._active_deployment_ids.clear()
+
+    def set_policy_engine(
+        self, policy_engine: "DeploymentRolloutPolicyEngine"
+    ) -> None:
+        """
+        Wire policy_engine in after construction — see
+        CanaryDeploymentEngine.set_health_engine for why this exists
+        instead of a constructor-injected singleton (the process-wide
+        rollout policy engine's own singleton depends, transitively
+        through the analytics engine, on this manager).
+        """
+
+        self._policy_engine = policy_engine
+
+    def _check_policy(
+        self,
+        deployment_id: str,
+        action: str,
+        context: "dict[str, Any]",
+    ) -> None:
+        """
+        Raise ValueError if a wired policy_engine denies action for
+        deployment_id. A no-op if no policy_engine is wired.
+        """
+
+        if self._policy_engine is None:
+            return
+
+        decision = self._policy_engine.evaluate(
+            deployment_id, action, context
+        )
+
+        if not decision.allowed:
+            raise ValueError(
+                f"{action} denied by policy '{decision.policy}': "
+                f"{decision.reason}"
+            )
 
     def _reset_routing(self, deployment_id: str) -> None:
         if self._traffic_router is None:

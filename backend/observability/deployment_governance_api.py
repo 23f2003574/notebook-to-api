@@ -3144,3 +3144,117 @@ async def post_governance_rollout_analytics_reset():
     _build_rollout_analytics().reset()
 
     return {"reset": True}
+
+
+def _build_rollout_policy_engine():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_rollout_policy_engine()
+
+
+@health_router.get("/rollout/policies")
+async def get_governance_rollout_policies():
+    """
+    Return every registered rollout policy, ordered by priority then
+    name.
+    """
+
+    policies = _build_rollout_policy_engine().list()
+
+    return [policy.to_dict() for policy in policies]
+
+
+@health_router.post("/rollout/policies")
+async def post_governance_rollout_policy(
+    name: str = Query(...),
+    priority: int = Query(default=0),
+    enabled: bool = Query(default=True),
+    strategy: "str | None" = Query(default=None),
+    conditions: str = Query(default="{}"),
+    policy_type: "str | None" = Query(default=None),
+):
+    """
+    Register a new rollout policy. conditions is a JSON object (as a
+    query string). If policy_type names one of the built-in rollout
+    checks, it is used instead of plain conditions-matching.
+    """
+
+    parsed_conditions = _parse_json_object(
+        conditions, field_name="conditions"
+    )
+
+    try:
+        policy = _build_rollout_policy_engine().register(
+            name,
+            priority=priority,
+            enabled=enabled,
+            strategy=strategy,
+            conditions=parsed_conditions,
+            policy_type=policy_type,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return policy.to_dict()
+
+
+@health_router.patch("/rollout/policies/{name}")
+async def patch_governance_rollout_policy(
+    name: str,
+    enabled: bool = Query(...),
+):
+    """
+    Enable or disable a registered rollout policy.
+    """
+
+    engine = _build_rollout_policy_engine()
+
+    try:
+        policy = engine.enable(name) if enabled else engine.disable(name)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return policy.to_dict()
+
+
+@health_router.delete("/rollout/policies/{name}")
+async def delete_governance_rollout_policy(name: str):
+    """
+    Remove a registered rollout policy.
+    """
+
+    try:
+        _build_rollout_policy_engine().remove(name)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"removed": name}
+
+
+@health_router.post("/rollout/policies/evaluate")
+async def post_governance_rollout_policy_evaluate(
+    deployment_id: str = Query(...),
+    action: str = Query(...),
+    context: str = Query(default="{}"),
+):
+    """
+    Evaluate action for deployment_id against every registered
+    rollout policy. context is a JSON object (as a query string).
+    """
+
+    parsed_context = _parse_json_object(context, field_name="context")
+
+    try:
+        decision = _build_rollout_policy_engine().evaluate(
+            deployment_id, action, parsed_context
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return decision.to_dict()
