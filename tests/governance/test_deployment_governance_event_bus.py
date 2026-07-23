@@ -448,6 +448,10 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "rollout_completed",
         "rollout_failed",
         "rollout_cancelled",
+        "deployment_registered",
+        "deployment_updated",
+        "deployment_removed",
+        "deployment_revision_created",
     }
 
 

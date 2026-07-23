@@ -372,6 +372,9 @@ if TYPE_CHECKING:
     from .deployment_governance_rollout_manager import (
         DeploymentRolloutManager,
     )
+    from .deployment_governance_version_registry import (
+        DeploymentVersionRegistry,
+    )
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2173,6 +2176,30 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return get_rollout_manager()
+
+    def build_governance_deployment_registry(
+        self,
+    ) -> "DeploymentVersionRegistry":
+        """
+        Return the process-wide governance deployment version
+        registry.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: which deployments are currently registered,
+        and their complete revision history, needs to be visible to
+        every caller (including the rollout manager resolving
+        deployment_id against it), which a persistence runtime built
+        fresh per request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_version_registry import (
+            get_version_registry,
+        )
+
+        return get_version_registry()
 
     def build_integrity_provider_configuration_service(
         self,

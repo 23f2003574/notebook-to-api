@@ -8,6 +8,9 @@ from uuid import uuid4
 
 if TYPE_CHECKING:
     from .deployment_governance_event_bus import GovernanceEventBus
+    from .deployment_governance_version_registry import (
+        DeploymentVersionRegistry,
+    )
 
 # The lifecycle every rollout passes through: PENDING the instant it
 # is created, RUNNING once started (with PAUSED as a reversible detour
@@ -157,6 +160,7 @@ class DeploymentRolloutManager:
         *,
         clock: Callable[[], datetime] | None = None,
         event_bus: "GovernanceEventBus | None" = None,
+        version_registry: "DeploymentVersionRegistry | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
@@ -172,6 +176,8 @@ class DeploymentRolloutManager:
 
         self._event_bus = event_bus
 
+        self._version_registry = version_registry
+
     def create(
         self, deployment_id: str, strategy: str
     ) -> Rollout:
@@ -179,12 +185,26 @@ class DeploymentRolloutManager:
         Create a new PENDING rollout for deployment_id.
 
         Raises ValueError if deployment_id already has an active
-        (non-terminal) rollout, or if strategy is not one of
-        ROLLOUT_STRATEGIES.
+        (non-terminal) rollout, if strategy is not one of
+        ROLLOUT_STRATEGIES, or — when this manager was built with a
+        version_registry — if deployment_id does not resolve to a
+        currently registered deployment there. With no version_registry
+        wired in, deployment_id is accepted as given, unresolved
+        against anything: the manager tracks rollout lifecycle either
+        way, it just cannot vouch that the deployment itself exists.
         """
 
         if not deployment_id:
             raise ValueError("deployment_id must not be empty")
+
+        if (
+            self._version_registry is not None
+            and not self._version_registry.exists(deployment_id)
+        ):
+            raise ValueError(
+                f"deployment '{deployment_id}' is not registered in "
+                "the version registry"
+            )
 
         with self._lock:
             if deployment_id in self._active_deployment_ids:
@@ -487,12 +507,18 @@ def build_default_governance_rollout_manager() -> (
 ):
     """
     Build the process-wide governance rollout manager, wired to the
-    process-wide governance event bus.
+    process-wide governance event bus and deployment version registry.
     """
 
     from .deployment_governance_event_bus import get_event_bus
+    from .deployment_governance_version_registry import (
+        get_version_registry,
+    )
 
-    return DeploymentRolloutManager(event_bus=get_event_bus())
+    return DeploymentRolloutManager(
+        event_bus=get_event_bus(),
+        version_registry=get_version_registry(),
+    )
 
 
 # Shared for the lifetime of the process: the rollout registry (which

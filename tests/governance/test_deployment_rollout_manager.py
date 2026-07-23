@@ -14,8 +14,13 @@ from backend.observability.deployment_governance_rollout_manager import (
     RolloutStatus,
     get_rollout_manager,
 )
+from backend.observability.deployment_governance_version_registry import (
+    get_version_registry,
+)
 
 BASE_TIME = datetime(2026, 7, 23, 12, 0, 0, tzinfo=timezone.utc)
+
+VALID_CHECKSUM = "a" * 64
 
 
 def _clock():
@@ -29,14 +34,21 @@ def _manager(event_bus=None) -> DeploymentRolloutManager:
 @pytest.fixture(autouse=True)
 def _reset_singleton():
     """
-    The rollout manager is a process-wide singleton; most tests below
-    construct their own fresh manager instead (see _manager), and only
-    the singleton and API tests touch the shared instance, matching
+    The rollout manager and version registry are both process-wide
+    singletons; most tests below construct their own fresh manager
+    instead (see _manager), and only the singleton and API tests touch
+    the shared instances, matching
     test_deployment_governance_scheduler_bootstrap.py's own fixture.
+
+    The process-wide rollout manager is wired to the process-wide
+    version registry (see build_default_governance_rollout_manager),
+    so API tests that create rollouts through it must first register
+    the deployment there.
     """
 
     def _reset():
         get_rollout_manager().clear()
+        get_version_registry().clear()
 
     _reset()
     yield
@@ -182,6 +194,65 @@ class TestCreate:
         assert len(events) == 1
         assert events[0].source == rollout.rollout_id
         assert events[0].payload["deployment_id"] == "dep-1"
+
+
+class TestVersionRegistryIntegration:
+
+    def test_create_with_no_registry_wired_accepts_any_deployment_id(
+        self,
+    ):
+        manager = _manager()
+
+        rollout = manager.create("unresolved-dep", "CANARY")
+
+        assert rollout.deployment_id == "unresolved-dep"
+
+    def test_create_rejects_unregistered_deployment(self):
+        from backend.observability.deployment_governance_version_registry import (  # noqa: E501
+            DeploymentVersionRegistry,
+        )
+
+        registry = DeploymentVersionRegistry(clock=_clock)
+        manager = DeploymentRolloutManager(
+            clock=_clock, version_registry=registry
+        )
+
+        with pytest.raises(
+            ValueError, match="not registered in the version registry"
+        ):
+            manager.create("dep-1", "CANARY")
+
+    def test_create_accepts_registered_deployment(self):
+        from backend.observability.deployment_governance_version_registry import (  # noqa: E501
+            DeploymentVersionRegistry,
+        )
+
+        registry = DeploymentVersionRegistry(clock=_clock)
+        registry.register("dep-1", "1.0.0", "artifact.tar.gz", VALID_CHECKSUM)
+
+        manager = DeploymentRolloutManager(
+            clock=_clock, version_registry=registry
+        )
+
+        rollout = manager.create("dep-1", "CANARY")
+
+        assert rollout.deployment_id == "dep-1"
+
+    def test_singleton_rollout_manager_is_wired_to_singleton_registry(
+        self,
+    ):
+        get_version_registry().register(
+            "dep-singleton-wiring",
+            "1.0.0",
+            "artifact.tar.gz",
+            VALID_CHECKSUM,
+        )
+
+        rollout = get_rollout_manager().create(
+            "dep-singleton-wiring", "CANARY"
+        )
+
+        assert rollout.deployment_id == "dep-singleton-wiring"
 
 
 # --- Lifecycle transitions -----------------------------------------------
@@ -484,9 +555,33 @@ def client() -> TestClient:
     return TestClient(app)
 
 
+def _register(client: TestClient, deployment_id: str) -> None:
+    """
+    The process-wide rollout manager resolves deployment_id against
+    the process-wide version registry (see
+    build_default_governance_rollout_manager), so every API test
+    below that creates a rollout must register its deployment_id
+    first.
+    """
+
+    response = client.post(
+        "/governance/deployments",
+        params={
+            "deployment_id": deployment_id,
+            "version": "1.0.0",
+            "artifact": "artifact.tar.gz",
+            "checksum": VALID_CHECKSUM,
+        },
+    )
+
+    assert response.status_code == 200
+
+
 class TestGovernanceRolloutApi:
 
     def test_post_creates_rollout(self, client):
+        _register(client, "dep-api-1")
+
         response = client.post(
             "/governance/rollouts",
             params={"deployment_id": "dep-api-1", "strategy": "CANARY"},
@@ -499,7 +594,20 @@ class TestGovernanceRolloutApi:
         assert payload["deployment_id"] == "dep-api-1"
         assert payload["state"] == "PENDING"
 
+    def test_post_unregistered_deployment_returns_409(self, client):
+        response = client.post(
+            "/governance/rollouts",
+            params={
+                "deployment_id": "dep-api-unregistered",
+                "strategy": "CANARY",
+            },
+        )
+
+        assert response.status_code == 409
+
     def test_post_duplicate_active_rollout_returns_409(self, client):
+        _register(client, "dep-api-2")
+
         client.post(
             "/governance/rollouts",
             params={"deployment_id": "dep-api-2", "strategy": "CANARY"},
@@ -513,6 +621,8 @@ class TestGovernanceRolloutApi:
         assert response.status_code == 409
 
     def test_get_rollout_status(self, client):
+        _register(client, "dep-api-3")
+
         created = client.post(
             "/governance/rollouts",
             params={"deployment_id": "dep-api-3", "strategy": "CANARY"},
@@ -531,6 +641,8 @@ class TestGovernanceRolloutApi:
         assert response.status_code == 404
 
     def test_list_rollouts(self, client):
+        _register(client, "dep-api-4")
+
         client.post(
             "/governance/rollouts",
             params={"deployment_id": "dep-api-4", "strategy": "CANARY"},
@@ -545,6 +657,8 @@ class TestGovernanceRolloutApi:
         )
 
     def test_start_pause_resume_cycle(self, client):
+        _register(client, "dep-api-5")
+
         created = client.post(
             "/governance/rollouts",
             params={"deployment_id": "dep-api-5", "strategy": "ROLLING"},
@@ -567,6 +681,8 @@ class TestGovernanceRolloutApi:
         assert resume_response.json()["state"] == "RUNNING"
 
     def test_delete_cancels_rollout(self, client):
+        _register(client, "dep-api-6")
+
         created = client.post(
             "/governance/rollouts",
             params={"deployment_id": "dep-api-6", "strategy": "CANARY"},
@@ -584,6 +700,8 @@ class TestGovernanceRolloutApi:
         assert response.status_code == 404
 
     def test_invalid_transition_returns_409(self, client):
+        _register(client, "dep-api-7")
+
         created = client.post(
             "/governance/rollouts",
             params={"deployment_id": "dep-api-7", "strategy": "CANARY"},

@@ -88,6 +88,10 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "rollout_completed",
     "rollout_failed",
     "rollout_cancelled",
+    "deployment_registered",
+    "deployment_updated",
+    "deployment_removed",
+    "deployment_revision_created",
 )
 
 

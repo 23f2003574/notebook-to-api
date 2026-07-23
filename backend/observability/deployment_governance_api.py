@@ -2064,3 +2064,134 @@ async def delete_governance_rollout(rollout_id: str):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return rollout.to_dict()
+
+
+def _build_version_registry():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_deployment_registry()
+
+
+@health_router.get("/deployments")
+async def get_governance_deployments():
+    """
+    Return every currently registered deployment version, ordered by
+    deployment_id.
+    """
+
+    versions = _build_version_registry().list()
+
+    return [version.to_dict() for version in versions]
+
+
+@health_router.get("/deployments/{deployment_id}")
+async def get_governance_deployment(deployment_id: str):
+    """
+    Return one deployment's currently registered version.
+    """
+
+    try:
+        version = _build_version_registry().get(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return version.to_dict()
+
+
+@health_router.get("/deployments/{deployment_id}/history")
+async def get_governance_deployment_history(deployment_id: str):
+    """
+    Return every revision ever recorded for deployment_id, oldest
+    first, including entries recorded before a later removal.
+    """
+
+    revisions = _build_version_registry().history(deployment_id)
+
+    return [revision.to_dict() for revision in revisions]
+
+
+@health_router.post("/deployments")
+async def post_governance_deployment(
+    deployment_id: str = Query(...),
+    version: str = Query(...),
+    artifact: str = Query(...),
+    checksum: str = Query(...),
+    metadata: str = Query(default="{}"),
+):
+    """
+    Register a new deployment's first version.
+    """
+
+    parsed_metadata = _parse_json_object(
+        metadata, field_name="metadata"
+    )
+
+    try:
+        record = _build_version_registry().register(
+            deployment_id,
+            version,
+            artifact,
+            checksum,
+            metadata=parsed_metadata,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return record.to_dict()
+
+
+@health_router.patch("/deployments/{deployment_id}")
+async def patch_governance_deployment(
+    deployment_id: str,
+    version: str = Query(...),
+    artifact: str = Query(...),
+    checksum: str = Query(...),
+    metadata: str = Query(default="{}"),
+):
+    """
+    Replace deployment_id's currently registered version, appending a
+    new revision to its history.
+    """
+
+    parsed_metadata = _parse_json_object(
+        metadata, field_name="metadata"
+    )
+
+    registry = _build_version_registry()
+
+    try:
+        record = registry.update(
+            deployment_id,
+            version,
+            artifact,
+            checksum,
+            metadata=parsed_metadata,
+        )
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return record.to_dict()
+
+
+@health_router.delete("/deployments/{deployment_id}")
+async def delete_governance_deployment(deployment_id: str):
+    """
+    Remove deployment_id's active registration. Its revision history
+    remains available through GET .../history.
+    """
+
+    try:
+        _build_version_registry().remove(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"removed": deployment_id}
