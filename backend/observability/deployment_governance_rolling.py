@@ -15,6 +15,9 @@ if TYPE_CHECKING:
     from .deployment_governance_scheduler_metrics import (
         GovernanceSchedulerMetrics,
     )
+    from .deployment_governance_traffic_router import (
+        DeploymentTrafficRouter,
+    )
     from .deployment_governance_version_registry import (
         DeploymentVersionRegistry,
     )
@@ -162,6 +165,7 @@ class RollingDeploymentEngine:
         version_registry: "DeploymentVersionRegistry | None" = None,
         scheduler: "GovernanceScheduler | None" = None,
         metrics: "GovernanceSchedulerMetrics | None" = None,
+        traffic_router: "DeploymentTrafficRouter | None" = None,
         default_batch_percentage: int = 25,
         batch_interval_seconds: int = 60,
     ) -> None:
@@ -197,6 +201,8 @@ class RollingDeploymentEngine:
         self._scheduler = scheduler
 
         self._metrics = metrics
+
+        self._traffic_router = traffic_router
 
         self._default_batch_percentage = default_batch_percentage
 
@@ -312,6 +318,8 @@ class RollingDeploymentEngine:
             },
         )
 
+        self._route_configure(deployment_id, target_version, 0.0)
+
         return record
 
     def next_batch(self, deployment_id: str) -> RollingDeployment:
@@ -379,6 +387,12 @@ class RollingDeploymentEngine:
                 "batch_number": batch_number,
                 "updated_instances": updated.updated_instances,
             },
+        )
+
+        self._route_allocate(
+            deployment_id,
+            updated.target_version,
+            100.0 * updated.updated_instances / updated.total_instances,
         )
 
         return updated
@@ -595,6 +609,8 @@ class RollingDeploymentEngine:
 
         self._publish("rolling_rolled_back", deployment_id, {})
 
+        self._route_allocate(deployment_id, updated.target_version, 0.0)
+
         return updated
 
     def status(self, deployment_id: str) -> RollingDeployment:
@@ -672,6 +688,40 @@ class RollingDeploymentEngine:
             except KeyError:
                 pass
 
+    def _route_configure(
+        self, deployment_id: str, target_version: str, percentage: float
+    ) -> None:
+        if self._traffic_router is None:
+            return
+
+        # RollingDeployment has no field for the version instances are
+        # being rolled away from, unlike Blue/Green's blue_version or
+        # Canary's stable_version — "PREVIOUS" is a sentinel label for
+        # "not yet on target_version", not a real version string.
+        try:
+            self._traffic_router.configure(
+                deployment_id,
+                [(target_version, percentage), ("PREVIOUS", 100.0 - percentage)],
+                strategy="ROLLING",
+            )
+
+        except ValueError:
+            pass
+
+    def _route_allocate(
+        self, deployment_id: str, version: str, percentage: float
+    ) -> None:
+        if self._traffic_router is None:
+            return
+
+        try:
+            self._traffic_router.allocate(
+                deployment_id, version, percentage
+            )
+
+        except (KeyError, ValueError):
+            pass
+
     def _publish(
         self,
         event_type: str,
@@ -690,7 +740,7 @@ def build_default_governance_rolling_engine() -> RollingDeploymentEngine:
     """
     Build the process-wide rolling update engine, wired to the
     process-wide governance event bus, deployment version registry,
-    scheduler, and scheduler metrics.
+    scheduler, scheduler metrics, and traffic router.
     """
 
     from .deployment_governance_event_bus import get_event_bus
@@ -698,6 +748,7 @@ def build_default_governance_rolling_engine() -> RollingDeploymentEngine:
     from .deployment_governance_scheduler_metrics import (
         get_scheduler_metrics,
     )
+    from .deployment_governance_traffic_router import get_traffic_router
     from .deployment_governance_version_registry import (
         get_version_registry,
     )
@@ -707,6 +758,7 @@ def build_default_governance_rolling_engine() -> RollingDeploymentEngine:
         version_registry=get_version_registry(),
         scheduler=get_scheduler(),
         metrics=get_scheduler_metrics(),
+        traffic_router=get_traffic_router(),
     )
 
 

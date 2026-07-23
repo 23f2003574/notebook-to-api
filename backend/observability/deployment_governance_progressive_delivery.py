@@ -14,6 +14,9 @@ if TYPE_CHECKING:
     from .deployment_governance_event_bus import GovernanceEventBus
     from .deployment_governance_rolling import RollingDeploymentEngine
     from .deployment_governance_scheduler import GovernanceScheduler
+    from .deployment_governance_traffic_router import (
+        DeploymentTrafficRouter,
+    )
 
 # What a pipeline stage's work actually is. CANARY/ROLLING/BLUE_GREEN
 # delegate one incremental step to the matching engine (if wired in);
@@ -162,6 +165,15 @@ class ProgressiveDeliveryEngine:
     the same declarative pattern CanaryDeploymentEngine and
     RollingDeploymentEngine use.
 
+    Unlike the three per-strategy engines, this one has no version or
+    percentage data of its own to hand the DeploymentTrafficRouter —
+    whatever routing exists for a given stage was already configured
+    by whichever sub-engine that stage delegated to. The one thing
+    this engine can meaningfully do with a wired-in traffic_router is
+    clean up: rollback() resets deployment_id's routing table, best
+    effort, since the whole pipeline (and whatever traffic shift its
+    stages produced) is being abandoned.
+
     Thread-safe: every mutation of engine state is guarded by an
     internal lock.
     """
@@ -175,6 +187,7 @@ class ProgressiveDeliveryEngine:
         rolling_engine: "RollingDeploymentEngine | None" = None,
         blue_green_engine: "BlueGreenDeploymentEngine | None" = None,
         scheduler: "GovernanceScheduler | None" = None,
+        traffic_router: "DeploymentTrafficRouter | None" = None,
         stage_interval_seconds: int = 60,
     ) -> None:
         self._lock = threading.Lock()
@@ -206,6 +219,8 @@ class ProgressiveDeliveryEngine:
         self._blue_green_engine = blue_green_engine
 
         self._scheduler = scheduler
+
+        self._traffic_router = traffic_router
 
         self._stage_interval_seconds = stage_interval_seconds
 
@@ -605,6 +620,13 @@ class ProgressiveDeliveryEngine:
 
         self._publish("progressive_rolled_back", deployment_id, {})
 
+        if self._traffic_router is not None:
+            try:
+                self._traffic_router.reset(deployment_id)
+
+            except (KeyError, ValueError):
+                pass
+
         return updated
 
     def status(self, deployment_id: str) -> ProgressiveDeployment:
@@ -749,8 +771,8 @@ def build_default_governance_progressive_delivery_engine() -> (
 ):
     """
     Build the process-wide progressive delivery engine, wired to the
-    process-wide governance event bus, scheduler, and the three
-    per-strategy deployment engines.
+    process-wide governance event bus, scheduler, traffic router, and
+    the three per-strategy deployment engines.
     """
 
     from .deployment_governance_blue_green import get_blue_green_engine
@@ -758,6 +780,7 @@ def build_default_governance_progressive_delivery_engine() -> (
     from .deployment_governance_event_bus import get_event_bus
     from .deployment_governance_rolling import get_rolling_engine
     from .deployment_governance_scheduler import get_scheduler
+    from .deployment_governance_traffic_router import get_traffic_router
 
     return ProgressiveDeliveryEngine(
         event_bus=get_event_bus(),
@@ -765,6 +788,7 @@ def build_default_governance_progressive_delivery_engine() -> (
         rolling_engine=get_rolling_engine(),
         blue_green_engine=get_blue_green_engine(),
         scheduler=get_scheduler(),
+        traffic_router=get_traffic_router(),
     )
 
 

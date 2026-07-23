@@ -16,6 +16,9 @@ if TYPE_CHECKING:
         ProgressiveDeliveryEngine,
     )
     from .deployment_governance_rolling import RollingDeploymentEngine
+    from .deployment_governance_traffic_router import (
+        DeploymentTrafficRouter,
+    )
     from .deployment_governance_version_registry import (
         DeploymentVersionRegistry,
     )
@@ -173,6 +176,7 @@ class DeploymentRolloutManager:
         canary_engine: "CanaryDeploymentEngine | None" = None,
         rolling_engine: "RollingDeploymentEngine | None" = None,
         progressive_engine: "ProgressiveDeliveryEngine | None" = None,
+        traffic_router: "DeploymentTrafficRouter | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
@@ -197,6 +201,8 @@ class DeploymentRolloutManager:
         self._rolling_engine = rolling_engine
 
         self._progressive_engine = progressive_engine
+
+        self._traffic_router = traffic_router
 
     def create(
         self, deployment_id: str, strategy: str
@@ -392,15 +398,28 @@ class DeploymentRolloutManager:
         state.
 
         Idempotent: a no-op returning the unchanged Rollout if already
-        CANCELLED.
+        CANCELLED. On a real (non-idempotent) cancellation, with a
+        traffic_router wired in, also resets that router's routing
+        table for this rollout's deployment_id, best effort — an
+        abandoned rollout should not leave partial traffic shifts in
+        place.
         """
 
-        return self._transition(
+        was_already_cancelled = self.status(rollout_id).state == (
+            "CANCELLED"
+        )
+
+        rollout = self._transition(
             rollout_id,
             to_state="CANCELLED",
             stage="cancelled",
             event_type="rollout_cancelled",
         )
+
+        if not was_already_cancelled:
+            self._reset_routing(rollout.deployment_id)
+
+        return rollout
 
     def complete(self, rollout_id: str) -> Rollout:
         """
@@ -503,8 +522,13 @@ class DeploymentRolloutManager:
         FAILED. Not part of the core API surface (there is no
         POST .../fail endpoint) but available for other governance
         components — e.g. a future health check — to report a rollout
-        as failed.
+        as failed. On a real (non-idempotent) failure, with a
+        traffic_router wired in, also resets that router's routing
+        table for this rollout's deployment_id, best effort, matching
+        cancel().
         """
+
+        was_already_failed = self.status(rollout_id).state == "FAILED"
 
         rollout = self._transition(
             rollout_id,
@@ -517,6 +541,9 @@ class DeploymentRolloutManager:
             self._publish(
                 "rollout_failed", rollout_id, {"reason": reason}
             )
+
+        if not was_already_failed:
+            self._reset_routing(rollout.deployment_id)
 
         return rollout
 
@@ -583,6 +610,16 @@ class DeploymentRolloutManager:
             self._status.clear()
             self._active_deployment_ids.clear()
 
+    def _reset_routing(self, deployment_id: str) -> None:
+        if self._traffic_router is None:
+            return
+
+        try:
+            self._traffic_router.reset(deployment_id)
+
+        except (KeyError, ValueError):
+            pass
+
     def _publish(
         self,
         event_type: str,
@@ -604,7 +641,7 @@ def build_default_governance_rollout_manager() -> (
     Build the process-wide governance rollout manager, wired to the
     process-wide governance event bus, deployment version registry,
     Blue/Green deployment engine, canary deployment engine, rolling
-    update engine, and progressive delivery engine.
+    update engine, progressive delivery engine, and traffic router.
     """
 
     from .deployment_governance_blue_green import get_blue_green_engine
@@ -614,6 +651,7 @@ def build_default_governance_rollout_manager() -> (
         get_progressive_delivery_engine,
     )
     from .deployment_governance_rolling import get_rolling_engine
+    from .deployment_governance_traffic_router import get_traffic_router
     from .deployment_governance_version_registry import (
         get_version_registry,
     )
@@ -625,6 +663,7 @@ def build_default_governance_rollout_manager() -> (
         canary_engine=get_canary_engine(),
         rolling_engine=get_rolling_engine(),
         progressive_engine=get_progressive_delivery_engine(),
+        traffic_router=get_traffic_router(),
     )
 
 

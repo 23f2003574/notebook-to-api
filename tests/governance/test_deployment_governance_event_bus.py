@@ -481,6 +481,11 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "progressive_completed",
         "progressive_failed",
         "progressive_rolled_back",
+        "routing_configured",
+        "routing_updated",
+        "routing_rebalanced",
+        "routing_reset",
+        "routing_validation_failed",
     }
 
 

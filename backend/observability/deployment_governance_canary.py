@@ -14,6 +14,9 @@ if TYPE_CHECKING:
     from .deployment_governance_scheduler_metrics import (
         GovernanceSchedulerMetrics,
     )
+    from .deployment_governance_traffic_router import (
+        DeploymentTrafficRouter,
+    )
     from .deployment_governance_version_registry import (
         DeploymentVersionRegistry,
     )
@@ -185,6 +188,7 @@ class CanaryDeploymentEngine:
         version_registry: "DeploymentVersionRegistry | None" = None,
         scheduler: "GovernanceScheduler | None" = None,
         metrics: "GovernanceSchedulerMetrics | None" = None,
+        traffic_router: "DeploymentTrafficRouter | None" = None,
         default_stages: "tuple[int, ...] | None" = None,
         evaluation_interval_seconds: int = 60,
     ) -> None:
@@ -219,6 +223,8 @@ class CanaryDeploymentEngine:
         self._scheduler = scheduler
 
         self._metrics = metrics
+
+        self._traffic_router = traffic_router
 
         self._default_stages = default_stages
 
@@ -304,6 +310,14 @@ class CanaryDeploymentEngine:
                 "stable_version": resolved_stable_version,
                 "canary_version": canary_version,
             },
+        )
+
+        self._route_configure(
+            deployment_id,
+            [
+                (resolved_stable_version, float(100 - resolved_stages[0])),
+                (canary_version, float(resolved_stages[0])),
+            ],
         )
 
         return record
@@ -450,6 +464,11 @@ class CanaryDeploymentEngine:
             {"traffic_percentage": updated.traffic_percentage},
         )
 
+        self._route_allocate(
+            deployment_id, updated.canary_version,
+            float(updated.traffic_percentage),
+        )
+
         if completed:
             self._unregister_scheduler_job(deployment_id)
 
@@ -559,6 +578,8 @@ class CanaryDeploymentEngine:
 
         self._publish("canary_rolled_back", deployment_id, {})
 
+        self._route_allocate(deployment_id, updated.canary_version, 0.0)
+
         return updated
 
     def status(self, deployment_id: str) -> CanaryDeployment:
@@ -635,6 +656,36 @@ class CanaryDeploymentEngine:
             except KeyError:
                 pass
 
+    def _route_configure(
+        self,
+        deployment_id: str,
+        allocations: "list[tuple[str, float]]",
+    ) -> None:
+        if self._traffic_router is None:
+            return
+
+        try:
+            self._traffic_router.configure(
+                deployment_id, allocations, strategy="CANARY"
+            )
+
+        except ValueError:
+            pass
+
+    def _route_allocate(
+        self, deployment_id: str, version: str, percentage: float
+    ) -> None:
+        if self._traffic_router is None:
+            return
+
+        try:
+            self._traffic_router.allocate(
+                deployment_id, version, percentage
+            )
+
+        except (KeyError, ValueError):
+            pass
+
     def _publish(
         self,
         event_type: str,
@@ -653,7 +704,7 @@ def build_default_governance_canary_engine() -> CanaryDeploymentEngine:
     """
     Build the process-wide canary deployment engine, wired to the
     process-wide governance event bus, deployment version registry,
-    scheduler, and scheduler metrics.
+    scheduler, scheduler metrics, and traffic router.
     """
 
     from .deployment_governance_event_bus import get_event_bus
@@ -661,6 +712,7 @@ def build_default_governance_canary_engine() -> CanaryDeploymentEngine:
     from .deployment_governance_scheduler_metrics import (
         get_scheduler_metrics,
     )
+    from .deployment_governance_traffic_router import get_traffic_router
     from .deployment_governance_version_registry import (
         get_version_registry,
     )
@@ -670,6 +722,7 @@ def build_default_governance_canary_engine() -> CanaryDeploymentEngine:
         version_registry=get_version_registry(),
         scheduler=get_scheduler(),
         metrics=get_scheduler_metrics(),
+        traffic_router=get_traffic_router(),
     )
 
 

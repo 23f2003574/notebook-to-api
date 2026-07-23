@@ -383,6 +383,9 @@ if TYPE_CHECKING:
     from .deployment_governance_progressive_delivery import (
         ProgressiveDeliveryEngine,
     )
+    from .deployment_governance_traffic_router import (
+        DeploymentTrafficRouter,
+    )
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2297,6 +2300,28 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return get_progressive_delivery_engine()
+
+    def build_governance_traffic_router(
+        self,
+    ) -> "DeploymentTrafficRouter":
+        """
+        Return the process-wide deployment traffic router.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: every rollout engine's routing changes (and
+        every API reader) need to observe the same routing tables,
+        which a persistence runtime built fresh per request cannot
+        provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_traffic_router import (
+            get_traffic_router,
+        )
+
+        return get_traffic_router()
 
     def build_integrity_provider_configuration_service(
         self,

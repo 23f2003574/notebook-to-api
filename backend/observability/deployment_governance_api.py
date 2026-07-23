@@ -2831,3 +2831,132 @@ async def post_governance_progressive_rollback(deployment_id: str):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return deployment.to_dict()
+
+
+def _build_traffic_router():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_traffic_router()
+
+
+def _zipped_allocations(
+    versions: "list[str]", percentages: "list[float]"
+) -> "list[tuple[str, float]]":
+    if len(versions) != len(percentages):
+        raise HTTPException(
+            status_code=422,
+            detail="versions and percentages must be the same length",
+        )
+
+    return list(zip(versions, percentages))
+
+
+@health_router.get("/routing")
+async def get_governance_routing_snapshots():
+    """
+    Return every currently tracked deployment's routing snapshot,
+    ordered by deployment_id.
+    """
+
+    snapshots = _build_traffic_router().list()
+
+    return [snapshot.to_dict() for snapshot in snapshots]
+
+
+@health_router.get("/routing/{deployment_id}")
+async def get_governance_routing_snapshot(deployment_id: str):
+    """
+    Return one deployment's current routing snapshot.
+    """
+
+    try:
+        snapshot = _build_traffic_router().snapshot(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return snapshot.to_dict()
+
+
+@health_router.post("/routing/{deployment_id}")
+async def post_governance_routing_configure(
+    deployment_id: str,
+    versions: "list[str]" = Query(...),
+    percentages: "list[float]" = Query(...),
+    strategy: str = Query(default="STATIC"),
+):
+    """
+    Replace deployment_id's entire routing table. versions and
+    percentages are parallel lists, one entry per allocation.
+    """
+
+    allocations = _zipped_allocations(versions, percentages)
+
+    try:
+        snapshot = _build_traffic_router().configure(
+            deployment_id, allocations, strategy=strategy
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return snapshot.to_dict()
+
+
+@health_router.patch("/routing/{deployment_id}")
+async def patch_governance_routing_update(
+    deployment_id: str,
+    versions: "list[str]" = Query(...),
+    percentages: "list[float]" = Query(...),
+):
+    """
+    Replace deployment_id's entire routing table, keeping its
+    currently configured strategy.
+    """
+
+    allocations = _zipped_allocations(versions, percentages)
+
+    try:
+        snapshot = _build_traffic_router().update(
+            deployment_id, allocations
+        )
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return snapshot.to_dict()
+
+
+@health_router.post("/routing/{deployment_id}/rebalance")
+async def post_governance_routing_rebalance(deployment_id: str):
+    """
+    Reapply deployment_id's configured strategy's rebalance rule to
+    its current allocation set.
+    """
+
+    try:
+        snapshot = _build_traffic_router().rebalance(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return snapshot.to_dict()
+
+
+@health_router.post("/routing/{deployment_id}/reset")
+async def post_governance_routing_reset(deployment_id: str):
+    """
+    Clear deployment_id's routing table to an empty allocation set.
+    """
+
+    snapshot = _build_traffic_router().reset(deployment_id)
+
+    return snapshot.to_dict()

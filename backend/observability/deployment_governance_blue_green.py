@@ -9,6 +9,9 @@ from .deployment_governance_version_registry import is_semantic_version
 
 if TYPE_CHECKING:
     from .deployment_governance_event_bus import GovernanceEventBus
+    from .deployment_governance_traffic_router import (
+        DeploymentTrafficRouter,
+    )
     from .deployment_governance_version_registry import (
         DeploymentVersionRegistry,
     )
@@ -147,6 +150,7 @@ class BlueGreenDeploymentEngine:
         clock: Callable[[], datetime] | None = None,
         event_bus: "GovernanceEventBus | None" = None,
         version_registry: "DeploymentVersionRegistry | None" = None,
+        traffic_router: "DeploymentTrafficRouter | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
@@ -163,6 +167,8 @@ class BlueGreenDeploymentEngine:
         self._event_bus = event_bus
 
         self._version_registry = version_registry
+
+        self._traffic_router = traffic_router
 
     def deploy(
         self,
@@ -248,6 +254,11 @@ class BlueGreenDeploymentEngine:
                 "blue_version": record.blue_version,
                 "green_version": record.green_version,
             },
+        )
+
+        self._route_configure(
+            deployment_id,
+            [(record.blue_version, 100.0), (record.green_version, 0.0)],
         )
 
         return record
@@ -344,6 +355,14 @@ class BlueGreenDeploymentEngine:
 
         self._publish("blue_green_completed", deployment_id, {})
 
+        active_version = (
+            record.green_version
+            if new_environment == "GREEN"
+            else record.blue_version
+        )
+
+        self._route_allocate_full(deployment_id, active_version)
+
         return result
 
     def rollback(self, deployment_id: str) -> BlueGreenSwitchResult:
@@ -403,6 +422,14 @@ class BlueGreenDeploymentEngine:
             },
         )
 
+        restored_version = (
+            record.green_version
+            if restored_environment == "GREEN"
+            else record.blue_version
+        )
+
+        self._route_allocate_full(deployment_id, restored_version)
+
         return result
 
     def status(self, deployment_id: str) -> BlueGreenDeployment:
@@ -459,6 +486,34 @@ class BlueGreenDeploymentEngine:
             self._validated.clear()
             self._history.clear()
 
+    def _route_configure(
+        self,
+        deployment_id: str,
+        allocations: "list[tuple[str, float]]",
+    ) -> None:
+        if self._traffic_router is None:
+            return
+
+        try:
+            self._traffic_router.configure(
+                deployment_id, allocations, strategy="BLUE_GREEN"
+            )
+
+        except ValueError:
+            pass
+
+    def _route_allocate_full(
+        self, deployment_id: str, version: str
+    ) -> None:
+        if self._traffic_router is None:
+            return
+
+        try:
+            self._traffic_router.allocate(deployment_id, version, 100.0)
+
+        except (KeyError, ValueError):
+            pass
+
     def _publish(
         self,
         event_type: str,
@@ -478,10 +533,12 @@ def build_default_governance_blue_green_engine() -> (
 ):
     """
     Build the process-wide Blue/Green deployment engine, wired to the
-    process-wide governance event bus and deployment version registry.
+    process-wide governance event bus, deployment version registry,
+    and traffic router.
     """
 
     from .deployment_governance_event_bus import get_event_bus
+    from .deployment_governance_traffic_router import get_traffic_router
     from .deployment_governance_version_registry import (
         get_version_registry,
     )
@@ -489,6 +546,7 @@ def build_default_governance_blue_green_engine() -> (
     return BlueGreenDeploymentEngine(
         event_bus=get_event_bus(),
         version_registry=get_version_registry(),
+        traffic_router=get_traffic_router(),
     )
 
 
