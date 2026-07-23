@@ -3088,3 +3088,59 @@ async def post_governance_rollout_health_evaluate(deployment_id: str):
     snapshot = _build_rollout_health_engine().evaluate(deployment_id)
 
     return snapshot.to_dict()
+
+
+def _build_rollout_analytics():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_rollout_analytics()
+
+
+@health_router.get("/rollout/analytics")
+async def get_governance_rollout_analytics():
+    """
+    Return a freshly computed global rollout analytics snapshot.
+    """
+
+    snapshot = _build_rollout_analytics().snapshot()
+
+    return snapshot.to_dict()
+
+
+@health_router.get("/rollout/analytics/summary")
+async def get_governance_rollout_analytics_summary():
+    """
+    Return every registered KPI's current value.
+    """
+
+    return _build_rollout_analytics().summary()
+
+
+@health_router.get("/rollout/analytics/trends")
+async def get_governance_rollout_analytics_trends():
+    """
+    Return every registered KPI's trend against its last recorded
+    value.
+    """
+
+    analytics = _build_rollout_analytics()
+
+    metrics = sorted(analytics.summary())
+
+    return [
+        analytics.trend(metric).to_dict() for metric in metrics
+    ]
+
+
+@health_router.post("/rollout/analytics/reset")
+async def post_governance_rollout_analytics_reset():
+    """
+    Remove every recorded outcome, rollback timestamp, health score,
+    and stored snapshot/KPI history.
+    """
+
+    _build_rollout_analytics().reset()
+
+    return {"reset": True}

@@ -390,6 +390,9 @@ if TYPE_CHECKING:
     from .deployment_governance_rollout_health import (
         DeploymentRolloutHealthEngine,
     )
+    from .deployment_governance_rollout_analytics import (
+        DeploymentRolloutAnalytics,
+    )
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2367,6 +2370,28 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return get_rollout_health_engine()
+
+    def build_governance_rollout_analytics(
+        self,
+    ) -> "DeploymentRolloutAnalytics":
+        """
+        Return the process-wide rollout analytics engine.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: the recorded outcome/rollback/health-score
+        history every KPI and trend is derived from needs to be
+        visible to every caller, which a persistence runtime built
+        fresh per request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_rollout_analytics import (
+            get_rollout_analytics,
+        )
+
+        return get_rollout_analytics()
 
     def build_integrity_provider_configuration_service(
         self,

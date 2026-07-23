@@ -432,7 +432,9 @@ class DeploymentRolloutHealthEngine:
             previous_status = self._previous_status.get(deployment_id)
             self._previous_status[deployment_id] = status
 
-        self._publish_for_status(deployment_id, status, previous_status)
+        self._publish_for_status(
+            deployment_id, status, previous_status, score
+        )
 
         return snapshot
 
@@ -606,10 +608,11 @@ class DeploymentRolloutHealthEngine:
         deployment_id: str,
         status: str,
         previous_status: "str | None",
+        score: float,
     ) -> None:
         self._publish(
             "rollout_health_evaluated", deployment_id,
-            {"status": status},
+            {"status": status, "score": score},
         )
 
         if status == "DEGRADED":

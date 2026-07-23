@@ -136,6 +136,10 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "rollout_health_unhealthy",
     "rollout_health_critical",
     "rollout_health_restored",
+    "rollout_analytics_updated",
+    "rollout_trend_changed",
+    "rollout_kpi_threshold_exceeded",
+    "rollout_snapshot_created",
 )
 
 
