@@ -566,12 +566,14 @@ def build_default_governance_lifecycle_manager() -> (
     API server constructs no worker/scheduler anywhere).
 
     provider_registry, metrics_bootstrap, logging_bootstrap,
-    delivery_runtime, health_service, readiness_service, and
-    diagnostics_service are all registered with no-op start/stop:
-    there is nothing real for a stateless process to start or stop on
-    their behalf, and each is still registered so the dependency
-    graph, startup order, and status() stay complete and honest about
-    every component that conceptually exists.
+    delivery_runtime, health_service, readiness_service,
+    diagnostics_service, and rollout_manager are all registered with
+    no-op start/stop: there is nothing real for a stateless process to
+    start or stop on their behalf (the rollout manager, like the event
+    bus, is always live once constructed — it has no start/stop of its
+    own), and each is still registered so the dependency graph,
+    startup order, and status() stay complete and honest about every
+    component that conceptually exists.
 
     liveness_service and scheduler are the two exceptions: liveness_
     service is wired to the real process-wide GovernanceLivenessService
@@ -658,6 +660,13 @@ def build_default_governance_lifecycle_manager() -> (
         dependencies=_COMPONENT_DEPENDENCIES["scheduler"],
         start=scheduler_bootstrap.initialize,
         stop=scheduler_bootstrap.shutdown,
+    )
+
+    manager.register(
+        "rollout_manager",
+        dependencies=_COMPONENT_DEPENDENCIES["rollout_manager"],
+        start=_noop,
+        stop=_noop,
     )
 
     return manager

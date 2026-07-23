@@ -441,6 +441,13 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "scheduler_bootstrap_failed",
         "scheduler_runtime_ready",
         "scheduler_runtime_shutdown",
+        "rollout_created",
+        "rollout_started",
+        "rollout_paused",
+        "rollout_resumed",
+        "rollout_completed",
+        "rollout_failed",
+        "rollout_cancelled",
     }
 
 

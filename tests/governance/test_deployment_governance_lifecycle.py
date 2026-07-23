@@ -480,7 +480,7 @@ class TestGovernanceLifecycleSingleton:
     def test_get_lifecycle_manager_returns_same_instance(self):
         assert get_lifecycle_manager() is get_lifecycle_manager()
 
-    def test_default_manager_has_all_nine_components(self):
+    def test_default_manager_has_all_ten_components(self):
         names = {c.name for c in get_lifecycle_manager().status()}
 
         assert names == {
@@ -493,6 +493,7 @@ class TestGovernanceLifecycleSingleton:
             "liveness_service",
             "diagnostics_service",
             "scheduler",
+            "rollout_manager",
         }
 
     def test_default_manager_startup_and_shutdown_succeed(self):
@@ -659,6 +660,7 @@ class TestGovernanceLifecycleApi:
             "liveness_service",
             "diagnostics_service",
             "scheduler",
+            "rollout_manager",
         }
         assert payload["failed"] == []
 
@@ -690,7 +692,7 @@ class TestGovernanceLifecycleApi:
 
         payload = response.json()
 
-        assert len(payload["stopped"]) == 9
+        assert len(payload["stopped"]) == 10
         assert payload["failed"] == []
 
         status_response = client.get("/governance/lifecycle/status")
@@ -713,8 +715,8 @@ class TestGovernanceLifecycleApi:
 
         payload = response.json()
 
-        assert len(payload["stopped"]) == 9
-        assert len(payload["started"]) == 9
+        assert len(payload["stopped"]) == 10
+        assert len(payload["started"]) == 10
 
         status_response = client.get("/governance/lifecycle/status")
 

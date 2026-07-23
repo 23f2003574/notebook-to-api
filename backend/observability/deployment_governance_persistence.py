@@ -369,6 +369,9 @@ if TYPE_CHECKING:
     from .deployment_governance_scheduler_bootstrap import (
         GovernanceSchedulerBootstrap,
     )
+    from .deployment_governance_rollout_manager import (
+        DeploymentRolloutManager,
+    )
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2148,6 +2151,28 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return get_scheduler_bootstrap()
+
+    def build_governance_rollout_manager(
+        self,
+    ) -> "DeploymentRolloutManager":
+        """
+        Return the process-wide governance rollout manager.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: which deployments currently have an active
+        rollout, and each rollout's lifecycle state, needs to be
+        visible to every caller, which a persistence runtime built
+        fresh per request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_rollout_manager import (
+            get_rollout_manager,
+        )
+
+        return get_rollout_manager()
 
     def build_integrity_provider_configuration_service(
         self,

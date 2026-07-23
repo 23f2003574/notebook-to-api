@@ -36,6 +36,7 @@ _COMPONENT_DEPENDENCIES: "dict[str, tuple[str, ...]]" = {
     "liveness_service": ("delivery_runtime",),
     "diagnostics_service": ("delivery_runtime",),
     "scheduler": (),
+    "rollout_manager": ("scheduler",),
 }
 
 

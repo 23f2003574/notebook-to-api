@@ -1929,3 +1929,138 @@ async def post_governance_scheduler_restart():
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return report.to_dict()
+
+
+def _build_rollout_manager():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_rollout_manager()
+
+
+@health_router.get("/rollouts")
+async def get_governance_rollouts():
+    """
+    Return every registered rollout, ordered by created_at then
+    rollout_id.
+    """
+
+    rollouts = _build_rollout_manager().list()
+
+    return [rollout.to_dict() for rollout in rollouts]
+
+
+@health_router.get("/rollouts/{rollout_id}")
+async def get_governance_rollout(rollout_id: str):
+    """
+    Return one rollout's current status snapshot by rollout_id.
+    """
+
+    try:
+        status = _build_rollout_manager().status(rollout_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return status.to_dict()
+
+
+@health_router.post("/rollouts")
+async def post_governance_rollout(
+    deployment_id: str = Query(...),
+    strategy: str = Query(...),
+):
+    """
+    Create a new PENDING rollout for deployment_id.
+    """
+
+    try:
+        rollout = _build_rollout_manager().create(
+            deployment_id, strategy
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return rollout.to_dict()
+
+
+@health_router.post("/rollouts/{rollout_id}/start")
+async def post_governance_rollout_start(rollout_id: str):
+    """
+    Start a registered rollout, transitioning it to RUNNING.
+    """
+
+    manager = _build_rollout_manager()
+
+    try:
+        rollout = manager.start(rollout_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return rollout.to_dict()
+
+
+@health_router.post("/rollouts/{rollout_id}/pause")
+async def post_governance_rollout_pause(rollout_id: str):
+    """
+    Pause a running rollout.
+    """
+
+    manager = _build_rollout_manager()
+
+    try:
+        rollout = manager.pause(rollout_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return rollout.to_dict()
+
+
+@health_router.post("/rollouts/{rollout_id}/resume")
+async def post_governance_rollout_resume(rollout_id: str):
+    """
+    Resume a paused rollout, transitioning it back to RUNNING.
+    """
+
+    manager = _build_rollout_manager()
+
+    try:
+        rollout = manager.resume(rollout_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return rollout.to_dict()
+
+
+@health_router.delete("/rollouts/{rollout_id}")
+async def delete_governance_rollout(rollout_id: str):
+    """
+    Cancel a registered rollout.
+    """
+
+    manager = _build_rollout_manager()
+
+    try:
+        rollout = manager.cancel(rollout_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return rollout.to_dict()
