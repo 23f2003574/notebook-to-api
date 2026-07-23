@@ -2498,3 +2498,174 @@ async def post_governance_canary_rollback(deployment_id: str):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return deployment.to_dict()
+
+
+def _build_rolling_engine():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_rolling_engine()
+
+
+@health_router.get("/rolling")
+async def get_governance_rolling_deployments():
+    """
+    Return every currently tracked rolling deployment, ordered by
+    deployment_id.
+    """
+
+    deployments = _build_rolling_engine().list()
+
+    return [deployment.to_dict() for deployment in deployments]
+
+
+@health_router.get("/rolling/{deployment_id}")
+async def get_governance_rolling_deployment(deployment_id: str):
+    """
+    Return one deployment's current rolling deployment state.
+    """
+
+    try:
+        status = _build_rolling_engine().status(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return status.to_dict()
+
+
+@health_router.post("/rolling/{deployment_id}/deploy")
+async def post_governance_rolling_deploy(
+    deployment_id: str,
+    target_version: str = Query(...),
+    total_instances: int = Query(..., gt=0),
+    batch_size: "int | None" = Query(default=None),
+    batch_percentage: "int | None" = Query(default=None),
+):
+    """
+    Start a new rolling update for deployment_id.
+    """
+
+    engine = _build_rolling_engine()
+
+    try:
+        deployment = engine.deploy(
+            deployment_id,
+            target_version,
+            total_instances,
+            batch_size=batch_size,
+            batch_percentage=batch_percentage,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return deployment.to_dict()
+
+
+@health_router.post("/rolling/{deployment_id}/next-batch")
+async def post_governance_rolling_next_batch(deployment_id: str):
+    """
+    Apply the next batch of deployment_id's rolling update.
+    """
+
+    engine = _build_rolling_engine()
+
+    try:
+        deployment = engine.next_batch(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return deployment.to_dict()
+
+
+@health_router.post("/rolling/{deployment_id}/validate-batch")
+async def post_governance_rolling_validate_batch(deployment_id: str):
+    """
+    Validate deployment_id's most recently applied batch. Not part of
+    the originally specified endpoint set, but added alongside it:
+    every next-batch call after the first unconditionally requires a
+    passing validation of the previous batch, so without this there
+    would be no way to progress a rolling update past its first batch
+    over the API. A failing validation pauses the rollout.
+    """
+
+    engine = _build_rolling_engine()
+
+    try:
+        result = engine.validate_batch(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return result.to_dict()
+
+
+@health_router.post("/rolling/{deployment_id}/pause")
+async def post_governance_rolling_pause(deployment_id: str):
+    """
+    Pause deployment_id's rolling update, blocking further batches
+    until resumed.
+    """
+
+    engine = _build_rolling_engine()
+
+    try:
+        deployment = engine.pause(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return deployment.to_dict()
+
+
+@health_router.post("/rolling/{deployment_id}/resume")
+async def post_governance_rolling_resume(deployment_id: str):
+    """
+    Resume deployment_id's paused rolling update.
+    """
+
+    engine = _build_rolling_engine()
+
+    try:
+        deployment = engine.resume(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return deployment.to_dict()
+
+
+@health_router.post("/rolling/{deployment_id}/rollback")
+async def post_governance_rolling_rollback(deployment_id: str):
+    """
+    Restore deployment_id's already-updated instances to their
+    previous version and mark the rollout terminal.
+    """
+
+    engine = _build_rolling_engine()
+
+    try:
+        deployment = engine.rollback(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return deployment.to_dict()

@@ -464,6 +464,14 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "canary_completed",
         "canary_failed",
         "canary_rolled_back",
+        "rolling_started",
+        "rolling_batch_started",
+        "rolling_batch_completed",
+        "rolling_paused",
+        "rolling_resumed",
+        "rolling_completed",
+        "rolling_failed",
+        "rolling_rolled_back",
     }
 
 

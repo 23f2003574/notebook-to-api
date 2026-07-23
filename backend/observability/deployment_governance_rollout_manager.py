@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     )
     from .deployment_governance_canary import CanaryDeploymentEngine
     from .deployment_governance_event_bus import GovernanceEventBus
+    from .deployment_governance_rolling import RollingDeploymentEngine
     from .deployment_governance_version_registry import (
         DeploymentVersionRegistry,
     )
@@ -167,6 +168,7 @@ class DeploymentRolloutManager:
         version_registry: "DeploymentVersionRegistry | None" = None,
         blue_green_engine: "BlueGreenDeploymentEngine | None" = None,
         canary_engine: "CanaryDeploymentEngine | None" = None,
+        rolling_engine: "RollingDeploymentEngine | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
@@ -187,6 +189,8 @@ class DeploymentRolloutManager:
         self._blue_green_engine = blue_green_engine
 
         self._canary_engine = canary_engine
+
+        self._rolling_engine = rolling_engine
 
     def create(
         self, deployment_id: str, strategy: str
@@ -408,11 +412,14 @@ class DeploymentRolloutManager:
         (CanaryDeploymentEngine.promote) — a canary's remaining
         progression (further promote()/evaluate() cycles) is still
         driven externally; this only takes the one step completing
-        the rollout represents. Either way, if the relevant engine has
-        nothing staged for this deployment_id, or isn't ready for that
-        step (e.g. the canary hasn't passed a health evaluation yet),
-        that delegation is silently skipped rather than failing
-        rollout completion.
+        the rollout represents. A strategy="ROLLING" rollout with a
+        rolling_engine wired in gets the same one-step treatment,
+        delegating to RollingDeploymentEngine.next_batch(). Either
+        way, if the relevant engine has nothing staged for this
+        deployment_id, or isn't ready for that step (e.g. the canary
+        hasn't passed a health evaluation yet, or the rolling
+        deployment is paused), that delegation is silently skipped
+        rather than failing rollout completion.
         """
 
         was_already_completed = self.status(rollout_id).state == (
@@ -446,6 +453,18 @@ class DeploymentRolloutManager:
             ):
                 try:
                     self._canary_engine.promote(rollout.deployment_id)
+
+                except (KeyError, ValueError):
+                    pass
+
+            elif (
+                rollout.strategy == "ROLLING"
+                and self._rolling_engine is not None
+            ):
+                try:
+                    self._rolling_engine.next_batch(
+                        rollout.deployment_id
+                    )
 
                 except (KeyError, ValueError):
                     pass
@@ -562,12 +581,14 @@ def build_default_governance_rollout_manager() -> (
     """
     Build the process-wide governance rollout manager, wired to the
     process-wide governance event bus, deployment version registry,
-    Blue/Green deployment engine, and canary deployment engine.
+    Blue/Green deployment engine, canary deployment engine, and
+    rolling update engine.
     """
 
     from .deployment_governance_blue_green import get_blue_green_engine
     from .deployment_governance_canary import get_canary_engine
     from .deployment_governance_event_bus import get_event_bus
+    from .deployment_governance_rolling import get_rolling_engine
     from .deployment_governance_version_registry import (
         get_version_registry,
     )
@@ -577,6 +598,7 @@ def build_default_governance_rollout_manager() -> (
         version_registry=get_version_registry(),
         blue_green_engine=get_blue_green_engine(),
         canary_engine=get_canary_engine(),
+        rolling_engine=get_rolling_engine(),
     )
 
 

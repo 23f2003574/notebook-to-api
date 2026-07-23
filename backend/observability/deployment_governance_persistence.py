@@ -379,6 +379,7 @@ if TYPE_CHECKING:
         BlueGreenDeploymentEngine,
     )
     from .deployment_governance_canary import CanaryDeploymentEngine
+    from .deployment_governance_rolling import RollingDeploymentEngine
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2248,6 +2249,27 @@ class DeploymentGovernancePersistenceRuntime:
         from .deployment_governance_canary import get_canary_engine
 
         return get_canary_engine()
+
+    def build_governance_rolling_engine(
+        self,
+    ) -> "RollingDeploymentEngine":
+        """
+        Return the process-wide rolling update engine.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: which deployments have an active rolling
+        update, and their progression/history, needs to be visible to
+        every caller (including the rollout manager delegating
+        strategy="ROLLING" completion to it), which a persistence
+        runtime built fresh per request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_rolling import get_rolling_engine
+
+        return get_rolling_engine()
 
     def build_integrity_provider_configuration_service(
         self,

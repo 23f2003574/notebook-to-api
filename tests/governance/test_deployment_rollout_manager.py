@@ -431,6 +431,90 @@ class TestCanaryIntegration:
         assert engine.list() == ()
 
 
+class TestRollingIntegration:
+
+    def test_complete_with_no_engine_wired_is_a_plain_completion(self):
+        manager = _manager()
+        rollout = manager.create("dep-1", "ROLLING")
+        manager.start(rollout.rollout_id)
+
+        completed = manager.complete(rollout.rollout_id)
+
+        assert completed.state == "COMPLETED"
+
+    def test_complete_delegates_a_single_next_batch(self):
+        from backend.observability.deployment_governance_rolling import (
+            RollingDeploymentEngine,
+        )
+
+        engine = RollingDeploymentEngine(clock=_clock)
+        engine.deploy("dep-1", "1.1.0", 10, batch_size=3)
+
+        manager = DeploymentRolloutManager(
+            clock=_clock, rolling_engine=engine
+        )
+        rollout = manager.create("dep-1", "ROLLING")
+        manager.start(rollout.rollout_id)
+
+        manager.complete(rollout.rollout_id)
+
+        assert engine.status("dep-1").updated_instances == 3
+
+    def test_complete_with_nothing_staged_in_the_engine_does_not_fail(self):
+        from backend.observability.deployment_governance_rolling import (
+            RollingDeploymentEngine,
+        )
+
+        engine = RollingDeploymentEngine(clock=_clock)
+
+        manager = DeploymentRolloutManager(
+            clock=_clock, rolling_engine=engine
+        )
+        rollout = manager.create("dep-1", "ROLLING")
+        manager.start(rollout.rollout_id)
+
+        completed = manager.complete(rollout.rollout_id)
+
+        assert completed.state == "COMPLETED"
+
+    def test_complete_with_paused_deployment_does_not_fail(self):
+        from backend.observability.deployment_governance_rolling import (
+            RollingDeploymentEngine,
+        )
+
+        engine = RollingDeploymentEngine(clock=_clock)
+        engine.deploy("dep-1", "1.1.0", 10, batch_size=3)
+        engine.pause("dep-1")
+
+        manager = DeploymentRolloutManager(
+            clock=_clock, rolling_engine=engine
+        )
+        rollout = manager.create("dep-1", "ROLLING")
+        manager.start(rollout.rollout_id)
+
+        completed = manager.complete(rollout.rollout_id)
+
+        assert completed.state == "COMPLETED"
+        assert engine.status("dep-1").updated_instances == 0
+
+    def test_non_rolling_strategy_never_touches_the_engine(self):
+        from backend.observability.deployment_governance_rolling import (
+            RollingDeploymentEngine,
+        )
+
+        engine = RollingDeploymentEngine(clock=_clock)
+
+        manager = DeploymentRolloutManager(
+            clock=_clock, rolling_engine=engine
+        )
+        rollout = manager.create("dep-1", "CANARY")
+        manager.start(rollout.rollout_id)
+
+        manager.complete(rollout.rollout_id)
+
+        assert engine.list() == ()
+
+
 # --- Lifecycle transitions -----------------------------------------------
 
 
