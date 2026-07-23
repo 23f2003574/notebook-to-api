@@ -504,6 +504,8 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "rollout_policy_removed",
         "rollout_policy_allowed",
         "rollout_policy_denied",
+        "rollout_dashboard_generated",
+        "rollout_dashboard_refreshed",
     }
 
 

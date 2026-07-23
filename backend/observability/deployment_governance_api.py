@@ -1951,6 +1951,92 @@ async def get_governance_rollouts():
     return [rollout.to_dict() for rollout in rollouts]
 
 
+def _build_rollout_dashboard():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_rollout_dashboard()
+
+
+@health_router.get("/rollouts/dashboard")
+async def get_governance_rollouts_dashboard():
+    """
+    Return the full cross-subsystem rollout dashboard, serving a
+    cached copy if the dashboard is configured with a nonzero
+    cache_ttl_seconds and one was built recently enough.
+
+    Registered before /rollouts/{rollout_id}: FastAPI matches path
+    routes in registration order, and "dashboard" would otherwise be
+    captured as a literal rollout_id by that route first — the same
+    reason /recovery/all precedes /recovery/{component} above.
+    """
+
+    dashboard = _build_rollout_dashboard().overview()
+
+    return dashboard.to_dict()
+
+
+@health_router.get("/rollouts/dashboard/deployments")
+async def get_governance_rollouts_dashboard_deployments():
+    """
+    Return one entry per deployment_id the dashboard could find data
+    for, ordered by deployment_id.
+    """
+
+    entries = _build_rollout_dashboard().deployments()
+
+    return [entry.to_dict() for entry in entries]
+
+
+@health_router.get("/rollouts/dashboard/traffic")
+async def get_governance_rollouts_dashboard_traffic():
+    """
+    Return the current routing snapshot per deployment, ordered by
+    deployment_id.
+    """
+
+    snapshots = _build_rollout_dashboard().traffic()
+
+    return [snapshot.to_dict() for snapshot in snapshots]
+
+
+@health_router.get("/rollouts/dashboard/health")
+async def get_governance_rollouts_dashboard_health():
+    """
+    Return the most recent health snapshot per deployment, ordered by
+    deployment_id.
+    """
+
+    snapshots = _build_rollout_dashboard().health()
+
+    return [snapshot.to_dict() for snapshot in snapshots]
+
+
+@health_router.get("/rollouts/dashboard/analytics")
+async def get_governance_rollouts_dashboard_analytics():
+    """
+    Return the current global rollout analytics snapshot, or null if
+    no analytics engine is wired.
+    """
+
+    snapshot = _build_rollout_dashboard().analytics()
+
+    return snapshot.to_dict() if snapshot is not None else None
+
+
+@health_router.get("/rollouts/dashboard/rollbacks")
+async def get_governance_rollouts_dashboard_rollbacks():
+    """
+    Return the current rollback plan per deployment, ordered by
+    deployment_id.
+    """
+
+    plans = _build_rollout_dashboard().rollbacks()
+
+    return [plan.to_dict() for plan in plans]
+
+
 @health_router.get("/rollouts/{rollout_id}")
 async def get_governance_rollout(rollout_id: str):
     """

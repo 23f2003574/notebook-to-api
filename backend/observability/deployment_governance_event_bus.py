@@ -144,6 +144,8 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "rollout_policy_removed",
     "rollout_policy_allowed",
     "rollout_policy_denied",
+    "rollout_dashboard_generated",
+    "rollout_dashboard_refreshed",
 )
 
 
