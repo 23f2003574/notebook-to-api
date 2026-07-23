@@ -452,6 +452,11 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "deployment_updated",
         "deployment_removed",
         "deployment_revision_created",
+        "blue_green_started",
+        "green_environment_ready",
+        "traffic_switched",
+        "blue_green_completed",
+        "blue_green_rollback",
     }
 
 

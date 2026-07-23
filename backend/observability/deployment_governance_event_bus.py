@@ -92,6 +92,11 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "deployment_updated",
     "deployment_removed",
     "deployment_revision_created",
+    "blue_green_started",
+    "green_environment_ready",
+    "traffic_switched",
+    "blue_green_completed",
+    "blue_green_rollback",
 )
 
 

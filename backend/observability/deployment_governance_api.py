@@ -2195,3 +2195,130 @@ async def delete_governance_deployment(deployment_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return {"removed": deployment_id}
+
+
+def _build_blue_green_engine():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_blue_green_engine()
+
+
+@health_router.get("/blue-green")
+async def get_governance_blue_green_deployments():
+    """
+    Return every currently tracked Blue/Green deployment, ordered by
+    deployment_id.
+    """
+
+    deployments = _build_blue_green_engine().list()
+
+    return [deployment.to_dict() for deployment in deployments]
+
+
+@health_router.get("/blue-green/{deployment_id}")
+async def get_governance_blue_green_deployment(deployment_id: str):
+    """
+    Return one deployment's current Blue/Green state.
+    """
+
+    try:
+        status = _build_blue_green_engine().status(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return status.to_dict()
+
+
+@health_router.post("/blue-green/{deployment_id}/deploy")
+async def post_governance_blue_green_deploy(
+    deployment_id: str,
+    green_version: str = Query(...),
+    blue_version: "str | None" = Query(default=None),
+):
+    """
+    Deploy green_version into deployment_id's idle environment. If
+    blue_version is omitted, it is resolved from the Version Registry.
+    """
+
+    engine = _build_blue_green_engine()
+
+    try:
+        deployment = engine.deploy(
+            deployment_id, green_version, blue_version=blue_version
+        )
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return deployment.to_dict()
+
+
+@health_router.post("/blue-green/{deployment_id}/validate")
+async def post_governance_blue_green_validate(deployment_id: str):
+    """
+    Validate deployment_id's currently idle environment, gating
+    POST .../switch. Not part of the originally specified endpoint
+    set, but added alongside it: switch() unconditionally requires a
+    passing validate() first, so without this there would be no way
+    to ever successfully call POST .../switch over the API.
+    """
+
+    engine = _build_blue_green_engine()
+
+    try:
+        passed = engine.validate(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"deployment_id": deployment_id, "validated": passed}
+
+
+@health_router.post("/blue-green/{deployment_id}/switch")
+async def post_governance_blue_green_switch(deployment_id: str):
+    """
+    Atomically switch deployment_id's live traffic to its currently
+    idle environment. Requires a prior, passing
+    POST .../validate call for the currently deployed idle
+    environment.
+    """
+
+    engine = _build_blue_green_engine()
+
+    try:
+        result = engine.switch(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return result.to_dict()
+
+
+@health_router.post("/blue-green/{deployment_id}/rollback")
+async def post_governance_blue_green_rollback(deployment_id: str):
+    """
+    Restore deployment_id's previously active environment, reverting
+    its most recent switch.
+    """
+
+    engine = _build_blue_green_engine()
+
+    try:
+        result = engine.rollback(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return result.to_dict()

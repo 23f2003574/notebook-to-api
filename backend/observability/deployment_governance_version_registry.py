@@ -21,7 +21,17 @@ _SEMVER_PATTERN = re.compile(
 _CHECKSUM_LENGTH = 64
 
 
-def _is_semantic_version(value: str) -> bool:
+def is_semantic_version(value: str) -> bool:
+    """
+    Whether value is a valid MAJOR.MINOR.PATCH semantic version
+    (with optional -prerelease/+build suffixes).
+
+    Public (unlike _is_sha256_hex below): deployment_governance_
+    blue_green validates blue_version/green_version against the same
+    rule this registry uses for DeploymentVersion.version, so both
+    modules share one definition instead of drifting apart.
+    """
+
     return bool(_SEMVER_PATTERN.match(value))
 
 
@@ -82,7 +92,7 @@ class DeploymentVersion:
         if not self.deployment_id:
             raise ValueError("deployment_id must not be empty")
 
-        if not _is_semantic_version(self.version):
+        if not is_semantic_version(self.version):
             raise ValueError(
                 f"version '{self.version}' is not a valid semantic "
                 "version (expected MAJOR.MINOR.PATCH)"

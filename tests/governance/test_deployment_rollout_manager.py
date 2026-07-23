@@ -255,6 +255,96 @@ class TestVersionRegistryIntegration:
         assert rollout.deployment_id == "dep-singleton-wiring"
 
 
+class TestBlueGreenIntegration:
+
+    def test_complete_with_no_engine_wired_is_a_plain_completion(self):
+        manager = _manager()
+        rollout = manager.create("dep-1", "BLUE_GREEN")
+        manager.start(rollout.rollout_id)
+
+        completed = manager.complete(rollout.rollout_id)
+
+        assert completed.state == "COMPLETED"
+
+    def test_complete_delegates_to_a_validated_blue_green_engine(self):
+        from backend.observability.deployment_governance_blue_green import (
+            BlueGreenDeploymentEngine,
+        )
+
+        engine = BlueGreenDeploymentEngine(clock=_clock)
+        engine.deploy("dep-1", "1.1.0", blue_version="1.0.0")
+        engine.validate("dep-1")
+
+        manager = DeploymentRolloutManager(
+            clock=_clock, blue_green_engine=engine
+        )
+        rollout = manager.create("dep-1", "BLUE_GREEN")
+        manager.start(rollout.rollout_id)
+
+        manager.complete(rollout.rollout_id)
+
+        assert engine.status("dep-1").active_environment == "GREEN"
+
+    def test_complete_with_nothing_staged_in_the_engine_does_not_fail(self):
+        from backend.observability.deployment_governance_blue_green import (
+            BlueGreenDeploymentEngine,
+        )
+
+        engine = BlueGreenDeploymentEngine(clock=_clock)
+
+        manager = DeploymentRolloutManager(
+            clock=_clock, blue_green_engine=engine
+        )
+        rollout = manager.create("dep-1", "BLUE_GREEN")
+        manager.start(rollout.rollout_id)
+
+        completed = manager.complete(rollout.rollout_id)
+
+        assert completed.state == "COMPLETED"
+
+    def test_complete_only_delegates_once_even_if_called_again(self):
+        from backend.observability.deployment_governance_blue_green import (
+            BlueGreenDeploymentEngine,
+        )
+
+        engine = BlueGreenDeploymentEngine(clock=_clock)
+        engine.deploy("dep-1", "1.1.0", blue_version="1.0.0")
+        engine.validate("dep-1")
+
+        manager = DeploymentRolloutManager(
+            clock=_clock, blue_green_engine=engine
+        )
+        rollout = manager.create("dep-1", "BLUE_GREEN")
+        manager.start(rollout.rollout_id)
+        manager.complete(rollout.rollout_id)
+
+        # A second switch would require re-validation; if complete()
+        # delegated again here it would raise ValueError internally,
+        # which would be swallowed either way — but confirming state
+        # stays GREEN either way is a stronger assertion of "only
+        # delegates once" than checking there's no exception.
+        manager.complete(rollout.rollout_id)
+
+        assert engine.status("dep-1").active_environment == "GREEN"
+
+    def test_non_blue_green_strategy_never_touches_the_engine(self):
+        from backend.observability.deployment_governance_blue_green import (
+            BlueGreenDeploymentEngine,
+        )
+
+        engine = BlueGreenDeploymentEngine(clock=_clock)
+
+        manager = DeploymentRolloutManager(
+            clock=_clock, blue_green_engine=engine
+        )
+        rollout = manager.create("dep-1", "CANARY")
+        manager.start(rollout.rollout_id)
+
+        manager.complete(rollout.rollout_id)
+
+        assert engine.list() == ()
+
+
 # --- Lifecycle transitions -----------------------------------------------
 
 

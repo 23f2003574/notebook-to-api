@@ -375,6 +375,9 @@ if TYPE_CHECKING:
     from .deployment_governance_version_registry import (
         DeploymentVersionRegistry,
     )
+    from .deployment_governance_blue_green import (
+        BlueGreenDeploymentEngine,
+    )
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2200,6 +2203,29 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return get_version_registry()
+
+    def build_governance_blue_green_engine(
+        self,
+    ) -> "BlueGreenDeploymentEngine":
+        """
+        Return the process-wide Blue/Green deployment engine.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: which environment is currently live for each
+        deployment needs to be visible to every caller (including the
+        rollout manager delegating strategy="BLUE_GREEN" completion to
+        it), which a persistence runtime built fresh per request
+        cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_blue_green import (
+            get_blue_green_engine,
+        )
+
+        return get_blue_green_engine()
 
     def build_integrity_provider_configuration_service(
         self,

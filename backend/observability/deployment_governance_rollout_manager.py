@@ -7,6 +7,9 @@ from typing import Any, Callable, TYPE_CHECKING
 from uuid import uuid4
 
 if TYPE_CHECKING:
+    from .deployment_governance_blue_green import (
+        BlueGreenDeploymentEngine,
+    )
     from .deployment_governance_event_bus import GovernanceEventBus
     from .deployment_governance_version_registry import (
         DeploymentVersionRegistry,
@@ -161,6 +164,7 @@ class DeploymentRolloutManager:
         clock: Callable[[], datetime] | None = None,
         event_bus: "GovernanceEventBus | None" = None,
         version_registry: "DeploymentVersionRegistry | None" = None,
+        blue_green_engine: "BlueGreenDeploymentEngine | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
@@ -177,6 +181,8 @@ class DeploymentRolloutManager:
         self._event_bus = event_bus
 
         self._version_registry = version_registry
+
+        self._blue_green_engine = blue_green_engine
 
     def create(
         self, deployment_id: str, strategy: str
@@ -387,16 +393,41 @@ class DeploymentRolloutManager:
         Transition rollout_id from RUNNING to COMPLETED.
 
         Idempotent: a no-op returning the unchanged Rollout if already
-        COMPLETED.
+        COMPLETED. For a strategy="BLUE_GREEN" rollout with a
+        blue_green_engine wired in, completing it for the first time
+        also asks that engine to switch traffic
+        (BlueGreenDeploymentEngine.switch) for this rollout's
+        deployment_id — completing a Blue/Green rollout is what
+        actually cuts traffic over. If the engine has nothing staged
+        for this deployment_id (it was never deploy()'d/validate()'d
+        through the engine directly), that delegation is silently
+        skipped rather than failing rollout completion.
         """
 
-        return self._transition(
+        was_already_completed = self.status(rollout_id).state == (
+            "COMPLETED"
+        )
+
+        rollout = self._transition(
             rollout_id,
             to_state="COMPLETED",
             stage="completed",
             progress=1.0,
             event_type="rollout_completed",
         )
+
+        if (
+            not was_already_completed
+            and rollout.strategy == "BLUE_GREEN"
+            and self._blue_green_engine is not None
+        ):
+            try:
+                self._blue_green_engine.switch(rollout.deployment_id)
+
+            except (KeyError, ValueError):
+                pass
+
+        return rollout
 
     def fail(
         self, rollout_id: str, reason: "str | None" = None
@@ -507,9 +538,11 @@ def build_default_governance_rollout_manager() -> (
 ):
     """
     Build the process-wide governance rollout manager, wired to the
-    process-wide governance event bus and deployment version registry.
+    process-wide governance event bus, deployment version registry,
+    and Blue/Green deployment engine.
     """
 
+    from .deployment_governance_blue_green import get_blue_green_engine
     from .deployment_governance_event_bus import get_event_bus
     from .deployment_governance_version_registry import (
         get_version_registry,
@@ -518,6 +551,7 @@ def build_default_governance_rollout_manager() -> (
     return DeploymentRolloutManager(
         event_bus=get_event_bus(),
         version_registry=get_version_registry(),
+        blue_green_engine=get_blue_green_engine(),
     )
 
 
