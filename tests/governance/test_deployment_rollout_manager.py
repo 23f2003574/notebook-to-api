@@ -515,6 +515,97 @@ class TestRollingIntegration:
         assert engine.list() == ()
 
 
+class TestProgressiveIntegration:
+
+    def test_complete_with_no_engine_wired_is_a_plain_completion(self):
+        manager = _manager()
+        rollout = manager.create("dep-1", "PROGRESSIVE")
+        manager.start(rollout.rollout_id)
+
+        completed = manager.complete(rollout.rollout_id)
+
+        assert completed.state == "COMPLETED"
+
+    def test_complete_delegates_a_single_advance(self):
+        from backend.observability.deployment_governance_progressive_delivery import (  # noqa: E501
+            ProgressiveDeliveryEngine,
+        )
+
+        engine = ProgressiveDeliveryEngine(clock=_clock)
+        engine.deploy(
+            "dep-1",
+            [
+                ("stage-1", "HEALTH_VALIDATION", False),
+                ("stage-2", "HEALTH_VALIDATION", False),
+            ],
+        )
+
+        manager = DeploymentRolloutManager(
+            clock=_clock, progressive_engine=engine
+        )
+        rollout = manager.create("dep-1", "PROGRESSIVE")
+        manager.start(rollout.rollout_id)
+
+        manager.complete(rollout.rollout_id)
+
+        assert engine.status("dep-1").current_stage == 1
+
+    def test_complete_with_nothing_staged_in_the_engine_does_not_fail(self):
+        from backend.observability.deployment_governance_progressive_delivery import (  # noqa: E501
+            ProgressiveDeliveryEngine,
+        )
+
+        engine = ProgressiveDeliveryEngine(clock=_clock)
+
+        manager = DeploymentRolloutManager(
+            clock=_clock, progressive_engine=engine
+        )
+        rollout = manager.create("dep-1", "PROGRESSIVE")
+        manager.start(rollout.rollout_id)
+
+        completed = manager.complete(rollout.rollout_id)
+
+        assert completed.state == "COMPLETED"
+
+    def test_complete_with_a_pending_approval_gate_does_not_fail(self):
+        from backend.observability.deployment_governance_progressive_delivery import (  # noqa: E501
+            ProgressiveDeliveryEngine,
+        )
+
+        engine = ProgressiveDeliveryEngine(clock=_clock)
+        engine.deploy(
+            "dep-1", [("approval", "MANUAL_APPROVAL", True)],
+        )
+
+        manager = DeploymentRolloutManager(
+            clock=_clock, progressive_engine=engine
+        )
+        rollout = manager.create("dep-1", "PROGRESSIVE")
+        manager.start(rollout.rollout_id)
+
+        completed = manager.complete(rollout.rollout_id)
+
+        assert completed.state == "COMPLETED"
+        assert engine.status("dep-1").state == "AWAITING_APPROVAL"
+
+    def test_non_progressive_strategy_never_touches_the_engine(self):
+        from backend.observability.deployment_governance_progressive_delivery import (  # noqa: E501
+            ProgressiveDeliveryEngine,
+        )
+
+        engine = ProgressiveDeliveryEngine(clock=_clock)
+
+        manager = DeploymentRolloutManager(
+            clock=_clock, progressive_engine=engine
+        )
+        rollout = manager.create("dep-1", "ROLLING")
+        manager.start(rollout.rollout_id)
+
+        manager.complete(rollout.rollout_id)
+
+        assert engine.list() == ()
+
+
 # --- Lifecycle transitions -----------------------------------------------
 
 

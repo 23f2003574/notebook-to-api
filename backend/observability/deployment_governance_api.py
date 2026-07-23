@@ -2669,3 +2669,165 @@ async def post_governance_rolling_rollback(deployment_id: str):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return deployment.to_dict()
+
+
+def _build_progressive_delivery_engine():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_progressive_delivery_engine()
+
+
+@health_router.get("/progressive")
+async def get_governance_progressive_deployments():
+    """
+    Return every currently tracked progressive delivery deployment,
+    ordered by deployment_id.
+    """
+
+    deployments = _build_progressive_delivery_engine().list()
+
+    return [deployment.to_dict() for deployment in deployments]
+
+
+@health_router.get("/progressive/{deployment_id}")
+async def get_governance_progressive_deployment(deployment_id: str):
+    """
+    Return one deployment's current progressive delivery state.
+    """
+
+    try:
+        status = _build_progressive_delivery_engine().status(
+            deployment_id
+        )
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return status.to_dict()
+
+
+@health_router.post("/progressive/{deployment_id}/deploy")
+async def post_governance_progressive_deploy(
+    deployment_id: str,
+    stage_names: "list[str]" = Query(...),
+    stage_strategies: "list[str]" = Query(...),
+    stage_approval_required: "list[bool]" = Query(...),
+):
+    """
+    Start a new progressive delivery pipeline for deployment_id.
+    stage_names, stage_strategies, and stage_approval_required are
+    parallel lists, one entry per pipeline stage, in order.
+    """
+
+    if not (
+        len(stage_names)
+        == len(stage_strategies)
+        == len(stage_approval_required)
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "stage_names, stage_strategies, and "
+                "stage_approval_required must be the same length"
+            ),
+        )
+
+    stages = list(
+        zip(stage_names, stage_strategies, stage_approval_required)
+    )
+
+    try:
+        deployment = _build_progressive_delivery_engine().deploy(
+            deployment_id, stages
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return deployment.to_dict()
+
+
+@health_router.post("/progressive/{deployment_id}/advance")
+async def post_governance_progressive_advance(deployment_id: str):
+    """
+    Attempt to complete deployment_id's current stage and move on to
+    the next.
+    """
+
+    engine = _build_progressive_delivery_engine()
+
+    try:
+        deployment = engine.advance(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return deployment.to_dict()
+
+
+@health_router.post("/progressive/{deployment_id}/approve")
+async def post_governance_progressive_approve(deployment_id: str):
+    """
+    Grant deployment_id's pending approval, unblocking the next
+    advance() call.
+    """
+
+    engine = _build_progressive_delivery_engine()
+
+    try:
+        deployment = engine.approve(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return deployment.to_dict()
+
+
+@health_router.post("/progressive/{deployment_id}/reject")
+async def post_governance_progressive_reject(deployment_id: str):
+    """
+    Reject deployment_id's pending approval, automatically rolling the
+    whole deployment back.
+    """
+
+    engine = _build_progressive_delivery_engine()
+
+    try:
+        deployment = engine.reject(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return deployment.to_dict()
+
+
+@health_router.post("/progressive/{deployment_id}/rollback")
+async def post_governance_progressive_rollback(deployment_id: str):
+    """
+    Mark deployment_id's progressive deployment rolled back at
+    whatever stage it is currently on.
+    """
+
+    engine = _build_progressive_delivery_engine()
+
+    try:
+        deployment = engine.rollback(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return deployment.to_dict()

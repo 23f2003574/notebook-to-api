@@ -380,6 +380,9 @@ if TYPE_CHECKING:
     )
     from .deployment_governance_canary import CanaryDeploymentEngine
     from .deployment_governance_rolling import RollingDeploymentEngine
+    from .deployment_governance_progressive_delivery import (
+        ProgressiveDeliveryEngine,
+    )
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2270,6 +2273,30 @@ class DeploymentGovernancePersistenceRuntime:
         from .deployment_governance_rolling import get_rolling_engine
 
         return get_rolling_engine()
+
+    def build_governance_progressive_delivery_engine(
+        self,
+    ) -> "ProgressiveDeliveryEngine":
+        """
+        Return the process-wide progressive delivery engine.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: which deployments have an active progressive
+        delivery pipeline, and their stage progression/history, needs
+        to be visible to every caller (including the rollout manager
+        delegating strategy="PROGRESSIVE" completion to it), which a
+        persistence runtime built fresh per request cannot provide on
+        its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_progressive_delivery import (
+            get_progressive_delivery_engine,
+        )
+
+        return get_progressive_delivery_engine()
 
     def build_integrity_provider_configuration_service(
         self,

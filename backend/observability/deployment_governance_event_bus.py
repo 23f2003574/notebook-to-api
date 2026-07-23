@@ -112,6 +112,15 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "rolling_completed",
     "rolling_failed",
     "rolling_rolled_back",
+    "progressive_started",
+    "stage_started",
+    "stage_completed",
+    "approval_requested",
+    "approval_granted",
+    "approval_rejected",
+    "progressive_completed",
+    "progressive_failed",
+    "progressive_rolled_back",
 )
 
 
