@@ -146,6 +146,11 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "rollout_policy_denied",
     "rollout_dashboard_generated",
     "rollout_dashboard_refreshed",
+    "rollout_bootstrap_started",
+    "rollout_bootstrap_completed",
+    "rollout_bootstrap_failed",
+    "rollout_runtime_ready",
+    "rollout_runtime_shutdown",
 )
 
 

@@ -566,26 +566,34 @@ def build_default_governance_lifecycle_manager() -> (
     API server constructs no worker/scheduler anywhere).
 
     provider_registry, metrics_bootstrap, logging_bootstrap,
-    delivery_runtime, health_service, readiness_service,
-    diagnostics_service, and rollout_manager are all registered with
-    no-op start/stop: there is nothing real for a stateless process to
-    start or stop on their behalf (the rollout manager, like the event
-    bus, is always live once constructed — it has no start/stop of its
-    own), and each is still registered so the dependency graph,
+    delivery_runtime, health_service, readiness_service, and
+    diagnostics_service are all registered with no-op start/stop: there
+    is nothing real for a stateless process to start or stop on their
+    behalf, and each is still registered so the dependency graph,
     startup order, and status() stay complete and honest about every
     component that conceptually exists.
 
-    liveness_service and scheduler are the two exceptions: liveness_
-    service is wired to the real process-wide GovernanceLivenessService
-    singleton, and scheduler is wired to the real process-wide
-    GovernanceSchedulerBootstrap singleton's initialize()/shutdown()
-    (not the bare GovernanceScheduler's own start()/stop() — the
-    bootstrap's pipeline validates the scheduling component graph and
-    restores persisted state before starting the scheduler itself, and
-    saves state back on shutdown), so starting/stopping this manager's
-    liveness_service/scheduler components genuinely starts/resets
-    process liveness tracking and bootstraps/tears down the whole
-    scheduling subsystem.
+    liveness_service, scheduler, and rollout_manager are the
+    exceptions: liveness_service is wired to the real process-wide
+    GovernanceLivenessService singleton; scheduler is wired to the real
+    process-wide GovernanceSchedulerBootstrap singleton's
+    initialize()/shutdown() (not the bare GovernanceScheduler's own
+    start()/stop() — the bootstrap's pipeline validates the scheduling
+    component graph and restores persisted state before starting the
+    scheduler itself, and saves state back on shutdown); and
+    rollout_manager (naming carried over from commit 1, before the
+    rollout subsystem had its own bootstrap — see
+    deployment_governance_rollout_bootstrap.py) is likewise wired to
+    the real process-wide DeploymentRolloutBootstrap singleton's own
+    initialize()/shutdown(), which validates and starts/stops every
+    rollout component (version registry, traffic router, blue/green,
+    canary, rolling, progressive, rollout manager proper, rollback,
+    health, analytics, policy, dashboard) as one unit — not just the
+    DeploymentRolloutManager component alone. So starting/stopping this
+    manager's liveness_service/scheduler/rollout_manager components
+    genuinely starts/resets process liveness tracking, bootstraps/tears
+    down the whole scheduling subsystem, and bootstraps/tears down the
+    whole rollout subsystem, respectively.
 
     A process that does construct a real delivery runtime (a worker
     process, not this API server) should use
@@ -615,6 +623,9 @@ def build_default_governance_lifecycle_manager() -> (
     from .deployment_governance_event_bus import get_event_bus
     from .deployment_governance_liveness import get_liveness_service
     from .deployment_governance_policy import get_policy_engine
+    from .deployment_governance_rollout_bootstrap import (
+        get_rollout_bootstrap,
+    )
     from .deployment_governance_scheduler_bootstrap import (
         get_scheduler_bootstrap,
     )
@@ -662,11 +673,13 @@ def build_default_governance_lifecycle_manager() -> (
         stop=scheduler_bootstrap.shutdown,
     )
 
+    rollout_bootstrap = get_rollout_bootstrap()
+
     manager.register(
         "rollout_manager",
         dependencies=_COMPONENT_DEPENDENCIES["rollout_manager"],
-        start=_noop,
-        stop=_noop,
+        start=rollout_bootstrap.initialize,
+        stop=rollout_bootstrap.shutdown,
     )
 
     return manager

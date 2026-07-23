@@ -506,6 +506,11 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "rollout_policy_denied",
         "rollout_dashboard_generated",
         "rollout_dashboard_refreshed",
+        "rollout_bootstrap_started",
+        "rollout_bootstrap_completed",
+        "rollout_bootstrap_failed",
+        "rollout_runtime_ready",
+        "rollout_runtime_shutdown",
     }
 
 
