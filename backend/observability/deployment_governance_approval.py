@@ -7,6 +7,7 @@ from typing import Any, Callable, TYPE_CHECKING
 from uuid import uuid4
 
 if TYPE_CHECKING:
+    from .deployment_governance_audit import GovernanceAuditService
     from .deployment_governance_event_bus import GovernanceEventBus
     from .deployment_governance_rbac import DeploymentRBACEngine
 
@@ -144,6 +145,7 @@ class DeploymentApprovalEngine:
         clock: "Callable[[], datetime] | None" = None,
         event_bus: "GovernanceEventBus | None" = None,
         rbac_engine: "DeploymentRBACEngine | None" = None,
+        audit_service: "GovernanceAuditService | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
@@ -162,6 +164,8 @@ class DeploymentApprovalEngine:
         self._event_bus = event_bus
 
         self._rbac_engine = rbac_engine
+
+        self._audit_service = audit_service
 
     def set_rbac_engine(
         self, rbac_engine: "DeploymentRBACEngine"
@@ -226,6 +230,12 @@ class DeploymentApprovalEngine:
 
         self._publish(
             "approval_requested", request.request_id, request.to_dict()
+        )
+
+        self._record_audit(
+            action="approval_requested", actor=requester,
+            resource=request.request_id, outcome="success",
+            metadata=request.to_dict(),
         )
 
         return request
@@ -312,6 +322,12 @@ class DeploymentApprovalEngine:
 
         self._publish(
             "approval_cancelled", request_id, updated.to_dict()
+        )
+
+        self._record_audit(
+            action="approval_cancelled", actor=updated.requester,
+            resource=request_id, outcome="success",
+            metadata=updated.to_dict(),
         )
 
         return updated
@@ -468,6 +484,12 @@ class DeploymentApprovalEngine:
 
         self._publish(event_type, request_id, updated.to_dict())
 
+        self._record_audit(
+            action=event_type, actor=approver, resource=request_id,
+            outcome="success",
+            metadata={**updated.to_dict(), "reason": reason},
+        )
+
         return updated
 
     def _require_decidable(
@@ -513,20 +535,39 @@ class DeploymentApprovalEngine:
             event_type, source=source, payload=payload
         )
 
+    def _record_audit(
+        self,
+        *,
+        action: str,
+        actor: str,
+        resource: str,
+        outcome: str,
+        metadata: "dict[str, Any] | None" = None,
+    ) -> None:
+        if self._audit_service is None:
+            return
+
+        self._audit_service.record(
+            action=action, actor=actor, resource=resource,
+            outcome=outcome, metadata=metadata or {},
+        )
+
 
 def build_default_governance_approval_engine() -> (
     DeploymentApprovalEngine
 ):
     """
     Build the process-wide deployment approval engine, wired to the
-    process-wide governance event bus and RBAC engine.
+    process-wide governance event bus, RBAC engine, and audit service.
     """
 
+    from .deployment_governance_audit import get_audit_service
     from .deployment_governance_event_bus import get_event_bus
     from .deployment_governance_rbac import get_rbac_engine
 
     return DeploymentApprovalEngine(
         event_bus=get_event_bus(), rbac_engine=get_rbac_engine(),
+        audit_service=get_audit_service(),
     )
 
 

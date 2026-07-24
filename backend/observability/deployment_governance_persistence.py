@@ -405,6 +405,7 @@ if TYPE_CHECKING:
     )
     from .deployment_governance_secret_vault import DeploymentSecretVault
     from .deployment_governance_approval import DeploymentApprovalEngine
+    from .deployment_governance_audit_trail import DeploymentAuditService
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2530,6 +2531,32 @@ class DeploymentGovernancePersistenceRuntime:
         from .deployment_governance_approval import get_approval_engine
 
         return get_approval_engine()
+
+    def build_governance_security_audit_service(
+        self,
+    ) -> "DeploymentAuditService":
+        """
+        Return the process-wide deployment audit trail service — a
+        query-oriented facade over the same underlying
+        GovernanceAuditService build_governance_audit_trail_service
+        above returns (named distinctly from that pre-existing method
+        for exactly the same reason its own docstring gives: two
+        different concepts that happen to share the word "audit").
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: it exists so every caller sees the same
+        already-recorded audit events, which a persistence runtime
+        built fresh per request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_audit_trail import (
+            get_audit_trail_service,
+        )
+
+        return get_audit_trail_service()
 
     def build_integrity_provider_configuration_service(
         self,

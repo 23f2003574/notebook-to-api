@@ -228,6 +228,11 @@ class DeploymentRBACEngine:
 
         self._publish("role_registered", name, role.to_dict())
 
+        self._record_audit(
+            action="role_registered", actor="system", resource=name,
+            outcome="success", metadata=role.to_dict(),
+        )
+
         return role
 
     def update_role_permissions(
@@ -273,6 +278,11 @@ class DeploymentRBACEngine:
 
         self._publish("role_removed", name, {})
 
+        self._record_audit(
+            action="role_removed", actor="system", resource=name,
+            outcome="success",
+        )
+
     def assign_role(
         self, principal_id: str, role: str
     ) -> DeploymentPrincipal:
@@ -305,6 +315,12 @@ class DeploymentRBACEngine:
             "role_assigned", principal_id, {"role": role}
         )
 
+        self._record_audit(
+            action="role_assigned", actor="system",
+            resource=principal_id, outcome="success",
+            metadata={"role": role},
+        )
+
         return principal
 
     def revoke_role(
@@ -329,10 +345,18 @@ class DeploymentRBACEngine:
             updated = current - {role}
             self._principal_roles[principal_id] = updated
 
-            return DeploymentPrincipal(
+            principal = DeploymentPrincipal(
                 principal_id=principal_id,
                 roles=tuple(sorted(updated)),
             )
+
+        self._record_audit(
+            action="role_revoked", actor="system",
+            resource=principal_id, outcome="success",
+            metadata={"role": role},
+        )
+
+        return principal
 
     def authorize(
         self, principal_id: str, permission: str
@@ -513,6 +537,23 @@ class DeploymentRBACEngine:
 
         self._event_bus.publish(
             event_type, source=source, payload=payload
+        )
+
+    def _record_audit(
+        self,
+        *,
+        action: str,
+        actor: str,
+        resource: str,
+        outcome: str,
+        metadata: "dict[str, Any] | None" = None,
+    ) -> None:
+        if self._audit_service is None:
+            return
+
+        self._audit_service.record(
+            action=action, actor=actor, resource=resource,
+            outcome=outcome, metadata=metadata or {},
         )
 
 

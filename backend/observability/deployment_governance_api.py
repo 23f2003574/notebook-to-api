@@ -3802,3 +3802,76 @@ async def get_governance_security_approval(request_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return request.to_dict()
+
+
+def _build_security_audit_service():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_security_audit_service()
+
+
+@health_router.post("/security/audit")
+async def post_governance_security_audit(
+    actor: str = Query(...),
+    action: str = Query(...),
+    resource: str = Query(...),
+):
+    """
+    Record a new deployment audit event.
+    """
+
+    event = _build_security_audit_service().record(
+        actor=actor, action=action, resource=resource
+    )
+
+    return event.to_dict()
+
+
+@health_router.get("/security/audit")
+async def get_governance_security_audit():
+    """
+    Return every currently recorded deployment audit event, ordered
+    by timestamp then event_id.
+    """
+
+    events = _build_security_audit_service().list()
+
+    return [event.to_dict() for event in events]
+
+
+@health_router.get("/security/audit/{event_id}")
+async def get_governance_security_audit_event(event_id: str):
+    """
+    Return the deployment audit event identified by event_id.
+    """
+
+    try:
+        event = _build_security_audit_service().get(event_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return event.to_dict()
+
+
+@health_router.post("/security/audit/search")
+async def post_governance_security_audit_search(
+    actor: "str | None" = Query(default=None),
+    action: "str | None" = Query(default=None),
+    resource: "str | None" = Query(default=None),
+):
+    """
+    Return every recorded deployment audit event matching the given
+    actor/action/resource filters (all optional; an unfiltered search
+    matches every event).
+    """
+
+    from .deployment_governance_audit_trail import AuditQuery
+
+    events = _build_security_audit_service().search(
+        AuditQuery(actor=actor, action=action, resource=resource)
+    )
+
+    return [event.to_dict() for event in events]

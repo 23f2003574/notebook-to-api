@@ -467,7 +467,11 @@ class TestAuditIntegration:
 
         records = audit_service.latest()
 
-        assert len(records) == 1
+        # 2, not 1: assign_role() itself now also records a
+        # "role_assigned" audit entry (see TestRoleAssignmentAuditing
+        # below) — records[0] (newest first) is still authorize()'s
+        # own entry.
+        assert len(records) == 2
         assert records[0].action == "authorization_granted"
         assert records[0].outcome == "success"
 
