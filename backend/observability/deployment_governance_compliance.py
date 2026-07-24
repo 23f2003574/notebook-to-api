@@ -189,6 +189,8 @@ class DeploymentComplianceEngine:
 
         self._audit_service = audit_service
 
+        self._latest: "dict[str, tuple[ComplianceResult, ...]]" = {}
+
     def register(
         self,
         name: str,
@@ -288,6 +290,9 @@ class DeploymentComplianceEngine:
 
             self._finalize_result(deployment_id, result)
 
+        with self._lock:
+            self._latest[deployment_id] = tuple(results)
+
         return tuple(results)
 
     def violation_count(
@@ -370,14 +375,50 @@ class DeploymentComplianceEngine:
             categories=categories,
         )
 
+    def evaluated_deployments(self) -> "tuple[str, ...]":
+        """
+        Return every deployment_id evaluate() has been called for at
+        least once, sorted. Introduced for
+        DeploymentReportingService's cross-subsystem summary, which
+        needs to know how many distinct deployments this engine has
+        an opinion on without evaluate()-ing every one of them again.
+        """
+
+        with self._lock:
+            return tuple(sorted(self._latest))
+
+    def compliance_rate(self) -> float:
+        """
+        Return the fraction of evaluated_deployments() whose most
+        recent evaluate() call found every enabled policy compliant —
+        0.0 if no deployment has been evaluated yet. Introduced for
+        DeploymentReportingService's cross-subsystem summary.
+        """
+
+        with self._lock:
+            latest = list(self._latest.values())
+
+        if not latest:
+            return 0.0
+
+        fully_compliant = sum(
+            1
+            for results in latest
+            if all(result.compliant for result in results)
+        )
+
+        return fully_compliant / len(latest)
+
     def clear(self) -> None:
         """
-        Remove every registered compliance policy.
+        Remove every registered compliance policy and every cached
+        evaluate() result.
         """
 
         with self._lock:
             self._policies.clear()
             self._evaluators.clear()
+            self._latest.clear()
 
     def _finalize_result(
         self, deployment_id: str, result: ComplianceResult

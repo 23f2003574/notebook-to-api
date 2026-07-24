@@ -4214,3 +4214,91 @@ async def get_governance_security_incident(incident_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return incident.to_dict()
+
+
+def _build_reporting_service():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_reporting_service()
+
+
+@health_router.get("/security/reports")
+async def get_governance_security_reports(
+    report_type: "str | None" = Query(default=None),
+):
+    """
+    Return every report ever generated, optionally filtered by
+    report_type, ordered by generation order.
+    """
+
+    reports = _build_reporting_service().list_reports(report_type)
+
+    return [report.to_dict() for report in reports]
+
+
+@health_router.get("/security/reports/{report_id}")
+async def get_governance_security_report(report_id: str):
+    """
+    Return report_id's full data: its metadata plus every aggregated
+    section.
+    """
+
+    try:
+        data = _build_reporting_service().get(report_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return data
+
+
+@health_router.post("/security/reports/generate")
+async def post_governance_security_reports_generate(
+    report_type: str = Query(...),
+):
+    """
+    Generate a new report of report_type.
+    """
+
+    try:
+        report = _build_reporting_service().generate(report_type)
+
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return report.to_dict()
+
+
+@health_router.post("/security/reports/{report_id}/export")
+async def post_governance_security_report_export(
+    report_id: str,
+    format: str = Query(default="json"),
+):
+    """
+    Export report_id as format ("json" or "csv"), returning the
+    rendered string.
+    """
+
+    service = _build_reporting_service()
+
+    try:
+        if format == "json":
+            exported = service.export_json(report_id)
+
+        elif format == "csv":
+            exported = service.export_csv(report_id)
+
+        else:
+            from .deployment_governance_reporting import EXPORT_FORMATS
+
+            raise HTTPException(
+                status_code=422,
+                detail=f"format must be one of {EXPORT_FORMATS}",
+            )
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"report_id": report_id, "format": format, "data": exported}

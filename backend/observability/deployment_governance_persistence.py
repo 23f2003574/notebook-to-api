@@ -419,6 +419,9 @@ if TYPE_CHECKING:
     from .deployment_governance_incident_response import (
         DeploymentIncidentResponseEngine,
     )
+    from .deployment_governance_reporting import (
+        DeploymentReportingService,
+    )
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2678,6 +2681,26 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return get_incident_response_engine()
+
+    def build_governance_reporting_service(
+        self,
+    ) -> "DeploymentReportingService":
+        """
+        Return the process-wide deployment reporting service.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: reports generated through the API need to be
+        retrievable/exportable identically by every caller, which a
+        persistence runtime built fresh per request cannot provide on
+        its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_reporting import get_reporting_service
+
+        return get_reporting_service()
 
     def build_integrity_provider_configuration_service(
         self,

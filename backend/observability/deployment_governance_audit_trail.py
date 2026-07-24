@@ -111,6 +111,24 @@ class AuditQuery:
         }
 
 
+@dataclass(frozen=True)
+class AuditTrailSummary:
+    """
+    An immutable, point-in-time count of every currently recorded
+    audit event. Introduced for DeploymentReportingService's "Audit"
+    report section.
+    """
+
+    total_events: int
+
+    def __post_init__(self) -> None:
+        if self.total_events < 0:
+            raise ValueError("total_events must not be negative")
+
+    def to_dict(self) -> dict[str, object]:
+        return {"total_events": self.total_events}
+
+
 class DeploymentAuditService:
     """
     Records and queries immutable deployment governance audit events.
@@ -228,6 +246,16 @@ class DeploymentAuditService:
         """
 
         return tuple(event.to_dict() for event in self.list())
+
+    def summary(self) -> AuditTrailSummary:
+        """
+        Return a point-in-time count of every currently recorded audit
+        event. Introduced for DeploymentReportingService's "Audit"
+        report section — a lighter-weight alternative to export()
+        when a caller only needs the count.
+        """
+
+        return AuditTrailSummary(total_events=len(self.list()))
 
 
 def build_default_governance_audit_trail_service() -> (
