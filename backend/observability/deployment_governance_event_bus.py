@@ -187,6 +187,8 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "incident_escalated",
     "report_generated",
     "report_exported",
+    "security_dashboard_generated",
+    "security_dashboard_refreshed",
 )
 
 

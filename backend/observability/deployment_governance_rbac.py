@@ -150,6 +150,32 @@ class AuthorizationDecision:
         }
 
 
+@dataclass(frozen=True)
+class RBACSummary:
+    """
+    An immutable, point-in-time count of the role registry and every
+    principal currently holding at least one role. Introduced for
+    DeploymentSecurityDashboard's "Authorization" section.
+    """
+
+    total_roles: int
+
+    total_principals: int
+
+    def __post_init__(self) -> None:
+        if self.total_roles < 0:
+            raise ValueError("total_roles must not be negative")
+
+        if self.total_principals < 0:
+            raise ValueError("total_principals must not be negative")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "total_roles": self.total_roles,
+            "total_principals": self.total_principals,
+        }
+
+
 class DeploymentRBACEngine:
     """
     Centralizes authorization for deployment governance operations:
@@ -494,6 +520,24 @@ class DeploymentRBACEngine:
                     self._principal_roles.get(principal_id, frozenset())
                 )
             )
+
+    def summary(self) -> RBACSummary:
+        """
+        Return a point-in-time count of the role registry and every
+        principal currently holding at least one role.
+        """
+
+        with self._lock:
+            total_roles = len(self._roles)
+            total_principals = sum(
+                1
+                for roles in self._principal_roles.values()
+                if roles
+            )
+
+        return RBACSummary(
+            total_roles=total_roles, total_principals=total_principals,
+        )
 
     def clear(self) -> None:
         """

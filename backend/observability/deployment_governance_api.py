@@ -4302,3 +4302,76 @@ async def post_governance_security_report_export(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return {"report_id": report_id, "format": format, "data": exported}
+
+
+def _build_security_dashboard():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_security_dashboard()
+
+
+@health_router.get("/security/dashboard")
+async def get_governance_security_dashboard_overview():
+    """
+    Return the full cross-subsystem headline snapshot.
+    """
+
+    return _build_security_dashboard().overview().to_dict()
+
+
+@health_router.get("/security/dashboard/security")
+async def get_governance_security_dashboard_security():
+    """
+    Return the Authentication, Authorization, Secrets, Approvals,
+    Security Scans, and Integrity sections.
+    """
+
+    sections = _build_security_dashboard().security()
+
+    return [section.to_dict() for section in sections]
+
+
+@health_router.get("/security/dashboard/compliance")
+async def get_governance_security_dashboard_compliance():
+    """
+    Return the Compliance section.
+    """
+
+    sections = _build_security_dashboard().compliance()
+
+    return [section.to_dict() for section in sections]
+
+
+@health_router.get("/security/dashboard/risk")
+async def get_governance_security_dashboard_risk():
+    """
+    Return the Risk section.
+    """
+
+    sections = _build_security_dashboard().risk()
+
+    return [section.to_dict() for section in sections]
+
+
+@health_router.get("/security/dashboard/incidents")
+async def get_governance_security_dashboard_incidents():
+    """
+    Return the Incidents section.
+    """
+
+    sections = _build_security_dashboard().incidents()
+
+    return [section.to_dict() for section in sections]
+
+
+@health_router.get("/security/dashboard/audit")
+async def get_governance_security_dashboard_audit():
+    """
+    Return the Audit section.
+    """
+
+    sections = _build_security_dashboard().audit()
+
+    return [section.to_dict() for section in sections]

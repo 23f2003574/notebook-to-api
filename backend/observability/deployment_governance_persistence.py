@@ -422,6 +422,9 @@ if TYPE_CHECKING:
     from .deployment_governance_reporting import (
         DeploymentReportingService,
     )
+    from .deployment_governance_security_dashboard import (
+        DeploymentSecurityDashboard,
+    )
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2701,6 +2704,28 @@ class DeploymentGovernancePersistenceRuntime:
         from .deployment_governance_reporting import get_reporting_service
 
         return get_reporting_service()
+
+    def build_governance_security_dashboard(
+        self,
+    ) -> "DeploymentSecurityDashboard":
+        """
+        Return the process-wide security dashboard.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: overview()'s cache (when configured with a
+        nonzero cache_ttl_seconds) needs to be shared across requests,
+        which a persistence runtime built fresh per request cannot
+        provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_security_dashboard import (
+            get_security_dashboard,
+        )
+
+        return get_security_dashboard()
 
     def build_integrity_provider_configuration_service(
         self,

@@ -547,6 +547,8 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "incident_escalated",
         "report_generated",
         "report_exported",
+        "security_dashboard_generated",
+        "security_dashboard_refreshed",
     }
 
 

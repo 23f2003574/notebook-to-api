@@ -341,6 +341,21 @@ class DeploymentReportingService:
             report for report in reports if report.report_type == report_type
         )
 
+    def latest(
+        self, report_type: "str | None" = None
+    ) -> "GovernanceReport | None":
+        """
+        Return the most recently generated report (optionally
+        filtered to report_type), or None if none has been generated
+        yet. Introduced for DeploymentSecurityDashboard, which prefers
+        this service's own already-aggregated summary() over
+        re-deriving one from each underlying engine directly.
+        """
+
+        reports = self.list_reports(report_type)
+
+        return reports[-1] if reports else None
+
     def clear(self) -> None:
         """
         Remove every generated report and its section data.
