@@ -523,6 +523,10 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "secret_retrieved",
         "secret_rotated",
         "secret_deleted",
+        "approval_requested",
+        "approval_granted",
+        "approval_rejected",
+        "approval_cancelled",
     }
 
 

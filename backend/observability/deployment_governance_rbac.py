@@ -407,6 +407,31 @@ class DeploymentRBACEngine:
 
         return self.authorize(identity.principal, permission)
 
+    def require(
+        self, principal_id: str, permission: str
+    ) -> AuthorizationDecision:
+        """
+        Like authorize(), but raises PermissionError instead of
+        returning a denied decision — for a caller (starting with
+        DeploymentApprovalEngine's "authorized approvers only" rule)
+        that wants to enforce a permission and move on, rather than
+        branch on decision.allowed itself.
+
+        Raises ValueError if principal_id or permission is empty
+        (same as authorize()), or PermissionError if principal_id is
+        not authorized for permission.
+        """
+
+        decision = self.authorize(principal_id, permission)
+
+        if not decision.allowed:
+            raise PermissionError(
+                f"principal '{principal_id}' is not authorized for "
+                f"'{permission}'"
+            )
+
+        return decision
+
     def permissions(self, principal_id: str) -> "frozenset[str]":
         """
         Return principal_id's effective permissions — the union of

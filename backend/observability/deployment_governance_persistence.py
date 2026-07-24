@@ -404,6 +404,7 @@ if TYPE_CHECKING:
         DeploymentAuthenticationManager,
     )
     from .deployment_governance_secret_vault import DeploymentSecretVault
+    from .deployment_governance_approval import DeploymentApprovalEngine
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2509,6 +2510,26 @@ class DeploymentGovernancePersistenceRuntime:
         from .deployment_governance_secret_vault import get_secret_vault
 
         return get_secret_vault()
+
+    def build_governance_approval_engine(
+        self,
+    ) -> "DeploymentApprovalEngine":
+        """
+        Return the process-wide deployment approval engine.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: approval requests created through the API need
+        to be decided/cancelled/listed identically by every caller,
+        which a persistence runtime built fresh per request cannot
+        provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_approval import get_approval_engine
+
+        return get_approval_engine()
 
     def build_integrity_provider_configuration_service(
         self,

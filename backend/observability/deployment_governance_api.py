@@ -3684,3 +3684,121 @@ async def delete_governance_security_secret(name: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return {"removed": name}
+
+
+def _build_approval_engine():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_approval_engine()
+
+
+@health_router.post("/security/approvals")
+async def post_governance_security_approval(
+    deployment_id: str = Query(...),
+    operation: str = Query(...),
+    requester: str = Query(...),
+):
+    """
+    Create a new PENDING approval request for operation on
+    deployment_id.
+    """
+
+    try:
+        request = _build_approval_engine().create_request(
+            deployment_id, operation, requester
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return request.to_dict()
+
+
+@health_router.post("/security/approvals/{request_id}/approve")
+async def post_governance_security_approval_approve(
+    request_id: str,
+    approver: str = Query(...),
+    reason: "str | None" = Query(default=None),
+):
+    """
+    Approve request_id as approver. Requires "deployment.approve"
+    against the deployment RBAC engine.
+    """
+
+    try:
+        request = _build_approval_engine().approve(
+            request_id, approver, reason=reason
+        )
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    return request.to_dict()
+
+
+@health_router.post("/security/approvals/{request_id}/reject")
+async def post_governance_security_approval_reject(
+    request_id: str,
+    approver: str = Query(...),
+    reason: "str | None" = Query(default=None),
+):
+    """
+    Reject request_id as approver. Requires "deployment.approve"
+    against the deployment RBAC engine.
+    """
+
+    try:
+        request = _build_approval_engine().reject(
+            request_id, approver, reason=reason
+        )
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    return request.to_dict()
+
+
+@health_router.get("/security/approvals/pending")
+async def get_governance_security_approvals_pending():
+    """
+    Return every PENDING approval request, ordered by creation order.
+
+    Registered before /security/approvals/{request_id}: FastAPI
+    matches path operations in registration order, so "pending" would
+    otherwise be captured as a literal request_id by that route first
+    — the same ordering requirement
+    get_governance_rollouts_dashboard's own docstring explains.
+    """
+
+    requests = _build_approval_engine().list_pending()
+
+    return [request.to_dict() for request in requests]
+
+
+@health_router.get("/security/approvals/{request_id}")
+async def get_governance_security_approval(request_id: str):
+    """
+    Return request_id's current ApprovalRequest.
+    """
+
+    try:
+        request = _build_approval_engine().get(request_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return request.to_dict()

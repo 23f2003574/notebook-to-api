@@ -293,6 +293,28 @@ class DeploymentAuthenticationManager:
 
         self.register_local_credential(principal, vault.fetch(secret_name))
 
+    def authenticated_principal(self, identity_id: str) -> str:
+        """
+        Return identity_id's principal if its session is currently
+        valid (validate()'s success path) — the small bridge other
+        governance services (starting with
+        DeploymentApprovalEngine) can use to turn an identity_id into
+        a trusted principal string before consulting RBAC, instead of
+        trusting a bare principal string handed to them directly.
+
+        Raises KeyError if identity_id was never issued by
+        authenticate() (propagated from validate()), or
+        PermissionError if it was but its session is no longer valid
+        (revoked or expired).
+        """
+
+        result = self.validate(identity_id)
+
+        if not result.authenticated:
+            raise PermissionError(result.reason)
+
+        return result.identity.principal
+
     def authenticate(
         self,
         principal: str,
