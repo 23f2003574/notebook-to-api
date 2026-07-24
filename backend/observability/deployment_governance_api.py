@@ -3575,3 +3575,112 @@ async def get_governance_security_status(identity_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return result.to_dict()
+
+
+def _build_secret_vault():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_secret_vault()
+
+
+def _parse_optional_datetime(
+    value: "str | None", *, field_name: str
+) -> "datetime | None":
+    if value is None:
+        return None
+
+    try:
+        return datetime.fromisoformat(value)
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field_name} must be a valid ISO 8601 datetime: "
+            f"{exc}",
+        ) from exc
+
+
+@health_router.get("/security/secrets/{name}/metadata")
+async def get_governance_security_secret_metadata(name: str):
+    """
+    Return secret name's current metadata (never its value).
+    """
+
+    try:
+        metadata = _build_secret_vault().metadata(name)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return metadata.to_dict()
+
+
+@health_router.post("/security/secrets")
+async def post_governance_security_secret(
+    name: str = Query(...),
+    value: str = Query(...),
+    provider: "str | None" = Query(default=None),
+    expires_at: "str | None" = Query(default=None),
+):
+    """
+    Store value as secret name's first version. Returns a
+    SecretReference — never the value itself.
+    """
+
+    parsed_expires_at = _parse_optional_datetime(
+        expires_at, field_name="expires_at"
+    )
+
+    try:
+        reference = _build_secret_vault().store(
+            name, value, provider=provider,
+            expires_at=parsed_expires_at,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return reference.to_dict()
+
+
+@health_router.post("/security/secrets/{name}/rotate")
+async def post_governance_security_secret_rotate(
+    name: str,
+    new_value: str = Query(...),
+    expires_at: "str | None" = Query(default=None),
+):
+    """
+    Replace secret name's value, incrementing its version. Returns
+    the updated SecretReference — never the value itself.
+    """
+
+    parsed_expires_at = _parse_optional_datetime(
+        expires_at, field_name="expires_at"
+    )
+
+    try:
+        reference = _build_secret_vault().rotate(
+            name, new_value, expires_at=parsed_expires_at,
+        )
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return reference.to_dict()
+
+
+@health_router.delete("/security/secrets/{name}")
+async def delete_governance_security_secret(name: str):
+    """
+    Remove secret name from the vault.
+    """
+
+    try:
+        _build_secret_vault().delete(name)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"removed": name}

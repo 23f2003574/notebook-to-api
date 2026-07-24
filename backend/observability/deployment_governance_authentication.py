@@ -8,6 +8,7 @@ from uuid import uuid4
 
 if TYPE_CHECKING:
     from .deployment_governance_event_bus import GovernanceEventBus
+    from .deployment_governance_secret_vault import DeploymentSecretVault
 
 # The authentication providers this manager ships with, selectable by
 # name via authenticate()'s provider parameter. Not enforced as a
@@ -269,6 +270,28 @@ class DeploymentAuthenticationManager:
 
         with self._lock:
             self._bearer_tokens[token] = (principal, expires_at)
+
+    def register_local_credential_from_vault(
+        self,
+        principal: str,
+        vault: "DeploymentSecretVault",
+        secret_name: str,
+    ) -> None:
+        """
+        Convenience wrapper: fetch secret_name's current value from
+        vault and register it as principal's LOCAL password via
+        register_local_credential — the same narrow "spare a caller
+        already holding both objects some boilerplate" integration
+        DeploymentRBACEngine.authorize_identity established for RBAC.
+        This manager still does not consult any secret vault
+        automatically, or any other provider integration beyond
+        LOCAL/API_KEY/BEARER_TOKEN — those remain standalone, as
+        established when this manager was introduced.
+
+        Raises KeyError if secret_name is not stored in vault.
+        """
+
+        self.register_local_credential(principal, vault.fetch(secret_name))
 
     def authenticate(
         self,

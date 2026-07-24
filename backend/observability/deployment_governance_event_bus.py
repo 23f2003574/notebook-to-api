@@ -159,6 +159,10 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "authentication_succeeded",
     "authentication_failed",
     "authentication_revoked",
+    "secret_stored",
+    "secret_retrieved",
+    "secret_rotated",
+    "secret_deleted",
 )
 
 

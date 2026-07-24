@@ -403,6 +403,7 @@ if TYPE_CHECKING:
     from .deployment_governance_authentication import (
         DeploymentAuthenticationManager,
     )
+    from .deployment_governance_secret_vault import DeploymentSecretVault
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2488,6 +2489,26 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return get_authentication_manager()
+
+    def build_governance_secret_vault(
+        self,
+    ) -> "DeploymentSecretVault":
+        """
+        Return the process-wide deployment secret vault.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: secrets stored through the API need to be
+        fetchable/rotatable/deletable identically by every caller,
+        which a persistence runtime built fresh per request cannot
+        provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_secret_vault import get_secret_vault
+
+        return get_secret_vault()
 
     def build_integrity_provider_configuration_service(
         self,
