@@ -350,6 +350,25 @@ class DeploymentApprovalEngine:
 
             return request
 
+    def compliance_scope(self, request_id: str) -> "tuple[str, str]":
+        """
+        Return (deployment_id, operation) for request_id — the shape
+        DeploymentComplianceEngine.evaluate()/evaluate_all() expect as
+        the thing being evaluated, sparing a caller that already holds
+        a request_id from fetching the full ApprovalRequest just to
+        extract these two fields. Not yet consulted by this engine
+        itself, or by anything else — compliance enforcement (e.g.
+        blocking approve() on a failed policy) is scoped to a later
+        commit; this is only the lookup a caller wiring that
+        enforcement together will eventually need.
+
+        Raises KeyError if request_id is not registered.
+        """
+
+        request = self.get(request_id)
+
+        return request.deployment_id, request.operation
+
     def decision(self, request_id: str) -> ApprovalDecision:
         """
         Return request_id's recorded ApprovalDecision.

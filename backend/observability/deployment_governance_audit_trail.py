@@ -16,11 +16,12 @@ if TYPE_CHECKING:
 # Authorization and Policy actions are already recorded by
 # DeploymentRBACEngine.authorize() and DeploymentRolloutPolicyEngine
 # respectively; Approval and Configuration by DeploymentApprovalEngine
-# and DeploymentRBACEngine's own role-management methods, as of this
-# commit. Authentication, Deployment, and Rollback recording is left
-# to whichever later commit wires each of those in — this service
-# itself only ever queries whatever GovernanceAuditService already
-# holds, it does not require any particular category to be present.
+# and DeploymentRBACEngine's own role-management methods; Compliance
+# by DeploymentComplianceEngine's policy registration and evaluation.
+# Authentication, Deployment, and Rollback recording is left to
+# whichever later commit wires each of those in — this service itself
+# only ever queries whatever GovernanceAuditService already holds, it
+# does not require any particular category to be present.
 RECORDED_AUDIT_ACTION_CATEGORIES: "tuple[str, ...]" = (
     "Authentication",
     "Authorization",
@@ -29,6 +30,7 @@ RECORDED_AUDIT_ACTION_CATEGORIES: "tuple[str, ...]" = (
     "Rollback",
     "Policy",
     "Configuration",
+    "Compliance",
 )
 
 

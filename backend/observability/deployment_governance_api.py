@@ -3875,3 +3875,77 @@ async def post_governance_security_audit_search(
     )
 
     return [event.to_dict() for event in events]
+
+
+def _build_compliance_engine():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_compliance_engine()
+
+
+@health_router.get("/security/compliance")
+async def get_governance_security_compliance():
+    """
+    Return every registered compliance policy, ordered by name.
+    """
+
+    policies = _build_compliance_engine().list()
+
+    return [policy.to_dict() for policy in policies]
+
+
+@health_router.post("/security/compliance")
+async def post_governance_security_compliance(
+    name: str = Query(...),
+    category: str = Query(...),
+    enabled: bool = Query(default=True),
+):
+    """
+    Register a new compliance policy. With no custom evaluator (not
+    configurable over this API), the policy trivially always reports
+    compliant.
+    """
+
+    try:
+        policy = _build_compliance_engine().register(
+            name, category, enabled=enabled
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return policy.to_dict()
+
+
+@health_router.post("/security/compliance/evaluate")
+async def post_governance_security_compliance_evaluate(
+    deployment_id: str = Query(...),
+    context: str = Query(default="{}"),
+):
+    """
+    Evaluate deployment_id against every enabled compliance policy.
+    context is a JSON object (as a query string).
+    """
+
+    parsed_context = _parse_json_object(context, field_name="context")
+
+    try:
+        results = _build_compliance_engine().evaluate(
+            deployment_id, parsed_context
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return [result.to_dict() for result in results]
+
+
+@health_router.get("/security/compliance/summary")
+async def get_governance_security_compliance_summary():
+    """
+    Return a point-in-time snapshot of the compliance policy registry.
+    """
+
+    return _build_compliance_engine().summary().to_dict()

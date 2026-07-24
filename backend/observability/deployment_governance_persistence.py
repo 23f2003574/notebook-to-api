@@ -406,6 +406,9 @@ if TYPE_CHECKING:
     from .deployment_governance_secret_vault import DeploymentSecretVault
     from .deployment_governance_approval import DeploymentApprovalEngine
     from .deployment_governance_audit_trail import DeploymentAuditService
+    from .deployment_governance_compliance import (
+        DeploymentComplianceEngine,
+    )
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2557,6 +2560,27 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return get_audit_trail_service()
+
+    def build_governance_compliance_engine(
+        self,
+    ) -> "DeploymentComplianceEngine":
+        """
+        Return the process-wide deployment compliance engine.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: policies registered through the API need to
+        be enforced identically by every caller, which a persistence
+        runtime built fresh per request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_compliance import (
+            get_compliance_engine,
+        )
+
+        return get_compliance_engine()
 
     def build_integrity_provider_configuration_service(
         self,

@@ -118,6 +118,7 @@ class TestRecordedAuditActionCategories:
         assert set(RECORDED_AUDIT_ACTION_CATEGORIES) == {
             "Authentication", "Authorization", "Approval",
             "Deployment", "Rollback", "Policy", "Configuration",
+            "Compliance",
         }
 
 

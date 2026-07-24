@@ -527,6 +527,10 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "approval_granted",
         "approval_rejected",
         "approval_cancelled",
+        "compliance_passed",
+        "compliance_failed",
+        "policy_registered",
+        "policy_removed",
     }
 
 

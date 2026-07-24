@@ -167,6 +167,10 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "approval_granted",
     "approval_rejected",
     "approval_cancelled",
+    "compliance_passed",
+    "compliance_failed",
+    "policy_registered",
+    "policy_removed",
 )
 
 
