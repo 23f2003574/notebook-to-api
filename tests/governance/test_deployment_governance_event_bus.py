@@ -516,6 +516,9 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "role_assigned",
         "authorization_denied",
         "authorization_granted",
+        "authentication_succeeded",
+        "authentication_failed",
+        "authentication_revoked",
     }
 
 

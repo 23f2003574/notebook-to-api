@@ -400,6 +400,9 @@ if TYPE_CHECKING:
         DeploymentRolloutDashboard,
     )
     from .deployment_governance_rbac import DeploymentRBACEngine
+    from .deployment_governance_authentication import (
+        DeploymentAuthenticationManager,
+    )
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2463,6 +2466,28 @@ class DeploymentGovernancePersistenceRuntime:
         from .deployment_governance_rbac import get_rbac_engine
 
         return get_rbac_engine()
+
+    def build_governance_authentication_manager(
+        self,
+    ) -> "DeploymentAuthenticationManager":
+        """
+        Return the process-wide deployment authentication manager.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: sessions issued through the API need to be
+        validated and revoked identically by every caller, which a
+        persistence runtime built fresh per request cannot provide on
+        its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_authentication import (
+            get_authentication_manager,
+        )
+
+        return get_authentication_manager()
 
     def build_integrity_provider_configuration_service(
         self,

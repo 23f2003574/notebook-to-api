@@ -7,6 +7,7 @@ from typing import Any, Iterable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .deployment_governance_audit import GovernanceAuditService
+    from .deployment_governance_authentication import DeploymentIdentity
     from .deployment_governance_event_bus import GovernanceEventBus
 
 # The permission vocabulary this engine understands. Not enforced as a
@@ -389,6 +390,22 @@ class DeploymentRBACEngine:
             )
 
         return decision
+
+    def authorize_identity(
+        self, identity: "DeploymentIdentity", permission: str
+    ) -> AuthorizationDecision:
+        """
+        Convenience wrapper around authorize() for an already-
+        authenticated DeploymentIdentity (see
+        DeploymentAuthenticationManager) — authorize(identity.
+        principal, permission). Not yet consulted by any governance
+        service (DeploymentAuthenticationManager is deliberately
+        standalone for now); this only spares a caller that already
+        holds a DeploymentIdentity from extracting its principal by
+        hand.
+        """
+
+        return self.authorize(identity.principal, permission)
 
     def permissions(self, principal_id: str) -> "frozenset[str]":
         """

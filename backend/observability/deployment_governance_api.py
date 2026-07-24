@@ -3512,3 +3512,66 @@ async def post_governance_security_authorize(
     decision = _build_rbac_engine().authorize(principal_id, permission)
 
     return decision.to_dict()
+
+
+def _build_authentication_manager():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_authentication_manager()
+
+
+@health_router.post("/security/authenticate")
+async def post_governance_security_authenticate(
+    principal: str = Query(...),
+    provider: str = Query(...),
+    credentials: str = Query(default="{}"),
+):
+    """
+    Authenticate principal against provider using credentials (a
+    JSON object, as a query string). Always returns 200: the response
+    body's "authenticated" field carries whether it succeeded.
+    """
+
+    parsed_credentials = _parse_json_object(
+        credentials, field_name="credentials"
+    )
+
+    result = _build_authentication_manager().authenticate(
+        principal, provider, parsed_credentials
+    )
+
+    return result.to_dict()
+
+
+@health_router.post("/security/revoke")
+async def post_governance_security_revoke(
+    identity_id: str = Query(...),
+):
+    """
+    Revoke identity_id's session.
+    """
+
+    try:
+        _build_authentication_manager().revoke(identity_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"revoked": identity_id}
+
+
+@health_router.get("/security/status/{identity_id}")
+async def get_governance_security_status(identity_id: str):
+    """
+    Return identity_id's current session state.
+    """
+
+    try:
+        result = _build_authentication_manager().status(identity_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return result.to_dict()
