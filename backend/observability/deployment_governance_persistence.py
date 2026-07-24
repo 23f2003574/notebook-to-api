@@ -410,6 +410,9 @@ if TYPE_CHECKING:
         DeploymentComplianceEngine,
     )
     from .deployment_governance_risk import DeploymentRiskEngine
+    from .deployment_governance_security_scanner import (
+        DeploymentSecurityScanner,
+    )
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2601,6 +2604,27 @@ class DeploymentGovernancePersistenceRuntime:
         from .deployment_governance_risk import get_risk_engine
 
         return get_risk_engine()
+
+    def build_governance_security_scanner(
+        self,
+    ) -> "DeploymentSecurityScanner":
+        """
+        Return the process-wide deployment security scanner.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: scanners registered through the API need to
+        run identically for every caller, which a persistence runtime
+        built fresh per request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_security_scanner import (
+            get_security_scanner,
+        )
+
+        return get_security_scanner()
 
     def build_integrity_provider_configuration_service(
         self,

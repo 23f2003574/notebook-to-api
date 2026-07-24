@@ -4010,3 +4010,65 @@ async def get_governance_security_risk(deployment_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return assessment.to_dict()
+
+
+def _build_security_scanner():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_security_scanner()
+
+
+@health_router.post("/security/scan")
+async def post_governance_security_scan(
+    deployment_id: str = Query(...),
+    context: str = Query(default="{}"),
+):
+    """
+    Run every registered scanner against deployment_id. context is a
+    JSON object (as a query string).
+    """
+
+    parsed_context = _parse_json_object(context, field_name="context")
+
+    try:
+        results = _build_security_scanner().scan(
+            deployment_id, parsed_context
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return [result.to_dict() for result in results]
+
+
+@health_router.get("/security/scan/summary")
+async def get_governance_security_scan_summary():
+    """
+    Return an aggregate over every cached scan result across every
+    deployment scanned so far.
+
+    Registered before /security/scan/{deployment_id}: FastAPI matches
+    path operations in registration order, so "summary" would
+    otherwise be captured as a literal deployment_id by that route
+    first — the same ordering requirement
+    get_governance_rollouts_dashboard's own docstring explains.
+    """
+
+    return _build_security_scanner().summary().to_dict()
+
+
+@health_router.get("/security/scan/{deployment_id}")
+async def get_governance_security_scan(deployment_id: str):
+    """
+    Return deployment_id's most recent scan results.
+    """
+
+    try:
+        results = _build_security_scanner().results(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return [result.to_dict() for result in results]

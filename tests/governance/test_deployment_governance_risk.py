@@ -131,7 +131,7 @@ class TestConstants:
         assert set(DEFAULT_RISK_FACTORS) == {
             "production_deployment", "rollback_frequency",
             "failed_health_checks", "required_approvals_missing",
-            "policy_violations",
+            "policy_violations", "security_findings",
         }
 
 

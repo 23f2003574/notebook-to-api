@@ -534,6 +534,10 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "risk_assessed",
         "high_risk_detected",
         "critical_risk_detected",
+        "security_scan_started",
+        "security_scan_completed",
+        "security_scan_failed",
+        "critical_finding_detected",
     }
 
 

@@ -11,6 +11,9 @@ if TYPE_CHECKING:
         DeploymentComplianceEngine,
     )
     from .deployment_governance_event_bus import GovernanceEventBus
+    from .deployment_governance_security_scanner import (
+        DeploymentSecurityScanner,
+    )
 
 # The score bands assess() classifies into — a fixed, non-overlapping
 # partition of [0, 100]: LOW below 25, MEDIUM [25, 50), HIGH [50, 75),
@@ -34,6 +37,7 @@ DEFAULT_RISK_FACTORS: "tuple[str, ...]" = (
     "failed_health_checks",
     "required_approvals_missing",
     "policy_violations",
+    "security_findings",
 )
 
 # A rule's evaluator decides whether it is triggered for deployment_id
@@ -175,7 +179,7 @@ class DeploymentRiskEngine:
     "weighted scoring (0-100)". Disabled rules are skipped entirely,
     contributing nothing.
 
-    Ships with five default risk factors (DEFAULT_RISK_FACTORS),
+    Ships with six default risk factors (DEFAULT_RISK_FACTORS),
     selectable via register_rule()'s factor parameter:
     "production_deployment" (context["environment"] == "production"),
     "rollback_frequency" (context["rollback_count"] >= 3),
@@ -183,13 +187,16 @@ class DeploymentRiskEngine:
     "required_approvals_missing" (with an approval_engine wired in,
     DeploymentApprovalEngine.is_approved(deployment_id,
     context["operation"]) is False; otherwise
-    context["required_approvals_missing"] truthy), and
+    context["required_approvals_missing"] truthy),
     "policy_violations" (with a compliance_engine wired in,
     DeploymentComplianceEngine.violation_count(deployment_id, context)
-    > 0; otherwise context["policy_violations"] > 0). Every default
-    factor degrades to a context-only fallback when its optional
-    engine is not wired — the same graceful-degradation contract every
-    other optional-dependency integration in this codebase follows.
+    > 0; otherwise context["policy_violations"] > 0), and
+    "security_findings" (with a security_scanner wired in, any of
+    deployment_id's cached ScanResult has status == "FAILED";
+    otherwise context["security_findings"] > 0). Every default factor
+    degrades to a context-only fallback when its optional engine is
+    not wired — the same graceful-degradation contract every other
+    optional-dependency integration in this codebase follows.
 
     Approval enforcement (blocking on a risk score), incident response,
     and reporting that consume these scores are out of scope here —
@@ -206,6 +213,7 @@ class DeploymentRiskEngine:
         event_bus: "GovernanceEventBus | None" = None,
         compliance_engine: "DeploymentComplianceEngine | None" = None,
         approval_engine: "DeploymentApprovalEngine | None" = None,
+        security_scanner: "DeploymentSecurityScanner | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
@@ -224,6 +232,8 @@ class DeploymentRiskEngine:
         self._compliance_engine = compliance_engine
 
         self._approval_engine = approval_engine
+
+        self._security_scanner = security_scanner
 
     def register_rule(
         self,
@@ -420,6 +430,7 @@ class DeploymentRiskEngine:
                 self._factor_required_approvals_missing
             ),
             "policy_violations": self._factor_policy_violations,
+            "security_findings": self._factor_security_findings,
         }
 
     def _factor_production_deployment(
@@ -460,6 +471,20 @@ class DeploymentRiskEngine:
 
         return context.get("policy_violations", 0) > 0
 
+    def _factor_security_findings(
+        self, rule: RiskRule, deployment_id: str, context: "dict[str, Any]"
+    ) -> bool:
+        if self._security_scanner is not None:
+            try:
+                results = self._security_scanner.results(deployment_id)
+
+            except KeyError:
+                return False
+
+            return any(result.status == "FAILED" for result in results)
+
+        return context.get("security_findings", 0) > 0
+
     def _publish(
         self,
         event_type: str,
@@ -477,18 +502,22 @@ class DeploymentRiskEngine:
 def build_default_governance_risk_engine() -> DeploymentRiskEngine:
     """
     Build the process-wide deployment risk engine, wired to the
-    process-wide governance event bus, compliance engine, and
-    approval engine.
+    process-wide governance event bus, compliance engine, approval
+    engine, and security scanner.
     """
 
     from .deployment_governance_approval import get_approval_engine
     from .deployment_governance_compliance import get_compliance_engine
     from .deployment_governance_event_bus import get_event_bus
+    from .deployment_governance_security_scanner import (
+        get_security_scanner,
+    )
 
     return DeploymentRiskEngine(
         event_bus=get_event_bus(),
         compliance_engine=get_compliance_engine(),
         approval_engine=get_approval_engine(),
+        security_scanner=get_security_scanner(),
     )
 
 

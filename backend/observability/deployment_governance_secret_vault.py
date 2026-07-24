@@ -323,6 +323,19 @@ class DeploymentSecretVault:
         with self._lock:
             return name in self._references
 
+    def names(self) -> "tuple[str, ...]":
+        """
+        Return every currently stored secret's name, sorted. Never
+        the values themselves — introduced for
+        DeploymentSecurityScanner's built-in "Secret Detection"
+        scanner, which needs to enumerate what secrets exist so it can
+        check deployment artifacts for their values, without this
+        vault ever handing out more than a name to do it with.
+        """
+
+        with self._lock:
+            return tuple(sorted(self._references))
+
     def delete(self, name: str) -> None:
         """
         Remove secret name from both this vault's registry and its
