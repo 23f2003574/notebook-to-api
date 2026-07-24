@@ -416,6 +416,9 @@ if TYPE_CHECKING:
     from .deployment_governance_artifact_integrity import (
         DeploymentIntegrityVerifier,
     )
+    from .deployment_governance_incident_response import (
+        DeploymentIncidentResponseEngine,
+    )
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2651,6 +2654,30 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return get_artifact_integrity_verifier()
+
+    def build_governance_incident_response_engine(
+        self,
+    ) -> "DeploymentIncidentResponseEngine":
+        """
+        Return the process-wide deployment incident response engine.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: incidents created through the API need to be
+        resolved/listed identically by every caller, and the auth-
+        failure counters only mean anything if they observe every
+        "authentication_failed" event the running process actually
+        publishes, which a persistence runtime built fresh per request
+        cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_incident_response import (
+            get_incident_response_engine,
+        )
+
+        return get_incident_response_engine()
 
     def build_integrity_provider_configuration_service(
         self,

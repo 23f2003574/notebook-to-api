@@ -541,6 +541,10 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "integrity_verified",
         "integrity_failed",
         "verification_rule_registered",
+        "incident_detected",
+        "incident_created",
+        "incident_resolved",
+        "incident_escalated",
     }
 
 

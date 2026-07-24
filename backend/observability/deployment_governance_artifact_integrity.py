@@ -337,6 +337,23 @@ class DeploymentIntegrityVerifier:
 
             return tuple(reports)
 
+    def latest_failed(self, artifact_id: str) -> bool:
+        """
+        Return whether artifact_id's most recent verify() call failed.
+        False if artifact_id has never been verified. Introduced for
+        DeploymentIncidentResponseEngine's
+        "integrity_verification_failure" default trigger, sparing it
+        from fetching and indexing history() itself.
+        """
+
+        with self._lock:
+            reports = self._history.get(artifact_id)
+
+        if not reports:
+            return False
+
+        return not reports[-1].verified
+
     def list(self) -> "tuple[IntegrityRule, ...]":
         """
         Return every registered verification rule, ordered

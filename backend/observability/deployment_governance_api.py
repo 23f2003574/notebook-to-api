@@ -4137,3 +4137,80 @@ async def get_governance_security_integrity(artifact_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return [report.to_dict() for report in reports]
+
+
+def _build_incident_response_engine():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_incident_response_engine()
+
+
+@health_router.post("/security/incidents")
+async def post_governance_security_incident(
+    source: str = Query(...),
+    severity: str = Query(...),
+):
+    """
+    Create a new incident for source at severity — "one active
+    incident per trigger source": a source with an existing active
+    incident at the same or higher severity is rejected; a lower one
+    is escalated instead.
+    """
+
+    try:
+        incident = _build_incident_response_engine().create(
+            source, severity
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return incident.to_dict()
+
+
+@health_router.post("/security/incidents/{incident_id}/resolve")
+async def post_governance_security_incident_resolve(
+    incident_id: str,
+    reason: "str | None" = Query(default=None),
+):
+    """
+    Resolve incident_id.
+    """
+
+    try:
+        incident = _build_incident_response_engine().resolve(
+            incident_id, reason=reason
+        )
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return incident.to_dict()
+
+
+@health_router.get("/security/incidents")
+async def get_governance_security_incidents():
+    """
+    Return every incident ever recorded, ordered by creation order.
+    """
+
+    incidents = _build_incident_response_engine().history()
+
+    return [incident.to_dict() for incident in incidents]
+
+
+@health_router.get("/security/incidents/{incident_id}")
+async def get_governance_security_incident(incident_id: str):
+    """
+    Return incident_id's current DeploymentIncident.
+    """
+
+    try:
+        incident = _build_incident_response_engine().get(incident_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return incident.to_dict()

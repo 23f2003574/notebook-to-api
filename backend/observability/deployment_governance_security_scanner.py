@@ -473,6 +473,24 @@ class DeploymentSecurityScanner:
 
         return not history[-1].verified
 
+    def has_critical_finding(self, deployment_id: str) -> bool:
+        """
+        Return whether any of deployment_id's most recent scan()
+        findings is CRITICAL severity. False if deployment_id has
+        never been scanned. Introduced for
+        DeploymentIncidentResponseEngine's "critical_security_finding"
+        default trigger, sparing it from fetching and filtering
+        findings() itself.
+        """
+
+        try:
+            findings = self.findings(deployment_id)
+
+        except KeyError:
+            return False
+
+        return any(finding.severity == "CRITICAL" for finding in findings)
+
     def clear(self) -> None:
         """
         Remove every registered scanner and every cached scan
