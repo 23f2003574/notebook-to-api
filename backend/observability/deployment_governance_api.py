@@ -20,6 +20,9 @@ from .deployment_governance_persistence import (
 from .deployment_governance_scheduler_bootstrap import (
     GovernanceSchedulerBootstrapError,
 )
+from .deployment_governance_security_bootstrap import (
+    DeploymentSecurityBootstrapError,
+)
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -4375,3 +4378,55 @@ async def get_governance_security_dashboard_audit():
     sections = _build_security_dashboard().audit()
 
     return [section.to_dict() for section in sections]
+
+
+def _build_security_bootstrap():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_security_bootstrap()
+
+
+@health_router.get("/security/bootstrap")
+async def get_governance_security_bootstrap():
+    """
+    Return the security bootstrap's current lifecycle state.
+    """
+
+    return _build_security_bootstrap().status().to_dict()
+
+
+@health_router.post("/security/bootstrap")
+async def post_governance_security_bootstrap():
+    """
+    Run the security bootstrap's initialization pipeline: validate the
+    security subsystem's component dependency graph, confirm every
+    /governance/security/* route is registered, and subscribe
+    diagnostic event handlers. Idempotent — a no-op returning the
+    original report if already initialized.
+    """
+
+    try:
+        report = _build_security_bootstrap().initialize()
+
+    except DeploymentSecurityBootstrapError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return report.to_dict()
+
+
+@health_router.post("/security/bootstrap/restart")
+async def post_governance_security_bootstrap_restart():
+    """
+    Shut down (if currently initialized) and re-run the security
+    bootstrap's initialization pipeline.
+    """
+
+    try:
+        report = _build_security_bootstrap().restart()
+
+    except DeploymentSecurityBootstrapError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return report.to_dict()

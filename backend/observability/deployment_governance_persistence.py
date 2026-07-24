@@ -425,6 +425,9 @@ if TYPE_CHECKING:
     from .deployment_governance_security_dashboard import (
         DeploymentSecurityDashboard,
     )
+    from .deployment_governance_security_bootstrap import (
+        DeploymentSecurityBootstrap,
+    )
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2726,6 +2729,29 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return get_security_dashboard()
+
+    def build_governance_security_bootstrap(
+        self,
+    ) -> "DeploymentSecurityBootstrap":
+        """
+        Return the process-wide security bootstrap.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: whether the security subsystem has completed
+        initialization needs to be visible to whatever queries it (the
+        top-level governance bootstrap's "security_bootstrap"
+        component, or a direct API caller), which a persistence
+        runtime built fresh per request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_security_bootstrap import (
+            get_security_bootstrap,
+        )
+
+        return get_security_bootstrap()
 
     def build_integrity_provider_configuration_service(
         self,

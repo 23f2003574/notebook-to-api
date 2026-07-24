@@ -171,3 +171,87 @@ from .deployment_governance_orchestrator import (
     DeploymentGovernanceExecutionHandoffResult,
     DeploymentGovernanceOrchestrator
 )
+
+# The deployment security subsystem (commits 1-13): each module's
+# process-wide singleton getter, plus its primary service class and
+# top-level result model, matching this __init__'s own existing
+# "class + its outcome model(s)" export shape for every module above.
+from .deployment_governance_rbac import (
+    DeploymentRole,
+    DeploymentPrincipal,
+    AuthorizationDecision,
+    DeploymentRBACEngine,
+    get_rbac_engine
+)
+from .deployment_governance_authentication import (
+    DeploymentIdentity,
+    AuthenticationResult,
+    DeploymentAuthenticationManager,
+    get_authentication_manager
+)
+from .deployment_governance_secret_vault import (
+    SecretReference,
+    SecretMetadata,
+    DeploymentSecretVault,
+    get_secret_vault
+)
+from .deployment_governance_approval import (
+    ApprovalRequest,
+    ApprovalDecision,
+    DeploymentApprovalEngine,
+    get_approval_engine
+)
+from .deployment_governance_audit_trail import (
+    AuditEvent,
+    AuditQuery,
+    DeploymentAuditService,
+    get_audit_trail_service
+)
+from .deployment_governance_compliance import (
+    CompliancePolicy,
+    ComplianceResult,
+    DeploymentComplianceEngine,
+    get_compliance_engine
+)
+from .deployment_governance_risk import (
+    RiskRule,
+    RiskAssessment,
+    DeploymentRiskEngine,
+    get_risk_engine
+)
+from .deployment_governance_security_scanner import (
+    ScanResult,
+    SecurityFinding,
+    DeploymentSecurityScanner,
+    get_security_scanner
+)
+from .deployment_governance_artifact_integrity import (
+    IntegrityReport,
+    IntegrityRule,
+    DeploymentIntegrityVerifier,
+    get_artifact_integrity_verifier
+)
+from .deployment_governance_incident_response import (
+    DeploymentIncident,
+    IncidentAction,
+    DeploymentIncidentResponseEngine,
+    get_incident_response_engine
+)
+from .deployment_governance_reporting import (
+    GovernanceReport,
+    ReportSummary,
+    DeploymentReportingService,
+    get_reporting_service
+)
+from .deployment_governance_security_dashboard import (
+    SecurityDashboard,
+    DashboardSection,
+    DeploymentSecurityDashboard,
+    get_security_dashboard
+)
+from .deployment_governance_security_bootstrap import (
+    SecurityBootstrapReport,
+    SecurityBootstrapStatus,
+    DeploymentSecurityBootstrap,
+    get_security_bootstrap
+)

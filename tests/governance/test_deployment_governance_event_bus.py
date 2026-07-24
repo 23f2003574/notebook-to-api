@@ -549,6 +549,11 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "report_exported",
         "security_dashboard_generated",
         "security_dashboard_refreshed",
+        "security_bootstrap_started",
+        "security_bootstrap_completed",
+        "security_bootstrap_failed",
+        "security_runtime_ready",
+        "security_runtime_shutdown",
     }
 
 

@@ -21,7 +21,14 @@ if TYPE_CHECKING:
 # built in any order; delivery_runtime wires all three together; the
 # observability services (health/readiness/liveness/diagnostics) are
 # all built from an already-running delivery runtime, so each
-# depends on it.
+# depends on it. security_bootstrap has no dependency on any of
+# these either — the deployment security subsystem (RBAC,
+# authentication, secrets, approvals, audit, compliance, risk,
+# security scanning, integrity verification, incident response,
+# reporting, and the security dashboard) is wired independently of
+# the delivery runtime and rollout subsystem, the same way
+# rollout_manager's own single "scheduler" dependency does not touch
+# delivery_runtime either.
 _COMPONENT_DEPENDENCIES: "dict[str, tuple[str, ...]]" = {
     "provider_registry": (),
     "metrics_bootstrap": (),
@@ -37,6 +44,7 @@ _COMPONENT_DEPENDENCIES: "dict[str, tuple[str, ...]]" = {
     "diagnostics_service": ("delivery_runtime",),
     "scheduler": (),
     "rollout_manager": ("scheduler",),
+    "security_bootstrap": (),
 }
 
 
