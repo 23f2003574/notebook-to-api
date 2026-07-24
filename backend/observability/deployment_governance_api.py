@@ -600,6 +600,27 @@ def _parse_json_object(value: str, *, field_name: str) -> dict:
     return parsed
 
 
+def _parse_json_string_list(value: str, *, field_name: str) -> "list[str]":
+    try:
+        parsed = json.loads(value)
+
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field_name} must be valid JSON: {exc}",
+        ) from exc
+
+    if not isinstance(parsed, list) or not all(
+        isinstance(item, str) for item in parsed
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field_name} must be a JSON array of strings",
+        )
+
+    return parsed
+
+
 @health_router.get("/policies")
 async def get_governance_policies():
     """
@@ -2056,38 +2077,52 @@ async def get_governance_rollout(rollout_id: str):
 async def post_governance_rollout(
     deployment_id: str = Query(...),
     strategy: str = Query(...),
+    principal_id: "str | None" = Query(default=None),
 ):
     """
-    Create a new PENDING rollout for deployment_id.
+    Create a new PENDING rollout for deployment_id. With principal_id
+    given, requires "deployment.deploy" against the deployment RBAC
+    engine.
     """
 
     try:
         rollout = _build_rollout_manager().create(
-            deployment_id, strategy
+            deployment_id, strategy, principal_id=principal_id,
         )
 
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
     return rollout.to_dict()
 
 
 @health_router.post("/rollouts/{rollout_id}/start")
-async def post_governance_rollout_start(rollout_id: str):
+async def post_governance_rollout_start(
+    rollout_id: str,
+    principal_id: "str | None" = Query(default=None),
+):
     """
-    Start a registered rollout, transitioning it to RUNNING.
+    Start a registered rollout, transitioning it to RUNNING. With
+    principal_id given, requires "deployment.deploy" against the
+    deployment RBAC engine.
     """
 
     manager = _build_rollout_manager()
 
     try:
-        rollout = manager.start(rollout_id)
+        rollout = manager.start(rollout_id, principal_id=principal_id)
 
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     return rollout.to_dict()
 
@@ -2133,21 +2168,28 @@ async def post_governance_rollout_resume(rollout_id: str):
 
 
 @health_router.delete("/rollouts/{rollout_id}")
-async def delete_governance_rollout(rollout_id: str):
+async def delete_governance_rollout(
+    rollout_id: str,
+    principal_id: "str | None" = Query(default=None),
+):
     """
-    Cancel a registered rollout.
+    Cancel a registered rollout. With principal_id given, requires
+    "deployment.cancel" against the deployment RBAC engine.
     """
 
     manager = _build_rollout_manager()
 
     try:
-        rollout = manager.cancel(rollout_id)
+        rollout = manager.cancel(rollout_id, principal_id=principal_id)
 
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     return rollout.to_dict()
 
@@ -3260,11 +3302,14 @@ async def post_governance_rollout_policy(
     strategy: "str | None" = Query(default=None),
     conditions: str = Query(default="{}"),
     policy_type: "str | None" = Query(default=None),
+    principal_id: "str | None" = Query(default=None),
 ):
     """
     Register a new rollout policy. conditions is a JSON object (as a
     query string). If policy_type names one of the built-in rollout
-    checks, it is used instead of plain conditions-matching.
+    checks, it is used instead of plain conditions-matching. With
+    principal_id given, requires "policy.manage" against the
+    deployment RBAC engine.
     """
 
     parsed_conditions = _parse_json_object(
@@ -3279,10 +3324,14 @@ async def post_governance_rollout_policy(
             strategy=strategy,
             conditions=parsed_conditions,
             policy_type=policy_type,
+            principal_id=principal_id,
         )
 
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     return policy.to_dict()
 
@@ -3291,33 +3340,52 @@ async def post_governance_rollout_policy(
 async def patch_governance_rollout_policy(
     name: str,
     enabled: bool = Query(...),
+    principal_id: "str | None" = Query(default=None),
 ):
     """
-    Enable or disable a registered rollout policy.
+    Enable or disable a registered rollout policy. With principal_id
+    given, requires "policy.manage" against the deployment RBAC
+    engine.
     """
 
     engine = _build_rollout_policy_engine()
 
     try:
-        policy = engine.enable(name) if enabled else engine.disable(name)
+        policy = (
+            engine.enable(name, principal_id=principal_id)
+            if enabled
+            else engine.disable(name, principal_id=principal_id)
+        )
 
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     return policy.to_dict()
 
 
 @health_router.delete("/rollout/policies/{name}")
-async def delete_governance_rollout_policy(name: str):
+async def delete_governance_rollout_policy(
+    name: str,
+    principal_id: "str | None" = Query(default=None),
+):
     """
-    Remove a registered rollout policy.
+    Remove a registered rollout policy. With principal_id given,
+    requires "policy.manage" against the deployment RBAC engine.
     """
 
     try:
-        _build_rollout_policy_engine().remove(name)
+        _build_rollout_policy_engine().remove(
+            name, principal_id=principal_id
+        )
 
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     return {"removed": name}
 
@@ -3342,5 +3410,105 @@ async def post_governance_rollout_policy_evaluate(
 
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return decision.to_dict()
+
+
+def _build_rbac_engine():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_rbac_engine()
+
+
+@health_router.get("/security/roles")
+async def get_governance_security_roles():
+    """
+    Return every registered deployment role, ordered by name.
+    """
+
+    roles = _build_rbac_engine().roles()
+
+    return [role.to_dict() for role in roles]
+
+
+@health_router.post("/security/roles")
+async def post_governance_security_role(
+    name: str = Query(...),
+    permissions: str = Query(default="[]"),
+):
+    """
+    Register a new deployment role. permissions is a JSON array of
+    permission strings (as a query string).
+    """
+
+    parsed_permissions = _parse_json_string_list(
+        permissions, field_name="permissions"
+    )
+
+    try:
+        role = _build_rbac_engine().register_role(
+            name, parsed_permissions
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return role.to_dict()
+
+
+@health_router.patch("/security/roles/{role}")
+async def patch_governance_security_role(
+    role: str,
+    permissions: str = Query(...),
+):
+    """
+    Replace a registered deployment role's permission set. permissions
+    is a JSON array of permission strings (as a query string).
+    """
+
+    parsed_permissions = _parse_json_string_list(
+        permissions, field_name="permissions"
+    )
+
+    try:
+        updated = _build_rbac_engine().update_role_permissions(
+            role, parsed_permissions
+        )
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return updated.to_dict()
+
+
+@health_router.delete("/security/roles/{role}")
+async def delete_governance_security_role(role: str):
+    """
+    Remove a registered deployment role, revoking it from every
+    principal it was assigned to.
+    """
+
+    try:
+        _build_rbac_engine().remove_role(role)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"removed": role}
+
+
+@health_router.post("/security/authorize")
+async def post_governance_security_authorize(
+    principal_id: str = Query(...),
+    permission: str = Query(...),
+):
+    """
+    Decide whether principal_id currently holds permission, the union
+    of every permission granted by every role assigned to it.
+    """
+
+    decision = _build_rbac_engine().authorize(principal_id, permission)
 
     return decision.to_dict()

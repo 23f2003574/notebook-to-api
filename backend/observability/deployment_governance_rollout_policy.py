@@ -11,6 +11,7 @@ from .deployment_governance_rules import conditions_match
 if TYPE_CHECKING:
     from .deployment_governance_audit import GovernanceAuditService
     from .deployment_governance_event_bus import GovernanceEventBus
+    from .deployment_governance_rbac import DeploymentRBACEngine
     from .deployment_governance_rollout_analytics import (
         DeploymentRolloutAnalytics,
     )
@@ -176,6 +177,7 @@ class DeploymentRolloutPolicyEngine:
         event_bus: "GovernanceEventBus | None" = None,
         audit_service: "GovernanceAuditService | None" = None,
         analytics: "DeploymentRolloutAnalytics | None" = None,
+        rbac_engine: "DeploymentRBACEngine | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
@@ -197,6 +199,8 @@ class DeploymentRolloutPolicyEngine:
 
         self._analytics = analytics
 
+        self._rbac_engine = rbac_engine
+
         if self._analytics is not None:
             self._analytics.register_kpi(
                 "rollout_policy_denial_rate", self._denial_rate
@@ -212,6 +216,7 @@ class DeploymentRolloutPolicyEngine:
         conditions: "dict[str, Any] | None" = None,
         policy_type: "str | None" = None,
         evaluator: "RolloutPolicyEvaluator | None" = None,
+        principal_id: "str | None" = None,
     ) -> RolloutPolicy:
         """
         Register a new named policy.
@@ -223,8 +228,13 @@ class DeploymentRolloutPolicyEngine:
         against evaluate()'s context.
 
         Raises ValueError if name is already registered, or if
-        policy_type is given but not a recognized built-in.
+        policy_type is given but not a recognized built-in. With
+        principal_id given and an rbac_engine wired in, also raises
+        PermissionError if principal_id is not authorized for
+        "policy.manage".
         """
+
+        self._check_authorization(principal_id, "policy.manage")
 
         with self._lock:
             if name in self._policies:
@@ -258,12 +268,18 @@ class DeploymentRolloutPolicyEngine:
 
         return policy
 
-    def remove(self, name: str) -> None:
+    def remove(
+        self, name: str, *, principal_id: "str | None" = None
+    ) -> None:
         """
         Remove a registered policy.
 
-        Raises KeyError if name is not registered.
+        Raises KeyError if name is not registered. With principal_id
+        given and an rbac_engine wired in, also raises PermissionError
+        if principal_id is not authorized for "policy.manage".
         """
+
+        self._check_authorization(principal_id, "policy.manage")
 
         with self._lock:
             if name not in self._policies:
@@ -274,21 +290,35 @@ class DeploymentRolloutPolicyEngine:
 
         self._publish("rollout_policy_removed", name, {})
 
-    def enable(self, name: str) -> RolloutPolicy:
+    def enable(
+        self, name: str, *, principal_id: "str | None" = None
+    ) -> RolloutPolicy:
         """
         Enable a registered policy, returning its updated state.
 
-        Raises KeyError if name is not registered. Idempotent.
+        Raises KeyError if name is not registered. Idempotent. With
+        principal_id given and an rbac_engine wired in, also raises
+        PermissionError if principal_id is not authorized for
+        "policy.manage".
         """
+
+        self._check_authorization(principal_id, "policy.manage")
 
         return self._set_enabled(name, True)
 
-    def disable(self, name: str) -> RolloutPolicy:
+    def disable(
+        self, name: str, *, principal_id: "str | None" = None
+    ) -> RolloutPolicy:
         """
         Disable a registered policy, returning its updated state.
 
-        Raises KeyError if name is not registered. Idempotent.
+        Raises KeyError if name is not registered. Idempotent. With
+        principal_id given and an rbac_engine wired in, also raises
+        PermissionError if principal_id is not authorized for
+        "policy.manage".
         """
+
+        self._check_authorization(principal_id, "policy.manage")
 
         return self._set_enabled(name, False)
 
@@ -399,6 +429,38 @@ class DeploymentRolloutPolicyEngine:
             self._evaluators.clear()
             self._decision_count = 0
             self._denial_count = 0
+
+    def set_rbac_engine(
+        self, rbac_engine: "DeploymentRBACEngine"
+    ) -> None:
+        """
+        Wire rbac_engine in after construction, matching how
+        build_default_governance_rbac_engine wires the process-wide
+        RBAC engine into this engine's own singleton.
+        """
+
+        self._rbac_engine = rbac_engine
+
+    def _check_authorization(
+        self, principal_id: "str | None", permission: str
+    ) -> None:
+        """
+        Raise PermissionError if principal_id is given, an
+        rbac_engine is wired, and principal_id is not authorized for
+        permission. A no-op if principal_id is None (authorization was
+        not requested) or no rbac_engine is wired.
+        """
+
+        if principal_id is None or self._rbac_engine is None:
+            return
+
+        decision = self._rbac_engine.authorize(principal_id, permission)
+
+        if not decision.allowed:
+            raise PermissionError(
+                f"principal '{principal_id}' is not authorized for "
+                f"'{permission}'"
+            )
 
     def _denial_rate(self) -> float:
         with self._lock:

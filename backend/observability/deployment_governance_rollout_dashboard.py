@@ -7,6 +7,7 @@ from typing import Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .deployment_governance_event_bus import GovernanceEventBus
+    from .deployment_governance_rbac import DeploymentRBACEngine
     from .deployment_governance_rollback import (
         DeploymentRollbackEngine,
         RollbackPlan,
@@ -173,6 +174,7 @@ class DeploymentRolloutDashboard:
         rollback_engine: "DeploymentRollbackEngine | None" = None,
         analytics: "DeploymentRolloutAnalytics | None" = None,
         policy_engine: "DeploymentRolloutPolicyEngine | None" = None,
+        rbac_engine: "DeploymentRBACEngine | None" = None,
         cache_ttl_seconds: float = 0.0,
     ) -> None:
         if cache_ttl_seconds < 0:
@@ -199,6 +201,8 @@ class DeploymentRolloutDashboard:
         self._analytics = analytics
 
         self._policy_engine = policy_engine
+
+        self._rbac_engine = rbac_engine
 
         self._cache_ttl_seconds = cache_ttl_seconds
 
@@ -228,14 +232,20 @@ class DeploymentRolloutDashboard:
 
         return self._build(event_type="rollout_dashboard_generated")
 
-    def refresh(self) -> RolloutDashboard:
+    def refresh(
+        self, *, principal_id: "str | None" = None
+    ) -> RolloutDashboard:
         """
         Rebuild the dashboard unconditionally, bypassing (and
         replacing) any cached copy, publishing "rollout_dashboard_
         refreshed" instead of "rollout_dashboard_generated" — for a
         caller that means "I explicitly asked for the latest view"
-        rather than an incidental read.
+        rather than an incidental read. With principal_id given and an
+        rbac_engine wired in, also raises PermissionError if
+        principal_id is not authorized for "deployment.manage".
         """
+
+        self._check_authorization(principal_id, "deployment.manage")
 
         return self._build(event_type="rollout_dashboard_refreshed")
 
@@ -306,6 +316,38 @@ class DeploymentRolloutDashboard:
             return ()
 
         return self._policy_engine.list()
+
+    def set_rbac_engine(
+        self, rbac_engine: "DeploymentRBACEngine"
+    ) -> None:
+        """
+        Wire rbac_engine in after construction, matching how
+        build_default_governance_rbac_engine wires the process-wide
+        RBAC engine into this dashboard's own singleton.
+        """
+
+        self._rbac_engine = rbac_engine
+
+    def _check_authorization(
+        self, principal_id: "str | None", permission: str
+    ) -> None:
+        """
+        Raise PermissionError if principal_id is given, an
+        rbac_engine is wired, and principal_id is not authorized for
+        permission. A no-op if principal_id is None (authorization was
+        not requested) or no rbac_engine is wired.
+        """
+
+        if principal_id is None or self._rbac_engine is None:
+            return
+
+        decision = self._rbac_engine.authorize(principal_id, permission)
+
+        if not decision.allowed:
+            raise PermissionError(
+                f"principal '{principal_id}' is not authorized for "
+                f"'{permission}'"
+            )
 
     def _build(self, *, event_type: str) -> RolloutDashboard:
         deployments = self._build_deployment_entries()

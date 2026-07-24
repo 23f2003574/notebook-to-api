@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from .deployment_governance_progressive_delivery import (
         ProgressiveDeliveryEngine,
     )
+    from .deployment_governance_rbac import DeploymentRBACEngine
     from .deployment_governance_rolling import RollingDeploymentEngine
     from .deployment_governance_rollout_policy import (
         DeploymentRolloutPolicyEngine,
@@ -181,6 +182,7 @@ class DeploymentRolloutManager:
         progressive_engine: "ProgressiveDeliveryEngine | None" = None,
         traffic_router: "DeploymentTrafficRouter | None" = None,
         policy_engine: "DeploymentRolloutPolicyEngine | None" = None,
+        rbac_engine: "DeploymentRBACEngine | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
@@ -210,6 +212,8 @@ class DeploymentRolloutManager:
 
         self._policy_engine = policy_engine
 
+        self._rbac_engine = rbac_engine
+
         if self._event_bus is not None:
             self._event_bus.subscribe(
                 "rollout_health_critical",
@@ -217,7 +221,11 @@ class DeploymentRolloutManager:
             )
 
     def create(
-        self, deployment_id: str, strategy: str
+        self,
+        deployment_id: str,
+        strategy: str,
+        *,
+        principal_id: "str | None" = None,
     ) -> Rollout:
         """
         Create a new PENDING rollout for deployment_id.
@@ -232,10 +240,18 @@ class DeploymentRolloutManager:
         way, it just cannot vouch that the deployment itself exists.
         Also raises ValueError if a wired policy_engine denies the
         "rollout_creation" action.
+
+        With principal_id given and an rbac_engine wired in, also
+        raises PermissionError if principal_id is not authorized for
+        "deployment.deploy". Omitting principal_id skips this check
+        entirely — it is not a stand-in for "anonymous", it means the
+        caller is not asking for authorization to be enforced.
         """
 
         if not deployment_id:
             raise ValueError("deployment_id must not be empty")
+
+        self._check_authorization(principal_id, "deployment.deploy")
 
         if (
             self._version_registry is not None
@@ -366,20 +382,27 @@ class DeploymentRolloutManager:
 
         return updated
 
-    def start(self, rollout_id: str) -> Rollout:
+    def start(
+        self, rollout_id: str, *, principal_id: "str | None" = None
+    ) -> Rollout:
         """
         Transition rollout_id from PENDING to RUNNING.
 
         Idempotent: a no-op returning the unchanged Rollout if already
-        RUNNING (a wired policy_engine is not re-consulted in that
-        case). Raises KeyError if rollout_id is not registered, or
-        ValueError if the current state cannot transition to RUNNING
-        or a wired policy_engine denies the "rollout_start" action.
+        RUNNING (neither a wired policy_engine nor a wired rbac_engine
+        is re-consulted in that case). Raises KeyError if rollout_id
+        is not registered, or ValueError if the current state cannot
+        transition to RUNNING or a wired policy_engine denies the
+        "rollout_start" action. With principal_id given and an
+        rbac_engine wired in, also raises PermissionError if
+        principal_id is not authorized for "deployment.deploy".
         """
 
         rollout = self.get(rollout_id)
 
         if rollout.state != "RUNNING":
+            self._check_authorization(principal_id, "deployment.deploy")
+
             self._check_policy(
                 rollout.deployment_id, "rollout_start",
                 {"strategy": rollout.strategy},
@@ -424,22 +447,30 @@ class DeploymentRolloutManager:
             from_states=frozenset({"PAUSED"}),
         )
 
-    def cancel(self, rollout_id: str) -> Rollout:
+    def cancel(
+        self, rollout_id: str, *, principal_id: "str | None" = None
+    ) -> Rollout:
         """
         Transition rollout_id to CANCELLED from any non-terminal
         state.
 
         Idempotent: a no-op returning the unchanged Rollout if already
-        CANCELLED. On a real (non-idempotent) cancellation, with a
-        traffic_router wired in, also resets that router's routing
-        table for this rollout's deployment_id, best effort — an
-        abandoned rollout should not leave partial traffic shifts in
-        place.
+        CANCELLED (a wired rbac_engine is not consulted in that case).
+        On a real (non-idempotent) cancellation, with a traffic_router
+        wired in, also resets that router's routing table for this
+        rollout's deployment_id, best effort — an abandoned rollout
+        should not leave partial traffic shifts in place. With
+        principal_id given and an rbac_engine wired in, also raises
+        PermissionError if principal_id is not authorized for
+        "deployment.cancel".
         """
 
         was_already_cancelled = self.status(rollout_id).state == (
             "CANCELLED"
         )
+
+        if not was_already_cancelled:
+            self._check_authorization(principal_id, "deployment.cancel")
 
         rollout = self._transition(
             rollout_id,
@@ -453,7 +484,9 @@ class DeploymentRolloutManager:
 
         return rollout
 
-    def complete(self, rollout_id: str) -> Rollout:
+    def complete(
+        self, rollout_id: str, *, principal_id: "str | None" = None
+    ) -> Rollout:
         """
         Transition rollout_id from RUNNING to COMPLETED.
 
@@ -677,6 +710,39 @@ class DeploymentRolloutManager:
         """
 
         self._policy_engine = policy_engine
+
+    def set_rbac_engine(
+        self, rbac_engine: "DeploymentRBACEngine"
+    ) -> None:
+        """
+        Wire rbac_engine in after construction, matching
+        set_policy_engine (the process-wide RBAC engine's own
+        singleton wires itself into this manager the same way the
+        process-wide rollout policy engine does).
+        """
+
+        self._rbac_engine = rbac_engine
+
+    def _check_authorization(
+        self, principal_id: "str | None", permission: str
+    ) -> None:
+        """
+        Raise PermissionError if principal_id is given, an
+        rbac_engine is wired, and principal_id is not authorized for
+        permission. A no-op if principal_id is None (authorization was
+        not requested) or no rbac_engine is wired.
+        """
+
+        if principal_id is None or self._rbac_engine is None:
+            return
+
+        decision = self._rbac_engine.authorize(principal_id, permission)
+
+        if not decision.allowed:
+            raise PermissionError(
+                f"principal '{principal_id}' is not authorized for "
+                f"'{permission}'"
+            )
 
     def _check_policy(
         self,

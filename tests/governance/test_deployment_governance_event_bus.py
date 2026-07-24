@@ -511,6 +511,11 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "rollout_bootstrap_failed",
         "rollout_runtime_ready",
         "rollout_runtime_shutdown",
+        "role_registered",
+        "role_removed",
+        "role_assigned",
+        "authorization_denied",
+        "authorization_granted",
     }
 
 

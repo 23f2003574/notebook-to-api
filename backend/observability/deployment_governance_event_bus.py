@@ -151,6 +151,11 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "rollout_bootstrap_failed",
     "rollout_runtime_ready",
     "rollout_runtime_shutdown",
+    "role_registered",
+    "role_removed",
+    "role_assigned",
+    "authorization_denied",
+    "authorization_granted",
 )
 
 

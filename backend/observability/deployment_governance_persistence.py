@@ -399,6 +399,7 @@ if TYPE_CHECKING:
     from .deployment_governance_rollout_dashboard import (
         DeploymentRolloutDashboard,
     )
+    from .deployment_governance_rbac import DeploymentRBACEngine
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2442,6 +2443,26 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return get_rollout_dashboard()
+
+    def build_governance_rbac_engine(
+        self,
+    ) -> "DeploymentRBACEngine":
+        """
+        Return the process-wide deployment RBAC engine.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: roles and principal assignments registered
+        through the API need to be enforced identically by every
+        protected governance operation, which a persistence runtime
+        built fresh per request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_rbac import get_rbac_engine
+
+        return get_rbac_engine()
 
     def build_integrity_provider_configuration_service(
         self,
