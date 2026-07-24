@@ -531,6 +531,9 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "compliance_failed",
         "policy_registered",
         "policy_removed",
+        "risk_assessed",
+        "high_risk_detected",
+        "critical_risk_detected",
     }
 
 

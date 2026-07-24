@@ -290,6 +290,27 @@ class DeploymentComplianceEngine:
 
         return tuple(results)
 
+    def violation_count(
+        self, deployment_id: str, context: "dict[str, Any] | None" = None
+    ) -> int:
+        """
+        Return how many enabled policies deployment_id fails when
+        evaluated against context — a narrow convenience over
+        evaluate(), simply counting its non-compliant results.
+        Introduced for DeploymentRiskEngine's "policy_violations"
+        default risk factor, sparing it from re-implementing
+        evaluate()'s own enabled-policy loop.
+
+        Raises ValueError if deployment_id is empty (propagated from
+        evaluate()).
+        """
+
+        return sum(
+            1
+            for result in self.evaluate(deployment_id, context)
+            if not result.compliant
+        )
+
     def evaluate_all(
         self,
         contexts: "dict[str, dict[str, Any]] | None" = None,

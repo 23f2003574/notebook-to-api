@@ -409,6 +409,7 @@ if TYPE_CHECKING:
     from .deployment_governance_compliance import (
         DeploymentComplianceEngine,
     )
+    from .deployment_governance_risk import DeploymentRiskEngine
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2581,6 +2582,25 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return get_compliance_engine()
+
+    def build_governance_risk_engine(
+        self,
+    ) -> "DeploymentRiskEngine":
+        """
+        Return the process-wide deployment risk engine.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: rules registered through the API need to be
+        enforced identically by every caller, which a persistence
+        runtime built fresh per request cannot provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_risk import get_risk_engine
+
+        return get_risk_engine()
 
     def build_integrity_provider_configuration_service(
         self,

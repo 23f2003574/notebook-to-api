@@ -3949,3 +3949,64 @@ async def get_governance_security_compliance_summary():
     """
 
     return _build_compliance_engine().summary().to_dict()
+
+
+def _build_risk_engine():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_risk_engine()
+
+
+@health_router.post("/security/risk/assess")
+async def post_governance_security_risk_assess(
+    deployment_id: str = Query(...),
+    context: str = Query(default="{}"),
+):
+    """
+    Score deployment_id against every enabled risk rule. context is a
+    JSON object (as a query string).
+    """
+
+    parsed_context = _parse_json_object(context, field_name="context")
+
+    try:
+        assessment = _build_risk_engine().assess(
+            deployment_id, parsed_context
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return assessment.to_dict()
+
+
+@health_router.get("/security/risk/summary")
+async def get_governance_security_risk_summary():
+    """
+    Return a point-in-time snapshot of the risk rule registry.
+
+    Registered before /security/risk/{deployment_id}: FastAPI matches
+    path operations in registration order, so "summary" would
+    otherwise be captured as a literal deployment_id by that route
+    first — the same ordering requirement
+    get_governance_rollouts_dashboard's own docstring explains.
+    """
+
+    return _build_risk_engine().summary().to_dict()
+
+
+@health_router.get("/security/risk/{deployment_id}")
+async def get_governance_security_risk(deployment_id: str):
+    """
+    Return deployment_id's most recently computed RiskAssessment.
+    """
+
+    try:
+        assessment = _build_risk_engine().latest(deployment_id)
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return assessment.to_dict()

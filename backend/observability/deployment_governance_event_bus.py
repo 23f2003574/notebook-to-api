@@ -171,6 +171,9 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "compliance_failed",
     "policy_registered",
     "policy_removed",
+    "risk_assessed",
+    "high_risk_detected",
+    "critical_risk_detected",
 )
 
 

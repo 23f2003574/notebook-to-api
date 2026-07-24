@@ -369,6 +369,24 @@ class DeploymentApprovalEngine:
 
         return request.deployment_id, request.operation
 
+    def is_approved(self, deployment_id: str, operation: str) -> bool:
+        """
+        Return whether deployment_id has any APPROVED request for
+        operation — the check DeploymentRiskEngine's "required_
+        approvals_missing" default risk factor uses instead of
+        reaching into this engine's request registry directly. A
+        deployment_id/operation pair this engine has never seen a
+        request for returns False, the same "missing" outcome as one
+        whose only request was rejected or cancelled.
+        """
+
+        return any(
+            request.deployment_id == deployment_id
+            and request.operation == operation
+            and request.status == "APPROVED"
+            for request in self.list()
+        )
+
     def decision(self, request_id: str) -> ApprovalDecision:
         """
         Return request_id's recorded ApprovalDecision.
