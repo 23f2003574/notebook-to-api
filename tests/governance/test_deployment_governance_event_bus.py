@@ -538,6 +538,9 @@ def test_governance_event_types_is_the_documented_vocabulary():
         "security_scan_completed",
         "security_scan_failed",
         "critical_finding_detected",
+        "integrity_verified",
+        "integrity_failed",
+        "verification_rule_registered",
     }
 
 

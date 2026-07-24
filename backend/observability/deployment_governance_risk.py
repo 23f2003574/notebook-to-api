@@ -38,6 +38,7 @@ DEFAULT_RISK_FACTORS: "tuple[str, ...]" = (
     "required_approvals_missing",
     "policy_violations",
     "security_findings",
+    "integrity_failures",
 )
 
 # A rule's evaluator decides whether it is triggered for deployment_id
@@ -179,7 +180,7 @@ class DeploymentRiskEngine:
     "weighted scoring (0-100)". Disabled rules are skipped entirely,
     contributing nothing.
 
-    Ships with six default risk factors (DEFAULT_RISK_FACTORS),
+    Ships with seven default risk factors (DEFAULT_RISK_FACTORS),
     selectable via register_rule()'s factor parameter:
     "production_deployment" (context["environment"] == "production"),
     "rollback_frequency" (context["rollback_count"] >= 3),
@@ -190,12 +191,17 @@ class DeploymentRiskEngine:
     context["required_approvals_missing"] truthy),
     "policy_violations" (with a compliance_engine wired in,
     DeploymentComplianceEngine.violation_count(deployment_id, context)
-    > 0; otherwise context["policy_violations"] > 0), and
+    > 0; otherwise context["policy_violations"] > 0),
     "security_findings" (with a security_scanner wired in, any of
     deployment_id's cached ScanResult has status == "FAILED";
-    otherwise context["security_findings"] > 0). Every default factor
-    degrades to a context-only fallback when its optional engine is
-    not wired — the same graceful-degradation contract every other
+    otherwise context["security_findings"] > 0), and
+    "integrity_failures" (with a security_scanner wired in,
+    DeploymentSecurityScanner.integrity_failed(deployment_id) — which
+    itself only answers non-trivially when that scanner was built
+    with an integrity_verifier; otherwise context["integrity_failures"]
+    truthy). Every default factor degrades to a context-only fallback
+    when its optional engine is not wired — the same graceful-
+    degradation contract every other
     optional-dependency integration in this codebase follows.
 
     Approval enforcement (blocking on a risk score), incident response,
@@ -431,6 +437,7 @@ class DeploymentRiskEngine:
             ),
             "policy_violations": self._factor_policy_violations,
             "security_findings": self._factor_security_findings,
+            "integrity_failures": self._factor_integrity_failures,
         }
 
     def _factor_production_deployment(
@@ -484,6 +491,14 @@ class DeploymentRiskEngine:
             return any(result.status == "FAILED" for result in results)
 
         return context.get("security_findings", 0) > 0
+
+    def _factor_integrity_failures(
+        self, rule: RiskRule, deployment_id: str, context: "dict[str, Any]"
+    ) -> bool:
+        if self._security_scanner is not None:
+            return self._security_scanner.integrity_failed(deployment_id)
+
+        return bool(context.get("integrity_failures", False))
 
     def _publish(
         self,

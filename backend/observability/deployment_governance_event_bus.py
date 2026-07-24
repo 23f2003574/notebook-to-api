@@ -178,6 +178,9 @@ GOVERNANCE_EVENT_TYPES: "tuple[str, ...]" = (
     "security_scan_completed",
     "security_scan_failed",
     "critical_finding_detected",
+    "integrity_verified",
+    "integrity_failed",
+    "verification_rule_registered",
 )
 
 

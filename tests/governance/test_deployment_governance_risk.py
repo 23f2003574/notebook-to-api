@@ -132,6 +132,7 @@ class TestConstants:
             "production_deployment", "rollback_frequency",
             "failed_health_checks", "required_approvals_missing",
             "policy_violations", "security_findings",
+            "integrity_failures",
         }
 
 

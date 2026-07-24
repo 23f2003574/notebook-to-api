@@ -6,6 +6,9 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Protocol, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .deployment_governance_artifact_integrity import (
+        DeploymentIntegrityVerifier,
+    )
     from .deployment_governance_event_bus import GovernanceEventBus
     from .deployment_governance_secret_vault import DeploymentSecretVault
 
@@ -204,6 +207,7 @@ class DeploymentSecurityScanner:
         clock: "Callable[[], datetime] | None" = None,
         event_bus: "GovernanceEventBus | None" = None,
         secret_vault: "DeploymentSecretVault | None" = None,
+        integrity_verifier: "DeploymentIntegrityVerifier | None" = None,
     ) -> None:
         self._lock = threading.Lock()
 
@@ -220,6 +224,8 @@ class DeploymentSecurityScanner:
         self._event_bus = event_bus
 
         self._secret_vault = secret_vault
+
+        self._integrity_verifier = integrity_verifier
 
     def register_scanner(
         self,
@@ -440,6 +446,33 @@ class DeploymentSecurityScanner:
             ),
         )
 
+    def integrity_failed(self, artifact_id: str) -> bool:
+        """
+        Return whether artifact_id's most recent integrity
+        verification failed, delegating to a wired
+        DeploymentIntegrityVerifier's own history(). False if no
+        integrity_verifier is wired, or artifact_id has never been
+        verified — an artifact this scanner cannot get an opinion on
+        is not the same thing as one confirmed to have failed.
+        Introduced for DeploymentRiskEngine's "integrity_failures"
+        default risk factor, which consults this rather than
+        depending on the integrity verifier directly.
+        """
+
+        if self._integrity_verifier is None:
+            return False
+
+        try:
+            history = self._integrity_verifier.history(artifact_id)
+
+        except KeyError:
+            return False
+
+        if not history:
+            return False
+
+        return not history[-1].verified
+
     def clear(self) -> None:
         """
         Remove every registered scanner and every cached scan
@@ -611,14 +644,19 @@ def build_default_governance_security_scanner() -> (
 ):
     """
     Build the process-wide deployment security scanner, wired to the
-    process-wide governance event bus and secret vault.
+    process-wide governance event bus, secret vault, and integrity
+    verifier.
     """
 
+    from .deployment_governance_artifact_integrity import (
+        get_artifact_integrity_verifier,
+    )
     from .deployment_governance_event_bus import get_event_bus
     from .deployment_governance_secret_vault import get_secret_vault
 
     return DeploymentSecurityScanner(
         event_bus=get_event_bus(), secret_vault=get_secret_vault(),
+        integrity_verifier=get_artifact_integrity_verifier(),
     )
 
 

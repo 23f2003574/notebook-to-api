@@ -4072,3 +4072,68 @@ async def get_governance_security_scan(deployment_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return [result.to_dict() for result in results]
+
+
+def _build_artifact_integrity_verifier():
+    runtime = build_deployment_governance_persistence(
+        deployment_governance_persistence_config_from_env()
+    )
+
+    return runtime.build_governance_artifact_integrity_verifier()
+
+
+@health_router.post("/security/integrity/verify")
+async def post_governance_security_integrity_verify(
+    artifact_id: str = Query(...),
+    content: str = Query(...),
+    context: str = Query(default="{}"),
+):
+    """
+    Verify artifact_id's content against every enabled verification
+    rule. context is a JSON object (as a query string).
+    """
+
+    parsed_context = _parse_json_object(context, field_name="context")
+
+    try:
+        report = _build_artifact_integrity_verifier().verify(
+            artifact_id, content, parsed_context
+        )
+
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return report.to_dict()
+
+
+@health_router.get("/security/integrity/summary")
+async def get_governance_security_integrity_summary():
+    """
+    Return a point-in-time aggregate over the verification rule
+    registry and every artifact verified so far.
+
+    Registered before /security/integrity/{artifact_id}: FastAPI
+    matches path operations in registration order, so "summary" would
+    otherwise be captured as a literal artifact_id by that route
+    first — the same ordering requirement
+    get_governance_rollouts_dashboard's own docstring explains.
+    """
+
+    return _build_artifact_integrity_verifier().summary().to_dict()
+
+
+@health_router.get("/security/integrity/{artifact_id}")
+async def get_governance_security_integrity(artifact_id: str):
+    """
+    Return artifact_id's verification history.
+    """
+
+    try:
+        reports = _build_artifact_integrity_verifier().history(
+            artifact_id
+        )
+
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return [report.to_dict() for report in reports]

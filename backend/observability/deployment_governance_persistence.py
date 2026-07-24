@@ -413,6 +413,9 @@ if TYPE_CHECKING:
     from .deployment_governance_security_scanner import (
         DeploymentSecurityScanner,
     )
+    from .deployment_governance_artifact_integrity import (
+        DeploymentIntegrityVerifier,
+    )
 
 
 DEFAULT_GOVERNANCE_DATABASE_PATH: Final[
@@ -2625,6 +2628,29 @@ class DeploymentGovernancePersistenceRuntime:
         )
 
         return get_security_scanner()
+
+    def build_governance_artifact_integrity_verifier(
+        self,
+    ) -> "DeploymentIntegrityVerifier":
+        """
+        Return the process-wide deployment integrity verifier.
+
+        Like build_integrity_event_bus, this does not construct a
+        fresh instance: rules registered through the API need to be
+        enforced identically by every caller, and history() needs to
+        reflect every verify() call regardless of which request made
+        it, which a persistence runtime built fresh per request cannot
+        provide on its own.
+
+        Imported locally (not at module top level) to avoid a
+        circular import, matching build_diagnostics_service below.
+        """
+
+        from .deployment_governance_artifact_integrity import (
+            get_artifact_integrity_verifier,
+        )
+
+        return get_artifact_integrity_verifier()
 
     def build_integrity_provider_configuration_service(
         self,
