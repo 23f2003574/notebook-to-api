@@ -8,6 +8,14 @@ from typing import Any, Mapping, Optional
 
 from fastapi import APIRouter, HTTPException
 
+from .deployment_metrics import (
+    DEPLOY_COUNT,
+    DEPLOY_DURATION_MS,
+    FAILURE_COUNT,
+    SUCCESS_COUNT,
+    DeploymentMetricsCollector,
+)
+
 SPAN_STATUSES = ("OK", "ERROR")
 
 
@@ -78,16 +86,20 @@ class DeploymentTracingService:
         *,
         attributes: Optional[Mapping[str, Any]] = None,
         timestamp: Optional[datetime] = None,
+        metrics_collector: Optional[DeploymentMetricsCollector] = None,
     ) -> Span:
         trace_id = _new_id()
         with self._lock:
             self._spans[trace_id] = {}
-        return self.create_span(
+        span = self.create_span(
             trace_id,
             operation,
             attributes=attributes,
             timestamp=timestamp,
         )
+        if metrics_collector is not None:
+            metrics_collector.increment(DEPLOY_COUNT)
+        return span
 
     def create_span(
         self,
@@ -120,6 +132,7 @@ class DeploymentTracingService:
         *,
         status: str = "OK",
         timestamp: Optional[datetime] = None,
+        metrics_collector: Optional[DeploymentMetricsCollector] = None,
     ) -> Span:
         with self._lock:
             spans = self._spans.get(trace_id)
@@ -139,6 +152,11 @@ class DeploymentTracingService:
                 attributes=span.attributes,
             )
             spans[span_id] = finished
+        if metrics_collector is not None and finished.parent_span_id is None:
+            metrics_collector.observe(DEPLOY_DURATION_MS, finished.duration_ms)
+            metrics_collector.increment(
+                SUCCESS_COUNT if finished.status == "OK" else FAILURE_COUNT
+            )
         return finished
 
     def get_trace(self, trace_id: str) -> list[Span]:

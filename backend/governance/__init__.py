@@ -10,6 +10,12 @@ from .deployment_tracing import (
     get_deployment_tracing_service,
     router as deployment_tracing_router,
 )
+from .deployment_metrics import (
+    DeploymentMetricsCollector,
+    MetricsSnapshot,
+    get_deployment_metrics_collector,
+    router as deployment_metrics_router,
+)
 
 __all__ = [
     "DeploymentLogEntry",
@@ -20,4 +26,8 @@ __all__ = [
     "Span",
     "get_deployment_tracing_service",
     "deployment_tracing_router",
+    "DeploymentMetricsCollector",
+    "MetricsSnapshot",
+    "get_deployment_metrics_collector",
+    "deployment_metrics_router",
 ]
