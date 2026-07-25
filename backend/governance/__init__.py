@@ -65,6 +65,13 @@ from .deployment_capacity import (
     get_deployment_capacity_monitor,
     router as deployment_capacity_router,
 )
+from .deployment_insights import (
+    DeploymentInsightsService,
+    Insight,
+    InsightReport,
+    get_deployment_insights_service,
+    router as deployment_insights_router,
+)
 
 __all__ = [
     "DeploymentLogEntry",
@@ -114,4 +121,9 @@ __all__ = [
     "ResourceMeasurement",
     "get_deployment_capacity_monitor",
     "deployment_capacity_router",
+    "DeploymentInsightsService",
+    "Insight",
+    "InsightReport",
+    "get_deployment_insights_service",
+    "deployment_insights_router",
 ]

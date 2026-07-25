@@ -8,6 +8,10 @@ from typing import Optional
 from fastapi import APIRouter, Body, HTTPException, Query
 
 from .deployment_alerts import DeploymentAlertManager, get_deployment_alert_manager
+from .deployment_insights import (
+    DeploymentInsightsService,
+    get_deployment_insights_service,
+)
 from .deployment_logging import (
     DeploymentLoggingService,
     get_deployment_logging_service,
@@ -123,6 +127,7 @@ class DiagnosticReport:
     timeline: tuple = field(default_factory=tuple)
     root_cause: str = "no significant issues detected"
     snapshot: Optional[DiagnosticSnapshot] = None
+    insights: tuple = field(default_factory=tuple)
 
     def to_dict(self) -> dict:
         return {
@@ -131,6 +136,7 @@ class DiagnosticReport:
             "timeline": list(self.timeline),
             "root_cause": self.root_cause,
             "snapshot": self.snapshot.to_dict() if self.snapshot else None,
+            "insights": list(self.insights),
         }
 
 
@@ -207,21 +213,56 @@ class DeploymentDiagnosticsService:
         deployment: str,
         *,
         snapshot: Optional[DiagnosticSnapshot] = None,
+        logging_service: Optional[DeploymentLoggingService] = None,
+        tracing_service: Optional[DeploymentTracingService] = None,
+        metrics_collector: Optional[DeploymentMetricsCollector] = None,
+        alert_manager: Optional[DeploymentAlertManager] = None,
+        recovery_coordinator: Optional[DeploymentRecoveryCoordinator] = None,
+        insights_service: Optional[DeploymentInsightsService] = None,
         timestamp: Optional[datetime] = None,
-        **capture_kwargs,
     ) -> DiagnosticReport:
         if snapshot is None:
             with self._lock:
                 snapshot = self._snapshots.get(deployment)
             if snapshot is None:
-                snapshot = self.capture(deployment, timestamp=timestamp, **capture_kwargs)
+                snapshot = self.capture(
+                    deployment,
+                    logging_service=logging_service,
+                    tracing_service=tracing_service,
+                    metrics_collector=metrics_collector,
+                    alert_manager=alert_manager,
+                    recovery_coordinator=recovery_coordinator,
+                    timestamp=timestamp,
+                )
+
+        insights: tuple = ()
+        timeline = _build_timeline(snapshot)
+        if insights_service is not None:
+            insight_report = insights_service.analyze(
+                deployment,
+                metrics_collector=metrics_collector,
+                recovery_coordinator=recovery_coordinator,
+                timestamp=timestamp,
+            )
+            insights = insight_report.insights
+            for insight in insights:
+                timeline.append(
+                    {
+                        "timestamp": insight.detected_at.isoformat(),
+                        "source": "insight",
+                        "level": insight.severity,
+                        "summary": insight.summary,
+                    }
+                )
+            timeline.sort(key=lambda event: event["timestamp"])
 
         report = DiagnosticReport(
             deployment=deployment,
             generated_at=timestamp or datetime.now(timezone.utc),
-            timeline=tuple(_build_timeline(snapshot)),
+            timeline=tuple(timeline),
             root_cause=_summarize_root_cause(snapshot),
             snapshot=snapshot,
+            insights=tuple(insight.to_dict() for insight in insights),
         )
         with self._lock:
             self._history.append(report)
@@ -265,6 +306,7 @@ def analyze_deployment(payload: dict = Body(...)) -> dict:
         metrics_collector=get_deployment_metrics_collector(),
         alert_manager=get_deployment_alert_manager(),
         recovery_coordinator=get_deployment_recovery_coordinator(),
+        insights_service=get_deployment_insights_service(),
     )
     return report.to_dict()
 
