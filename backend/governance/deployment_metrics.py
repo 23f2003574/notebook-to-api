@@ -16,6 +16,12 @@ ROLLBACK_COUNT = "rollback_count"
 AVAILABILITY = "availability"
 
 
+def capacity_metric_name(resource: str) -> str:
+    """The gauge name a capacity measurement for `resource` is published under."""
+
+    return f"capacity_{resource}_utilization"
+
+
 @dataclass(frozen=True)
 class HistogramSummary:
     """Immutable rollup of the observations recorded for a histogram."""

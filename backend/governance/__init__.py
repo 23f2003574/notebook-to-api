@@ -58,6 +58,13 @@ from .deployment_diagnostics import (
     get_deployment_diagnostics_service,
     router as deployment_diagnostics_router,
 )
+from .deployment_capacity import (
+    DeploymentCapacityMonitor,
+    ResourceDefinition,
+    ResourceMeasurement,
+    get_deployment_capacity_monitor,
+    router as deployment_capacity_router,
+)
 
 __all__ = [
     "DeploymentLogEntry",
@@ -102,4 +109,9 @@ __all__ = [
     "DiagnosticSnapshot",
     "get_deployment_diagnostics_service",
     "deployment_diagnostics_router",
+    "DeploymentCapacityMonitor",
+    "ResourceDefinition",
+    "ResourceMeasurement",
+    "get_deployment_capacity_monitor",
+    "deployment_capacity_router",
 ]
