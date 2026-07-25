@@ -97,6 +97,7 @@ class RecoveryRecord:
     message: str
     started_at: datetime
     completed_at: datetime
+    source: str = "manual"
     context: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -108,6 +109,7 @@ class RecoveryRecord:
             "message": self.message,
             "started_at": self.started_at.isoformat(),
             "completed_at": self.completed_at.isoformat(),
+            "source": self.source,
             "context": dict(self.context),
         }
 
@@ -142,6 +144,7 @@ class DeploymentRecoveryCoordinator:
         *,
         strategy_name: Optional[str] = None,
         timestamp: Optional[datetime] = None,
+        source: str = "manual",
     ) -> RecoveryRecord:
         deployment = context.get("deployment")
         if not deployment:
@@ -180,6 +183,7 @@ class DeploymentRecoveryCoordinator:
                 context=context,
                 started_at=started_at,
                 timestamp=timestamp,
+                source=source,
             )
 
         return self._store(
@@ -190,6 +194,7 @@ class DeploymentRecoveryCoordinator:
             context=context,
             started_at=started_at,
             timestamp=timestamp,
+            source=source,
         )
 
     def status(
@@ -220,6 +225,7 @@ class DeploymentRecoveryCoordinator:
         context: Mapping[str, Any],
         started_at: datetime,
         timestamp: Optional[datetime],
+        source: str = "manual",
     ) -> RecoveryRecord:
         record = RecoveryRecord(
             recovery_id=_new_id(),
@@ -229,6 +235,7 @@ class DeploymentRecoveryCoordinator:
             message=message,
             started_at=started_at,
             completed_at=timestamp or datetime.now(timezone.utc),
+            source=source,
             context=dict(context),
         )
         with self._lock:

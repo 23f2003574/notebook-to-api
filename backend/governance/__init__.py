@@ -44,6 +44,13 @@ from .deployment_recovery import (
     get_deployment_recovery_coordinator,
     router as deployment_recovery_router,
 )
+from .deployment_chaos import (
+    ChaosExperiment,
+    DeploymentChaosFramework,
+    ExperimentRecord,
+    get_deployment_chaos_framework,
+    router as deployment_chaos_router,
+)
 
 __all__ = [
     "DeploymentLogEntry",
@@ -78,4 +85,9 @@ __all__ = [
     "RecoveryStrategy",
     "get_deployment_recovery_coordinator",
     "deployment_recovery_router",
+    "ChaosExperiment",
+    "DeploymentChaosFramework",
+    "ExperimentRecord",
+    "get_deployment_chaos_framework",
+    "deployment_chaos_router",
 ]
