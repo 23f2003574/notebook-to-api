@@ -103,6 +103,18 @@ class DeploymentLoggingService:
         entries = self.query(deployment=deployment, level=level)
         return json.dumps([e.to_dict() for e in entries], sort_keys=True)
 
+    def trace_ids(self, deployment: str) -> set[str]:
+        """
+        Distinct trace correlation ids referenced by this deployment's
+        log entries, for stitching logs together with distributed traces.
+        """
+
+        return {
+            entry.context["trace_id"]
+            for entry in self.query(deployment=deployment)
+            if "trace_id" in entry.context
+        }
+
     def clear(self) -> None:
         with self._lock:
             self._entries.clear()

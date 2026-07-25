@@ -51,6 +51,13 @@ from .deployment_chaos import (
     get_deployment_chaos_framework,
     router as deployment_chaos_router,
 )
+from .deployment_diagnostics import (
+    DeploymentDiagnosticsService,
+    DiagnosticReport,
+    DiagnosticSnapshot,
+    get_deployment_diagnostics_service,
+    router as deployment_diagnostics_router,
+)
 
 __all__ = [
     "DeploymentLogEntry",
@@ -90,4 +97,9 @@ __all__ = [
     "ExperimentRecord",
     "get_deployment_chaos_framework",
     "deployment_chaos_router",
+    "DeploymentDiagnosticsService",
+    "DiagnosticReport",
+    "DiagnosticSnapshot",
+    "get_deployment_diagnostics_service",
+    "deployment_diagnostics_router",
 ]
