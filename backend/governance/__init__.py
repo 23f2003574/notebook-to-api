@@ -72,6 +72,12 @@ from .deployment_insights import (
     get_deployment_insights_service,
     router as deployment_insights_router,
 )
+from .deployment_observability_dashboard import (
+    DashboardSnapshot,
+    DeploymentObservabilityDashboard,
+    get_deployment_observability_dashboard,
+    router as deployment_observability_dashboard_router,
+)
 
 __all__ = [
     "DeploymentLogEntry",
@@ -126,4 +132,8 @@ __all__ = [
     "InsightReport",
     "get_deployment_insights_service",
     "deployment_insights_router",
+    "DashboardSnapshot",
+    "DeploymentObservabilityDashboard",
+    "get_deployment_observability_dashboard",
+    "deployment_observability_dashboard_router",
 ]

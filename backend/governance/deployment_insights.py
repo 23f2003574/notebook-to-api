@@ -255,6 +255,15 @@ class DeploymentInsightsService:
             raise UnknownDeploymentError(deployment)
         return [insight.recommendation for insight in report.insights]
 
+    def latest(self, limit: int = 10) -> list[Insight]:
+        """The most recently detected insights across all deployments."""
+
+        with self._lock:
+            reports = list(self._latest.values())
+        insights = [insight for report in reports for insight in report.insights]
+        insights.sort(key=lambda insight: insight.detected_at, reverse=True)
+        return insights[:limit]
+
     def summary(self, deployment: Optional[str] = None) -> dict:
         with self._lock:
             if deployment is not None:
