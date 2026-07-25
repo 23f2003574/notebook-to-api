@@ -30,6 +30,13 @@ from .deployment_notifications import (
     get_deployment_notification_service,
     router as deployment_notifications_router,
 )
+from .deployment_slo import (
+    DeploymentSLOManager,
+    SLOEvaluationResult,
+    SLOObjective,
+    get_deployment_slo_manager,
+    router as deployment_slo_router,
+)
 
 __all__ = [
     "DeploymentLogEntry",
@@ -54,4 +61,9 @@ __all__ = [
     "NotificationRecord",
     "get_deployment_notification_service",
     "deployment_notifications_router",
+    "DeploymentSLOManager",
+    "SLOEvaluationResult",
+    "SLOObjective",
+    "get_deployment_slo_manager",
+    "deployment_slo_router",
 ]

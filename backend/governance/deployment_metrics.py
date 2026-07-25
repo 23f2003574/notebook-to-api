@@ -13,6 +13,7 @@ SUCCESS_COUNT = "success_count"
 FAILURE_COUNT = "failure_count"
 ACTIVE_DEPLOYMENTS = "active_deployments"
 ROLLBACK_COUNT = "rollback_count"
+AVAILABILITY = "availability"
 
 
 @dataclass(frozen=True)
