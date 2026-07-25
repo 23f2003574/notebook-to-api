@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import Lock
-from typing import Mapping
+from typing import Mapping, Optional
 
 from fastapi import APIRouter
 
@@ -64,6 +64,26 @@ class MetricsSnapshot:
                 for name, summary in self.histograms.items()
             },
         }
+
+    def get(
+        self,
+        name: str,
+        *,
+        histogram_field: str = "avg",
+        default: Optional[float] = None,
+    ) -> Optional[float]:
+        """
+        Look up a single metric value by name, regardless of which
+        kind (counter, gauge, or histogram) it was recorded as.
+        """
+
+        if name in self.counters:
+            return self.counters[name]
+        if name in self.gauges:
+            return self.gauges[name]
+        if name in self.histograms:
+            return getattr(self.histograms[name], histogram_field)
+        return default
 
 
 class DeploymentMetricsCollector:

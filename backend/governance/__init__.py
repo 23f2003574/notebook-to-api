@@ -16,6 +16,13 @@ from .deployment_metrics import (
     get_deployment_metrics_collector,
     router as deployment_metrics_router,
 )
+from .deployment_alerts import (
+    Alert,
+    AlertRule,
+    DeploymentAlertManager,
+    get_deployment_alert_manager,
+    router as deployment_alerts_router,
+)
 
 __all__ = [
     "DeploymentLogEntry",
@@ -30,4 +37,9 @@ __all__ = [
     "MetricsSnapshot",
     "get_deployment_metrics_collector",
     "deployment_metrics_router",
+    "Alert",
+    "AlertRule",
+    "DeploymentAlertManager",
+    "get_deployment_alert_manager",
+    "deployment_alerts_router",
 ]
