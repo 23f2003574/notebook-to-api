@@ -60,15 +60,22 @@ class DeploymentLoggingService:
         *,
         context: Optional[Mapping[str, Any]] = None,
         timestamp: Optional[datetime] = None,
+        trace_id: Optional[str] = None,
+        span_id: Optional[str] = None,
     ) -> DeploymentLogEntry:
         if not deployment:
             raise ValueError("deployment correlation id is required")
+        merged_context = dict(context or {})
+        if trace_id is not None:
+            merged_context["trace_id"] = trace_id
+        if span_id is not None:
+            merged_context["span_id"] = span_id
         entry = DeploymentLogEntry(
             deployment=deployment,
             level=_normalize_level(level),
             message=message,
             timestamp=timestamp or datetime.now(timezone.utc),
-            context=dict(context or {}),
+            context=merged_context,
         )
         with self._lock:
             self._entries.append(entry)
