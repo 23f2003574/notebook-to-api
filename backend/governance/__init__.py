@@ -23,6 +23,13 @@ from .deployment_alerts import (
     get_deployment_alert_manager,
     router as deployment_alerts_router,
 )
+from .deployment_notifications import (
+    DeploymentNotificationService,
+    NotificationChannel,
+    NotificationRecord,
+    get_deployment_notification_service,
+    router as deployment_notifications_router,
+)
 
 __all__ = [
     "DeploymentLogEntry",
@@ -42,4 +49,9 @@ __all__ = [
     "DeploymentAlertManager",
     "get_deployment_alert_manager",
     "deployment_alerts_router",
+    "DeploymentNotificationService",
+    "NotificationChannel",
+    "NotificationRecord",
+    "get_deployment_notification_service",
+    "deployment_notifications_router",
 ]

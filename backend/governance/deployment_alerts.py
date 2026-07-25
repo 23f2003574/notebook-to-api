@@ -17,6 +17,7 @@ from .deployment_metrics import (
     MetricsSnapshot,
     get_deployment_metrics_collector,
 )
+from .deployment_notifications import DeploymentNotificationService
 
 ALERT_LEVELS = ("INFO", "WARNING", "ERROR", "CRITICAL")
 
@@ -178,6 +179,7 @@ class DeploymentAlertManager:
         snapshot: MetricsSnapshot,
         *,
         timestamp: Optional[datetime] = None,
+        notification_service: Optional[DeploymentNotificationService] = None,
     ) -> list[Alert]:
         with self._lock:
             rules = list(self._rules.values())
@@ -190,6 +192,8 @@ class DeploymentAlertManager:
             alert = self._trigger(rule, value, timestamp)
             if alert is not None:
                 triggered.append(alert)
+                if notification_service is not None:
+                    notification_service.notify(alert, timestamp=timestamp)
         return triggered
 
     def _trigger(
