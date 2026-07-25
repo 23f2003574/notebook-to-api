@@ -78,6 +78,21 @@ from .deployment_observability_dashboard import (
     get_deployment_observability_dashboard,
     router as deployment_observability_dashboard_router,
 )
+from .deployment_observability_bootstrap import (
+    BootstrapValidationResult,
+    DeploymentObservabilityBootstrap,
+    DeploymentObservabilityBootstrapError,
+    bootstrap_observability_subsystem,
+    get_deployment_observability_bootstrap,
+)
+from .runtime import (
+    register_health_check,
+    register_subsystem,
+    registered_health_checks,
+    registered_subsystems,
+    run_health_checks,
+    run_startup_validation,
+)
 
 __all__ = [
     "DeploymentLogEntry",
@@ -136,4 +151,15 @@ __all__ = [
     "DeploymentObservabilityDashboard",
     "get_deployment_observability_dashboard",
     "deployment_observability_dashboard_router",
+    "BootstrapValidationResult",
+    "DeploymentObservabilityBootstrap",
+    "DeploymentObservabilityBootstrapError",
+    "bootstrap_observability_subsystem",
+    "get_deployment_observability_bootstrap",
+    "register_health_check",
+    "register_subsystem",
+    "registered_health_checks",
+    "registered_subsystems",
+    "run_health_checks",
+    "run_startup_validation",
 ]
