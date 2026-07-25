@@ -37,6 +37,13 @@ from .deployment_slo import (
     get_deployment_slo_manager,
     router as deployment_slo_router,
 )
+from .deployment_recovery import (
+    DeploymentRecoveryCoordinator,
+    RecoveryRecord,
+    RecoveryStrategy,
+    get_deployment_recovery_coordinator,
+    router as deployment_recovery_router,
+)
 
 __all__ = [
     "DeploymentLogEntry",
@@ -66,4 +73,9 @@ __all__ = [
     "SLOObjective",
     "get_deployment_slo_manager",
     "deployment_slo_router",
+    "DeploymentRecoveryCoordinator",
+    "RecoveryRecord",
+    "RecoveryStrategy",
+    "get_deployment_recovery_coordinator",
+    "deployment_recovery_router",
 ]

@@ -18,6 +18,7 @@ from .deployment_metrics import (
     get_deployment_metrics_collector,
 )
 from .deployment_notifications import DeploymentNotificationService
+from .deployment_recovery import DeploymentRecoveryCoordinator
 
 ALERT_LEVELS = ("INFO", "WARNING", "ERROR", "CRITICAL")
 
@@ -180,6 +181,7 @@ class DeploymentAlertManager:
         *,
         timestamp: Optional[datetime] = None,
         notification_service: Optional[DeploymentNotificationService] = None,
+        recovery_coordinator: Optional[DeploymentRecoveryCoordinator] = None,
     ) -> list[Alert]:
         with self._lock:
             rules = list(self._rules.values())
@@ -194,6 +196,15 @@ class DeploymentAlertManager:
                 triggered.append(alert)
                 if notification_service is not None:
                     notification_service.notify(alert, timestamp=timestamp)
+                if recovery_coordinator is not None:
+                    recovery_coordinator.recover(
+                        {
+                            "deployment": alert.rule_name,
+                            "alert_id": alert.alert_id,
+                            "level": alert.level,
+                        },
+                        timestamp=timestamp,
+                    )
         return triggered
 
     def _trigger(
