@@ -85,6 +85,13 @@ from .deployment_observability_bootstrap import (
     bootstrap_observability_subsystem,
     get_deployment_observability_bootstrap,
 )
+from .deployment_pipeline import (
+    DeploymentPipeline,
+    DeploymentPipelineEngine,
+    PipelineStage,
+    get_deployment_pipeline_engine,
+    router as deployment_pipeline_router,
+)
 from .runtime import (
     register_health_check,
     register_subsystem,
@@ -156,6 +163,11 @@ __all__ = [
     "DeploymentObservabilityBootstrapError",
     "bootstrap_observability_subsystem",
     "get_deployment_observability_bootstrap",
+    "DeploymentPipeline",
+    "DeploymentPipelineEngine",
+    "PipelineStage",
+    "get_deployment_pipeline_engine",
+    "deployment_pipeline_router",
     "register_health_check",
     "register_subsystem",
     "registered_health_checks",
