@@ -135,6 +135,13 @@ from .deployment_templates import (
     get_deployment_template_registry,
     router as deployment_templates_router,
 )
+from .deployment_automation import (
+    AutomationRule,
+    DeploymentAutomationEngine,
+    TriggerCondition,
+    get_deployment_automation_engine,
+    router as deployment_automation_router,
+)
 from .runtime import (
     register_health_check,
     register_subsystem,
@@ -242,6 +249,11 @@ __all__ = [
     "TemplateParameter",
     "get_deployment_template_registry",
     "deployment_templates_router",
+    "AutomationRule",
+    "DeploymentAutomationEngine",
+    "TriggerCondition",
+    "get_deployment_automation_engine",
+    "deployment_automation_router",
     "register_health_check",
     "register_subsystem",
     "registered_health_checks",

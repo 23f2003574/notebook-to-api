@@ -119,6 +119,12 @@ class DeploymentScheduler:
             self._schedules[deployment.schedule_id] = deployment
         return deployment
 
+    def schedule_now(
+        self, pipeline: str, *, priority: int = 0, timestamp: Optional[datetime] = None
+    ) -> ScheduledDeployment:
+        now = timestamp or datetime.now(timezone.utc)
+        return self.schedule(pipeline, now, priority=priority, timestamp=now)
+
     def reschedule(
         self,
         schedule_id: str,
