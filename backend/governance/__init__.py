@@ -142,6 +142,13 @@ from .deployment_automation import (
     get_deployment_automation_engine,
     router as deployment_automation_router,
 )
+from .deployment_approval_gate import (
+    ApprovalGate,
+    DeploymentApprovalGate,
+    GateDecision,
+    get_deployment_approval_gate,
+    router as deployment_approval_gate_router,
+)
 from .runtime import (
     register_health_check,
     register_subsystem,
@@ -254,6 +261,11 @@ __all__ = [
     "TriggerCondition",
     "get_deployment_automation_engine",
     "deployment_automation_router",
+    "ApprovalGate",
+    "DeploymentApprovalGate",
+    "GateDecision",
+    "get_deployment_approval_gate",
+    "deployment_approval_gate_router",
     "register_health_check",
     "register_subsystem",
     "registered_health_checks",

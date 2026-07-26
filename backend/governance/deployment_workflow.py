@@ -158,6 +158,14 @@ class DeploymentWorkflowEngine:
                 if execution.pipeline == pipeline
             )
 
+    def pause_if_running(
+        self, execution_id: str, *, timestamp: Optional[datetime] = None
+    ) -> WorkflowExecution:
+        execution = self.status(execution_id)
+        if execution.status == "RUNNING":
+            return self.pause(execution_id, timestamp=timestamp)
+        return execution
+
     def _transition(
         self, execution_id: str, action: str, *, timestamp: Optional[datetime] = None
     ) -> WorkflowExecution:
