@@ -149,6 +149,13 @@ from .deployment_approval_gate import (
     get_deployment_approval_gate,
     router as deployment_approval_gate_router,
 )
+from .deployment_pipeline_recovery import (
+    DeploymentPipelineRecoveryManager,
+    PipelineRecovery,
+    RecoveryAction,
+    get_deployment_pipeline_recovery_manager,
+    router as deployment_pipeline_recovery_router,
+)
 from .runtime import (
     register_health_check,
     register_subsystem,
@@ -266,6 +273,11 @@ __all__ = [
     "GateDecision",
     "get_deployment_approval_gate",
     "deployment_approval_gate_router",
+    "DeploymentPipelineRecoveryManager",
+    "PipelineRecovery",
+    "RecoveryAction",
+    "get_deployment_pipeline_recovery_manager",
+    "deployment_pipeline_recovery_router",
     "register_health_check",
     "register_subsystem",
     "registered_health_checks",

@@ -18,6 +18,7 @@ _TRANSITIONS = {
     "cancel": (("RUNNING", "PAUSED"), "CANCELLED"),
     "complete": (("RUNNING",), "COMPLETED"),
     "fail": (("RUNNING", "PAUSED"), "FAILED"),
+    "recover": (("FAILED", "PAUSED"), "RUNNING"),
 }
 
 
@@ -142,6 +143,11 @@ class DeploymentWorkflowEngine:
         self, execution_id: str, *, timestamp: Optional[datetime] = None
     ) -> WorkflowExecution:
         return self._transition(execution_id, "fail", timestamp=timestamp)
+
+    def recover(
+        self, execution_id: str, *, timestamp: Optional[datetime] = None
+    ) -> WorkflowExecution:
+        return self._transition(execution_id, "recover", timestamp=timestamp)
 
     def status(self, execution_id: str) -> WorkflowExecution:
         with self._lock:
