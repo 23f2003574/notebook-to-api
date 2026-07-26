@@ -120,6 +120,13 @@ from .deployment_scheduler import (
     get_deployment_scheduler,
     router as deployment_scheduler_router,
 )
+from .deployment_execution_plan import (
+    DeploymentExecutionPlanBuilder,
+    ExecutionPlan,
+    ExecutionStep,
+    get_deployment_execution_plan_builder,
+    router as deployment_execution_plan_router,
+)
 from .runtime import (
     register_health_check,
     register_subsystem,
@@ -216,6 +223,11 @@ __all__ = [
     "SchedulePolicy",
     "get_deployment_scheduler",
     "deployment_scheduler_router",
+    "DeploymentExecutionPlanBuilder",
+    "ExecutionPlan",
+    "ExecutionStep",
+    "get_deployment_execution_plan_builder",
+    "deployment_execution_plan_router",
     "register_health_check",
     "register_subsystem",
     "registered_health_checks",

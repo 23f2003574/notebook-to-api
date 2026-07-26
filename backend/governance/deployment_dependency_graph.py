@@ -101,6 +101,16 @@ class DeploymentDependencyGraph:
             raise CycleDetectedError(f"dependency graph has cycles: {result['cycles']}")
         return result["order"]
 
+    def execution_levels(self) -> tuple:
+        with self._lock:
+            node_names = set(self._nodes)
+            edges = {stage: set(deps) for stage, deps in self._edges.items()}
+
+        cycles = self._detect_cycles(node_names, edges)
+        if cycles:
+            raise CycleDetectedError(f"dependency graph has cycles: {cycles}")
+        return self._level_order(node_names, edges)
+
     def _detect_cycles(self, node_names: set, edges: dict) -> tuple:
         WHITE, GRAY, BLACK = 0, 1, 2
         color = {name: WHITE for name in node_names}
@@ -144,6 +154,27 @@ class DeploymentDependencyGraph:
                     heapq.heappush(ready, successor)
 
         return tuple(order)
+
+    def _level_order(self, node_names: set, edges: dict) -> tuple:
+        in_degree = {name: len(edges.get(name, ())) for name in node_names}
+        successors: dict = {name: [] for name in node_names}
+        for stage, deps in edges.items():
+            for dependency in deps:
+                successors[dependency].append(stage)
+
+        current = sorted(name for name, degree in in_degree.items() if degree == 0)
+        levels: list = []
+        while current:
+            levels.append(tuple(current))
+            next_level: set = set()
+            for name in current:
+                for successor in successors[name]:
+                    in_degree[successor] -= 1
+                    if in_degree[successor] == 0:
+                        next_level.add(successor)
+            current = sorted(next_level)
+
+        return tuple(levels)
 
 
 _graph = DeploymentDependencyGraph()
