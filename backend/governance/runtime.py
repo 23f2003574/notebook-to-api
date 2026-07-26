@@ -26,6 +26,22 @@ def registered_health_checks() -> tuple:
     return tuple(_HEALTH_CHECKS)
 
 
+def run_subsystem_validation(name: str) -> object:
+    """Run one specific registered subsystem's bootstrap callable by name."""
+
+    if name not in _SUBSYSTEM_BOOTSTRAPS:
+        raise KeyError(name)
+    return _SUBSYSTEM_BOOTSTRAPS[name]()
+
+
+def run_health_check(name: str) -> dict:
+    """Run one specific registered subsystem's health check callable by name."""
+
+    if name not in _HEALTH_CHECKS:
+        raise KeyError(name)
+    return _HEALTH_CHECKS[name]()
+
+
 def run_startup_validation() -> dict:
     """
     Run every registered subsystem's bootstrap callable in

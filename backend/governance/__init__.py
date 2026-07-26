@@ -168,13 +168,22 @@ from .deployment_orchestration_dashboard import (
     get_deployment_orchestration_dashboard,
     router as deployment_orchestration_dashboard_router,
 )
+from .deployment_orchestration_bootstrap import (
+    DeploymentOrchestrationBootstrap,
+    DeploymentOrchestrationBootstrapError,
+    OrchestrationBootstrapValidationResult,
+    bootstrap_orchestration_subsystem,
+    get_deployment_orchestration_bootstrap,
+)
 from .runtime import (
     register_health_check,
     register_subsystem,
     registered_health_checks,
     registered_subsystems,
+    run_health_check,
     run_health_checks,
     run_startup_validation,
+    run_subsystem_validation,
 )
 
 __all__ = [
@@ -298,10 +307,17 @@ __all__ = [
     "DeploymentOrchestrationDashboard",
     "get_deployment_orchestration_dashboard",
     "deployment_orchestration_dashboard_router",
+    "DeploymentOrchestrationBootstrap",
+    "DeploymentOrchestrationBootstrapError",
+    "OrchestrationBootstrapValidationResult",
+    "bootstrap_orchestration_subsystem",
+    "get_deployment_orchestration_bootstrap",
     "register_health_check",
     "register_subsystem",
     "registered_health_checks",
     "registered_subsystems",
+    "run_health_check",
     "run_health_checks",
     "run_startup_validation",
+    "run_subsystem_validation",
 ]

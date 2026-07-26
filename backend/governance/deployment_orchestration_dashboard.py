@@ -186,6 +186,7 @@ def get_overview() -> dict:
     from .deployment_workflow_analytics import get_deployment_workflow_analytics_service
 
     return get_deployment_orchestration_dashboard().overview(
+        refresh=True,
         pipeline_engine=get_deployment_pipeline_engine(),
         workflow_engine=get_deployment_workflow_engine(),
         scheduler=get_deployment_scheduler(),
