@@ -15,6 +15,10 @@ class UnknownPipelineError(KeyError):
     pass
 
 
+class PipelineAlreadyExistsError(ValueError):
+    pass
+
+
 @dataclass(frozen=True)
 class PipelineStage:
     """One step in a deployment pipeline's workflow."""
@@ -103,6 +107,8 @@ class DeploymentPipelineEngine:
             created_at=timestamp or datetime.now(timezone.utc),
         )
         with self._lock:
+            if name in self._pipelines:
+                raise PipelineAlreadyExistsError(f"pipeline '{name}' is already registered")
             self._pipelines[name] = pipeline
         return pipeline
 
@@ -159,6 +165,8 @@ def register_pipeline(payload: dict = Body(...)) -> dict:
         pipeline = get_deployment_pipeline_engine().register(
             name, stages, version=version, metadata=metadata
         )
+    except PipelineAlreadyExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 

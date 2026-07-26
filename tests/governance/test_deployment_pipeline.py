@@ -117,15 +117,15 @@ def test_api_register_and_get_pipeline(client: TestClient):
     register_response = client.post(
         "/governance/pipelines",
         json={
-            "name": "svc-api-1",
+            "name": "pipeline-svc-api-1",
             "stages": [{"name": "build", "action": "build_image"}],
         },
     )
-    get_response = client.get("/governance/pipelines/svc-api-1")
+    get_response = client.get("/governance/pipelines/pipeline-svc-api-1")
 
     assert register_response.status_code == 200
     assert get_response.status_code == 200
-    assert get_response.json()["name"] == "svc-api-1"
+    assert get_response.json()["name"] == "pipeline-svc-api-1"
 
 
 def test_api_register_requires_name_and_stages(client: TestClient):
@@ -138,7 +138,7 @@ def test_api_register_rejects_invalid_version(client: TestClient):
     response = client.post(
         "/governance/pipelines",
         json={
-            "name": "svc-api-2",
+            "name": "pipeline-svc-api-2",
             "stages": [{"name": "build", "action": "build_image"}],
             "version": "bad",
         },
@@ -157,7 +157,7 @@ def test_api_list_pipelines(client: TestClient):
     client.post(
         "/governance/pipelines",
         json={
-            "name": "svc-api-3",
+            "name": "pipeline-svc-api-3",
             "stages": [{"name": "build", "action": "build_image"}],
         },
     )
@@ -165,4 +165,4 @@ def test_api_list_pipelines(client: TestClient):
     response = client.get("/governance/pipelines")
 
     assert response.status_code == 200
-    assert any(p["name"] == "svc-api-3" for p in response.json())
+    assert any(p["name"] == "pipeline-svc-api-3" for p in response.json())

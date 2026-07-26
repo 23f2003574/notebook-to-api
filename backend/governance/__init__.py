@@ -88,6 +88,7 @@ from .deployment_observability_bootstrap import (
 from .deployment_pipeline import (
     DeploymentPipeline,
     DeploymentPipelineEngine,
+    PipelineAlreadyExistsError,
     PipelineStage,
     get_deployment_pipeline_engine,
     router as deployment_pipeline_router,
@@ -126,6 +127,13 @@ from .deployment_execution_plan import (
     ExecutionStep,
     get_deployment_execution_plan_builder,
     router as deployment_execution_plan_router,
+)
+from .deployment_templates import (
+    DeploymentTemplateRegistry,
+    PipelineTemplate,
+    TemplateParameter,
+    get_deployment_template_registry,
+    router as deployment_templates_router,
 )
 from .runtime import (
     register_health_check,
@@ -200,6 +208,7 @@ __all__ = [
     "get_deployment_observability_bootstrap",
     "DeploymentPipeline",
     "DeploymentPipelineEngine",
+    "PipelineAlreadyExistsError",
     "PipelineStage",
     "get_deployment_pipeline_engine",
     "deployment_pipeline_router",
@@ -228,6 +237,11 @@ __all__ = [
     "ExecutionStep",
     "get_deployment_execution_plan_builder",
     "deployment_execution_plan_router",
+    "DeploymentTemplateRegistry",
+    "PipelineTemplate",
+    "TemplateParameter",
+    "get_deployment_template_registry",
+    "deployment_templates_router",
     "register_health_check",
     "register_subsystem",
     "registered_health_checks",

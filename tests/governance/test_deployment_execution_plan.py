@@ -195,20 +195,20 @@ def test_api_create_and_get_plan(client: TestClient):
     client.post(
         "/governance/pipelines",
         json={
-            "name": "svc-api-1",
+            "name": "plan-svc-api-1",
             "stages": [{"name": "build", "action": "build"}, {"name": "deploy", "action": "deploy"}],
         },
     )
 
     create_response = client.post(
-        "/governance/execution-plans", json={"pipeline": "svc-api-1"}
+        "/governance/execution-plans", json={"pipeline": "plan-svc-api-1"}
     )
     plan_id = create_response.json()["plan_id"]
     get_response = client.get(f"/governance/execution-plans/{plan_id}")
 
     assert create_response.status_code == 200
     assert get_response.status_code == 200
-    assert get_response.json()["pipeline"] == "svc-api-1"
+    assert get_response.json()["pipeline"] == "plan-svc-api-1"
 
 
 def test_api_create_requires_pipeline(client: TestClient):
@@ -229,7 +229,7 @@ def test_api_create_cyclic_dependencies_returns_422(client: TestClient):
     client.post(
         "/governance/pipelines",
         json={
-            "name": "svc-api-2",
+            "name": "plan-svc-api-2",
             "stages": [{"name": "cyc-a", "action": "a"}, {"name": "cyc-b", "action": "b"}],
         },
     )
@@ -238,7 +238,7 @@ def test_api_create_cyclic_dependencies_returns_422(client: TestClient):
 
     try:
         response = client.post(
-            "/governance/execution-plans", json={"pipeline": "svc-api-2"}
+            "/governance/execution-plans", json={"pipeline": "plan-svc-api-2"}
         )
         assert response.status_code == 422
     finally:

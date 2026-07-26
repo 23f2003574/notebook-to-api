@@ -141,13 +141,13 @@ def test_api_start_pause_resume_and_get(client: TestClient):
     client.post(
         "/governance/pipelines",
         json={
-            "name": "svc-api-1",
+            "name": "workflow-svc-api-1",
             "stages": [{"name": "build", "action": "build_image"}],
         },
     )
 
     start_response = client.post(
-        "/governance/workflows/start", json={"pipeline": "svc-api-1"}
+        "/governance/workflows/start", json={"pipeline": "workflow-svc-api-1"}
     )
     execution_id = start_response.json()["execution_id"]
 
@@ -173,12 +173,12 @@ def test_api_pause_twice_returns_409(client: TestClient):
     client.post(
         "/governance/pipelines",
         json={
-            "name": "svc-api-2",
+            "name": "workflow-svc-api-2",
             "stages": [{"name": "build", "action": "build_image"}],
         },
     )
     start_response = client.post(
-        "/governance/workflows/start", json={"pipeline": "svc-api-2"}
+        "/governance/workflows/start", json={"pipeline": "workflow-svc-api-2"}
     )
     execution_id = start_response.json()["execution_id"]
     client.post(f"/governance/workflows/{execution_id}/pause")

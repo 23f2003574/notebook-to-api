@@ -252,7 +252,7 @@ def _start_execution(client: TestClient, pipeline_name: str) -> str:
 
 
 def test_api_execute_and_get_stage(client: TestClient):
-    execution_id = _start_execution(client, "svc-api-1")
+    execution_id = _start_execution(client, "stage-svc-api-1")
 
     execute_response = client.post(
         "/governance/stages/build/execute", json={"execution_id": execution_id}
@@ -272,7 +272,7 @@ def test_api_execute_requires_execution_id(client: TestClient):
 
 
 def test_api_execute_out_of_sequence_returns_409(client: TestClient):
-    execution_id = _start_execution(client, "svc-api-2")
+    execution_id = _start_execution(client, "stage-svc-api-2")
 
     response = client.post(
         "/governance/stages/deploy/execute", json={"execution_id": execution_id}
@@ -282,7 +282,7 @@ def test_api_execute_out_of_sequence_returns_409(client: TestClient):
 
 
 def test_api_execute_forced_failure_then_retry(client: TestClient):
-    execution_id = _start_execution(client, "svc-api-3")
+    execution_id = _start_execution(client, "stage-svc-api-3")
 
     fail_response = client.post(
         "/governance/stages/build/execute",
@@ -298,7 +298,7 @@ def test_api_execute_forced_failure_then_retry(client: TestClient):
 
 
 def test_api_execute_timeout_via_duration(client: TestClient):
-    execution_id = _start_execution(client, "svc-api-4")
+    execution_id = _start_execution(client, "stage-svc-api-4")
 
     response = client.post(
         "/governance/stages/build/execute",
