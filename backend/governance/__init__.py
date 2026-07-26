@@ -163,6 +163,11 @@ from .deployment_workflow_analytics import (
     get_deployment_workflow_analytics_service,
     router as deployment_workflow_analytics_router,
 )
+from .deployment_orchestration_dashboard import (
+    DeploymentOrchestrationDashboard,
+    get_deployment_orchestration_dashboard,
+    router as deployment_orchestration_dashboard_router,
+)
 from .runtime import (
     register_health_check,
     register_subsystem,
@@ -290,6 +295,9 @@ __all__ = [
     "WorkflowTrend",
     "get_deployment_workflow_analytics_service",
     "deployment_workflow_analytics_router",
+    "DeploymentOrchestrationDashboard",
+    "get_deployment_orchestration_dashboard",
+    "deployment_orchestration_dashboard_router",
     "register_health_check",
     "register_subsystem",
     "registered_health_checks",

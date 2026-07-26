@@ -116,6 +116,11 @@ class DeploymentWorkflowAnalyticsService:
             snapshot = {name: list(self._records[name]) for name in names}
         return tuple(self._summarize_entries(name, snapshot[name], now) for name in names)
 
+    def summarize_all(self, *, timestamp: Optional[datetime] = None) -> WorkflowAnalytics:
+        with self._lock:
+            entries = [entry for pipeline_entries in self._records.values() for entry in pipeline_entries]
+        return self._summarize_entries("__all__", entries, timestamp or datetime.now(timezone.utc))
+
     def trends(
         self,
         pipeline: Optional[str] = None,
