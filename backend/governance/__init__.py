@@ -106,6 +106,13 @@ from .deployment_stage_orchestrator import (
     get_deployment_stage_orchestrator,
     router as deployment_stage_orchestrator_router,
 )
+from .deployment_dependency_graph import (
+    DeploymentDependencyGraph,
+    DependencyEdge,
+    DependencyNode,
+    get_deployment_dependency_graph,
+    router as deployment_dependency_graph_router,
+)
 from .runtime import (
     register_health_check,
     register_subsystem,
@@ -192,6 +199,11 @@ __all__ = [
     "StageResult",
     "get_deployment_stage_orchestrator",
     "deployment_stage_orchestrator_router",
+    "DeploymentDependencyGraph",
+    "DependencyEdge",
+    "DependencyNode",
+    "get_deployment_dependency_graph",
+    "deployment_dependency_graph_router",
     "register_health_check",
     "register_subsystem",
     "registered_health_checks",

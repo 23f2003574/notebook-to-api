@@ -8,6 +8,7 @@ from typing import Callable, Optional
 
 from fastapi import APIRouter, Body, HTTPException
 
+from .deployment_dependency_graph import DeploymentDependencyGraph
 from .deployment_workflow import DeploymentWorkflowEngine, UnknownExecutionError
 
 STAGE_RESULT_STATUSES = ("SUCCEEDED", "FAILED", "TIMED_OUT", "SKIPPED")
@@ -88,6 +89,7 @@ class DeploymentStageOrchestrator:
         self,
         workflow_engine: Optional[DeploymentWorkflowEngine] = None,
         *,
+        dependency_graph: Optional[DeploymentDependencyGraph] = None,
         max_retries: int = 3,
     ) -> None:
         self._progress: dict[str, dict[str, StageExecution]] = {}
@@ -95,6 +97,7 @@ class DeploymentStageOrchestrator:
         self._hooks: list[Callable[[StageResult], None]] = []
         self._lock = Lock()
         self._workflow_engine = workflow_engine
+        self._dependency_graph = dependency_graph
         self._max_retries = max_retries
 
     def on_event(self, hook: Callable[[StageResult], None]) -> None:
@@ -106,9 +109,11 @@ class DeploymentStageOrchestrator:
         execution_id: str,
         *,
         workflow_engine: Optional[DeploymentWorkflowEngine] = None,
+        dependency_graph: Optional[DeploymentDependencyGraph] = None,
     ) -> Optional[str]:
         engine = workflow_engine or self._workflow_engine
-        stages = self._stage_sequence(execution_id, engine)
+        graph = dependency_graph or self._dependency_graph
+        stages = self._stage_sequence(execution_id, engine, graph)
         with self._lock:
             completed = {
                 stage
@@ -128,11 +133,13 @@ class DeploymentStageOrchestrator:
         action: Optional[Callable[[], str]] = None,
         timeout_seconds: float = 30.0,
         workflow_engine: Optional[DeploymentWorkflowEngine] = None,
+        dependency_graph: Optional[DeploymentDependencyGraph] = None,
         clock: Callable[[], float] = time.monotonic,
         timestamp: Optional[datetime] = None,
     ) -> StageResult:
         engine = workflow_engine or self._workflow_engine
-        stages = self._stage_sequence(execution_id, engine)
+        graph = dependency_graph or self._dependency_graph
+        stages = self._stage_sequence(execution_id, engine, graph)
         if stage not in stages:
             raise UnknownStageError(stage)
 
@@ -143,12 +150,12 @@ class DeploymentStageOrchestrator:
                 f"stage '{stage}' has already been executed; use retry_stage or skip_stage"
             )
 
-        expected = self.next_stage(execution_id, workflow_engine=engine)
+        expected = self.next_stage(execution_id, workflow_engine=engine, dependency_graph=graph)
         if expected is not None and expected != stage:
             raise OutOfSequenceError(f"stage '{stage}' cannot run before '{expected}'")
 
         result = self._run(execution_id, stage, action, timeout_seconds, clock, timestamp, attempt=1)
-        self._maybe_complete_workflow(execution_id, engine, timestamp)
+        self._maybe_complete_workflow(execution_id, engine, graph, timestamp)
         return result
 
     def retry_stage(
@@ -159,11 +166,13 @@ class DeploymentStageOrchestrator:
         action: Optional[Callable[[], str]] = None,
         timeout_seconds: float = 30.0,
         workflow_engine: Optional[DeploymentWorkflowEngine] = None,
+        dependency_graph: Optional[DeploymentDependencyGraph] = None,
         clock: Callable[[], float] = time.monotonic,
         timestamp: Optional[datetime] = None,
     ) -> StageResult:
         engine = workflow_engine or self._workflow_engine
-        stages = self._stage_sequence(execution_id, engine)
+        graph = dependency_graph or self._dependency_graph
+        stages = self._stage_sequence(execution_id, engine, graph)
         if stage not in stages:
             raise UnknownStageError(stage)
 
@@ -179,7 +188,7 @@ class DeploymentStageOrchestrator:
         result = self._run(
             execution_id, stage, action, timeout_seconds, clock, timestamp, attempt=existing.attempts + 1
         )
-        self._maybe_complete_workflow(execution_id, engine, timestamp)
+        self._maybe_complete_workflow(execution_id, engine, graph, timestamp)
         return result
 
     def skip_stage(
@@ -189,10 +198,12 @@ class DeploymentStageOrchestrator:
         *,
         reason: Optional[str] = None,
         workflow_engine: Optional[DeploymentWorkflowEngine] = None,
+        dependency_graph: Optional[DeploymentDependencyGraph] = None,
         timestamp: Optional[datetime] = None,
     ) -> StageResult:
         engine = workflow_engine or self._workflow_engine
-        stages = self._stage_sequence(execution_id, engine)
+        graph = dependency_graph or self._dependency_graph
+        stages = self._stage_sequence(execution_id, engine, graph)
         if stage not in stages:
             raise UnknownStageError(stage)
 
@@ -212,7 +223,7 @@ class DeploymentStageOrchestrator:
         )
         self._record(execution_id, stage, result)
         self._notify(result)
-        self._maybe_complete_workflow(execution_id, engine, timestamp)
+        self._maybe_complete_workflow(execution_id, engine, graph, timestamp)
         return result
 
     def get_stage(self, stage: str) -> StageExecution:
@@ -223,11 +234,21 @@ class DeploymentStageOrchestrator:
         return execution
 
     def _stage_sequence(
-        self, execution_id: str, engine: Optional[DeploymentWorkflowEngine]
+        self,
+        execution_id: str,
+        engine: Optional[DeploymentWorkflowEngine],
+        graph: Optional[DeploymentDependencyGraph] = None,
     ) -> tuple:
         if engine is None:
             raise ValueError("workflow_engine is required to resolve stage sequence")
-        return engine.status(execution_id).stages
+        stages = tuple(engine.status(execution_id).stages)
+        if graph is None:
+            return stages
+
+        order = graph.execution_order()
+        ordered = tuple(name for name in order if name in stages)
+        remaining = tuple(name for name in stages if name not in ordered)
+        return ordered + remaining
 
     def _run(
         self,
@@ -304,11 +325,12 @@ class DeploymentStageOrchestrator:
         self,
         execution_id: str,
         engine: Optional[DeploymentWorkflowEngine],
+        graph: Optional[DeploymentDependencyGraph],
         timestamp: Optional[datetime],
     ) -> None:
         if engine is None:
             return
-        if self.next_stage(execution_id, workflow_engine=engine) is None:
+        if self.next_stage(execution_id, workflow_engine=engine, dependency_graph=graph) is None:
             engine.complete(execution_id, timestamp=timestamp)
 
     def _notify(self, result: StageResult) -> None:
@@ -346,6 +368,7 @@ def _build_action(payload: dict) -> Optional[Callable[[], str]]:
 
 @router.post("/stages/{stage}/execute")
 def execute_stage_endpoint(stage: str, payload: dict = Body(default={})) -> dict:
+    from .deployment_dependency_graph import get_deployment_dependency_graph
     from .deployment_workflow import get_deployment_workflow_engine
 
     execution_id = payload.get("execution_id")
@@ -360,6 +383,7 @@ def execute_stage_endpoint(stage: str, payload: dict = Body(default={})) -> dict
             action=_build_action(payload),
             timeout_seconds=timeout_seconds,
             workflow_engine=get_deployment_workflow_engine(),
+            dependency_graph=get_deployment_dependency_graph(),
         )
     except UnknownExecutionError:
         raise HTTPException(status_code=404, detail="unknown execution")
@@ -372,6 +396,7 @@ def execute_stage_endpoint(stage: str, payload: dict = Body(default={})) -> dict
 
 @router.post("/stages/{stage}/retry")
 def retry_stage_endpoint(stage: str, payload: dict = Body(default={})) -> dict:
+    from .deployment_dependency_graph import get_deployment_dependency_graph
     from .deployment_workflow import get_deployment_workflow_engine
 
     execution_id = payload.get("execution_id")
@@ -386,6 +411,7 @@ def retry_stage_endpoint(stage: str, payload: dict = Body(default={})) -> dict:
             action=_build_action(payload),
             timeout_seconds=timeout_seconds,
             workflow_engine=get_deployment_workflow_engine(),
+            dependency_graph=get_deployment_dependency_graph(),
         )
     except UnknownExecutionError:
         raise HTTPException(status_code=404, detail="unknown execution")
