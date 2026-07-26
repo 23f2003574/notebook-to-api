@@ -10,12 +10,14 @@ from fastapi import APIRouter, Body, HTTPException
 
 from .deployment_pipeline import DeploymentPipelineEngine, UnknownPipelineError
 
-WORKFLOW_STATUSES = ("RUNNING", "PAUSED", "CANCELLED")
+WORKFLOW_STATUSES = ("RUNNING", "PAUSED", "CANCELLED", "COMPLETED", "FAILED")
 
 _TRANSITIONS = {
     "pause": (("RUNNING",), "PAUSED"),
     "resume": (("PAUSED",), "RUNNING"),
     "cancel": (("RUNNING", "PAUSED"), "CANCELLED"),
+    "complete": (("RUNNING",), "COMPLETED"),
+    "fail": (("RUNNING", "PAUSED"), "FAILED"),
 }
 
 
@@ -130,6 +132,16 @@ class DeploymentWorkflowEngine:
         self, execution_id: str, *, timestamp: Optional[datetime] = None
     ) -> WorkflowExecution:
         return self._transition(execution_id, "cancel", timestamp=timestamp)
+
+    def complete(
+        self, execution_id: str, *, timestamp: Optional[datetime] = None
+    ) -> WorkflowExecution:
+        return self._transition(execution_id, "complete", timestamp=timestamp)
+
+    def fail(
+        self, execution_id: str, *, timestamp: Optional[datetime] = None
+    ) -> WorkflowExecution:
+        return self._transition(execution_id, "fail", timestamp=timestamp)
 
     def status(self, execution_id: str) -> WorkflowExecution:
         with self._lock:

@@ -99,6 +99,13 @@ from .deployment_workflow import (
     get_deployment_workflow_engine,
     router as deployment_workflow_router,
 )
+from .deployment_stage_orchestrator import (
+    DeploymentStageOrchestrator,
+    StageExecution,
+    StageResult,
+    get_deployment_stage_orchestrator,
+    router as deployment_stage_orchestrator_router,
+)
 from .runtime import (
     register_health_check,
     register_subsystem,
@@ -180,6 +187,11 @@ __all__ = [
     "WorkflowExecution",
     "get_deployment_workflow_engine",
     "deployment_workflow_router",
+    "DeploymentStageOrchestrator",
+    "StageExecution",
+    "StageResult",
+    "get_deployment_stage_orchestrator",
+    "deployment_stage_orchestrator_router",
     "register_health_check",
     "register_subsystem",
     "registered_health_checks",
