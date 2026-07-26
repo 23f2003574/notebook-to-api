@@ -73,6 +73,12 @@ class WorkflowExecution:
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 
+    def duration_seconds(self) -> Optional[float]:
+        if len(self.history) < 2:
+            return None
+        elapsed = self.history[-1].transitioned_at - self.history[0].transitioned_at
+        return elapsed.total_seconds()
+
 
 class DeploymentWorkflowEngine:
     """Manages the lifecycle of deployment pipeline executions."""

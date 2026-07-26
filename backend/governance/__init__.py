@@ -156,6 +156,13 @@ from .deployment_pipeline_recovery import (
     get_deployment_pipeline_recovery_manager,
     router as deployment_pipeline_recovery_router,
 )
+from .deployment_workflow_analytics import (
+    DeploymentWorkflowAnalyticsService,
+    WorkflowAnalytics,
+    WorkflowTrend,
+    get_deployment_workflow_analytics_service,
+    router as deployment_workflow_analytics_router,
+)
 from .runtime import (
     register_health_check,
     register_subsystem,
@@ -278,6 +285,11 @@ __all__ = [
     "RecoveryAction",
     "get_deployment_pipeline_recovery_manager",
     "deployment_pipeline_recovery_router",
+    "DeploymentWorkflowAnalyticsService",
+    "WorkflowAnalytics",
+    "WorkflowTrend",
+    "get_deployment_workflow_analytics_service",
+    "deployment_workflow_analytics_router",
     "register_health_check",
     "register_subsystem",
     "registered_health_checks",
