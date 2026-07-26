@@ -150,6 +150,14 @@ class DeploymentWorkflowEngine:
             raise UnknownExecutionError(execution_id)
         return execution
 
+    def executions_for(self, pipeline: str) -> tuple:
+        with self._lock:
+            return tuple(
+                execution
+                for execution in self._executions.values()
+                if execution.pipeline == pipeline
+            )
+
     def _transition(
         self, execution_id: str, action: str, *, timestamp: Optional[datetime] = None
     ) -> WorkflowExecution:

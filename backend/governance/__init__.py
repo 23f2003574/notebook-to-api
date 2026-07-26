@@ -113,6 +113,13 @@ from .deployment_dependency_graph import (
     get_deployment_dependency_graph,
     router as deployment_dependency_graph_router,
 )
+from .deployment_scheduler import (
+    DeploymentScheduler,
+    ScheduledDeployment,
+    SchedulePolicy,
+    get_deployment_scheduler,
+    router as deployment_scheduler_router,
+)
 from .runtime import (
     register_health_check,
     register_subsystem,
@@ -204,6 +211,11 @@ __all__ = [
     "DependencyNode",
     "get_deployment_dependency_graph",
     "deployment_dependency_graph_router",
+    "DeploymentScheduler",
+    "ScheduledDeployment",
+    "SchedulePolicy",
+    "get_deployment_scheduler",
+    "deployment_scheduler_router",
     "register_health_check",
     "register_subsystem",
     "registered_health_checks",
