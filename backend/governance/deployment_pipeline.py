@@ -123,6 +123,9 @@ class DeploymentPipelineEngine:
         with self._lock:
             return list(self._pipelines.values())
 
+    def stage_names(self, name: str) -> tuple:
+        return tuple(stage.name for stage in self.get(name).stages)
+
 
 _engine = DeploymentPipelineEngine()
 
