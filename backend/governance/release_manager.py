@@ -38,6 +38,7 @@ class Release:
     artifacts: tuple = ()
     state: str = "DRAFT"
     notes_id: Optional[str] = None
+    channel_id: Optional[str] = None
     created_at: Optional[datetime] = None
     published_at: Optional[datetime] = None
     cancelled_at: Optional[datetime] = None
@@ -49,6 +50,7 @@ class Release:
             "artifacts": [dict(artifact) for artifact in self.artifacts],
             "state": self.state,
             "notes_id": self.notes_id,
+            "channel_id": self.channel_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "published_at": self.published_at.isoformat() if self.published_at else None,
             "cancelled_at": self.cancelled_at.isoformat() if self.cancelled_at else None,
@@ -115,6 +117,13 @@ class ReleaseManager:
     def attach_notes(self, release_id: str, notes_id: str) -> Release:
         release = self.get(release_id)
         updated = replace(release, notes_id=notes_id)
+        with self._lock:
+            self._releases[release_id] = updated
+        return updated
+
+    def attach_channel(self, release_id: str, channel_id: str) -> Release:
+        release = self.get(release_id)
+        updated = replace(release, channel_id=channel_id)
         with self._lock:
             self._releases[release_id] = updated
         return updated
