@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from threading import Lock
 from typing import Iterable, Optional
@@ -58,6 +58,7 @@ class Artifact:
     metadata: ArtifactMetadata
     tags: tuple = ()
     created_at: Optional[datetime] = None
+    archived_at: Optional[datetime] = None
 
     def to_dict(self) -> dict:
         return {
@@ -68,6 +69,7 @@ class Artifact:
             "metadata": self.metadata.to_dict(),
             "tags": list(self.tags),
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "archived_at": self.archived_at.isoformat() if self.archived_at else None,
         }
 
 
@@ -158,6 +160,13 @@ class ArtifactRegistry:
         if artifact_id is None:
             raise UnknownArtifactError(f"{name}@{version}")
         return self.get(artifact_id)
+
+    def archive(self, artifact_id: str, *, timestamp: Optional[datetime] = None) -> Artifact:
+        artifact = self.get(artifact_id)
+        updated = replace(artifact, archived_at=timestamp or datetime.now(timezone.utc))
+        with self._lock:
+            self._artifacts[artifact_id] = updated
+        return updated
 
     def search(
         self,
