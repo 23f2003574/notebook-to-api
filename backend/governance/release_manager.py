@@ -37,6 +37,7 @@ class Release:
     name: str
     artifacts: tuple = ()
     state: str = "DRAFT"
+    notes_id: Optional[str] = None
     created_at: Optional[datetime] = None
     published_at: Optional[datetime] = None
     cancelled_at: Optional[datetime] = None
@@ -47,6 +48,7 @@ class Release:
             "name": self.name,
             "artifacts": [dict(artifact) for artifact in self.artifacts],
             "state": self.state,
+            "notes_id": self.notes_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "published_at": self.published_at.isoformat() if self.published_at else None,
             "cancelled_at": self.cancelled_at.isoformat() if self.cancelled_at else None,
@@ -109,6 +111,13 @@ class ReleaseManager:
         if release is None:
             raise UnknownReleaseError(release_id)
         return release
+
+    def attach_notes(self, release_id: str, notes_id: str) -> Release:
+        release = self.get(release_id)
+        updated = replace(release, notes_id=notes_id)
+        with self._lock:
+            self._releases[release_id] = updated
+        return updated
 
     def publish(self, release_id: str, *, timestamp: Optional[datetime] = None) -> Release:
         release = self.get(release_id)
