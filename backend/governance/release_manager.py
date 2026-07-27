@@ -10,7 +10,7 @@ from fastapi import APIRouter, Body, HTTPException
 
 from .artifact_promotion import ArtifactPromotionEngine, ENVIRONMENTS, get_artifact_promotion_engine
 
-ReleaseState = ("DRAFT", "PUBLISHED", "CANCELLED")
+ReleaseState = ("DRAFT", "PUBLISHED", "CANCELLED", "FAILED")
 
 
 def _new_id() -> str:
@@ -45,6 +45,8 @@ class Release:
     published_at: Optional[datetime] = None
     cancelled_at: Optional[datetime] = None
     verified_at: Optional[datetime] = None
+    failed_at: Optional[datetime] = None
+    failure_reason: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -60,6 +62,8 @@ class Release:
             "published_at": self.published_at.isoformat() if self.published_at else None,
             "cancelled_at": self.cancelled_at.isoformat() if self.cancelled_at else None,
             "verified_at": self.verified_at.isoformat() if self.verified_at else None,
+            "failed_at": self.failed_at.isoformat() if self.failed_at else None,
+            "failure_reason": self.failure_reason,
         }
 
 
@@ -175,6 +179,29 @@ class ReleaseManager:
 
         updated = replace(
             release, state="CANCELLED", cancelled_at=timestamp or datetime.now(timezone.utc)
+        )
+        with self._lock:
+            self._releases[release_id] = updated
+        return updated
+
+    def fail(
+        self,
+        release_id: str,
+        *,
+        reason: Optional[str] = None,
+        timestamp: Optional[datetime] = None,
+    ) -> Release:
+        release = self.get(release_id)
+        if release.state != "DRAFT":
+            raise InvalidReleaseStateError(
+                f"release '{release_id}' is not in DRAFT state (state={release.state})"
+            )
+
+        updated = replace(
+            release,
+            state="FAILED",
+            failed_at=timestamp or datetime.now(timezone.utc),
+            failure_reason=reason,
         )
         with self._lock:
             self._releases[release_id] = updated
