@@ -1,3 +1,12 @@
+from .artifact_registry import (
+    Artifact,
+    ArtifactAlreadyExistsError,
+    ArtifactMetadata,
+    ArtifactRegistry,
+    UnknownArtifactError,
+    get_artifact_registry,
+    router as artifact_registry_router,
+)
 from .deployment_logging import (
     DeploymentLogEntry,
     DeploymentLoggingService,
@@ -187,6 +196,13 @@ from .runtime import (
 )
 
 __all__ = [
+    "Artifact",
+    "ArtifactAlreadyExistsError",
+    "ArtifactMetadata",
+    "ArtifactRegistry",
+    "UnknownArtifactError",
+    "get_artifact_registry",
+    "artifact_registry_router",
     "DeploymentLogEntry",
     "DeploymentLoggingService",
     "get_deployment_logging_service",
