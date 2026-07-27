@@ -94,6 +94,14 @@ class ArtifactVersionManager:
             versions = list(self._versions.get(name, []))
         return sorted(versions, key=lambda entry: _parse_version(entry.version))
 
+    def get(self, name: str, version: str) -> ArtifactVersion:
+        entry = next(
+            (entry for entry in self.history(name) if entry.version == version), None
+        )
+        if entry is None:
+            raise UnknownVersionError(f"{name}@{version}")
+        return entry
+
     def latest(self, name: str) -> ArtifactVersion:
         active = [entry for entry in self.history(name) if entry.state == "ACTIVE"]
         if not active:
