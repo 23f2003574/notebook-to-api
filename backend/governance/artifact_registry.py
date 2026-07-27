@@ -152,6 +152,13 @@ class ArtifactRegistry:
             raise UnknownArtifactError(artifact_id)
         return artifact
 
+    def find(self, name: str, version: str) -> Artifact:
+        with self._lock:
+            artifact_id = self._by_name_version.get((name, version))
+        if artifact_id is None:
+            raise UnknownArtifactError(f"{name}@{version}")
+        return self.get(artifact_id)
+
     def search(
         self,
         *,
