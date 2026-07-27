@@ -168,6 +168,10 @@ class ArtifactRegistry:
             self._artifacts[artifact_id] = updated
         return updated
 
+    def verify_checksum(self, artifact_id: str, checksum: str) -> bool:
+        artifact = self.get(artifact_id)
+        return artifact.metadata.checksum == checksum
+
     def search(
         self,
         *,
