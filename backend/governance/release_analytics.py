@@ -83,6 +83,14 @@ class ReleaseAnalyticsService:
         with self._lock:
             return list(self._releases.values())
 
+    def recent_activity(self, limit: int = 10) -> list:
+        releases = sorted(
+            self.releases(),
+            key=lambda release: release.created_at or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        return releases[:limit]
+
     def summary(
         self,
         *,
