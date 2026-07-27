@@ -78,6 +78,9 @@ class ArtifactPromotionEngine:
     def _current(self, name: str, version: str) -> str:
         return self._current_environment.get((name, version), ENVIRONMENTS[0])
 
+    def current_environment(self, name: str, version: str) -> str:
+        return self._current(name, version)
+
     def validate(self, name: str, version: str, target_environment: str) -> None:
         if target_environment not in ENVIRONMENTS:
             raise InvalidPromotionError(
