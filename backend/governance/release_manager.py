@@ -40,9 +40,11 @@ class Release:
     notes_id: Optional[str] = None
     channel_id: Optional[str] = None
     policy_passed: Optional[bool] = None
+    verified: Optional[bool] = None
     created_at: Optional[datetime] = None
     published_at: Optional[datetime] = None
     cancelled_at: Optional[datetime] = None
+    verified_at: Optional[datetime] = None
 
     def to_dict(self) -> dict:
         return {
@@ -53,9 +55,11 @@ class Release:
             "notes_id": self.notes_id,
             "channel_id": self.channel_id,
             "policy_passed": self.policy_passed,
+            "verified": self.verified,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "published_at": self.published_at.isoformat() if self.published_at else None,
             "cancelled_at": self.cancelled_at.isoformat() if self.cancelled_at else None,
+            "verified_at": self.verified_at.isoformat() if self.verified_at else None,
         }
 
 
@@ -133,6 +137,17 @@ class ReleaseManager:
     def mark_policy_result(self, release_id: str, passed: bool) -> Release:
         release = self.get(release_id)
         updated = replace(release, policy_passed=passed)
+        with self._lock:
+            self._releases[release_id] = updated
+        return updated
+
+    def mark_verified(
+        self, release_id: str, passed: bool, *, timestamp: Optional[datetime] = None
+    ) -> Release:
+        release = self.get(release_id)
+        updated = replace(
+            release, verified=passed, verified_at=timestamp or datetime.now(timezone.utc)
+        )
         with self._lock:
             self._releases[release_id] = updated
         return updated
