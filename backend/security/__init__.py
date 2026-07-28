@@ -3,10 +3,21 @@ from .authentication import (
     AuthenticationResult,
     InvalidCredentialsError,
     UnknownSessionError,
+    UnknownUserError,
     UserAlreadyExistsError,
     UserCredential,
     get_authentication_manager,
     router as authentication_router,
+)
+from .api_keys import (
+    APIKey,
+    APIKeyExpiredError,
+    APIKeyManager,
+    APIKeyMetadata,
+    APIKeyRevokedError,
+    UnknownAPIKeyError,
+    get_api_key_manager,
+    router as api_keys_router,
 )
 
 __all__ = [
@@ -14,8 +25,17 @@ __all__ = [
     "AuthenticationResult",
     "InvalidCredentialsError",
     "UnknownSessionError",
+    "UnknownUserError",
     "UserAlreadyExistsError",
     "UserCredential",
     "get_authentication_manager",
     "authentication_router",
+    "APIKey",
+    "APIKeyExpiredError",
+    "APIKeyManager",
+    "APIKeyMetadata",
+    "APIKeyRevokedError",
+    "UnknownAPIKeyError",
+    "get_api_key_manager",
+    "api_keys_router",
 ]

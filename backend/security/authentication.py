@@ -33,6 +33,10 @@ class UnknownSessionError(KeyError):
     pass
 
 
+class UnknownUserError(KeyError):
+    pass
+
+
 @dataclass(frozen=True)
 class UserCredential:
     """A registered user's stored credential material."""
@@ -124,6 +128,13 @@ class AuthenticationManager:
     def is_authenticated(self, session_token: str) -> bool:
         with self._lock:
             return session_token in self._sessions
+
+    def get_user(self, user_id: str) -> UserCredential:
+        with self._lock:
+            credential = self._users.get(user_id)
+        if credential is None:
+            raise UnknownUserError(user_id)
+        return credential
 
 
 _authentication_manager = AuthenticationManager()
