@@ -19,6 +19,17 @@ from .api_keys import (
     get_api_key_manager,
     router as api_keys_router,
 )
+from .jwt_service import (
+    InvalidTokenError,
+    JWTToken,
+    JWTTokenService,
+    TokenClaims,
+    TokenExpiredError,
+    TokenRevokedError,
+    UnknownRefreshTokenError,
+    get_jwt_token_service,
+    router as jwt_router,
+)
 
 __all__ = [
     "AuthenticationManager",
@@ -38,4 +49,13 @@ __all__ = [
     "UnknownAPIKeyError",
     "get_api_key_manager",
     "api_keys_router",
+    "InvalidTokenError",
+    "JWTToken",
+    "JWTTokenService",
+    "TokenClaims",
+    "TokenExpiredError",
+    "TokenRevokedError",
+    "UnknownRefreshTokenError",
+    "get_jwt_token_service",
+    "jwt_router",
 ]
