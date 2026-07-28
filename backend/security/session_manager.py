@@ -8,6 +8,7 @@ from typing import Iterable, Optional
 
 from fastapi import APIRouter, Body, HTTPException
 
+from .audit_logs import AuditLogService, get_audit_log_service
 from .authentication import UnknownUserError
 from .jwt_service import JWTTokenService, get_jwt_token_service
 
@@ -75,9 +76,11 @@ class SessionManager:
         self,
         jwt_service: Optional[JWTTokenService] = None,
         *,
+        audit_log: Optional[AuditLogService] = None,
         idle_timeout: timedelta = DEFAULT_IDLE_TIMEOUT,
     ) -> None:
         self._jwt_service = jwt_service or get_jwt_token_service()
+        self._audit_log = audit_log or get_audit_log_service()
         self._idle_timeout = idle_timeout
         self._sessions: dict[str, SessionMetadata] = {}
         self._user_sessions: dict[str, set] = {}
@@ -100,6 +103,9 @@ class SessionManager:
                 "access_token": token.access_token,
                 "refresh_token": token.refresh_token,
             }
+        self._audit_log.record(
+            "Session", user_id, f"session:{session_id}", "create", timestamp=now
+        )
         return Session(
             metadata=metadata, access_token=token.access_token, refresh_token=token.refresh_token
         )
@@ -153,6 +159,10 @@ class SessionManager:
         if tokens is not None:
             self._jwt_service.revoke(tokens["access_token"])
             self._jwt_service.revoke_refresh_token(tokens["refresh_token"])
+
+        self._audit_log.record(
+            "Session", metadata.user_id, f"session:{session_id}", "terminate", timestamp=now
+        )
 
     def sessions_for_user(self, user_id: str) -> list:
         with self._lock:

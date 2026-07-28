@@ -62,6 +62,16 @@ from .session_manager import (
     get_session_manager,
     router as session_router,
 )
+from .audit_logs import (
+    EVENT_TYPES,
+    AuditEvent,
+    AuditLogService,
+    AuditQuery,
+    InvalidEventTypeError,
+    UnknownEventError,
+    get_audit_log_service,
+    router as audit_router,
+)
 
 __all__ = [
     "AuthenticationManager",
@@ -116,4 +126,12 @@ __all__ = [
     "UnknownActiveSessionError",
     "get_session_manager",
     "session_router",
+    "EVENT_TYPES",
+    "AuditEvent",
+    "AuditLogService",
+    "AuditQuery",
+    "InvalidEventTypeError",
+    "UnknownEventError",
+    "get_audit_log_service",
+    "audit_router",
 ]
