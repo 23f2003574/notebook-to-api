@@ -51,6 +51,17 @@ from .permissions import (
     get_permission_engine,
     router as permissions_router,
 )
+from .session_manager import (
+    DEFAULT_IDLE_TIMEOUT,
+    Session,
+    SessionExpiredError,
+    SessionManager,
+    SessionMetadata,
+    SessionTerminatedError,
+    UnknownSessionError as UnknownActiveSessionError,
+    get_session_manager,
+    router as session_router,
+)
 
 __all__ = [
     "AuthenticationManager",
@@ -96,4 +107,13 @@ __all__ = [
     "PermissionNotGrantedError",
     "get_permission_engine",
     "permissions_router",
+    "DEFAULT_IDLE_TIMEOUT",
+    "Session",
+    "SessionExpiredError",
+    "SessionManager",
+    "SessionMetadata",
+    "SessionTerminatedError",
+    "UnknownActiveSessionError",
+    "get_session_manager",
+    "session_router",
 ]

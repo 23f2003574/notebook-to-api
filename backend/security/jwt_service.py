@@ -226,6 +226,10 @@ class JWTTokenService:
         with self._lock:
             self._revoked.add(claims.token_id)
 
+    def revoke_refresh_token(self, refresh_token: str) -> None:
+        with self._lock:
+            self._refresh_tokens.pop(refresh_token, None)
+
 
 _jwt_token_service = JWTTokenService()
 
