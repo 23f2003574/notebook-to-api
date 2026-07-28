@@ -96,6 +96,13 @@ from .secrets import (
     get_secret_management_service,
     router as secrets_router,
 )
+from .security_analytics import (
+    SecurityAnalyticsService,
+    SecurityMetrics,
+    SecurityTrend,
+    get_security_analytics_service,
+    router as security_analytics_router,
+)
 
 __all__ = [
     "AuthenticationManager",
@@ -178,4 +185,9 @@ __all__ = [
     "UnknownSecretError",
     "get_secret_management_service",
     "secrets_router",
+    "SecurityAnalyticsService",
+    "SecurityMetrics",
+    "SecurityTrend",
+    "get_security_analytics_service",
+    "security_analytics_router",
 ]

@@ -94,6 +94,7 @@ class AuditQuery:
     event_type: Optional[str] = None
     actor: Optional[str] = None
     resource: Optional[str] = None
+    action: Optional[str] = None
     since: Optional[datetime] = None
     until: Optional[datetime] = None
 
@@ -103,6 +104,8 @@ class AuditQuery:
         if self.actor is not None and event.actor != self.actor:
             return False
         if self.resource is not None and event.resource != self.resource:
+            return False
+        if self.action is not None and event.action != self.action:
             return False
         if self.since is not None and event.timestamp < self.since:
             return False
@@ -170,6 +173,9 @@ class AuditLogService:
         with self._lock:
             events = list(self._events)
         return [event for event in events if query.matches(event)]
+
+    def count(self, query: Optional[AuditQuery] = None) -> int:
+        return len(self.query(query))
 
     def export(self, query: Optional[AuditQuery] = None) -> list:
         return [event.to_dict() for event in self.query(query)]
