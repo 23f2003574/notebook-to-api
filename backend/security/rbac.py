@@ -159,6 +159,13 @@ class RoleBasedAccessControl:
         with self._lock:
             return list(self._assignments.get(user_id, {}).values())
 
+    def resolve_inheritance(self, role_name: str) -> list:
+        self.get_role(role_name)
+        with self._lock:
+            resolved: set = set()
+            self._resolve_inherited(role_name, resolved)
+        return sorted(resolved)
+
 
 _rbac = RoleBasedAccessControl()
 

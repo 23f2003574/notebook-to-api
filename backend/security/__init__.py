@@ -41,6 +41,16 @@ from .rbac import (
     get_rbac,
     router as rbac_router,
 )
+from .permissions import (
+    PERMISSION_TYPES,
+    InvalidPermissionTypeError,
+    Permission,
+    PermissionAssignment,
+    PermissionEngine,
+    PermissionNotGrantedError,
+    get_permission_engine,
+    router as permissions_router,
+)
 
 __all__ = [
     "AuthenticationManager",
@@ -78,4 +88,12 @@ __all__ = [
     "UnknownRoleError",
     "get_rbac",
     "rbac_router",
+    "PERMISSION_TYPES",
+    "InvalidPermissionTypeError",
+    "Permission",
+    "PermissionAssignment",
+    "PermissionEngine",
+    "PermissionNotGrantedError",
+    "get_permission_engine",
+    "permissions_router",
 ]
