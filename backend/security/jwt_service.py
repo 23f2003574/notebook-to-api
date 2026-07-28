@@ -9,7 +9,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from threading import Lock
-from typing import Optional
+from typing import Iterable, Optional
 
 from fastapi import APIRouter, Body, HTTPException
 
@@ -57,6 +57,7 @@ class TokenClaims:
     token_id: str
     issued_at: datetime
     expires_at: datetime
+    roles: tuple = ()
 
     def to_dict(self) -> dict:
         return {
@@ -64,6 +65,7 @@ class TokenClaims:
             "jti": self.token_id,
             "iat": int(self.issued_at.timestamp()),
             "exp": int(self.expires_at.timestamp()),
+            "roles": list(self.roles),
         }
 
 
@@ -111,22 +113,36 @@ class JWTTokenService:
         signature = hmac.new(self._secret_key, signing_input, hashlib.sha256).digest()
         return f"{header_segment}.{payload_segment}.{_b64url_encode(signature)}"
 
-    def _issue_access_token(self, subject: str, *, timestamp: datetime) -> tuple:
+    def _issue_access_token(
+        self, subject: str, *, timestamp: datetime, roles: Iterable[str] = ()
+    ) -> tuple:
         expires_at = timestamp + self._access_ttl
         claims = TokenClaims(
-            subject=subject, token_id=_new_id(), issued_at=timestamp, expires_at=expires_at
+            subject=subject,
+            token_id=_new_id(),
+            issued_at=timestamp,
+            expires_at=expires_at,
+            roles=tuple(roles),
         )
         token = self._sign({"alg": _ALGORITHM, "typ": "JWT"}, claims.to_dict())
         return token, claims
 
-    def issue(self, user_id: str, *, timestamp: Optional[datetime] = None) -> JWTToken:
+    def issue(
+        self,
+        user_id: str,
+        *,
+        roles: Iterable[str] = (),
+        timestamp: Optional[datetime] = None,
+    ) -> JWTToken:
         self._authentication_manager.get_user(user_id)
         now = timestamp or datetime.now(timezone.utc)
-        access_token, claims = self._issue_access_token(user_id, timestamp=now)
+        roles = tuple(roles)
+        access_token, claims = self._issue_access_token(user_id, timestamp=now, roles=roles)
         refresh_token = _new_id()
         with self._lock:
             self._refresh_tokens[refresh_token] = {
                 "subject": user_id,
+                "roles": roles,
                 "expires_at": now + self._refresh_ttl,
             }
         return JWTToken(
@@ -157,6 +173,7 @@ class JWTTokenService:
             expires_at = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
             issued_at = datetime.fromtimestamp(payload["iat"], tz=timezone.utc)
             subject = payload["sub"]
+            roles = tuple(payload.get("roles", ()))
         except (KeyError, TypeError, OSError, OverflowError):
             raise InvalidTokenError("malformed token")
 
@@ -168,7 +185,11 @@ class JWTTokenService:
             raise TokenExpiredError("token has expired")
 
         return TokenClaims(
-            subject=subject, token_id=token_id, issued_at=issued_at, expires_at=expires_at
+            subject=subject,
+            token_id=token_id,
+            issued_at=issued_at,
+            expires_at=expires_at,
+            roles=roles,
         )
 
     def validate(self, token: str, *, timestamp: Optional[datetime] = None) -> TokenClaims:
@@ -186,12 +207,14 @@ class JWTTokenService:
             raise TokenExpiredError("refresh token has expired")
 
         subject = record["subject"]
-        access_token, claims = self._issue_access_token(subject, timestamp=now)
+        roles = record.get("roles", ())
+        access_token, claims = self._issue_access_token(subject, timestamp=now, roles=roles)
         new_refresh_token = _new_id()
         with self._lock:
             self._refresh_tokens.pop(refresh_token, None)
             self._refresh_tokens[new_refresh_token] = {
                 "subject": subject,
+                "roles": roles,
                 "expires_at": now + self._refresh_ttl,
             }
         return JWTToken(

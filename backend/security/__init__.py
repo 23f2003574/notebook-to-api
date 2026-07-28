@@ -30,6 +30,17 @@ from .jwt_service import (
     get_jwt_token_service,
     router as jwt_router,
 )
+from .rbac import (
+    DEFAULT_ROLES,
+    Role,
+    RoleAlreadyExistsError,
+    RoleAssignment,
+    RoleBasedAccessControl,
+    RoleNotAssignedError,
+    UnknownRoleError,
+    get_rbac,
+    router as rbac_router,
+)
 
 __all__ = [
     "AuthenticationManager",
@@ -58,4 +69,13 @@ __all__ = [
     "UnknownRefreshTokenError",
     "get_jwt_token_service",
     "jwt_router",
+    "DEFAULT_ROLES",
+    "Role",
+    "RoleAlreadyExistsError",
+    "RoleAssignment",
+    "RoleBasedAccessControl",
+    "RoleNotAssignedError",
+    "UnknownRoleError",
+    "get_rbac",
+    "rbac_router",
 ]
