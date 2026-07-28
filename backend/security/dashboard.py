@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter
 
 from .audit_logs import AuditLogService, AuditQuery, get_audit_log_service
 from .security_analytics import SecurityAnalyticsService, get_security_analytics_service
+
+
+def _generated_at(timestamp: Optional[datetime]) -> str:
+    return (timestamp or datetime.now(timezone.utc)).isoformat()
 
 
 class SecurityDashboardAPI:
@@ -19,7 +24,7 @@ class SecurityDashboardAPI:
         self._audit_log = audit_log or get_audit_log_service()
         self._analytics_service = analytics_service or get_security_analytics_service()
 
-    def authentication(self) -> dict:
+    def authentication(self, *, timestamp: Optional[datetime] = None) -> dict:
         events = self._audit_log.query(AuditQuery(event_type="Authentication"))
         successes = sum(1 for event in events if event.outcome == "success")
 
@@ -31,9 +36,10 @@ class SecurityDashboardAPI:
             "recent_events": [
                 event.to_dict() for event in self._analytics_service.recent_events("Authentication")
             ],
+            "generated_at": _generated_at(timestamp),
         }
 
-    def authorization(self) -> dict:
+    def authorization(self, *, timestamp: Optional[datetime] = None) -> dict:
         events = self._audit_log.query(AuditQuery(event_type="Authorization"))
         denials = sum(1 for event in events if event.outcome != "success")
 
@@ -43,9 +49,10 @@ class SecurityDashboardAPI:
             "recent_events": [
                 event.to_dict() for event in self._analytics_service.recent_events("Authorization")
             ],
+            "generated_at": _generated_at(timestamp),
         }
 
-    def sessions(self) -> dict:
+    def sessions(self, *, timestamp: Optional[datetime] = None) -> dict:
         created = self._audit_log.count(AuditQuery(event_type="Session", action="create"))
         terminated = self._audit_log.count(AuditQuery(event_type="Session", action="terminate"))
 
@@ -56,10 +63,11 @@ class SecurityDashboardAPI:
             "recent_events": [
                 event.to_dict() for event in self._analytics_service.recent_events("Session")
             ],
+            "generated_at": _generated_at(timestamp),
         }
 
-    def analytics(self) -> dict:
-        return self._analytics_service.export()
+    def analytics(self, *, timestamp: Optional[datetime] = None) -> dict:
+        return {**self._analytics_service.export(), "generated_at": _generated_at(timestamp)}
 
     def overview(self) -> dict:
         return {

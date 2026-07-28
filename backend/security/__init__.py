@@ -108,6 +108,17 @@ from .dashboard import (
     get_security_dashboard_api,
     router as security_dashboard_router,
 )
+from .export_service import (
+    DATASETS,
+    EXPORT_FORMATS,
+    InvalidExportFormatError,
+    SecurityExportRequest,
+    SecurityExportResult,
+    SecurityExportService,
+    UnknownExportError,
+    get_security_export_service,
+    router as security_export_router,
+)
 
 __all__ = [
     "AuthenticationManager",
@@ -198,4 +209,13 @@ __all__ = [
     "SecurityDashboardAPI",
     "get_security_dashboard_api",
     "security_dashboard_router",
+    "DATASETS",
+    "EXPORT_FORMATS",
+    "InvalidExportFormatError",
+    "SecurityExportRequest",
+    "SecurityExportResult",
+    "SecurityExportService",
+    "UnknownExportError",
+    "get_security_export_service",
+    "security_export_router",
 ]
