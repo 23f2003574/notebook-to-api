@@ -103,6 +103,11 @@ from .security_analytics import (
     get_security_analytics_service,
     router as security_analytics_router,
 )
+from .dashboard import (
+    SecurityDashboardAPI,
+    get_security_dashboard_api,
+    router as security_dashboard_router,
+)
 
 __all__ = [
     "AuthenticationManager",
@@ -190,4 +195,7 @@ __all__ = [
     "SecurityTrend",
     "get_security_analytics_service",
     "security_analytics_router",
+    "SecurityDashboardAPI",
+    "get_security_dashboard_api",
+    "security_dashboard_router",
 ]

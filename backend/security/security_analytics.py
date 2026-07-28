@@ -171,6 +171,10 @@ class SecurityAnalyticsService:
             bucket_start = bucket_end
         return trends
 
+    def recent_events(self, event_type: Optional[str] = None, *, limit: int = 10) -> list:
+        events = self._audit_log.query(AuditQuery(event_type=event_type))
+        return sorted(events, key=lambda event: event.timestamp, reverse=True)[:limit]
+
     def export(
         self,
         *,
