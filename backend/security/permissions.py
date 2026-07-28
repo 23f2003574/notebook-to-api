@@ -151,6 +151,9 @@ class PermissionEngine:
                         return True
         return False
 
+    def has_admin_override(self, user_id: str, resource: str) -> bool:
+        return self.check(user_id, resource, "Admin")
+
 
 _permission_engine = PermissionEngine()
 

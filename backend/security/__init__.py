@@ -72,6 +72,17 @@ from .audit_logs import (
     get_audit_log_service,
     router as audit_router,
 )
+from .security_policy import (
+    BUILTIN_POLICIES,
+    PolicyAlreadyExistsError,
+    PolicyResult,
+    SecurityPolicy,
+    SecurityPolicyEngine,
+    UnknownEvaluatorError,
+    UnknownPolicyError,
+    get_security_policy_engine,
+    router as security_policy_router,
+)
 
 __all__ = [
     "AuthenticationManager",
@@ -134,4 +145,13 @@ __all__ = [
     "UnknownEventError",
     "get_audit_log_service",
     "audit_router",
+    "BUILTIN_POLICIES",
+    "PolicyAlreadyExistsError",
+    "PolicyResult",
+    "SecurityPolicy",
+    "SecurityPolicyEngine",
+    "UnknownEvaluatorError",
+    "UnknownPolicyError",
+    "get_security_policy_engine",
+    "security_policy_router",
 ]
