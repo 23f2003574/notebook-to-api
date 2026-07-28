@@ -119,6 +119,18 @@ from .export_service import (
     get_security_export_service,
     router as security_export_router,
 )
+from .bootstrap import (
+    DEFAULT_PERMISSIONS,
+    DEFAULT_POLICY_NAMES,
+    REQUIRED_SERVICES,
+    SUBSYSTEM_NAME,
+    SecurityBootstrap,
+    SecurityBootstrapError,
+    SecurityBootstrapValidationResult,
+    UnknownServiceError,
+    bootstrap_security_subsystem,
+    get_security_bootstrap,
+)
 
 __all__ = [
     "AuthenticationManager",
@@ -218,4 +230,14 @@ __all__ = [
     "UnknownExportError",
     "get_security_export_service",
     "security_export_router",
+    "DEFAULT_PERMISSIONS",
+    "DEFAULT_POLICY_NAMES",
+    "REQUIRED_SERVICES",
+    "SUBSYSTEM_NAME",
+    "SecurityBootstrap",
+    "SecurityBootstrapError",
+    "SecurityBootstrapValidationResult",
+    "UnknownServiceError",
+    "bootstrap_security_subsystem",
+    "get_security_bootstrap",
 ]

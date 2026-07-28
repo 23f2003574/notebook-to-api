@@ -22,6 +22,19 @@ from backend.observability.deployment_governance_api import (
     router as governance_metrics_router,
     health_router as governance_health_router,
 )
+from backend.security.authentication import router as security_authentication_router
+from backend.security.api_keys import router as security_api_keys_router
+from backend.security.jwt_service import router as security_jwt_router
+from backend.security.rbac import router as security_rbac_router
+from backend.security.permissions import router as security_permissions_router
+from backend.security.session_manager import router as security_session_router
+from backend.security.audit_logs import router as security_audit_router
+from backend.security.security_policy import router as security_policy_router
+from backend.security.secrets import router as security_secrets_router
+from backend.security.security_analytics import router as security_analytics_router
+from backend.security.dashboard import router as security_dashboard_router
+from backend.security.export_service import router as security_export_router
+from backend.security.bootstrap import bootstrap_security_subsystem
 
 app = FastAPI(
     title="notebook-to-api Dashboard",
@@ -45,6 +58,21 @@ register_governance_metrics_middleware(app)
 app.include_router(upload_router)
 app.include_router(governance_metrics_router)
 app.include_router(governance_health_router)
+
+# Security, Authentication & Access Control subsystem
+app.include_router(security_authentication_router)
+app.include_router(security_api_keys_router)
+app.include_router(security_jwt_router)
+app.include_router(security_rbac_router)
+app.include_router(security_permissions_router)
+app.include_router(security_session_router)
+app.include_router(security_audit_router)
+app.include_router(security_policy_router)
+app.include_router(security_secrets_router)
+app.include_router(security_analytics_router)
+app.include_router(security_dashboard_router)
+app.include_router(security_export_router)
+bootstrap_security_subsystem()
 
 
 @app.get("/")
