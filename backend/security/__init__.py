@@ -83,6 +83,19 @@ from .security_policy import (
     get_security_policy_engine,
     router as security_policy_router,
 )
+from .secrets import (
+    SECRET_TYPES,
+    AccessDeniedError,
+    InvalidSecretTypeError,
+    Secret,
+    SecretAlreadyExistsError,
+    SecretExpiredError,
+    SecretManagementService,
+    SecretMetadata,
+    UnknownSecretError,
+    get_secret_management_service,
+    router as secrets_router,
+)
 
 __all__ = [
     "AuthenticationManager",
@@ -154,4 +167,15 @@ __all__ = [
     "UnknownPolicyError",
     "get_security_policy_engine",
     "security_policy_router",
+    "SECRET_TYPES",
+    "AccessDeniedError",
+    "InvalidSecretTypeError",
+    "Secret",
+    "SecretAlreadyExistsError",
+    "SecretExpiredError",
+    "SecretManagementService",
+    "SecretMetadata",
+    "UnknownSecretError",
+    "get_secret_management_service",
+    "secrets_router",
 ]

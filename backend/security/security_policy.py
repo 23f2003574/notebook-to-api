@@ -194,6 +194,20 @@ class SecurityPolicyEngine:
         passed, message = self._evaluators[name](merged_context)
         return PolicyResult(policy=name, passed=passed, message=message, evaluated_at=now)
 
+    def evaluate_if_registered(
+        self,
+        name: str,
+        context: Optional[dict] = None,
+        *,
+        user_id: Optional[str] = None,
+        timestamp: Optional[datetime] = None,
+    ) -> Optional[PolicyResult]:
+        try:
+            self.get_policy(name)
+        except UnknownPolicyError:
+            return None
+        return self.evaluate(name, context, user_id=user_id, timestamp=timestamp)
+
 
 _security_policy_engine = SecurityPolicyEngine()
 
