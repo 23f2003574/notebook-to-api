@@ -47,6 +47,7 @@ from backend.plugins.plugin_marketplace import router as plugin_marketplace_rout
 from backend.plugins.plugin_analytics import router as plugin_analytics_router
 from backend.plugins.dashboard import router as plugin_dashboard_router
 from backend.plugins.plugin_registry import router as plugin_registry_router
+from backend.plugins.bootstrap import bootstrap_plugin_framework
 
 app = FastAPI(
     title="notebook-to-api Dashboard",
@@ -140,6 +141,7 @@ app.include_router(plugin_analytics_router)
 # anything).
 app.include_router(plugin_dashboard_router)
 app.include_router(plugin_registry_router)
+bootstrap_plugin_framework()
 
 
 @app.get("/")

@@ -121,6 +121,17 @@ from .dashboard import (
     get_plugin_dashboard_api,
     router as plugin_dashboard_router,
 )
+from .bootstrap import (
+    PLUGINS_DIR,
+    REQUIRED_SERVICES,
+    SUBSYSTEM_NAME,
+    PluginBootstrap,
+    PluginBootstrapError,
+    PluginBootstrapValidationResult,
+    UnknownBootstrapServiceError,
+    bootstrap_plugin_framework,
+    get_plugin_bootstrap,
+)
 
 __all__ = [
     "MetricType",
@@ -222,4 +233,13 @@ __all__ = [
     "PluginDashboardAPI",
     "get_plugin_dashboard_api",
     "plugin_dashboard_router",
+    "PLUGINS_DIR",
+    "REQUIRED_SERVICES",
+    "SUBSYSTEM_NAME",
+    "PluginBootstrap",
+    "PluginBootstrapError",
+    "PluginBootstrapValidationResult",
+    "UnknownBootstrapServiceError",
+    "bootstrap_plugin_framework",
+    "get_plugin_bootstrap",
 ]
