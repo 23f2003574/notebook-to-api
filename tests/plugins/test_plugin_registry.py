@@ -37,6 +37,17 @@ def test_register_creates_plugin(registry: PluginRegistry):
     assert plugin.metadata.author == "alice"
 
 
+def test_metadata_source_defaults_to_empty_string():
+    assert PluginMetadata().source == ""
+
+
+def test_metadata_source_round_trips_through_dict():
+    metadata = PluginMetadata.from_dict({"source": "marketplace:official"})
+
+    assert metadata.source == "marketplace:official"
+    assert metadata.to_dict()["source"] == "marketplace:official"
+
+
 def test_register_rejects_duplicate_version(registry: PluginRegistry):
     registry.register("csv-exporter", "1.0.0")
 

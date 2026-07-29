@@ -23,12 +23,14 @@ class PluginMetadata:
     description: str = ""
     author: str = ""
     tags: tuple = ()
+    source: str = ""
 
     def to_dict(self) -> dict:
         return {
             "description": self.description,
             "author": self.author,
             "tags": list(self.tags),
+            "source": self.source,
         }
 
     @classmethod
@@ -38,6 +40,7 @@ class PluginMetadata:
             description=payload.get("description", ""),
             author=payload.get("author", ""),
             tags=tuple(payload.get("tags", ())),
+            source=payload.get("source", ""),
         )
 
 

@@ -85,6 +85,17 @@ from .plugin_config import (
     get_plugin_configuration_manager,
     router as plugin_config_router,
 )
+from .plugin_marketplace import (
+    MarketplacePlugin,
+    MarketplacePluginAlreadyListedError,
+    MarketplaceSource,
+    NoUpdateAvailableError,
+    PluginMarketplaceService,
+    UnknownMarketplacePluginError,
+    UntrustedSourceError,
+    get_plugin_marketplace_service,
+    router as plugin_marketplace_router,
+)
 
 __all__ = [
     "EventType",
@@ -158,4 +169,13 @@ __all__ = [
     "UnknownPluginConfigError",
     "get_plugin_configuration_manager",
     "plugin_config_router",
+    "MarketplacePlugin",
+    "MarketplacePluginAlreadyListedError",
+    "MarketplaceSource",
+    "NoUpdateAvailableError",
+    "PluginMarketplaceService",
+    "UnknownMarketplacePluginError",
+    "UntrustedSourceError",
+    "get_plugin_marketplace_service",
+    "plugin_marketplace_router",
 ]
