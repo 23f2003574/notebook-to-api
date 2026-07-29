@@ -27,6 +27,20 @@ from .plugin_lifecycle import (
     get_plugin_lifecycle_manager,
     router as plugin_lifecycle_router,
 )
+from .extension_api import (
+    API_VERSION,
+    EndpointAlreadyRegisteredError,
+    ExtensionAPI,
+    ExtensionCapability,
+    ExtensionContext,
+    IncompatibleApiVersionError,
+    ServiceAlreadyRegisteredError,
+    UnknownEndpointError,
+    UnknownExtensionError,
+    UnknownServiceError,
+    get_extension_api,
+    router as extension_api_router,
+)
 
 __all__ = [
     "Plugin",
@@ -52,4 +66,16 @@ __all__ = [
     "PluginState",
     "get_plugin_lifecycle_manager",
     "plugin_lifecycle_router",
+    "API_VERSION",
+    "EndpointAlreadyRegisteredError",
+    "ExtensionAPI",
+    "ExtensionCapability",
+    "ExtensionContext",
+    "IncompatibleApiVersionError",
+    "ServiceAlreadyRegisteredError",
+    "UnknownEndpointError",
+    "UnknownExtensionError",
+    "UnknownServiceError",
+    "get_extension_api",
+    "extension_api_router",
 ]

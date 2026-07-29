@@ -8,6 +8,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from .extension_api import (
+    ExtensionAPI,
+    IncompatibleApiVersionError,
+    get_extension_api,
+)
 from .plugin_loader import (
     ManifestValidationError,
     PluginLoadError,
@@ -66,9 +71,11 @@ class PluginLifecycleManager:
         self,
         loader: Optional[PluginLoader] = None,
         registry: Optional[PluginRegistry] = None,
+        extension_api: Optional[ExtensionAPI] = None,
     ) -> None:
         self._loader = loader if loader is not None else get_plugin_loader()
         self._registry = registry if registry is not None else get_plugin_registry()
+        self._extension_api = extension_api if extension_api is not None else get_extension_api()
         self._records: dict = {}
         self._lock = Lock()
 
@@ -133,21 +140,42 @@ class PluginLifecycleManager:
         self._validate_transition(record["state"], PluginState.ENABLED)
         if not self._loader.is_loaded(name):
             self._loader.load(record["manifest"])
+        try:
+            self._register_extension_if_declared(name)
+        except IncompatibleApiVersionError:
+            self._loader.unload_if_loaded(name)
+            raise
         return self._commit_transition(name, PluginState.ENABLED, reason)
 
     def disable(self, name: str, *, reason: str = "manual") -> LifecycleEvent:
         record = self._require_record(name)
         self._validate_transition(record["state"], PluginState.DISABLED)
         self._loader.unload_if_loaded(name)
+        self._extension_api.unregister_extension(name)
         return self._commit_transition(name, PluginState.DISABLED, reason)
 
     def uninstall(self, name: str, *, reason: str = "manual") -> LifecycleEvent:
         record = self._require_record(name)
         self._validate_transition(record["state"], PluginState.UNINSTALLED)
         self._loader.unload_if_loaded(name)
+        self._extension_api.unregister_extension(name)
         if self._registry.is_registered(name):
             self._registry.unregister(name)
         return self._commit_transition(name, PluginState.UNINSTALLED, reason)
+
+    def _register_extension_if_declared(self, name: str) -> None:
+        """If the plugin's loaded module declares an extension API version, register it.
+
+        Plugins are not required to participate in the extension API; a
+        module without an ``EXTENSION_API_VERSION`` attribute simply loads
+        and enables without gaining an extension context.
+        """
+        loaded = self._loader.get_loaded(name)
+        api_version = getattr(loaded.module, "EXTENSION_API_VERSION", None)
+        if api_version is None:
+            return
+        capabilities = getattr(loaded.module, "CAPABILITIES", [])
+        self._extension_api.register_extension(name, api_version, capabilities)
 
     def get_state(self, name: str) -> PluginState:
         return self._require_record(name)["state"]
@@ -213,6 +241,8 @@ def enable_plugin_endpoint(
         raise HTTPException(status_code=409, detail=str(exc))
     except PluginLoadError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    except IncompatibleApiVersionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     return {"name": plugin, "state": event.to_state.value}
 
 

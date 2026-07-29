@@ -5,7 +5,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.plugins.extension_api import ExtensionAPI, UnknownExtensionError
 from backend.plugins.plugin_lifecycle import (
+    IncompatibleApiVersionError,
     InvalidTransitionError,
     LifecycleEvent,
     PluginAlreadyInstalledError,
@@ -27,9 +29,14 @@ def plugin_module(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setattr(sys, "dont_write_bytecode", True)
 
-    def _write(value: int = 1) -> str:
+    def _write(value: int = 1, extension_api_version: str = None, capabilities=None) -> str:
         module_name = _unique_module_name()
-        (tmp_path / f"{module_name}.py").write_text(f"VALUE = {value}\n")
+        lines = [f"VALUE = {value}"]
+        if extension_api_version is not None:
+            lines.append(f"EXTENSION_API_VERSION = {extension_api_version!r}")
+        if capabilities is not None:
+            lines.append(f"CAPABILITIES = {capabilities!r}")
+        (tmp_path / f"{module_name}.py").write_text("\n".join(lines) + "\n")
         return module_name
 
     return _write
@@ -46,8 +53,13 @@ def loader(registry: PluginRegistry) -> PluginLoader:
 
 
 @pytest.fixture
-def lifecycle(loader: PluginLoader, registry: PluginRegistry) -> PluginLifecycleManager:
-    return PluginLifecycleManager(loader, registry)
+def extension_api() -> ExtensionAPI:
+    return ExtensionAPI()
+
+
+@pytest.fixture
+def lifecycle(loader: PluginLoader, registry: PluginRegistry, extension_api: ExtensionAPI) -> PluginLifecycleManager:
+    return PluginLifecycleManager(loader, registry, extension_api)
 
 
 @pytest.fixture
@@ -218,6 +230,55 @@ def test_auto_enable_installed_skips_plugins_that_fail_to_load(lifecycle: Plugin
 
     assert enabled == ["good-plugin"]
     assert lifecycle.get_state("bad-plugin") == PluginState.INSTALLED
+
+
+def test_enable_registers_declared_extension(
+    lifecycle: PluginLifecycleManager, extension_api: ExtensionAPI, plugin_module
+):
+    manifest = _manifest(plugin_module(extension_api_version="1.0", capabilities=["export"]))
+    lifecycle.install(manifest)
+
+    lifecycle.enable("sample")
+
+    context = extension_api.get_extension("sample")
+    assert context.api_version == "1.0"
+    assert [c.name for c in context.capabilities] == ["export"]
+
+
+def test_enable_without_extension_version_skips_registration(
+    lifecycle: PluginLifecycleManager, extension_api: ExtensionAPI, plugin_module
+):
+    manifest = _manifest(plugin_module())
+    lifecycle.install(manifest)
+
+    lifecycle.enable("sample")
+
+    with pytest.raises(UnknownExtensionError):
+        extension_api.get_extension("sample")
+
+
+def test_enable_rejects_incompatible_extension_version(
+    lifecycle: PluginLifecycleManager, loader: PluginLoader, plugin_module
+):
+    manifest = _manifest(plugin_module(extension_api_version="9.0"))
+    lifecycle.install(manifest)
+
+    with pytest.raises(IncompatibleApiVersionError):
+        lifecycle.enable("sample")
+
+    assert lifecycle.get_state("sample") == PluginState.INSTALLED
+    assert loader.is_loaded("sample") is False
+
+
+def test_disable_unregisters_extension(lifecycle: PluginLifecycleManager, extension_api: ExtensionAPI, plugin_module):
+    manifest = _manifest(plugin_module(extension_api_version="1.0"))
+    lifecycle.install(manifest)
+    lifecycle.enable("sample")
+
+    lifecycle.disable("sample")
+
+    with pytest.raises(UnknownExtensionError):
+        extension_api.get_extension("sample")
 
 
 def test_api_install_enable_disable_uninstall_flow(client: TestClient, plugin_module):
