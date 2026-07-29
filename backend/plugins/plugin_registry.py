@@ -127,6 +127,15 @@ class PluginRegistry:
                 raise UnknownPluginError(f"{name}@{version}")
             return plugin
 
+    def is_registered(self, name: str, version: Optional[str] = None) -> bool:
+        with self._lock:
+            versions = self._plugins.get(name)
+            if not versions:
+                return False
+            if version is None:
+                return True
+            return version in versions
+
     def list_plugins(self, tag: Optional[str] = None) -> list:
         with self._lock:
             if tag is not None:

@@ -35,6 +35,7 @@ from backend.security.security_analytics import router as security_analytics_rou
 from backend.security.dashboard import router as security_dashboard_router
 from backend.security.export_service import router as security_export_router
 from backend.security.bootstrap import bootstrap_security_subsystem
+from backend.plugins.plugin_loader import router as plugin_loader_router
 from backend.plugins.plugin_registry import router as plugin_registry_router
 
 app = FastAPI(
@@ -76,6 +77,10 @@ app.include_router(security_export_router)
 bootstrap_security_subsystem()
 
 # Plugin subsystem
+# plugin_loader_router must be included before plugin_registry_router: its
+# static "/plugins/loaded" path would otherwise be shadowed by the
+# registry's "/plugins/{name}" route.
+app.include_router(plugin_loader_router)
 app.include_router(plugin_registry_router)
 
 

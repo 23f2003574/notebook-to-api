@@ -77,6 +77,16 @@ def test_get_unknown_version_raises(registry: PluginRegistry):
         registry.get("csv-exporter", version="9.9.9")
 
 
+def test_is_registered_checks_name_and_version(registry: PluginRegistry):
+    assert registry.is_registered("csv-exporter") is False
+
+    registry.register("csv-exporter", "1.0.0")
+
+    assert registry.is_registered("csv-exporter") is True
+    assert registry.is_registered("csv-exporter", version="1.0.0") is True
+    assert registry.is_registered("csv-exporter", version="9.9.9") is False
+
+
 def test_list_plugins_returns_latest_of_each(registry: PluginRegistry):
     registry.register("csv-exporter", "1.0.0")
     registry.register("csv-exporter", "2.0.0")
