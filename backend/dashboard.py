@@ -35,6 +35,7 @@ from backend.security.security_analytics import router as security_analytics_rou
 from backend.security.dashboard import router as security_dashboard_router
 from backend.security.export_service import router as security_export_router
 from backend.security.bootstrap import bootstrap_security_subsystem
+from backend.plugins.plugin_registry import router as plugin_registry_router
 
 app = FastAPI(
     title="notebook-to-api Dashboard",
@@ -73,6 +74,9 @@ app.include_router(security_analytics_router)
 app.include_router(security_dashboard_router)
 app.include_router(security_export_router)
 bootstrap_security_subsystem()
+
+# Plugin subsystem
+app.include_router(plugin_registry_router)
 
 
 @app.get("/")
