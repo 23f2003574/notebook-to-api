@@ -14,6 +14,13 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from .plugin_dependencies import PluginDependencyManager
 from .plugin_registry import PluginMetadata, PluginRegistry, get_plugin_registry
+from .plugin_sandbox import (
+    PluginSandbox,
+    SandboxFilesystemViolationError,
+    SandboxResourceLimitExceededError,
+    SandboxTimeoutError,
+    UnknownSandboxError,
+)
 
 _ENTRY_POINT_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 
@@ -123,6 +130,7 @@ class PluginLoader:
         self,
         manifest: PluginManifest,
         dependencies: Optional[PluginDependencyManager] = None,
+        sandbox: Optional[PluginSandbox] = None,
     ) -> LoadedPlugin:
         with self._lock:
             if manifest.name in self._loaded:
@@ -138,9 +146,16 @@ class PluginLoader:
                     f"cannot load '{manifest.name}': missing dependencies {missing}"
                 )
         try:
-            module = importlib.import_module(manifest.entry_point)
+            if sandbox is not None and self._has_sandbox(sandbox, manifest.name):
+                # Route the import itself (where a plugin's module-level code
+                # runs) through the sandbox's timeout/CPU/filesystem policy.
+                module = sandbox.execute(manifest.name, importlib.import_module, manifest.entry_point)
+            else:
+                module = importlib.import_module(manifest.entry_point)
         except ImportError as exc:
             raise PluginLoadError(f"failed to import '{manifest.entry_point}': {exc}") from exc
+        except (SandboxTimeoutError, SandboxResourceLimitExceededError, SandboxFilesystemViolationError) as exc:
+            raise PluginLoadError(f"sandboxed import of '{manifest.entry_point}' failed: {exc}") from exc
         loaded = LoadedPlugin(manifest=manifest, module=module, loaded_at=datetime.now(timezone.utc))
         with self._lock:
             self._loaded[manifest.name] = loaded
@@ -197,6 +212,14 @@ class PluginLoader:
     def list_loaded(self) -> list:
         with self._lock:
             return sorted(self._loaded.values(), key=lambda loaded: loaded.manifest.name)
+
+    @staticmethod
+    def _has_sandbox(sandbox: PluginSandbox, name: str) -> bool:
+        try:
+            sandbox.status(name)
+        except UnknownSandboxError:
+            return False
+        return True
 
 
 _plugin_loader = PluginLoader()

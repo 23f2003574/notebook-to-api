@@ -11,6 +11,7 @@ from backend.plugins.plugin_loader import (
     LoadedPlugin,
     ManifestValidationError,
     PluginAlreadyLoadedError,
+    PluginLoadError,
     PluginLoader,
     PluginManifest,
     PluginNotLoadedError,
@@ -19,6 +20,7 @@ from backend.plugins.plugin_loader import (
     router as plugin_loader_router,
 )
 from backend.plugins.plugin_registry import PluginRegistry, get_plugin_registry
+from backend.plugins.plugin_sandbox import PluginSandbox, SandboxPolicy
 
 
 def _unique_module_name() -> str:
@@ -133,6 +135,45 @@ def test_load_with_satisfied_dependency_succeeds(loader: PluginLoader, plugin_mo
     )
 
     assert isinstance(loaded, LoadedPlugin)
+
+
+def test_load_uses_sandbox_when_one_exists_for_plugin(loader: PluginLoader, plugin_module):
+    module_name = plugin_module()
+    sandbox = PluginSandbox()
+    sandbox.create("sample", SandboxPolicy(timeout_seconds=2.0))
+
+    loaded = loader.load(
+        PluginManifest(name="sample", version="1.0.0", entry_point=module_name), sandbox=sandbox
+    )
+
+    assert isinstance(loaded, LoadedPlugin)
+    assert sandbox.status("sample")["execution_count"] == 1
+
+
+def test_load_without_matching_sandbox_loads_normally(loader: PluginLoader, plugin_module):
+    module_name = plugin_module()
+    sandbox = PluginSandbox()
+    sandbox.create("some-other-plugin")
+
+    loaded = loader.load(
+        PluginManifest(name="sample", version="1.0.0", entry_point=module_name), sandbox=sandbox
+    )
+
+    assert isinstance(loaded, LoadedPlugin)
+
+
+def test_load_wraps_sandbox_timeout_as_plugin_load_error(loader: PluginLoader, tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(sys, "dont_write_bytecode", True)
+    module_name = f"slow_import_plugin_{uuid.uuid4().hex}"
+    (tmp_path / f"{module_name}.py").write_text("import time\ntime.sleep(1.0)\nVALUE = 1\n")
+    sandbox = PluginSandbox()
+    sandbox.create("sample", SandboxPolicy(timeout_seconds=0.05))
+
+    with pytest.raises(PluginLoadError):
+        loader.load(
+            PluginManifest(name="sample", version="1.0.0", entry_point=module_name), sandbox=sandbox
+        )
 
 
 def test_reload_picks_up_source_changes(loader: PluginLoader, plugin_module, tmp_path):

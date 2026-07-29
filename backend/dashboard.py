@@ -41,6 +41,7 @@ from backend.plugins.extension_api import router as extension_api_router
 from backend.plugins.event_system import router as event_system_router
 from backend.plugins.plugin_dependencies import router as plugin_dependencies_router
 from backend.plugins.plugin_config import router as plugin_config_router
+from backend.plugins.plugin_sandbox import router as plugin_sandbox_router
 from backend.plugins.plugin_registry import router as plugin_registry_router
 
 app = FastAPI(
@@ -111,6 +112,11 @@ app.include_router(plugin_dependencies_router)
 # doesn't collide with the registry's "/plugins/{name}" and can be included
 # in any order relative to it.
 app.include_router(plugin_config_router)
+# plugin_sandbox's routes are all under "/plugins/sandbox" (2+ segments,
+# with "sandbox" as a static literal), and the registry has no POST route
+# at "/plugins/{name}" for it to collide with, so this is order-independent
+# relative to plugin_registry_router too.
+app.include_router(plugin_sandbox_router)
 app.include_router(plugin_registry_router)
 
 
