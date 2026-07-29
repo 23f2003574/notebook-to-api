@@ -104,6 +104,11 @@ from .plugin_marketplace import (
     get_plugin_marketplace_service,
     router as plugin_marketplace_router,
 )
+from .dashboard import (
+    PluginDashboardAPI,
+    get_plugin_dashboard_api,
+    router as plugin_dashboard_router,
+)
 
 __all__ = [
     "MetricType",
@@ -192,4 +197,7 @@ __all__ = [
     "UntrustedSourceError",
     "get_plugin_marketplace_service",
     "plugin_marketplace_router",
+    "PluginDashboardAPI",
+    "get_plugin_dashboard_api",
+    "plugin_dashboard_router",
 ]

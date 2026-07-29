@@ -60,6 +60,34 @@ def test_list_records_filters_by_plugin(service: PluginAnalyticsService):
     assert [record.plugin for record in records] == ["csv-exporter"]
 
 
+def test_recent_returns_newest_first_regardless_of_insertion_order(service: PluginAnalyticsService):
+    service.record("csv-exporter", MetricType.INSTALL, timestamp=DAY_2)
+    service.record("csv-exporter", MetricType.LOAD, timestamp=DAY_1)
+
+    recent = service.recent()
+
+    assert [record.timestamp for record in recent] == [DAY_2, DAY_1]
+
+
+def test_recent_respects_limit(service: PluginAnalyticsService):
+    for i in range(5):
+        service.record("csv-exporter", MetricType.EXECUTION, timestamp=DAY_1 + timedelta(minutes=i))
+
+    recent = service.recent(limit=2)
+
+    assert len(recent) == 2
+    assert recent[0].timestamp == DAY_1 + timedelta(minutes=4)
+
+
+def test_recent_filters_by_plugin(service: PluginAnalyticsService):
+    service.record("csv-exporter", MetricType.INSTALL, timestamp=DAY_1)
+    service.record("json-exporter", MetricType.INSTALL, timestamp=DAY_2)
+
+    recent = service.recent(plugin="csv-exporter")
+
+    assert [record.plugin for record in recent] == ["csv-exporter"]
+
+
 def test_summary_counts_installs(service: PluginAnalyticsService):
     service.record("csv-exporter", MetricType.INSTALL)
     service.record("csv-exporter", MetricType.INSTALL)

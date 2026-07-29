@@ -44,6 +44,7 @@ from backend.plugins.plugin_config import router as plugin_config_router
 from backend.plugins.plugin_sandbox import router as plugin_sandbox_router
 from backend.plugins.plugin_marketplace import router as plugin_marketplace_router
 from backend.plugins.plugin_analytics import router as plugin_analytics_router
+from backend.plugins.dashboard import router as plugin_dashboard_router
 from backend.plugins.plugin_registry import router as plugin_registry_router
 
 app = FastAPI(
@@ -127,6 +128,11 @@ app.include_router(plugin_marketplace_router)
 # shadowed by the registry's "/plugins/{name}" route (its "/summary" and
 # "/trends" sub-paths don't collide with anything).
 app.include_router(plugin_analytics_router)
+# plugin_dashboard's bare "GET /plugins/dashboard" would otherwise be
+# shadowed by the registry's "/plugins/{name}" route (its "/registry",
+# "/runtime", "/marketplace", and "/analytics" sub-paths don't collide with
+# anything).
+app.include_router(plugin_dashboard_router)
 app.include_router(plugin_registry_router)
 
 

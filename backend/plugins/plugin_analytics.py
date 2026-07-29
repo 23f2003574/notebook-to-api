@@ -105,6 +105,11 @@ class PluginAnalyticsService:
     def list_records(self, plugin: Optional[str] = None, metric_type=None) -> list:
         return self._filtered_records(plugin, metric_type)
 
+    def recent(self, limit: int = 10, plugin: Optional[str] = None) -> list:
+        """The most recently recorded metrics (by timestamp, not insertion order), newest first."""
+        records = self._filtered_records(plugin)
+        return sorted(records, key=lambda record: record.timestamp, reverse=True)[:limit]
+
     def summary(self, plugin: Optional[str] = None) -> dict:
         records = self._filtered_records(plugin)
         install_count = sum(1 for record in records if record.metric_type == MetricType.INSTALL)
