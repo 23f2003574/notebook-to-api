@@ -132,6 +132,10 @@ class JobRegistry:
                 raise UnknownJobError(job_id)
             return job
 
+    def is_registered(self, job_id: str) -> bool:
+        with self._lock:
+            return job_id in self._jobs
+
     def update_status(self, job_id: str, status: JobStatus) -> Job:
         with self._lock:
             job = self._jobs.get(job_id)
