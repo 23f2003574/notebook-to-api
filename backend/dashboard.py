@@ -42,6 +42,7 @@ from backend.plugins.event_system import router as event_system_router
 from backend.plugins.plugin_dependencies import router as plugin_dependencies_router
 from backend.plugins.plugin_config import router as plugin_config_router
 from backend.plugins.plugin_sandbox import router as plugin_sandbox_router
+from backend.plugins.plugin_packaging import router as plugin_packaging_router
 from backend.plugins.plugin_marketplace import router as plugin_marketplace_router
 from backend.plugins.plugin_analytics import router as plugin_analytics_router
 from backend.plugins.dashboard import router as plugin_dashboard_router
@@ -120,6 +121,11 @@ app.include_router(plugin_config_router)
 # at "/plugins/{name}" for it to collide with, so this is order-independent
 # relative to plugin_registry_router too.
 app.include_router(plugin_sandbox_router)
+# plugin_packaging's routes are "POST /plugins/package", "GET
+# /plugins/package/{plugin}", and "POST /plugins/import" - the registry has
+# no POST route at "/plugins/{name}" and its GET route is 2 segments (not 3),
+# so this is order-independent relative to plugin_registry_router too.
+app.include_router(plugin_packaging_router)
 # plugin_marketplace's bare "GET /plugins/marketplace" would otherwise be
 # shadowed by the registry's "/plugins/{name}" route (its "/search",
 # "/install", and "/update/{plugin}" sub-paths don't collide with anything).

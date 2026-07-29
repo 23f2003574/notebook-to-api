@@ -15,11 +15,20 @@ from .plugin_lifecycle import (
     get_plugin_lifecycle_manager,
 )
 from .plugin_loader import PluginManifest
+from .plugin_packaging import (
+    ChecksumMismatchError,
+    PluginPackagingService,
+    get_plugin_packaging_service,
+)
 from .plugin_registry import PluginRegistry, UnknownPluginError, get_plugin_registry
 
 
 class UntrustedSourceError(ValueError):
     pass
+
+
+class PackageMismatchError(ValueError):
+    """The imported package doesn't correspond to the marketplace listing being installed."""
 
 
 class UnknownMarketplacePluginError(KeyError):
@@ -59,6 +68,7 @@ class MarketplacePlugin:
     tags: tuple = ()
     min_api_version: Optional[str] = None
     featured: bool = False
+    checksum: Optional[str] = None
 
     def matches(self, query: Optional[str]) -> bool:
         if not query:
@@ -77,6 +87,7 @@ class MarketplacePlugin:
             "tags": list(self.tags),
             "min_api_version": self.min_api_version,
             "featured": self.featured,
+            "checksum": self.checksum,
         }
 
 
@@ -87,9 +98,11 @@ class PluginMarketplaceService:
         self,
         lifecycle: Optional[PluginLifecycleManager] = None,
         registry: Optional[PluginRegistry] = None,
+        packaging: Optional[PluginPackagingService] = None,
     ) -> None:
         self._lifecycle = lifecycle if lifecycle is not None else get_plugin_lifecycle_manager()
         self._registry = registry if registry is not None else get_plugin_registry()
+        self._packaging = packaging if packaging is not None else get_plugin_packaging_service()
         self._listings: dict = {}
         self._lock = Lock()
 
@@ -137,7 +150,30 @@ class PluginMarketplaceService:
                 f"incompatible with host version '{API_VERSION}'"
             )
 
-    def install(self, name: str, version: Optional[str] = None, *, allow_untrusted: bool = False):
+    def verify_package(self, listing: MarketplacePlugin, package_data: bytes, package_format: str = "zip") -> bool:
+        """Check that an uploaded package's manifest and checksum match a catalog listing."""
+        package_manifest = self._packaging.import_package(package_data, package_format)
+        if package_manifest.name != listing.name or package_manifest.version != listing.version:
+            raise PackageMismatchError(
+                f"package '{package_manifest.name}@{package_manifest.version}' does not match "
+                f"listing '{listing.name}@{listing.version}'"
+            )
+        if listing.checksum is not None and package_manifest.checksum != listing.checksum:
+            raise ChecksumMismatchError(
+                f"package checksum '{package_manifest.checksum}' does not match "
+                f"listing checksum '{listing.checksum}' for '{listing.name}'"
+            )
+        return True
+
+    def install(
+        self,
+        name: str,
+        version: Optional[str] = None,
+        *,
+        allow_untrusted: bool = False,
+        package_data: Optional[bytes] = None,
+        package_format: str = "zip",
+    ):
         with self._lock:
             versions = self._listings.get(name)
         if not versions:
@@ -150,6 +186,8 @@ class PluginMarketplaceService:
                 raise UnknownMarketplacePluginError(f"{name}@{version}")
 
         self._check_installable(listing, allow_untrusted)
+        if package_data is not None:
+            self.verify_package(listing, package_data, package_format)
 
         manifest = PluginManifest(
             name=listing.name,
