@@ -2,6 +2,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.plugins.event_system import EventType, HookEventSystem
 from backend.plugins.extension_api import (
     API_VERSION,
     EndpointAlreadyRegisteredError,
@@ -20,8 +21,13 @@ from backend.plugins.extension_api import (
 
 
 @pytest.fixture
-def api() -> ExtensionAPI:
-    return ExtensionAPI()
+def event_system() -> HookEventSystem:
+    return HookEventSystem()
+
+
+@pytest.fixture
+def api(event_system: HookEventSystem) -> ExtensionAPI:
+    return ExtensionAPI(event_system)
 
 
 @pytest.fixture
@@ -54,6 +60,16 @@ def test_register_extension_rejects_incompatible_version(api: ExtensionAPI):
 def test_get_extension_unknown_raises(api: ExtensionAPI):
     with pytest.raises(UnknownExtensionError):
         api.get_extension("does-not-exist")
+
+
+def test_register_extension_emits_plugin_enabled_event(api: ExtensionAPI, event_system: HookEventSystem):
+    api.register_extension("csv-exporter", "1.0")
+
+    events = event_system.list_events(event_type=EventType.PLUGIN_ENABLED.value)
+
+    assert len(events) == 1
+    assert events[0].source == "csv-exporter"
+    assert events[0].payload["plugin"] == "csv-exporter"
 
 
 def test_list_extensions_returns_sorted(api: ExtensionAPI):

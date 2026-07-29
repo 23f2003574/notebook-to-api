@@ -1,3 +1,14 @@
+from .event_system import (
+    EventType,
+    HookAlreadyRegisteredError,
+    HookEventSystem,
+    HookRegistration,
+    PluginEvent,
+    UnknownHookError,
+    UnknownSubscriptionError,
+    get_hook_event_system,
+    router as event_system_router,
+)
 from .plugin_registry import (
     Plugin,
     PluginAlreadyRegisteredError,
@@ -43,6 +54,15 @@ from .extension_api import (
 )
 
 __all__ = [
+    "EventType",
+    "HookAlreadyRegisteredError",
+    "HookEventSystem",
+    "HookRegistration",
+    "PluginEvent",
+    "UnknownHookError",
+    "UnknownSubscriptionError",
+    "get_hook_event_system",
+    "event_system_router",
     "Plugin",
     "PluginAlreadyRegisteredError",
     "PluginMetadata",

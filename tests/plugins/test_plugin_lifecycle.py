@@ -5,6 +5,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.plugins.event_system import HookEventSystem
 from backend.plugins.extension_api import ExtensionAPI, UnknownExtensionError
 from backend.plugins.plugin_lifecycle import (
     IncompatibleApiVersionError,
@@ -54,7 +55,7 @@ def loader(registry: PluginRegistry) -> PluginLoader:
 
 @pytest.fixture
 def extension_api() -> ExtensionAPI:
-    return ExtensionAPI()
+    return ExtensionAPI(HookEventSystem())
 
 
 @pytest.fixture

@@ -7,6 +7,8 @@ from typing import Callable, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from .event_system import EventType, HookEventSystem, get_hook_event_system
+
 API_VERSION = "1.0"
 
 
@@ -83,10 +85,11 @@ class ExtensionContext:
 class ExtensionAPI:
     """The stable surface plugins use to expose endpoints and services to the host."""
 
-    def __init__(self) -> None:
+    def __init__(self, event_system: Optional[HookEventSystem] = None) -> None:
         self._extensions: dict = {}
         self._endpoints: dict = {}
         self._services: dict = {}
+        self._event_system = event_system if event_system is not None else get_hook_event_system()
         self._lock = Lock()
 
     def register_extension(
@@ -110,6 +113,11 @@ class ExtensionAPI:
         with self._lock:
             self._extensions[plugin] = context
             self._endpoints.setdefault(plugin, {})
+        self._event_system.emit(
+            EventType.PLUGIN_ENABLED,
+            payload={"plugin": plugin, "api_version": api_version},
+            source=plugin,
+        )
         return context
 
     def unregister_extension(self, plugin: str) -> None:

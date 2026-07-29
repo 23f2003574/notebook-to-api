@@ -38,6 +38,7 @@ from backend.security.bootstrap import bootstrap_security_subsystem
 from backend.plugins.plugin_loader import router as plugin_loader_router
 from backend.plugins.plugin_lifecycle import router as plugin_lifecycle_router
 from backend.plugins.extension_api import router as extension_api_router
+from backend.plugins.event_system import router as event_system_router
 from backend.plugins.plugin_registry import router as plugin_registry_router
 
 app = FastAPI(
@@ -91,9 +92,13 @@ bootstrap_security_subsystem()
 #     from the catalog as part of the same transition.
 #   - extension_api's static "/plugins/extensions" would otherwise be
 #     shadowed by the registry's "/plugins/{name}" route.
+#   - event_system's static "/plugins/events" would otherwise be shadowed
+#     by the registry's "/plugins/{name}" route (its "/plugins/hooks" and
+#     "/plugins/hooks/{hook}" paths don't collide with anything).
 app.include_router(plugin_loader_router)
 app.include_router(plugin_lifecycle_router)
 app.include_router(extension_api_router)
+app.include_router(event_system_router)
 app.include_router(plugin_registry_router)
 
 
