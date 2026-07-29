@@ -2,6 +2,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.plugins.plugin_analytics import MetricType, PluginAnalyticsService
 from backend.plugins.plugin_registry import (
     Plugin,
     PluginAlreadyRegisteredError,
@@ -46,6 +47,21 @@ def test_metadata_source_round_trips_through_dict():
 
     assert metadata.source == "marketplace:official"
     assert metadata.to_dict()["source"] == "marketplace:official"
+
+
+def test_register_records_install_metric_when_analytics_provided(registry: PluginRegistry):
+    analytics = PluginAnalyticsService()
+
+    registry.register("csv-exporter", "1.0.0", analytics=analytics)
+
+    records = analytics.list_records("csv-exporter", MetricType.INSTALL)
+    assert len(records) == 1
+
+
+def test_register_without_analytics_does_not_error(registry: PluginRegistry):
+    plugin = registry.register("csv-exporter", "1.0.0")
+
+    assert plugin.name == "csv-exporter"
 
 
 def test_register_rejects_duplicate_version(registry: PluginRegistry):

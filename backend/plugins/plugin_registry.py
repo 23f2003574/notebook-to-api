@@ -7,6 +7,8 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
+from .plugin_analytics import MetricType, PluginAnalyticsService
+
 
 class PluginAlreadyRegisteredError(ValueError):
     pass
@@ -75,6 +77,8 @@ class PluginRegistry:
         name: str,
         version: str,
         metadata: Optional[PluginMetadata] = None,
+        *,
+        analytics: Optional[PluginAnalyticsService] = None,
     ) -> Plugin:
         if not name:
             raise ValueError("plugin name is required")
@@ -94,6 +98,8 @@ class PluginRegistry:
             versions[version] = plugin
             for tag in metadata.tags:
                 self._tag_index.setdefault(tag, set()).add(name)
+        if analytics is not None:
+            analytics.record(name, MetricType.INSTALL)
         return plugin
 
     def unregister(self, name: str, version: Optional[str] = None) -> None:

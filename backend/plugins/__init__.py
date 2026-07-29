@@ -9,6 +9,14 @@ from .event_system import (
     get_hook_event_system,
     router as event_system_router,
 )
+from .plugin_analytics import (
+    MetricType,
+    PluginAnalyticsService,
+    PluginMetrics,
+    PluginTrend,
+    get_plugin_analytics_service,
+    router as plugin_analytics_router,
+)
 from .plugin_registry import (
     Plugin,
     PluginAlreadyRegisteredError,
@@ -98,6 +106,12 @@ from .plugin_marketplace import (
 )
 
 __all__ = [
+    "MetricType",
+    "PluginAnalyticsService",
+    "PluginMetrics",
+    "PluginTrend",
+    "get_plugin_analytics_service",
+    "plugin_analytics_router",
     "EventType",
     "HookAlreadyRegisteredError",
     "HookEventSystem",
