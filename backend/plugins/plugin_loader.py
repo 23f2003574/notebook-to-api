@@ -163,6 +163,18 @@ class PluginLoader:
         with self._lock:
             return name in self._loaded
 
+    def get_loaded(self, name: str) -> Optional[LoadedPlugin]:
+        with self._lock:
+            return self._loaded.get(name)
+
+    def unload_if_loaded(self, name: str) -> bool:
+        """Unload a plugin if it is currently loaded. Returns whether anything was unloaded."""
+        with self._lock:
+            if name not in self._loaded:
+                return False
+            del self._loaded[name]
+            return True
+
     def list_loaded(self) -> list:
         with self._lock:
             return sorted(self._loaded.values(), key=lambda loaded: loaded.manifest.name)

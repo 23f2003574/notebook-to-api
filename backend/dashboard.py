@@ -36,6 +36,7 @@ from backend.security.dashboard import router as security_dashboard_router
 from backend.security.export_service import router as security_export_router
 from backend.security.bootstrap import bootstrap_security_subsystem
 from backend.plugins.plugin_loader import router as plugin_loader_router
+from backend.plugins.plugin_lifecycle import router as plugin_lifecycle_router
 from backend.plugins.plugin_registry import router as plugin_registry_router
 
 app = FastAPI(
@@ -77,10 +78,16 @@ app.include_router(security_export_router)
 bootstrap_security_subsystem()
 
 # Plugin subsystem
-# plugin_loader_router must be included before plugin_registry_router: its
-# static "/plugins/loaded" path would otherwise be shadowed by the
-# registry's "/plugins/{name}" route.
+# Route ordering matters here: both plugin_loader_router and
+# plugin_lifecycle_router must be included before plugin_registry_router.
+#   - loader's static "/plugins/loaded" would otherwise be shadowed by the
+#     registry's "/plugins/{name}" route.
+#   - lifecycle's "DELETE /plugins/{plugin}" (uninstall) intentionally takes
+#     over that path from the registry's plain "DELETE /plugins/{name}"
+#     (unregister), since uninstall unloads the plugin and unregisters it
+#     from the catalog as part of the same transition.
 app.include_router(plugin_loader_router)
+app.include_router(plugin_lifecycle_router)
 app.include_router(plugin_registry_router)
 
 

@@ -18,6 +18,15 @@ from .plugin_loader import (
     get_plugin_loader,
     router as plugin_loader_router,
 )
+from .plugin_lifecycle import (
+    InvalidTransitionError,
+    LifecycleEvent,
+    PluginAlreadyInstalledError,
+    PluginLifecycleManager,
+    PluginState,
+    get_plugin_lifecycle_manager,
+    router as plugin_lifecycle_router,
+)
 
 __all__ = [
     "Plugin",
@@ -36,4 +45,11 @@ __all__ = [
     "PluginNotLoadedError",
     "get_plugin_loader",
     "plugin_loader_router",
+    "InvalidTransitionError",
+    "LifecycleEvent",
+    "PluginAlreadyInstalledError",
+    "PluginLifecycleManager",
+    "PluginState",
+    "get_plugin_lifecycle_manager",
+    "plugin_lifecycle_router",
 ]
