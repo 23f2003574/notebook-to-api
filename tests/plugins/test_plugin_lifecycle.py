@@ -148,6 +148,27 @@ def test_disable_before_enable_raises_invalid_transition(lifecycle: PluginLifecy
         lifecycle.disable("sample")
 
 
+def test_reload_reimports_enabled_plugin(lifecycle: PluginLifecycleManager, plugin_module, tmp_path):
+    module_name = plugin_module(value=1)
+    manifest = _manifest(module_name)
+    lifecycle.install(manifest)
+    lifecycle.enable("sample")
+
+    (tmp_path / f"{module_name}.py").write_text("VALUE = 2\n")
+    loaded = lifecycle.reload("sample")
+
+    assert loaded.module.VALUE == 2
+    assert lifecycle.get_state("sample") == PluginState.ENABLED
+
+
+def test_reload_before_enable_raises_invalid_transition(lifecycle: PluginLifecycleManager, plugin_module):
+    manifest = _manifest(plugin_module())
+    lifecycle.install(manifest)
+
+    with pytest.raises(InvalidTransitionError):
+        lifecycle.reload("sample")
+
+
 def test_disabled_plugin_can_be_reenabled(lifecycle: PluginLifecycleManager, loader: PluginLoader, plugin_module):
     manifest = _manifest(plugin_module())
     lifecycle.install(manifest)

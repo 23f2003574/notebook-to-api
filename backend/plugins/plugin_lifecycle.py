@@ -163,6 +163,13 @@ class PluginLifecycleManager:
             self._registry.unregister(name)
         return self._commit_transition(name, PluginState.UNINSTALLED, reason)
 
+    def reload(self, name: str):
+        """Re-import an enabled plugin's module in place, e.g. after its configuration changes."""
+        record = self._require_record(name)
+        if record["state"] != PluginState.ENABLED:
+            raise InvalidTransitionError(f"cannot reload plugin '{name}' unless it is enabled")
+        return self._loader.reload(name)
+
     def _register_extension_if_declared(self, name: str) -> None:
         """If the plugin's loaded module declares an extension API version, register it.
 

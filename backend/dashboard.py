@@ -40,6 +40,7 @@ from backend.plugins.plugin_lifecycle import router as plugin_lifecycle_router
 from backend.plugins.extension_api import router as extension_api_router
 from backend.plugins.event_system import router as event_system_router
 from backend.plugins.plugin_dependencies import router as plugin_dependencies_router
+from backend.plugins.plugin_config import router as plugin_config_router
 from backend.plugins.plugin_registry import router as plugin_registry_router
 
 app = FastAPI(
@@ -105,6 +106,11 @@ app.include_router(plugin_lifecycle_router)
 app.include_router(extension_api_router)
 app.include_router(event_system_router)
 app.include_router(plugin_dependencies_router)
+# plugin_config's routes are all 3+ segments ("/plugins/{plugin}/config",
+# "/plugins/{plugin}/config/validate"), so unlike the routers above it
+# doesn't collide with the registry's "/plugins/{name}" and can be included
+# in any order relative to it.
+app.include_router(plugin_config_router)
 app.include_router(plugin_registry_router)
 
 

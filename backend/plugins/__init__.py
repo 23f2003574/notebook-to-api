@@ -62,6 +62,16 @@ from .extension_api import (
     get_extension_api,
     router as extension_api_router,
 )
+from .plugin_config import (
+    ConfigField,
+    ConfigSchema,
+    ConfigValidationError,
+    PluginConfig,
+    PluginConfigurationManager,
+    UnknownPluginConfigError,
+    get_plugin_configuration_manager,
+    router as plugin_config_router,
+)
 
 __all__ = [
     "EventType",
@@ -116,4 +126,12 @@ __all__ = [
     "UnknownServiceError",
     "get_extension_api",
     "extension_api_router",
+    "ConfigField",
+    "ConfigSchema",
+    "ConfigValidationError",
+    "PluginConfig",
+    "PluginConfigurationManager",
+    "UnknownPluginConfigError",
+    "get_plugin_configuration_manager",
+    "plugin_config_router",
 ]
