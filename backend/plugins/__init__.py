@@ -18,6 +18,15 @@ from .plugin_registry import (
     get_plugin_registry,
     router as plugin_registry_router,
 )
+from .plugin_dependencies import (
+    CircularDependencyError,
+    DependencyGraph,
+    PluginDependency,
+    PluginDependencyManager,
+    UnsatisfiedDependencyError,
+    get_plugin_dependency_manager,
+    router as plugin_dependencies_router,
+)
 from .plugin_loader import (
     LoadedPlugin,
     ManifestValidationError,
@@ -26,6 +35,7 @@ from .plugin_loader import (
     PluginLoader,
     PluginManifest,
     PluginNotLoadedError,
+    UnmetDependencyError,
     get_plugin_loader,
     router as plugin_loader_router,
 )
@@ -70,6 +80,13 @@ __all__ = [
     "UnknownPluginError",
     "get_plugin_registry",
     "plugin_registry_router",
+    "CircularDependencyError",
+    "DependencyGraph",
+    "PluginDependency",
+    "PluginDependencyManager",
+    "UnsatisfiedDependencyError",
+    "get_plugin_dependency_manager",
+    "plugin_dependencies_router",
     "LoadedPlugin",
     "ManifestValidationError",
     "PluginAlreadyLoadedError",
@@ -77,6 +94,7 @@ __all__ = [
     "PluginLoader",
     "PluginManifest",
     "PluginNotLoadedError",
+    "UnmetDependencyError",
     "get_plugin_loader",
     "plugin_loader_router",
     "InvalidTransitionError",

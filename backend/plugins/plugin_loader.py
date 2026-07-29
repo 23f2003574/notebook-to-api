@@ -12,6 +12,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from .plugin_dependencies import PluginDependencyManager
 from .plugin_registry import PluginMetadata, PluginRegistry, get_plugin_registry
 
 _ENTRY_POINT_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
@@ -30,6 +31,10 @@ class PluginAlreadyLoadedError(ValueError):
 
 
 class PluginNotLoadedError(KeyError):
+    pass
+
+
+class UnmetDependencyError(RuntimeError):
     pass
 
 
@@ -114,10 +119,24 @@ class PluginLoader:
             manifests.append(PluginManifest.from_dict(data))
         return manifests
 
-    def load(self, manifest: PluginManifest) -> LoadedPlugin:
+    def load(
+        self,
+        manifest: PluginManifest,
+        dependencies: Optional[PluginDependencyManager] = None,
+    ) -> LoadedPlugin:
         with self._lock:
             if manifest.name in self._loaded:
                 raise PluginAlreadyLoadedError(manifest.name)
+        if dependencies is not None:
+            missing = [
+                dependency.depends_on
+                for dependency in dependencies.get_dependencies(manifest.name)
+                if not self.is_loaded(dependency.depends_on)
+            ]
+            if missing:
+                raise UnmetDependencyError(
+                    f"cannot load '{manifest.name}': missing dependencies {missing}"
+                )
         try:
             module = importlib.import_module(manifest.entry_point)
         except ImportError as exc:

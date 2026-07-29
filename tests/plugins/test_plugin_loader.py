@@ -6,6 +6,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.plugins.plugin_dependencies import PluginDependencyManager
 from backend.plugins.plugin_loader import (
     LoadedPlugin,
     ManifestValidationError,
@@ -13,6 +14,7 @@ from backend.plugins.plugin_loader import (
     PluginLoader,
     PluginManifest,
     PluginNotLoadedError,
+    UnmetDependencyError,
     get_plugin_loader,
     router as plugin_loader_router,
 )
@@ -107,6 +109,30 @@ def test_load_twice_raises(loader: PluginLoader, plugin_module):
 
     with pytest.raises(PluginAlreadyLoadedError):
         loader.load(manifest)
+
+
+def test_load_with_unmet_dependency_raises(loader: PluginLoader, plugin_module):
+    module_name = plugin_module()
+    manifest = PluginManifest(name="app", version="1.0.0", entry_point=module_name)
+    dependencies = PluginDependencyManager()
+    dependencies.add_dependency("app", "auth-plugin")
+
+    with pytest.raises(UnmetDependencyError):
+        loader.load(manifest, dependencies=dependencies)
+
+
+def test_load_with_satisfied_dependency_succeeds(loader: PluginLoader, plugin_module):
+    auth_module = plugin_module()
+    app_module = plugin_module()
+    dependencies = PluginDependencyManager()
+    dependencies.add_dependency("app", "auth-plugin")
+
+    loader.load(PluginManifest(name="auth-plugin", version="1.0.0", entry_point=auth_module))
+    loaded = loader.load(
+        PluginManifest(name="app", version="1.0.0", entry_point=app_module), dependencies=dependencies
+    )
+
+    assert isinstance(loaded, LoadedPlugin)
 
 
 def test_reload_picks_up_source_changes(loader: PluginLoader, plugin_module, tmp_path):
