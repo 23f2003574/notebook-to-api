@@ -7,6 +7,8 @@ from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from .rate_limiter import RateLimiter, RateLimitExceededError, UnknownRateLimitClientError, get_rate_limiter
+
 BeforeHook = Callable[["MiddlewareContext"], None]
 AfterHook = Callable[["MiddlewareContext"], None]
 
@@ -170,6 +172,24 @@ class CompressionMiddleware:
         context.state["compressed"] = len(str(context.payload)) >= self.minimum_size
 
 
+class RateLimitingMiddleware:
+    """Built-in middleware that throttles requests per client using a RateLimiter."""
+
+    def __init__(self, limiter: RateLimiter, client_key: str = "client") -> None:
+        self.limiter = limiter
+        self.client_key = client_key
+
+    def before(self, context: MiddlewareContext) -> None:
+        client = context.payload.get(self.client_key, "anonymous")
+        try:
+            self.limiter.consume(client)
+        except RateLimitExceededError as exc:
+            context.short_circuited = True
+            context.response = {"error": "rate_limited", "retry_after": exc.retry_after}
+        except UnknownRateLimitClientError:
+            pass
+
+
 def _build_authentication(config: dict):
     return AuthenticationMiddleware(config.get("required_token", "")).before, None
 
@@ -187,11 +207,16 @@ def _build_compression(config: dict):
     return None, CompressionMiddleware(config.get("minimum_size", 0)).after
 
 
+def _build_rate_limiting(config: dict):
+    return RateLimitingMiddleware(get_rate_limiter(), client_key=config.get("client_key", "client")).before, None
+
+
 BUILTIN_MIDDLEWARE_FACTORIES = {
     "authentication": _build_authentication,
     "logging": _build_logging,
     "cors": _build_cors,
     "compression": _build_compression,
+    "rate_limiting": _build_rate_limiting,
 }
 
 
