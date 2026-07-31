@@ -47,6 +47,7 @@ class GatewayStatistics:
     min_latency_ms: float = 0.0
     max_latency_ms: float = 0.0
     throughput_per_second: float = 0.0
+    error_rate: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -58,6 +59,7 @@ class GatewayStatistics:
             "min_latency_ms": self.min_latency_ms,
             "max_latency_ms": self.max_latency_ms,
             "throughput_per_second": self.throughput_per_second,
+            "error_rate": self.error_rate,
         }
 
 
@@ -128,6 +130,14 @@ class GatewayAnalytics:
             else:
                 throughput_per_second = 0.0
 
+            if total_responses > 0:
+                error_count = sum(
+                    count for status, count in status_code_counts.items() if int(status) >= 400
+                )
+                error_rate = error_count / total_responses
+            else:
+                error_rate = 0.0
+
             return GatewayStatistics(
                 total_requests=self._request_counter,
                 total_responses=total_responses,
@@ -137,6 +147,7 @@ class GatewayAnalytics:
                 min_latency_ms=min_latency_ms,
                 max_latency_ms=max_latency_ms,
                 throughput_per_second=throughput_per_second,
+                error_rate=error_rate,
             )
 
     def reset(self) -> None:
