@@ -6,6 +6,7 @@ from typing import Any, Callable, Optional
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from .middleware import MiddlewareContext, MiddlewarePipeline, get_middleware_pipeline
+from .request_validation import RequestValidationEngine, UnknownValidationRuleError, get_validation_engine
 from .route_registry import (
     InvalidMethodError,
     Route,
@@ -49,6 +50,7 @@ class RoutingResult:
     params: dict = field(default_factory=dict)
     reason: str = "matched"
     middleware_response: Optional[Any] = None
+    validation_errors: tuple = field(default_factory=tuple)
 
     def to_dict(self) -> dict:
         return {
@@ -59,6 +61,7 @@ class RoutingResult:
             "params": self.params,
             "reason": self.reason,
             "middleware_response": self.middleware_response,
+            "validation_errors": list(self.validation_errors),
         }
 
 
@@ -70,10 +73,12 @@ class RequestRouter:
         registry: RouteRegistry,
         fallback_handler: Optional[FallbackHandler] = None,
         middleware_pipeline: Optional[MiddlewarePipeline] = None,
+        validation_engine: Optional[RequestValidationEngine] = None,
     ) -> None:
         self._registry = registry
         self._fallback_handler = fallback_handler
         self._middleware_pipeline = middleware_pipeline
+        self._validation_engine = validation_engine
 
     def match(self, path: str, method: Optional[str] = None) -> RouteMatch:
         structural_match: Optional[Route] = None
@@ -135,7 +140,15 @@ class RequestRouter:
             reason=reason,
         )
 
-    def route(self, path: str, method: Optional[str] = None, payload: Optional[dict] = None) -> RoutingResult:
+    def route(
+        self,
+        path: str,
+        method: Optional[str] = None,
+        payload: Optional[dict] = None,
+        *,
+        headers: Optional[dict] = None,
+        query_params: Optional[dict] = None,
+    ) -> RoutingResult:
         context: Optional[MiddlewareContext] = None
         if self._middleware_pipeline is not None:
             context = MiddlewareContext(path=path, method=method.upper() if method else "", payload=payload or {})
@@ -155,13 +168,40 @@ class RequestRouter:
         result = self.resolve(path, method)
         if not result.matched:
             result = self.fallback(path, method, reason=result.reason)
+        elif self._validation_engine is not None:
+            try:
+                rule = self._validation_engine.get_rule(result.route.path)
+            except UnknownValidationRuleError:
+                rule = None
+            if rule is not None:
+                validation = self._validation_engine.validate_request(
+                    rule,
+                    headers=headers,
+                    params=query_params,
+                    path_params=result.params,
+                    body=payload,
+                )
+                if not validation.valid:
+                    result = RoutingResult(
+                        matched=False,
+                        path=path,
+                        method=result.method,
+                        route=result.route,
+                        params=result.params,
+                        reason="validation_failed",
+                        validation_errors=tuple(validation.errors),
+                    )
 
         if context is not None:
             self._middleware_pipeline.execute_after(context)
         return result
 
 
-_request_router = RequestRouter(get_route_registry(), middleware_pipeline=get_middleware_pipeline())
+_request_router = RequestRouter(
+    get_route_registry(),
+    middleware_pipeline=get_middleware_pipeline(),
+    validation_engine=get_validation_engine(),
+)
 
 
 def get_request_router() -> RequestRouter:
@@ -179,7 +219,13 @@ def route_request_endpoint(
     payload: dict = Body(default={}),
     request_router: RequestRouter = Depends(get_request_router),
 ) -> dict:
-    result = request_router.route(payload.get("path", ""), payload.get("method"), payload.get("payload"))
+    result = request_router.route(
+        payload.get("path", ""),
+        payload.get("method"),
+        payload.get("payload"),
+        headers=payload.get("headers"),
+        query_params=payload.get("params"),
+    )
     return result.to_dict()
 
 
