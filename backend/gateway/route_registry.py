@@ -22,6 +22,10 @@ class InvalidMethodError(ValueError):
     pass
 
 
+class RouteVersionMismatchError(ValueError):
+    pass
+
+
 def match_path_template(template: str, path: str) -> Optional[dict]:
     """Match a concrete path against a route template, extracting `{name}` segments.
 
@@ -78,6 +82,7 @@ class Route:
     methods: tuple
     metadata: RouteMetadata
     registered_at: datetime
+    version: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -85,6 +90,7 @@ class Route:
             "methods": list(self.methods),
             "metadata": self.metadata.to_dict(),
             "registered_at": self.registered_at.isoformat(),
+            "version": self.version,
         }
 
 
@@ -101,6 +107,8 @@ class RouteRegistry:
         path: str,
         methods: Iterable[str],
         metadata: Optional[RouteMetadata] = None,
+        *,
+        version: Optional[str] = None,
     ) -> Route:
         if not path:
             raise ValueError("path is required")
@@ -120,6 +128,7 @@ class RouteRegistry:
                 methods=normalized_methods,
                 metadata=metadata,
                 registered_at=datetime.now(timezone.utc),
+                version=version,
             )
             self._routes[path] = route
             for tag in metadata.tags:
@@ -139,7 +148,7 @@ class RouteRegistry:
                     if not paths:
                         del self._tag_index[tag]
 
-    def resolve(self, path: str, method: Optional[str] = None) -> Route:
+    def resolve(self, path: str, method: Optional[str] = None, version: Optional[str] = None) -> Route:
         path = path if path.startswith("/") else f"/{path}"
         with self._lock:
             route = self._routes.get(path)
@@ -147,6 +156,10 @@ class RouteRegistry:
                 raise RouteNotFoundError(path)
             if method is not None and method.upper() not in route.methods:
                 raise InvalidMethodError(f"{method.upper()} not allowed for {path}")
+            if version is not None and route.version is not None and route.version != version:
+                raise RouteVersionMismatchError(
+                    f"{path} is registered for version {route.version}, not {version}"
+                )
             return route
 
     def list_routes(self, tag: Optional[str] = None) -> list:
@@ -178,6 +191,7 @@ def register_route_endpoint(
             payload.get("path", ""),
             payload.get("methods", []),
             RouteMetadata.from_dict(payload.get("metadata")),
+            version=payload.get("version"),
         )
     except RouteAlreadyRegisteredError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -197,12 +211,15 @@ def list_routes_endpoint(
 @router.get("/{route:path}")
 def get_route_endpoint(
     route: str,
+    version: Optional[str] = Query(default=None),
     registry: RouteRegistry = Depends(get_route_registry),
 ) -> dict:
     try:
-        found = registry.resolve(route)
+        found = registry.resolve(route, version=version)
     except RouteNotFoundError:
         raise HTTPException(status_code=404, detail="unknown route")
+    except RouteVersionMismatchError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     return found.to_dict()
 
 
