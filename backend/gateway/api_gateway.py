@@ -9,6 +9,8 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from .route_registry import RouteAlreadyRegisteredError, RouteRegistry
+
 
 class GatewayNotRunningError(RuntimeError):
     pass
@@ -72,10 +74,26 @@ class APIGateway:
         self._dispatch_count = 0
         self._started_at: Optional[datetime] = None
         self._lock = Lock()
+        self._route_registry = RouteRegistry()
 
-    def register_route(self, route: str, handler: Callable[[dict], Any]) -> None:
+    @property
+    def route_registry(self) -> RouteRegistry:
+        return self._route_registry
+
+    def register_route(
+        self,
+        route: str,
+        handler: Callable[[dict], Any],
+        *,
+        methods: tuple = ("POST",),
+        metadata: Optional[Any] = None,
+    ) -> None:
         with self._lock:
             self._handlers[route] = handler
+        try:
+            self._route_registry.register(route, methods, metadata)
+        except RouteAlreadyRegisteredError:
+            pass
 
     def start(self) -> GatewayStatus:
         with self._lock:
