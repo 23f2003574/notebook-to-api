@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from .gateway_analytics import GatewayAnalytics
 from .route_registry import RouteAlreadyRegisteredError, RouteRegistry
 
 
@@ -75,10 +76,15 @@ class APIGateway:
         self._started_at: Optional[datetime] = None
         self._lock = Lock()
         self._route_registry = RouteRegistry()
+        self._analytics = GatewayAnalytics()
 
     @property
     def route_registry(self) -> RouteRegistry:
         return self._route_registry
+
+    @property
+    def analytics(self) -> GatewayAnalytics:
+        return self._analytics
 
     def register_route(
         self,
@@ -120,7 +126,14 @@ class APIGateway:
                 raise UnknownRouteError(route)
             request = GatewayRequest(route=route, payload=payload or {})
             self._dispatch_count += 1
-        result = handler(request.payload)
+
+        analytics_id = self._analytics.record_request(route, "DISPATCH")
+        try:
+            result = handler(request.payload)
+        except Exception:
+            self._analytics.record_response(analytics_id, 500)
+            raise
+        self._analytics.record_response(analytics_id, 200)
         return GatewayResponse(request_id=request.request_id, route=route, result=result)
 
     def status(self) -> dict:
