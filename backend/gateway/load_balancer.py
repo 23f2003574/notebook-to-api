@@ -7,6 +7,8 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from .traffic_policy import TrafficDeniedError, TrafficPolicyEngine
+
 STRATEGIES = frozenset({"round_robin", "least_connections", "weighted_round_robin", "random"})
 
 
@@ -71,7 +73,13 @@ class LoadBalancerState:
 class LoadBalancer:
     """Distributes requests across registered backends using a configurable strategy."""
 
-    def __init__(self, strategy: str = "round_robin", *, random_source: Optional[random.Random] = None) -> None:
+    def __init__(
+        self,
+        strategy: str = "round_robin",
+        *,
+        random_source: Optional[random.Random] = None,
+        policy_engine: Optional[TrafficPolicyEngine] = None,
+    ) -> None:
         if strategy not in STRATEGIES:
             raise InvalidStrategyError(f"unsupported strategy: {strategy}")
         self._strategy = strategy
@@ -82,6 +90,7 @@ class LoadBalancer:
         self._total_selections = 0
         self._lock = Lock()
         self._random = random_source or random.Random()
+        self._policy_engine = policy_engine
 
     def register_backend(self, name: str, address: str, *, weight: int = 1) -> BackendNode:
         if not name:
@@ -148,8 +157,20 @@ class LoadBalancer:
     def _select_random(self, healthy: list) -> BackendNode:
         return self._random.choice(healthy)
 
-    def select(self) -> BackendNode:
+    def select(self, context: Optional[dict] = None) -> BackendNode:
         with self._lock:
+            if self._policy_engine is not None and context is not None:
+                decision = self._policy_engine.evaluate(context)
+                if decision is not None and decision.action == "deny":
+                    raise TrafficDeniedError(decision.reason)
+                if decision is not None and decision.action == "route":
+                    node = self._backends.get(decision.metadata.get("target"))
+                    if node is not None and node.healthy:
+                        node.selections += 1
+                        node.active_connections += 1
+                        self._total_selections += 1
+                        return node
+
             healthy = self._healthy_backends()
             if not healthy:
                 raise NoHealthyBackendError("no healthy backend available")
