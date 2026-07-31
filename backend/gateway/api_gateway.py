@@ -117,6 +117,15 @@ class APIGateway:
             self._started_at = None
             return self._status
 
+    def reset(self) -> None:
+        """Idempotently stop the gateway and clear handlers, dispatch count, and analytics."""
+        with self._lock:
+            self._status = GatewayStatus.STOPPED
+            self._started_at = None
+            self._handlers.clear()
+            self._dispatch_count = 0
+        self._analytics.reset()
+
     def dispatch(self, route: str, payload: Optional[dict] = None) -> GatewayResponse:
         with self._lock:
             if self._status != GatewayStatus.RUNNING:
