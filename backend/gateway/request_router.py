@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
+from .middleware import MiddlewareContext, MiddlewarePipeline, get_middleware_pipeline
 from .route_registry import (
     InvalidMethodError,
     Route,
@@ -47,6 +48,7 @@ class RoutingResult:
     route: Optional[Route]
     params: dict = field(default_factory=dict)
     reason: str = "matched"
+    middleware_response: Optional[Any] = None
 
     def to_dict(self) -> dict:
         return {
@@ -56,6 +58,7 @@ class RoutingResult:
             "route": self.route.to_dict() if self.route else None,
             "params": self.params,
             "reason": self.reason,
+            "middleware_response": self.middleware_response,
         }
 
 
@@ -66,9 +69,11 @@ class RequestRouter:
         self,
         registry: RouteRegistry,
         fallback_handler: Optional[FallbackHandler] = None,
+        middleware_pipeline: Optional[MiddlewarePipeline] = None,
     ) -> None:
         self._registry = registry
         self._fallback_handler = fallback_handler
+        self._middleware_pipeline = middleware_pipeline
 
     def match(self, path: str, method: Optional[str] = None) -> RouteMatch:
         structural_match: Optional[Route] = None
@@ -130,14 +135,33 @@ class RequestRouter:
             reason=reason,
         )
 
-    def route(self, path: str, method: Optional[str] = None) -> RoutingResult:
+    def route(self, path: str, method: Optional[str] = None, payload: Optional[dict] = None) -> RoutingResult:
+        context: Optional[MiddlewareContext] = None
+        if self._middleware_pipeline is not None:
+            context = MiddlewareContext(path=path, method=method.upper() if method else "", payload=payload or {})
+            self._middleware_pipeline.execute_before(context)
+            if context.short_circuited:
+                result = RoutingResult(
+                    matched=False,
+                    path=path,
+                    method=context.method,
+                    route=None,
+                    reason="short_circuited",
+                    middleware_response=context.response,
+                )
+                self._middleware_pipeline.execute_after(context)
+                return result
+
         result = self.resolve(path, method)
-        if result.matched:
-            return result
-        return self.fallback(path, method, reason=result.reason)
+        if not result.matched:
+            result = self.fallback(path, method, reason=result.reason)
+
+        if context is not None:
+            self._middleware_pipeline.execute_after(context)
+        return result
 
 
-_request_router = RequestRouter(get_route_registry())
+_request_router = RequestRouter(get_route_registry(), middleware_pipeline=get_middleware_pipeline())
 
 
 def get_request_router() -> RequestRouter:
@@ -155,7 +179,7 @@ def route_request_endpoint(
     payload: dict = Body(default={}),
     request_router: RequestRouter = Depends(get_request_router),
 ) -> dict:
-    result = request_router.route(payload.get("path", ""), payload.get("method"))
+    result = request_router.route(payload.get("path", ""), payload.get("method"), payload.get("payload"))
     return result.to_dict()
 
 
