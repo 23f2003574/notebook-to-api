@@ -22,6 +22,26 @@ class InvalidMethodError(ValueError):
     pass
 
 
+def match_path_template(template: str, path: str) -> Optional[dict]:
+    """Match a concrete path against a route template, extracting `{name}` segments.
+
+    Returns the extracted parameters as a dict, or None if the path does not
+    match the template's shape.
+    """
+
+    template_segments = [segment for segment in template.split("/") if segment != ""]
+    path_segments = [segment for segment in path.split("/") if segment != ""]
+    if len(template_segments) != len(path_segments):
+        return None
+    params: dict = {}
+    for template_segment, path_segment in zip(template_segments, path_segments):
+        if template_segment.startswith("{") and template_segment.endswith("}"):
+            params[template_segment[1:-1]] = path_segment
+        elif template_segment != path_segment:
+            return None
+    return params
+
+
 @dataclass(frozen=True)
 class RouteMetadata:
     """Descriptive information attached to a registered route."""
