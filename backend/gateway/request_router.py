@@ -5,6 +5,7 @@ from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
+from .load_balancer import LoadBalancer, NoHealthyBackendError, get_load_balancer
 from .middleware import MiddlewareContext, MiddlewarePipeline, get_middleware_pipeline
 from .request_validation import RequestValidationEngine, UnknownValidationRuleError, get_validation_engine
 from .route_registry import (
@@ -51,6 +52,7 @@ class RoutingResult:
     reason: str = "matched"
     middleware_response: Optional[Any] = None
     validation_errors: tuple = field(default_factory=tuple)
+    backend: Optional[dict] = None
 
     def to_dict(self) -> dict:
         return {
@@ -62,6 +64,7 @@ class RoutingResult:
             "reason": self.reason,
             "middleware_response": self.middleware_response,
             "validation_errors": list(self.validation_errors),
+            "backend": self.backend,
         }
 
 
@@ -74,11 +77,13 @@ class RequestRouter:
         fallback_handler: Optional[FallbackHandler] = None,
         middleware_pipeline: Optional[MiddlewarePipeline] = None,
         validation_engine: Optional[RequestValidationEngine] = None,
+        load_balancer: Optional[LoadBalancer] = None,
     ) -> None:
         self._registry = registry
         self._fallback_handler = fallback_handler
         self._middleware_pipeline = middleware_pipeline
         self._validation_engine = validation_engine
+        self._load_balancer = load_balancer
 
     def match(self, path: str, method: Optional[str] = None) -> RouteMatch:
         structural_match: Optional[Route] = None
@@ -168,7 +173,8 @@ class RequestRouter:
         result = self.resolve(path, method)
         if not result.matched:
             result = self.fallback(path, method, reason=result.reason)
-        elif self._validation_engine is not None:
+
+        if result.matched and self._validation_engine is not None:
             try:
                 rule = self._validation_engine.get_rule(result.route.path)
             except UnknownValidationRuleError:
@@ -191,6 +197,29 @@ class RequestRouter:
                         reason="validation_failed",
                         validation_errors=tuple(validation.errors),
                     )
+
+        if result.matched and self._load_balancer is not None:
+            try:
+                node = self._load_balancer.select()
+            except NoHealthyBackendError:
+                result = RoutingResult(
+                    matched=False,
+                    path=path,
+                    method=result.method,
+                    route=result.route,
+                    params=result.params,
+                    reason="no_healthy_backend",
+                )
+            else:
+                result = RoutingResult(
+                    matched=True,
+                    path=path,
+                    method=result.method,
+                    route=result.route,
+                    params=result.params,
+                    reason=result.reason,
+                    backend=node.to_dict(),
+                )
 
         if context is not None:
             self._middleware_pipeline.execute_after(context)
