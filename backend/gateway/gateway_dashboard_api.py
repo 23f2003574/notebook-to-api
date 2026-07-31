@@ -104,6 +104,9 @@ class GatewayDashboardAPI:
     def metrics(self) -> dict:
         return self._analytics.compute_statistics().to_dict()
 
+    def routes(self) -> list:
+        return [route.to_dict() for route in self._route_registry.list_routes()]
+
     def health(self) -> GatewayHealth:
         status = self._gateway.status()
         gateway_running = status["status"] == "running"
