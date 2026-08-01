@@ -7,6 +7,16 @@ from threading import Lock
 from time import perf_counter
 from typing import Optional
 
+from fastapi import APIRouter, Body, Depends, HTTPException
+
+from .resource_pool import (
+    PoolAlreadyExistsError,
+    PoolType,
+    ResourcePoolManager,
+    UnknownPoolError,
+    get_resource_pool_manager,
+)
+
 
 class UnknownSessionError(KeyError):
     pass
@@ -189,3 +199,48 @@ _performance_profiler = PerformanceProfiler()
 
 def get_performance_profiler() -> PerformanceProfiler:
     return _performance_profiler
+
+
+pool_router = APIRouter(prefix="/performance/pools", tags=["resource-pool"])
+
+
+@pool_router.post("", status_code=201)
+def create_pool_endpoint(
+    payload: dict = Body(default={}),
+    manager: ResourcePoolManager = Depends(get_resource_pool_manager),
+) -> dict:
+    try:
+        pool_type = PoolType(payload.get("pool_type", ""))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="unknown pool type")
+    try:
+        pool = manager.create_pool(
+            payload.get("name", ""),
+            pool_type=pool_type,
+            min_size=payload.get("min_size", 0),
+            max_size=payload.get("max_size", 1),
+            idle_timeout_seconds=payload.get("idle_timeout_seconds"),
+        )
+    except PoolAlreadyExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return pool.to_dict()
+
+
+@pool_router.get("")
+def list_pools_endpoint(
+    manager: ResourcePoolManager = Depends(get_resource_pool_manager),
+) -> dict:
+    return {"pools": [pool.to_dict() for pool in manager.list_pools()]}
+
+
+@pool_router.get("/{pool}/stats")
+def pool_stats_endpoint(
+    pool: str,
+    manager: ResourcePoolManager = Depends(get_resource_pool_manager),
+) -> dict:
+    try:
+        return manager.stats(pool)
+    except UnknownPoolError:
+        raise HTTPException(status_code=404, detail="unknown pool")

@@ -48,6 +48,19 @@ from .profiler import (
     SessionNotRunningError,
     UnknownSessionError,
     get_performance_profiler,
+    pool_router,
+)
+from .resource_pool import (
+    PoolAlreadyExistsError,
+    PoolExhaustedError,
+    PoolType,
+    PooledResource,
+    ResourceNotAcquiredError,
+    ResourcePool,
+    ResourcePoolManager,
+    UnknownPoolError,
+    UnknownResourceError,
+    get_resource_pool_manager,
 )
 
 __all__ = [
@@ -88,4 +101,15 @@ __all__ = [
     "SessionNotRunningError",
     "UnknownSessionError",
     "get_performance_profiler",
+    "pool_router",
+    "PoolAlreadyExistsError",
+    "PoolExhaustedError",
+    "PoolType",
+    "PooledResource",
+    "ResourceNotAcquiredError",
+    "ResourcePool",
+    "ResourcePoolManager",
+    "UnknownPoolError",
+    "UnknownResourceError",
+    "get_resource_pool_manager",
 ]
