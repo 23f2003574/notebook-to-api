@@ -32,6 +32,13 @@ from .response_cache import (
     ResponseCacheMiddleware,
     get_response_cache_middleware,
 )
+from .cache_invalidation import (
+    CacheInvalidationService,
+    InvalidationRequest,
+    InvalidationResult,
+    InvalidationTrigger,
+    get_cache_invalidation_service,
+)
 
 __all__ = [
     "CacheEntry",
@@ -58,4 +65,9 @@ __all__ = [
     "CachedResponse",
     "ResponseCacheMiddleware",
     "get_response_cache_middleware",
+    "CacheInvalidationService",
+    "InvalidationRequest",
+    "InvalidationResult",
+    "InvalidationTrigger",
+    "get_cache_invalidation_service",
 ]

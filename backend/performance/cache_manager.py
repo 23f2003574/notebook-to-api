@@ -21,6 +21,11 @@ from .cache_eviction import (
     get_cache_eviction_engine,
 )
 from .response_cache import ResponseCacheMiddleware, get_response_cache_middleware
+from .cache_invalidation import (
+    CacheInvalidationService,
+    InvalidationTrigger,
+    get_cache_invalidation_service,
+)
 
 
 class CacheKeyError(KeyError):
@@ -152,6 +157,13 @@ class CacheManager:
                 misses=self._misses,
                 evictions=self._evictions,
             )
+
+    def keys(self, namespace: Optional[str] = None) -> list:
+        with self._lock:
+            if namespace is None:
+                return [entry.key for entry in self._entries.values()]
+            prefix = f"{namespace}:"
+            return [k[len(prefix):] for k in self._entries if k.startswith(prefix)]
 
 
 _cache_manager = CacheManager()
@@ -330,3 +342,49 @@ def invalidate_cached_responses_endpoint(
         path=payload.get("path"),
     )
     return {"invalidated": invalidated}
+
+
+def _parse_trigger(payload: dict) -> InvalidationTrigger:
+    try:
+        return InvalidationTrigger(payload.get("trigger", InvalidationTrigger.MANUAL.value))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="unknown invalidation trigger")
+
+
+@router.post("/invalidate")
+def invalidate_key_endpoint(
+    payload: dict = Body(default={}),
+    service: CacheInvalidationService = Depends(get_cache_invalidation_service),
+) -> dict:
+    key = payload.get("key", "")
+    trigger = _parse_trigger(payload)
+    try:
+        result = service.invalidate(key, namespace=payload.get("namespace", "default"), trigger=trigger)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return result.to_dict()
+
+
+@router.post("/invalidate-pattern")
+def invalidate_pattern_endpoint(
+    payload: dict = Body(default={}),
+    service: CacheInvalidationService = Depends(get_cache_invalidation_service),
+) -> dict:
+    pattern = payload.get("pattern", "")
+    trigger = _parse_trigger(payload)
+    try:
+        result = service.invalidate_pattern(
+            pattern, namespace=payload.get("namespace", "default"), trigger=trigger
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return result.to_dict()
+
+
+@router.delete("/namespace/{namespace}")
+def invalidate_namespace_endpoint(
+    namespace: str,
+    service: CacheInvalidationService = Depends(get_cache_invalidation_service),
+) -> dict:
+    result = service.invalidate_namespace(namespace)
+    return result.to_dict()

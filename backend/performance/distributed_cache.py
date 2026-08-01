@@ -102,6 +102,21 @@ class DistributedCacheAdapter:
             raise KeyError(key)
         del connection.store[key]
 
+    def keys(self) -> list:
+        return list(self._active_connection().store.keys())
+
+    def clear(self) -> int:
+        connection = self._active_connection()
+        count = len(connection.store)
+        connection.store.clear()
+        return count
+
+    def active_backend_name(self) -> Optional[str]:
+        try:
+            return self._active_connection().config.name
+        except NoAvailableBackendError:
+            return None
+
     def set_backend_health(self, name: str, *, healthy: bool) -> None:
         with self._lock:
             connection = self._connections.get(name)
