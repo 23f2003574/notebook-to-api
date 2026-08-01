@@ -71,7 +71,18 @@ from .compression import (
     UnsupportedAlgorithmError,
     get_compression_engine,
 )
-from .dashboard import PerformanceDashboardAPI, get_performance_dashboard_api
+from .dashboard import (
+    PerformanceDashboardAPI,
+    get_performance_dashboard_api,
+    export_router,
+)
+from .export_service import (
+    ExportFormat,
+    ExportManifest,
+    PerformanceExport,
+    PerformanceExportService,
+    get_performance_export_service,
+)
 
 __all__ = [
     "CacheEntry",
@@ -131,4 +142,10 @@ __all__ = [
     "get_compression_engine",
     "PerformanceDashboardAPI",
     "get_performance_dashboard_api",
+    "export_router",
+    "ExportFormat",
+    "ExportManifest",
+    "PerformanceExport",
+    "PerformanceExportService",
+    "get_performance_export_service",
 ]

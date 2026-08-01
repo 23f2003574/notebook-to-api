@@ -2,6 +2,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
+from fastapi import APIRouter, Depends, HTTPException
+
+from .export_service import (
+    ExportFormat,
+    PerformanceExportService,
+    get_performance_export_service,
+)
+
 if TYPE_CHECKING:
     from .cache_manager import CacheManager
     from .in_memory_cache import InMemoryCache
@@ -102,3 +110,57 @@ def get_performance_dashboard_api() -> PerformanceDashboardAPI:
             compression_engine=get_compression_engine(),
         )
     return _performance_dashboard_api
+
+
+export_router = APIRouter(prefix="/performance/export", tags=["performance-export"])
+
+
+def _parse_format(value: str) -> ExportFormat:
+    try:
+        return ExportFormat(value)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="unknown export format")
+
+
+@export_router.get("/metrics")
+def export_metrics_endpoint(
+    format: str = "json",
+    sections: Optional[str] = None,
+    service: PerformanceExportService = Depends(get_performance_export_service),
+) -> dict:
+    fmt = _parse_format(format)
+    section_list = [s.strip() for s in sections.split(",")] if sections else None
+    export = service.export_metrics(fmt=fmt, sections=section_list)
+    return export.to_dict()
+
+
+@export_router.get("/cache")
+def export_cache_endpoint(
+    format: str = "json",
+    service: PerformanceExportService = Depends(get_performance_export_service),
+) -> dict:
+    fmt = _parse_format(format)
+    export = service.export_cache(fmt=fmt)
+    return export.to_dict()
+
+
+@export_router.get("/profiles")
+def export_profiles_endpoint(
+    format: str = "json",
+    session_ids: Optional[str] = None,
+    service: PerformanceExportService = Depends(get_performance_export_service),
+) -> dict:
+    fmt = _parse_format(format)
+    id_list = [s.strip() for s in session_ids.split(",")] if session_ids else None
+    export = service.export_profiles(fmt=fmt, session_ids=id_list)
+    return export.to_dict()
+
+
+@export_router.get("/all")
+def export_all_endpoint(
+    format: str = "json",
+    service: PerformanceExportService = Depends(get_performance_export_service),
+) -> dict:
+    fmt = _parse_format(format)
+    manifest = service.export_all(fmt=fmt)
+    return manifest.to_dict()
