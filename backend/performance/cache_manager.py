@@ -7,6 +7,8 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Depends
 
+from .in_memory_cache import InMemoryCache, get_in_memory_cache
+
 
 class CacheKeyError(KeyError):
     pass
@@ -197,3 +199,17 @@ def clear_cache_endpoint(
     cache: CacheManager = Depends(get_cache_manager),
 ) -> None:
     cache.clear(namespace=namespace)
+
+
+@router.get("/memory/stats")
+def get_memory_cache_stats_endpoint(
+    memory_cache: InMemoryCache = Depends(get_in_memory_cache),
+) -> dict:
+    return memory_cache.stats().to_dict()
+
+
+@router.post("/memory/clear", status_code=204)
+def clear_memory_cache_endpoint(
+    memory_cache: InMemoryCache = Depends(get_in_memory_cache),
+) -> None:
+    memory_cache.clear()
