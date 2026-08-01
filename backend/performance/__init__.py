@@ -12,6 +12,14 @@ from .in_memory_cache import (
     MemoryCacheStats,
     get_in_memory_cache,
 )
+from .distributed_cache import (
+    CacheBackend,
+    ConnectionConfig,
+    DistributedCacheAdapter,
+    NoAvailableBackendError,
+    UnknownBackendError,
+    get_distributed_cache_adapter,
+)
 
 __all__ = [
     "CacheEntry",
@@ -24,4 +32,10 @@ __all__ = [
     "InMemoryCache",
     "MemoryCacheStats",
     "get_in_memory_cache",
+    "CacheBackend",
+    "ConnectionConfig",
+    "DistributedCacheAdapter",
+    "NoAvailableBackendError",
+    "UnknownBackendError",
+    "get_distributed_cache_adapter",
 ]

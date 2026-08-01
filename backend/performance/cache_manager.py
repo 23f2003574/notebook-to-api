@@ -8,6 +8,13 @@ from typing import Any, Optional
 from fastapi import APIRouter, Body, HTTPException, Depends
 
 from .in_memory_cache import InMemoryCache, get_in_memory_cache
+from .distributed_cache import (
+    CacheBackend,
+    ConnectionConfig,
+    DistributedCacheAdapter,
+    UnknownBackendError,
+    get_distributed_cache_adapter,
+)
 
 
 class CacheKeyError(KeyError):
@@ -168,6 +175,13 @@ def put_cache_endpoint(
     return entry.to_dict()
 
 
+@router.get("/backend")
+def list_backends_endpoint(
+    adapter: DistributedCacheAdapter = Depends(get_distributed_cache_adapter),
+) -> dict:
+    return {"backends": adapter.list_backends()}
+
+
 @router.get("/{key}")
 def get_cache_endpoint(
     key: str,
@@ -213,3 +227,34 @@ def clear_memory_cache_endpoint(
     memory_cache: InMemoryCache = Depends(get_in_memory_cache),
 ) -> None:
     memory_cache.clear()
+
+
+@router.post("/backend", status_code=201)
+def connect_backend_endpoint(
+    payload: dict = Body(default={}),
+    adapter: DistributedCacheAdapter = Depends(get_distributed_cache_adapter),
+) -> dict:
+    try:
+        backend = CacheBackend(payload.get("backend", ""))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="unknown backend type")
+    config = ConnectionConfig(
+        name=payload.get("name", ""),
+        backend=backend,
+        host=payload.get("host", "localhost"),
+        port=payload.get("port", 6379),
+        timeout_seconds=payload.get("timeout_seconds", 5.0),
+        priority=payload.get("priority", 0),
+        extra=payload.get("extra", {}),
+    )
+    if not config.name:
+        raise HTTPException(status_code=422, detail="name is required")
+    connection = adapter.connect(config)
+    return connection.to_dict()
+
+
+@router.get("/backend/health")
+def backend_health_endpoint(
+    adapter: DistributedCacheAdapter = Depends(get_distributed_cache_adapter),
+) -> dict:
+    return {"backends": adapter.health_check()}
