@@ -16,6 +16,7 @@ from .resource_pool import (
     UnknownPoolError,
     get_resource_pool_manager,
 )
+from .dashboard import PerformanceDashboardAPI, get_performance_dashboard_api
 
 
 class UnknownSessionError(KeyError):
@@ -193,6 +194,10 @@ class PerformanceProfiler:
                 timeline=list(session.timeline),
             )
 
+    def list_sessions(self) -> list:
+        with self._lock:
+            return list(self._sessions.values())
+
 
 _performance_profiler = PerformanceProfiler()
 
@@ -244,3 +249,34 @@ def pool_stats_endpoint(
         return manager.stats(pool)
     except UnknownPoolError:
         raise HTTPException(status_code=404, detail="unknown pool")
+
+
+dashboard_router = APIRouter(prefix="/performance/dashboard", tags=["performance-dashboard"])
+
+
+@dashboard_router.get("")
+def dashboard_overview_endpoint(
+    dashboard: PerformanceDashboardAPI = Depends(get_performance_dashboard_api),
+) -> dict:
+    return dashboard.overview()
+
+
+@dashboard_router.get("/cache")
+def dashboard_cache_endpoint(
+    dashboard: PerformanceDashboardAPI = Depends(get_performance_dashboard_api),
+) -> dict:
+    return dashboard.cache()
+
+
+@dashboard_router.get("/resources")
+def dashboard_resources_endpoint(
+    dashboard: PerformanceDashboardAPI = Depends(get_performance_dashboard_api),
+) -> dict:
+    return dashboard.resources()
+
+
+@dashboard_router.get("/connections")
+def dashboard_connections_endpoint(
+    dashboard: PerformanceDashboardAPI = Depends(get_performance_dashboard_api),
+) -> dict:
+    return dashboard.connections()

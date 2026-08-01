@@ -49,6 +49,7 @@ from .profiler import (
     UnknownSessionError,
     get_performance_profiler,
     pool_router,
+    dashboard_router,
 )
 from .resource_pool import (
     PoolAlreadyExistsError,
@@ -70,6 +71,7 @@ from .compression import (
     UnsupportedAlgorithmError,
     get_compression_engine,
 )
+from .dashboard import PerformanceDashboardAPI, get_performance_dashboard_api
 
 __all__ = [
     "CacheEntry",
@@ -110,6 +112,7 @@ __all__ = [
     "UnknownSessionError",
     "get_performance_profiler",
     "pool_router",
+    "dashboard_router",
     "PoolAlreadyExistsError",
     "PoolExhaustedError",
     "PoolType",
@@ -126,4 +129,6 @@ __all__ = [
     "CompressionResult",
     "UnsupportedAlgorithmError",
     "get_compression_engine",
+    "PerformanceDashboardAPI",
+    "get_performance_dashboard_api",
 ]
