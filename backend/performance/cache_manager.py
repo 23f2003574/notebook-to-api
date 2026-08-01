@@ -20,6 +20,7 @@ from .cache_eviction import (
     EvictionPolicy,
     get_cache_eviction_engine,
 )
+from .response_cache import ResponseCacheMiddleware, get_response_cache_middleware
 
 
 class CacheKeyError(KeyError):
@@ -201,6 +202,24 @@ def get_eviction_config_endpoint(
     return engine.config()
 
 
+@router.get("/responses")
+def list_cached_responses_endpoint(
+    response_cache: ResponseCacheMiddleware = Depends(get_response_cache_middleware),
+) -> dict:
+    stats = response_cache.stats()
+    return {
+        "responses": [cached.to_dict() for cached in response_cache.list_cached()],
+        **stats,
+    }
+
+
+@router.delete("/responses", status_code=204)
+def clear_cached_responses_endpoint(
+    response_cache: ResponseCacheMiddleware = Depends(get_response_cache_middleware),
+) -> None:
+    response_cache.invalidate()
+
+
 @router.get("/{key}")
 def get_cache_endpoint(
     key: str,
@@ -299,3 +318,15 @@ def configure_eviction_endpoint(
         raise HTTPException(status_code=422, detail=str(exc))
     result = engine.evict(memory_cache)
     return result.to_dict()
+
+
+@router.post("/responses/invalidate")
+def invalidate_cached_responses_endpoint(
+    payload: dict = Body(default={}),
+    response_cache: ResponseCacheMiddleware = Depends(get_response_cache_middleware),
+) -> dict:
+    invalidated = response_cache.invalidate(
+        key=payload.get("key"),
+        path=payload.get("path"),
+    )
+    return {"invalidated": invalidated}

@@ -8,6 +8,7 @@ from typing import Any, Callable, Optional
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from .rate_limiter import RateLimiter, RateLimitExceededError, UnknownRateLimitClientError, get_rate_limiter
+from ..performance.response_cache import CacheContext, get_response_cache_middleware
 
 BeforeHook = Callable[["MiddlewareContext"], None]
 AfterHook = Callable[["MiddlewareContext"], None]
@@ -190,6 +191,42 @@ class RateLimitingMiddleware:
             pass
 
 
+class ResponseCachingMiddleware:
+    """Built-in middleware that serves cached GET responses and stores fresh ones."""
+
+    def __init__(self, *, ttl_seconds: Optional[float] = None) -> None:
+        self.ttl_seconds = ttl_seconds
+
+    def before(self, context: MiddlewareContext) -> None:
+        cache = get_response_cache_middleware()
+        cache_context = CacheContext(
+            method=context.method,
+            path=context.path,
+            query_params=context.payload.get("query_params", {}),
+        )
+        cached = cache.before_request(cache_context)
+        if cached is not None:
+            context.short_circuited = True
+            context.response = cached.body
+            context.state["cache_status"] = "hit"
+        else:
+            context.state["cache_status"] = "miss"
+
+    def after(self, context: MiddlewareContext) -> None:
+        if context.state.get("cache_status") == "hit":
+            return
+        cache = get_response_cache_middleware()
+        cache_context = CacheContext(
+            method=context.method,
+            path=context.path,
+            query_params=context.payload.get("query_params", {}),
+            status_code=context.payload.get("status_code", 200),
+            body=context.response,
+            ttl_seconds=self.ttl_seconds,
+        )
+        cache.after_response(cache_context)
+
+
 def _build_authentication(config: dict):
     return AuthenticationMiddleware(config.get("required_token", "")).before, None
 
@@ -211,12 +248,18 @@ def _build_rate_limiting(config: dict):
     return RateLimitingMiddleware(get_rate_limiter(), client_key=config.get("client_key", "client")).before, None
 
 
+def _build_response_caching(config: dict):
+    instance = ResponseCachingMiddleware(ttl_seconds=config.get("ttl_seconds"))
+    return instance.before, instance.after
+
+
 BUILTIN_MIDDLEWARE_FACTORIES = {
     "authentication": _build_authentication,
     "logging": _build_logging,
     "cors": _build_cors,
     "compression": _build_compression,
     "rate_limiting": _build_rate_limiting,
+    "response_caching": _build_response_caching,
 }
 
 

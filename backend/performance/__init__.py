@@ -26,6 +26,12 @@ from .cache_eviction import (
     EvictionResult,
     get_cache_eviction_engine,
 )
+from .response_cache import (
+    CacheContext,
+    CachedResponse,
+    ResponseCacheMiddleware,
+    get_response_cache_middleware,
+)
 
 __all__ = [
     "CacheEntry",
@@ -48,4 +54,8 @@ __all__ = [
     "EvictionPolicy",
     "EvictionResult",
     "get_cache_eviction_engine",
+    "CacheContext",
+    "CachedResponse",
+    "ResponseCacheMiddleware",
+    "get_response_cache_middleware",
 ]
