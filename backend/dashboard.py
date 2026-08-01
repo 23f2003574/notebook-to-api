@@ -48,6 +48,16 @@ from backend.plugins.plugin_analytics import router as plugin_analytics_router
 from backend.plugins.dashboard import router as plugin_dashboard_router
 from backend.plugins.plugin_registry import router as plugin_registry_router
 from backend.plugins.bootstrap import bootstrap_plugin_framework
+from backend.performance.cache_manager import (
+    router as performance_cache_router,
+    profile_router as performance_profile_router,
+)
+from backend.performance.profiler import (
+    pool_router as performance_pool_router,
+    dashboard_router as performance_dashboard_router,
+)
+from backend.performance.dashboard import export_router as performance_export_router
+from backend.performance.bootstrap import bootstrap_performance_subsystem
 
 app = FastAPI(
     title="notebook-to-api Dashboard",
@@ -142,6 +152,14 @@ app.include_router(plugin_analytics_router)
 app.include_router(plugin_dashboard_router)
 app.include_router(plugin_registry_router)
 bootstrap_plugin_framework()
+
+# Caching & Performance Optimization subsystem
+app.include_router(performance_cache_router)
+app.include_router(performance_profile_router)
+app.include_router(performance_pool_router)
+app.include_router(performance_dashboard_router)
+app.include_router(performance_export_router)
+bootstrap_performance_subsystem()
 
 
 @app.get("/")

@@ -83,6 +83,15 @@ from .export_service import (
     PerformanceExportService,
     get_performance_export_service,
 )
+from .bootstrap import (
+    PerformanceBootstrap,
+    PerformanceBootstrapError,
+    PerformanceBootstrapValidationResult,
+    PerformanceNotInitializedError,
+    UnknownServiceError,
+    bootstrap_performance_subsystem,
+    get_performance_bootstrap,
+)
 
 __all__ = [
     "CacheEntry",
@@ -148,4 +157,11 @@ __all__ = [
     "PerformanceExport",
     "PerformanceExportService",
     "get_performance_export_service",
+    "PerformanceBootstrap",
+    "PerformanceBootstrapError",
+    "PerformanceBootstrapValidationResult",
+    "PerformanceNotInitializedError",
+    "UnknownServiceError",
+    "bootstrap_performance_subsystem",
+    "get_performance_bootstrap",
 ]
