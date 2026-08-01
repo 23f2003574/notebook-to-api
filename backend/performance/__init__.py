@@ -20,6 +20,12 @@ from .distributed_cache import (
     UnknownBackendError,
     get_distributed_cache_adapter,
 )
+from .cache_eviction import (
+    CacheEvictionEngine,
+    EvictionPolicy,
+    EvictionResult,
+    get_cache_eviction_engine,
+)
 
 __all__ = [
     "CacheEntry",
@@ -38,4 +44,8 @@ __all__ = [
     "NoAvailableBackendError",
     "UnknownBackendError",
     "get_distributed_cache_adapter",
+    "CacheEvictionEngine",
+    "EvictionPolicy",
+    "EvictionResult",
+    "get_cache_eviction_engine",
 ]

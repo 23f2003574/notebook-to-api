@@ -15,6 +15,11 @@ from .distributed_cache import (
     UnknownBackendError,
     get_distributed_cache_adapter,
 )
+from .cache_eviction import (
+    CacheEvictionEngine,
+    EvictionPolicy,
+    get_cache_eviction_engine,
+)
 
 
 class CacheKeyError(KeyError):
@@ -182,6 +187,20 @@ def list_backends_endpoint(
     return {"backends": adapter.list_backends()}
 
 
+@router.get("/eviction/stats")
+def eviction_stats_endpoint(
+    engine: CacheEvictionEngine = Depends(get_cache_eviction_engine),
+) -> dict:
+    return engine.stats()
+
+
+@router.get("/eviction")
+def get_eviction_config_endpoint(
+    engine: CacheEvictionEngine = Depends(get_cache_eviction_engine),
+) -> dict:
+    return engine.config()
+
+
 @router.get("/{key}")
 def get_cache_endpoint(
     key: str,
@@ -258,3 +277,25 @@ def backend_health_endpoint(
     adapter: DistributedCacheAdapter = Depends(get_distributed_cache_adapter),
 ) -> dict:
     return {"backends": adapter.health_check()}
+
+
+@router.post("/eviction", status_code=201)
+def configure_eviction_endpoint(
+    payload: dict = Body(default={}),
+    engine: CacheEvictionEngine = Depends(get_cache_eviction_engine),
+    memory_cache: InMemoryCache = Depends(get_in_memory_cache),
+) -> dict:
+    try:
+        policy = EvictionPolicy(payload.get("policy", EvictionPolicy.LRU.value))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="unknown eviction policy")
+    try:
+        engine.configure(
+            policy=policy,
+            max_entries=payload.get("max_entries"),
+            max_memory_bytes=payload.get("max_memory_bytes"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    result = engine.evict(memory_cache)
+    return result.to_dict()

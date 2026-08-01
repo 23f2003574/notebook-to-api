@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from threading import RLock
 from typing import Any, Optional
@@ -16,6 +16,8 @@ class CacheNode:
     created_at: datetime
     expires_at: Optional[datetime]
     size_bytes: int
+    last_accessed_at: datetime
+    access_count: int = 0
 
     def is_expired(self, *, now: Optional[datetime] = None) -> bool:
         if self.expires_at is None:
@@ -29,6 +31,8 @@ class CacheNode:
             "created_at": self.created_at.isoformat(),
             "expires_at": self.expires_at.isoformat() if self.expires_at else None,
             "size_bytes": self.size_bytes,
+            "last_accessed_at": self.last_accessed_at.isoformat(),
+            "access_count": self.access_count,
         }
 
 
@@ -71,6 +75,7 @@ class InMemoryCache:
             created_at=now,
             expires_at=now + timedelta(seconds=ttl_seconds) if ttl_seconds else None,
             size_bytes=sys.getsizeof(value),
+            last_accessed_at=now,
         )
         with self._lock:
             self._nodes[key] = node
@@ -87,7 +92,17 @@ class InMemoryCache:
                 self._misses += 1
                 raise KeyError(key)
             self._hits += 1
+            node = replace(
+                node,
+                last_accessed_at=datetime.now(timezone.utc),
+                access_count=node.access_count + 1,
+            )
+            self._nodes[key] = node
             return node
+
+    def items(self) -> list:
+        with self._lock:
+            return list(self._nodes.items())
 
     def contains(self, key: str) -> bool:
         with self._lock:
