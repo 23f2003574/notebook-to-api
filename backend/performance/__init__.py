@@ -5,6 +5,7 @@ from .cache_manager import (
     CacheStats,
     get_cache_manager,
     router as cache_manager_router,
+    profile_router,
 )
 from .in_memory_cache import (
     CacheNode,
@@ -39,6 +40,15 @@ from .cache_invalidation import (
     InvalidationTrigger,
     get_cache_invalidation_service,
 )
+from .profiler import (
+    PerformanceProfiler,
+    PerformanceReport,
+    ProfileSession,
+    SessionAlreadyExistsError,
+    SessionNotRunningError,
+    UnknownSessionError,
+    get_performance_profiler,
+)
 
 __all__ = [
     "CacheEntry",
@@ -47,6 +57,7 @@ __all__ = [
     "CacheStats",
     "get_cache_manager",
     "cache_manager_router",
+    "profile_router",
     "CacheNode",
     "InMemoryCache",
     "MemoryCacheStats",
@@ -70,4 +81,11 @@ __all__ = [
     "InvalidationResult",
     "InvalidationTrigger",
     "get_cache_invalidation_service",
+    "PerformanceProfiler",
+    "PerformanceReport",
+    "ProfileSession",
+    "SessionAlreadyExistsError",
+    "SessionNotRunningError",
+    "UnknownSessionError",
+    "get_performance_profiler",
 ]

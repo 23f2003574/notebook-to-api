@@ -26,6 +26,13 @@ from .cache_invalidation import (
     InvalidationTrigger,
     get_cache_invalidation_service,
 )
+from .profiler import (
+    PerformanceProfiler,
+    SessionAlreadyExistsError,
+    SessionNotRunningError,
+    UnknownSessionError,
+    get_performance_profiler,
+)
 
 
 class CacheKeyError(KeyError):
@@ -388,3 +395,51 @@ def invalidate_namespace_endpoint(
 ) -> dict:
     result = service.invalidate_namespace(namespace)
     return result.to_dict()
+
+
+profile_router = APIRouter(prefix="/performance/profile", tags=["performance-profiler"])
+
+
+@profile_router.post("/start", status_code=201)
+def start_profile_endpoint(
+    payload: dict = Body(default={}),
+    profiler: PerformanceProfiler = Depends(get_performance_profiler),
+) -> dict:
+    try:
+        session = profiler.start(payload.get("name", ""), session_id=payload.get("session_id"))
+    except SessionAlreadyExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return session.to_dict()
+
+
+@profile_router.post("/stop")
+def stop_profile_endpoint(
+    payload: dict = Body(default={}),
+    profiler: PerformanceProfiler = Depends(get_performance_profiler),
+) -> dict:
+    try:
+        session = profiler.stop(
+            payload.get("session_id", ""),
+            cpu_usage_percent=payload.get("cpu_usage_percent"),
+            memory_usage_bytes=payload.get("memory_usage_bytes"),
+            io_time_ms=payload.get("io_time_ms"),
+        )
+    except UnknownSessionError:
+        raise HTTPException(status_code=404, detail="unknown session")
+    except SessionNotRunningError:
+        raise HTTPException(status_code=409, detail="session is not running")
+    return session.to_dict()
+
+
+@profile_router.get("/{session}")
+def get_profile_report_endpoint(
+    session: str,
+    profiler: PerformanceProfiler = Depends(get_performance_profiler),
+) -> dict:
+    try:
+        report = profiler.report(session)
+    except UnknownSessionError:
+        raise HTTPException(status_code=404, detail="unknown session")
+    return report.to_dict()
