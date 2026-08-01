@@ -9,6 +9,12 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from .rate_limiter import RateLimiter, RateLimitExceededError, UnknownRateLimitClientError, get_rate_limiter
 from ..performance.response_cache import CacheContext, get_response_cache_middleware
+from ..performance.compression import (
+    CompressionAlgorithm,
+    CompressionEngine,
+    UnsupportedAlgorithmError,
+    get_compression_engine,
+)
 
 BeforeHook = Callable[["MiddlewareContext"], None]
 AfterHook = Callable[["MiddlewareContext"], None]
@@ -227,6 +233,30 @@ class ResponseCachingMiddleware:
         cache.after_response(cache_context)
 
 
+class CompressionEngineMiddleware:
+    """Built-in middleware that negotiates and applies real payload compression."""
+
+    def __init__(
+        self,
+        *,
+        threshold_bytes: Optional[int] = None,
+        level: Optional[int] = None,
+        algorithm: Optional[CompressionAlgorithm] = None,
+    ) -> None:
+        self.threshold_bytes = threshold_bytes
+        self.level = level
+        self.algorithm = algorithm
+
+    def after(self, context: MiddlewareContext) -> None:
+        engine = get_compression_engine()
+        chosen = self.algorithm or engine.negotiate(context.payload.get("accept_encoding", ""))
+        body = context.response if context.response is not None else context.payload
+        result = engine.compress(
+            str(body), algorithm=chosen, threshold_bytes=self.threshold_bytes, level=self.level
+        )
+        context.state["compression"] = result.to_dict()
+
+
 def _build_authentication(config: dict):
     return AuthenticationMiddleware(config.get("required_token", "")).before, None
 
@@ -253,6 +283,14 @@ def _build_response_caching(config: dict):
     return instance.before, instance.after
 
 
+def _build_compression_engine(config: dict):
+    instance = CompressionEngineMiddleware(
+        threshold_bytes=config.get("threshold_bytes"),
+        level=config.get("level"),
+    )
+    return None, instance.after
+
+
 BUILTIN_MIDDLEWARE_FACTORIES = {
     "authentication": _build_authentication,
     "logging": _build_logging,
@@ -260,6 +298,7 @@ BUILTIN_MIDDLEWARE_FACTORIES = {
     "compression": _build_compression,
     "rate_limiting": _build_rate_limiting,
     "response_caching": _build_response_caching,
+    "compression_engine": _build_compression_engine,
 }
 
 
@@ -307,3 +346,44 @@ def remove_middleware_endpoint(
         pipeline.remove(middleware)
     except UnknownMiddlewareError:
         raise HTTPException(status_code=404, detail="unknown middleware")
+
+
+compression_router = APIRouter(prefix="/performance/compression", tags=["compression-engine"])
+
+
+@compression_router.get("")
+def get_compression_config_endpoint(
+    engine: CompressionEngine = Depends(get_compression_engine),
+) -> dict:
+    return {
+        **engine.profile.to_dict(),
+        "supported_algorithms": [alg.value for alg in CompressionAlgorithm if engine.supports(alg)],
+    }
+
+
+@compression_router.post("/test")
+def test_compression_endpoint(
+    payload: dict = Body(default={}),
+    engine: CompressionEngine = Depends(get_compression_engine),
+) -> dict:
+    data = payload.get("data", "")
+    accept_encoding = payload.get("accept_encoding")
+    if "algorithm" in payload:
+        try:
+            algorithm = CompressionAlgorithm(payload["algorithm"])
+        except ValueError:
+            raise HTTPException(status_code=422, detail="unknown compression algorithm")
+    else:
+        algorithm = engine.negotiate(accept_encoding or "")
+    try:
+        result = engine.compress(data, algorithm=algorithm)
+    except UnsupportedAlgorithmError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return result.to_dict()
+
+
+@compression_router.get("/stats")
+def compression_stats_endpoint(
+    engine: CompressionEngine = Depends(get_compression_engine),
+) -> dict:
+    return engine.stats()

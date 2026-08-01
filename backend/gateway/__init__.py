@@ -20,7 +20,7 @@ from .gateway_analytics import router as gateway_analytics_router
 from .gateway_dashboard_api import router as gateway_dashboard_router
 from .gateway_export import router as gateway_export_router
 from .load_balancer import router as load_balancer_router
-from .middleware import router as middleware_router
+from .middleware import router as middleware_router, compression_router
 from .rate_limiter import router as rate_limiter_router
 from .request_router import router as request_router_router
 from .request_validation import router as request_validation_router
@@ -44,6 +44,7 @@ all_routers = (
     gateway_analytics_router,
     gateway_dashboard_router,
     gateway_export_router,
+    compression_router,
 )
 
 __all__ = [
@@ -61,4 +62,5 @@ __all__ = [
     "GatewayNotInitializedError",
     "get_bootstrap",
     "all_routers",
+    "compression_router",
 ]

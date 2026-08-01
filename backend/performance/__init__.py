@@ -62,6 +62,14 @@ from .resource_pool import (
     UnknownResourceError,
     get_resource_pool_manager,
 )
+from .compression import (
+    CompressionAlgorithm,
+    CompressionEngine,
+    CompressionProfile,
+    CompressionResult,
+    UnsupportedAlgorithmError,
+    get_compression_engine,
+)
 
 __all__ = [
     "CacheEntry",
@@ -112,4 +120,10 @@ __all__ = [
     "UnknownPoolError",
     "UnknownResourceError",
     "get_resource_pool_manager",
+    "CompressionAlgorithm",
+    "CompressionEngine",
+    "CompressionProfile",
+    "CompressionResult",
+    "UnsupportedAlgorithmError",
+    "get_compression_engine",
 ]
