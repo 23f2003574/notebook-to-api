@@ -76,6 +76,13 @@ from .pipeline_scheduler import (
     get_pipeline_scheduler,
     router as pipeline_scheduler_router,
 )
+from .pipeline_analytics import (
+    PipelineAnalyticsService,
+    PipelineMetrics,
+    PipelineTrend,
+    get_pipeline_analytics_service,
+    router as pipeline_analytics_router,
+)
 from .pipeline_executor import (
     ExecutionState,
     InvalidStateTransitionError,
@@ -160,6 +167,11 @@ __all__ = [
     "UnknownScheduleError",
     "get_pipeline_scheduler",
     "pipeline_scheduler_router",
+    "PipelineAnalyticsService",
+    "PipelineMetrics",
+    "PipelineTrend",
+    "get_pipeline_analytics_service",
+    "pipeline_analytics_router",
     "ExecutionState",
     "InvalidStateTransitionError",
     "PipelineExecutionEngine",

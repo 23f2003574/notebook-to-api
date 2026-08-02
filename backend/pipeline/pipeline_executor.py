@@ -11,6 +11,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from .data_sources import DataSourceManager, get_data_source_manager
 from .etl_engine import ETLStage, ETLWorkflowEngine, UnknownWorkflowError, get_etl_workflow_engine
+from .pipeline_analytics import PipelineAnalyticsService, get_pipeline_analytics_service
 from .pipeline_scheduler import PipelineScheduler
 from .transformation_engine import DataTransformationEngine, get_data_transformation_engine
 
@@ -106,6 +107,7 @@ class PipelineExecutionEngine:
         workflows: ETLWorkflowEngine,
         sources: Optional[DataSourceManager] = None,
         transformation_engine: Optional[DataTransformationEngine] = None,
+        analytics: Optional[PipelineAnalyticsService] = None,
         **execute_kwargs,
     ) -> PipelineRun:
         with self._lock:
@@ -137,6 +139,7 @@ class PipelineExecutionEngine:
                 )
                 self._runs[run_id] = failed
                 self._pending_rows.pop(run_id, None)
+            self._record_metrics(analytics, failed, row_count=0)
             return failed
 
         progress = len(result.stages_completed) / len(ETLStage)
@@ -152,7 +155,22 @@ class PipelineExecutionEngine:
             )
             self._runs[run_id] = finished
             self._pending_rows.pop(run_id, None)
+        self._record_metrics(analytics, finished, row_count=result.row_count)
         return finished
+
+    @staticmethod
+    def _record_metrics(analytics: Optional[PipelineAnalyticsService], run: "PipelineRun", *, row_count: int) -> None:
+        if analytics is None:
+            return
+        duration_ms = 0.0
+        if run.started_at and run.finished_at:
+            duration_ms = (run.finished_at - run.started_at).total_seconds() * 1000
+        analytics.record(
+            run.workflow_name,
+            "success" if run.state == ExecutionState.SUCCEEDED else "failed",
+            duration_ms,
+            row_count,
+        )
 
     def cancel(self, run_id: str) -> PipelineRun:
         with self._lock:
@@ -217,6 +235,7 @@ def execute_endpoint(
     workflows: ETLWorkflowEngine = Depends(get_etl_workflow_engine),
     sources: DataSourceManager = Depends(get_data_source_manager),
     transformation_engine: DataTransformationEngine = Depends(get_data_transformation_engine),
+    analytics: PipelineAnalyticsService = Depends(get_pipeline_analytics_service),
 ) -> dict:
     try:
         run = engine.submit(payload.get("workflow_name", ""), payload.get("rows", []))
@@ -227,6 +246,7 @@ def execute_endpoint(
         workflows=workflows,
         sources=sources,
         transformation_engine=transformation_engine,
+        analytics=analytics,
     )
     return finished.to_dict()
 
