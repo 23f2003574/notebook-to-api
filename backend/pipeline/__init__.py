@@ -101,10 +101,18 @@ from .checkpoint_manager import (
     get_checkpoint_recovery_manager,
     router as checkpoint_manager_router,
 )
+from .export_service import (
+    ExportFormat,
+    ExportManifest,
+    PipelineExport,
+    PipelineExportService,
+    get_pipeline_export_service,
+)
 from .dashboard import (
     PipelineDashboardAPI,
     get_pipeline_dashboard_api,
     router as dashboard_router,
+    export_router as pipeline_export_router,
 )
 
 __all__ = [
@@ -191,7 +199,13 @@ __all__ = [
     "UnknownCheckpointError",
     "get_checkpoint_recovery_manager",
     "checkpoint_manager_router",
+    "ExportFormat",
+    "ExportManifest",
+    "PipelineExport",
+    "PipelineExportService",
+    "get_pipeline_export_service",
     "PipelineDashboardAPI",
     "get_pipeline_dashboard_api",
     "dashboard_router",
+    "pipeline_export_router",
 ]

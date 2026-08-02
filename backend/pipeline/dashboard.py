@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
+from .export_service import ExportFormat, PipelineExportService, get_pipeline_export_service
 from .pipeline_analytics import PipelineAnalyticsService, get_pipeline_analytics_service
 from .pipeline_executor import PipelineExecutionEngine, get_pipeline_execution_engine
 from .pipeline_scheduler import PipelineScheduler, get_pipeline_scheduler
@@ -106,3 +107,56 @@ def get_dashboard_schedules(api: PipelineDashboardAPI = Depends(get_pipeline_das
 @router.get("/analytics")
 def get_dashboard_analytics(api: PipelineDashboardAPI = Depends(get_pipeline_dashboard_api)) -> dict:
     return api.analytics()
+
+
+export_router = APIRouter(prefix="/pipelines/export", tags=["pipeline-export"])
+
+
+def _parse_format(value: str) -> ExportFormat:
+    try:
+        return ExportFormat(value)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="unknown export format")
+
+
+@export_router.get("/definitions")
+def export_definitions_endpoint(
+    format: str = "json",
+    names: Optional[str] = None,
+    service: PipelineExportService = Depends(get_pipeline_export_service),
+) -> dict:
+    fmt = _parse_format(format)
+    name_list = [name.strip() for name in names.split(",")] if names else None
+    export = service.export_pipeline(fmt=fmt, names=name_list)
+    return export.to_dict()
+
+
+@export_router.get("/runs")
+def export_runs_endpoint(
+    format: str = "json",
+    workflow_name: Optional[str] = None,
+    service: PipelineExportService = Depends(get_pipeline_export_service),
+) -> dict:
+    fmt = _parse_format(format)
+    export = service.export_runs(fmt=fmt, workflow_name=workflow_name)
+    return export.to_dict()
+
+
+@export_router.get("/schemas")
+def export_schemas_endpoint(
+    format: str = "json",
+    service: PipelineExportService = Depends(get_pipeline_export_service),
+) -> dict:
+    fmt = _parse_format(format)
+    export = service.export_schemas(fmt=fmt)
+    return export.to_dict()
+
+
+@export_router.get("/all")
+def export_all_endpoint(
+    format: str = "json",
+    service: PipelineExportService = Depends(get_pipeline_export_service),
+) -> dict:
+    fmt = _parse_format(format)
+    manifest = service.export_all(fmt=fmt)
+    return manifest.to_dict()
