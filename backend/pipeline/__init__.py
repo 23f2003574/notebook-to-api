@@ -18,6 +18,17 @@ from .data_sources import (
     get_data_source_manager,
     router as data_sources_router,
 )
+from .transformation_engine import (
+    DataTransformationEngine,
+    InvalidTransformationStepError,
+    OperationType,
+    TransformationResult,
+    TransformationStep,
+    UnknownColumnError,
+    UnsupportedOperationError,
+    get_data_transformation_engine,
+    router as transformation_engine_router,
+)
 
 __all__ = [
     "Pipeline",
@@ -36,4 +47,13 @@ __all__ = [
     "UnknownDataSourceError",
     "get_data_source_manager",
     "data_sources_router",
+    "DataTransformationEngine",
+    "InvalidTransformationStepError",
+    "OperationType",
+    "TransformationResult",
+    "TransformationStep",
+    "UnknownColumnError",
+    "UnsupportedOperationError",
+    "get_data_transformation_engine",
+    "transformation_engine_router",
 ]

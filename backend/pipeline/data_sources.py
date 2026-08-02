@@ -77,6 +77,8 @@ class DataSource:
     registered_at: datetime
     healthy: Optional[bool] = None
     last_checked_at: Optional[datetime] = None
+    read_count: int = 0
+    last_read_at: Optional[datetime] = None
 
     def to_dict(self) -> dict:
         return {
@@ -85,6 +87,8 @@ class DataSource:
             "registered_at": self.registered_at.isoformat(),
             "healthy": self.healthy,
             "last_checked_at": self.last_checked_at.isoformat() if self.last_checked_at else None,
+            "read_count": self.read_count,
+            "last_read_at": self.last_read_at.isoformat() if self.last_read_at else None,
         }
 
 
@@ -125,6 +129,19 @@ class DataSourceManager:
             if source is None:
                 raise UnknownDataSourceError(name)
             updated = replace(source, healthy=False, last_checked_at=datetime.now(timezone.utc))
+            self._sources[name] = updated
+            return updated
+
+    def mark_read(self, name: str) -> DataSource:
+        with self._lock:
+            source = self._sources.get(name)
+            if source is None:
+                raise UnknownDataSourceError(name)
+            updated = replace(
+                source,
+                read_count=source.read_count + 1,
+                last_read_at=datetime.now(timezone.utc),
+            )
             self._sources[name] = updated
             return updated
 
