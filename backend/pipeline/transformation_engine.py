@@ -7,6 +7,7 @@ from enum import Enum
 from threading import Lock
 from time import perf_counter
 from typing import Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
@@ -30,6 +31,10 @@ class UnsupportedOperationError(ValueError):
 
 
 class InvalidTransformationStepError(ValueError):
+    pass
+
+
+class UnknownTransformationResultError(KeyError):
     pass
 
 
@@ -76,9 +81,11 @@ class TransformationResult:
     duration_ms: float
     executed_at: datetime
     steps: tuple
+    result_id: str = field(default_factory=lambda: uuid4().hex)
 
     def to_dict(self) -> dict:
         return {
+            "result_id": self.result_id,
             "rows": [dict(row) for row in self.rows],
             "row_count": self.row_count,
             "duration_ms": self.duration_ms,
@@ -220,6 +227,13 @@ class DataTransformationEngine:
         if limit is not None:
             items = items[:limit]
         return items
+
+    def get_result(self, result_id: str) -> TransformationResult:
+        with self._lock:
+            for result in self._history:
+                if result.result_id == result_id:
+                    return result
+        raise UnknownTransformationResultError(result_id)
 
 
 _data_transformation_engine = DataTransformationEngine()

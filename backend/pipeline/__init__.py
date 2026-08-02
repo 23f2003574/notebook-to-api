@@ -25,9 +25,23 @@ from .transformation_engine import (
     TransformationResult,
     TransformationStep,
     UnknownColumnError,
+    UnknownTransformationResultError,
     UnsupportedOperationError,
     get_data_transformation_engine,
     router as transformation_engine_router,
+)
+from .etl_engine import (
+    ETLStage,
+    ETLWorkflow,
+    ETLWorkflowEngine,
+    ExecutionResult,
+    LoadTargetError,
+    POST_PROCESSING_ACTIONS,
+    UnknownWorkflowError,
+    UnsupportedPostProcessingActionError,
+    WorkflowAlreadyExistsError,
+    get_etl_workflow_engine,
+    router as etl_engine_router,
 )
 
 __all__ = [
@@ -53,7 +67,19 @@ __all__ = [
     "TransformationResult",
     "TransformationStep",
     "UnknownColumnError",
+    "UnknownTransformationResultError",
     "UnsupportedOperationError",
     "get_data_transformation_engine",
     "transformation_engine_router",
+    "ETLStage",
+    "ETLWorkflow",
+    "ETLWorkflowEngine",
+    "ExecutionResult",
+    "LoadTargetError",
+    "POST_PROCESSING_ACTIONS",
+    "UnknownWorkflowError",
+    "UnsupportedPostProcessingActionError",
+    "WorkflowAlreadyExistsError",
+    "get_etl_workflow_engine",
+    "etl_engine_router",
 ]
