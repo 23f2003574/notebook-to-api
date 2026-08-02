@@ -55,6 +55,17 @@ from .etl_engine import (
     get_etl_workflow_engine,
     router as etl_engine_router,
 )
+from .schema_registry import (
+    IncompatibleSchemaError,
+    SchemaAlreadyExistsError,
+    SchemaDefinition,
+    SchemaRegistry,
+    SchemaVersion,
+    UnknownSchemaError,
+    UnknownSchemaVersionError,
+    get_schema_registry,
+    router as schema_registry_router,
+)
 
 __all__ = [
     "Pipeline",
@@ -104,4 +115,13 @@ __all__ = [
     "WorkflowAlreadyExistsError",
     "get_etl_workflow_engine",
     "etl_engine_router",
+    "IncompatibleSchemaError",
+    "SchemaAlreadyExistsError",
+    "SchemaDefinition",
+    "SchemaRegistry",
+    "SchemaVersion",
+    "UnknownSchemaError",
+    "UnknownSchemaVersionError",
+    "get_schema_registry",
+    "schema_registry_router",
 ]

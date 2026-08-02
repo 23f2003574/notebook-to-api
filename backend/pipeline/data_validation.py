@@ -72,6 +72,8 @@ class ValidationReport:
     issues: tuple
     executed_at: datetime
     duration_ms: float
+    schema_name: Optional[str] = None
+    schema_version: Optional[int] = None
 
     def to_dict(self) -> dict:
         return {
@@ -82,6 +84,8 @@ class ValidationReport:
             "issues": [dict(issue) for issue in self.issues],
             "executed_at": self.executed_at.isoformat(),
             "duration_ms": self.duration_ms,
+            "schema_name": self.schema_name,
+            "schema_version": self.schema_version,
         }
 
 
@@ -189,7 +193,14 @@ class DataValidationEngine:
                 raise UnsupportedValidationTypeError(rule.rule_type)
         return issues
 
-    def validate(self, rows: list, rules: list) -> ValidationReport:
+    def validate(
+        self,
+        rows: list,
+        rules: list,
+        *,
+        schema_name: Optional[str] = None,
+        schema_version: Optional[int] = None,
+    ) -> ValidationReport:
         start = perf_counter()
         issues = self.check_quality(rows, rules)
         duration_ms = (perf_counter() - start) * 1000
@@ -201,6 +212,8 @@ class DataValidationEngine:
             issues=tuple(issues),
             executed_at=datetime.now(timezone.utc),
             duration_ms=duration_ms,
+            schema_name=schema_name,
+            schema_version=schema_version,
         )
         with self._lock:
             self._reports[result.report_id] = result
