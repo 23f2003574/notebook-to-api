@@ -45,6 +45,7 @@ class PipelineRun:
     submitted_at: datetime
     started_at: Optional[datetime]
     finished_at: Optional[datetime]
+    resumed_from_checkpoint: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -58,6 +59,7 @@ class PipelineRun:
             "submitted_at": self.submitted_at.isoformat(),
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+            "resumed_from_checkpoint": self.resumed_from_checkpoint,
         }
 
 
@@ -69,7 +71,14 @@ class PipelineExecutionEngine:
         self._pending_rows: dict = {}
         self._lock = Lock()
 
-    def submit(self, workflow_name: str, rows: list, *, schedule_id: Optional[str] = None) -> PipelineRun:
+    def submit(
+        self,
+        workflow_name: str,
+        rows: list,
+        *,
+        schedule_id: Optional[str] = None,
+        resumed_from_checkpoint: Optional[str] = None,
+    ) -> PipelineRun:
         if not workflow_name:
             raise ValueError("workflow_name is required")
         run = PipelineRun(
@@ -83,6 +92,7 @@ class PipelineExecutionEngine:
             submitted_at=datetime.now(timezone.utc),
             started_at=None,
             finished_at=None,
+            resumed_from_checkpoint=resumed_from_checkpoint,
         )
         with self._lock:
             self._runs[run.run_id] = run

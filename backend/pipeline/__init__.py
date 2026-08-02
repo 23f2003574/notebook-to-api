@@ -85,6 +85,15 @@ from .pipeline_executor import (
     get_pipeline_execution_engine,
     router as pipeline_executor_router,
 )
+from .checkpoint_manager import (
+    Checkpoint,
+    CheckpointRecoveryManager,
+    CheckpointType,
+    RecoveryState,
+    UnknownCheckpointError,
+    get_checkpoint_recovery_manager,
+    router as checkpoint_manager_router,
+)
 
 __all__ = [
     "Pipeline",
@@ -158,4 +167,11 @@ __all__ = [
     "UnknownRunError",
     "get_pipeline_execution_engine",
     "pipeline_executor_router",
+    "Checkpoint",
+    "CheckpointRecoveryManager",
+    "CheckpointType",
+    "RecoveryState",
+    "UnknownCheckpointError",
+    "get_checkpoint_recovery_manager",
+    "checkpoint_manager_router",
 ]
