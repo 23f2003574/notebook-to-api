@@ -114,6 +114,17 @@ from .dashboard import (
     router as dashboard_router,
     export_router as pipeline_export_router,
 )
+from .bootstrap import (
+    REQUIRED_SERVICES,
+    SUBSYSTEM_NAME,
+    PipelineBootstrap,
+    PipelineBootstrapError,
+    PipelineBootstrapValidationResult,
+    PipelineNotInitializedError,
+    UnknownServiceError,
+    bootstrap_pipeline_subsystem,
+    get_pipeline_bootstrap,
+)
 
 __all__ = [
     "Pipeline",
@@ -208,4 +219,13 @@ __all__ = [
     "get_pipeline_dashboard_api",
     "dashboard_router",
     "pipeline_export_router",
+    "REQUIRED_SERVICES",
+    "SUBSYSTEM_NAME",
+    "PipelineBootstrap",
+    "PipelineBootstrapError",
+    "PipelineBootstrapValidationResult",
+    "PipelineNotInitializedError",
+    "UnknownServiceError",
+    "bootstrap_pipeline_subsystem",
+    "get_pipeline_bootstrap",
 ]

@@ -58,6 +58,21 @@ from backend.performance.profiler import (
 )
 from backend.performance.dashboard import export_router as performance_export_router
 from backend.performance.bootstrap import bootstrap_performance_subsystem
+from backend.pipeline.data_sources import router as pipeline_data_sources_router
+from backend.pipeline.transformation_engine import router as pipeline_transformation_router
+from backend.pipeline.data_validation import router as pipeline_validation_router
+from backend.pipeline.etl_engine import router as pipeline_etl_router
+from backend.pipeline.schema_registry import router as pipeline_schema_registry_router
+from backend.pipeline.pipeline_scheduler import router as pipeline_scheduler_router
+from backend.pipeline.pipeline_executor import router as pipeline_executor_router
+from backend.pipeline.checkpoint_manager import router as pipeline_checkpoint_router
+from backend.pipeline.pipeline_analytics import router as pipeline_analytics_router
+from backend.pipeline.dashboard import (
+    router as pipeline_dashboard_router,
+    export_router as pipeline_export_router,
+)
+from backend.pipeline.pipeline_registry import router as pipeline_registry_router
+from backend.pipeline.bootstrap import bootstrap_pipeline_subsystem
 
 app = FastAPI(
     title="notebook-to-api Dashboard",
@@ -160,6 +175,44 @@ app.include_router(performance_pool_router)
 app.include_router(performance_dashboard_router)
 app.include_router(performance_export_router)
 bootstrap_performance_subsystem()
+
+# Data Pipeline & ETL Framework subsystem
+# Route ordering matters here for the same reason as the plugin subsystem
+# above: pipeline_registry_router's catch-all "/pipelines/{name}" route must
+# be included LAST, since any other router adding a static second-segment
+# path under "/pipelines/" (e.g. "/sources", "/schemas", "/schedules")
+# would otherwise be shadowed by it.
+#   - data_sources's bare "GET /pipelines/sources" would otherwise be
+#     shadowed by the registry's "/pipelines/{name}" route.
+#   - schema_registry's bare "GET /pipelines/schemas" would otherwise be
+#     shadowed by the registry's "/pipelines/{name}" route.
+#   - pipeline_scheduler's bare "GET /pipelines/schedules" would otherwise
+#     be shadowed by the registry's "/pipelines/{name}" route.
+#   - pipeline_executor's "GET /pipelines/runs" would otherwise be shadowed
+#     by the registry's "/pipelines/{name}" route (its "POST /execute" and
+#     "/runs/{run}" sub-paths don't collide with anything).
+#   - checkpoint_manager's bare "GET /pipelines/checkpoints" would otherwise
+#     be shadowed by the registry's "/pipelines/{name}" route.
+#   - pipeline_analytics's bare "GET /pipelines/analytics" would otherwise
+#     be shadowed by the registry's "/pipelines/{name}" route.
+#   - dashboard's bare "GET /pipelines/dashboard" would otherwise be
+#     shadowed by the registry's "/pipelines/{name}" route.
+# transformation_engine, data_validation, etl_engine, and export are
+# order-independent relative to the registry: none of them define a bare
+# 2-segment GET under "/pipelines/", so they never collide with "/{name}".
+app.include_router(pipeline_data_sources_router)
+app.include_router(pipeline_transformation_router)
+app.include_router(pipeline_validation_router)
+app.include_router(pipeline_etl_router)
+app.include_router(pipeline_schema_registry_router)
+app.include_router(pipeline_scheduler_router)
+app.include_router(pipeline_executor_router)
+app.include_router(pipeline_checkpoint_router)
+app.include_router(pipeline_analytics_router)
+app.include_router(pipeline_dashboard_router)
+app.include_router(pipeline_export_router)
+app.include_router(pipeline_registry_router)
+bootstrap_pipeline_subsystem()
 
 
 @app.get("/")
