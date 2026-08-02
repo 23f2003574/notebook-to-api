@@ -92,6 +92,11 @@ class PipelineAnalyticsService:
     def list_records(self, workflow_name: Optional[str] = None) -> list:
         return self._filtered_records(workflow_name)
 
+    def recent(self, limit: int = 10, workflow_name: Optional[str] = None) -> list:
+        """The most recently recorded metrics (by timestamp, not insertion order), newest first."""
+        records = self._filtered_records(workflow_name)
+        return sorted(records, key=lambda record: record.recorded_at, reverse=True)[:limit]
+
     def summary(self, workflow_name: Optional[str] = None) -> dict:
         records = self._filtered_records(workflow_name)
         execution_count = len(records)

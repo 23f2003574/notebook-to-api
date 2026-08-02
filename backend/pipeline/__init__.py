@@ -101,6 +101,11 @@ from .checkpoint_manager import (
     get_checkpoint_recovery_manager,
     router as checkpoint_manager_router,
 )
+from .dashboard import (
+    PipelineDashboardAPI,
+    get_pipeline_dashboard_api,
+    router as dashboard_router,
+)
 
 __all__ = [
     "Pipeline",
@@ -186,4 +191,7 @@ __all__ = [
     "UnknownCheckpointError",
     "get_checkpoint_recovery_manager",
     "checkpoint_manager_router",
+    "PipelineDashboardAPI",
+    "get_pipeline_dashboard_api",
+    "dashboard_router",
 ]
