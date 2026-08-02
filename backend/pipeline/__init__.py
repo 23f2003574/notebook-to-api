@@ -76,6 +76,15 @@ from .pipeline_scheduler import (
     get_pipeline_scheduler,
     router as pipeline_scheduler_router,
 )
+from .pipeline_executor import (
+    ExecutionState,
+    InvalidStateTransitionError,
+    PipelineExecutionEngine,
+    PipelineRun,
+    UnknownRunError,
+    get_pipeline_execution_engine,
+    router as pipeline_executor_router,
+)
 
 __all__ = [
     "Pipeline",
@@ -142,4 +151,11 @@ __all__ = [
     "UnknownScheduleError",
     "get_pipeline_scheduler",
     "pipeline_scheduler_router",
+    "ExecutionState",
+    "InvalidStateTransitionError",
+    "PipelineExecutionEngine",
+    "PipelineRun",
+    "UnknownRunError",
+    "get_pipeline_execution_engine",
+    "pipeline_executor_router",
 ]

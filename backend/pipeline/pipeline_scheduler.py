@@ -221,6 +221,31 @@ class PipelineScheduler:
             due = due[:limit]
         return due
 
+    def due(self, now: Optional[datetime] = None) -> list:
+        now = now or datetime.now(timezone.utc)
+        with self._lock:
+            items = list(self._schedules.values())
+        ready = [
+            schedule
+            for schedule in items
+            if schedule.status == "active" and schedule.next_run_at is not None and schedule.next_run_at <= now
+        ]
+        ready.sort(key=lambda schedule: schedule.next_run_at)
+        return ready
+
+    def mark_dispatched(self, schedule_id: str, *, now: Optional[datetime] = None) -> PipelineSchedule:
+        now = now or datetime.now(timezone.utc)
+        with self._lock:
+            existing = self._schedules.get(schedule_id)
+            if existing is None:
+                raise UnknownScheduleError(schedule_id)
+            if existing.trigger.trigger_type == TriggerType.ONE_TIME:
+                updated = replace(existing, status="completed", next_run_at=None, updated_at=now)
+            else:
+                updated = replace(existing, next_run_at=_compute_next_run(existing.trigger, now), updated_at=now)
+            self._schedules[schedule_id] = updated
+            return updated
+
 
 _pipeline_scheduler = PipelineScheduler()
 
