@@ -11,6 +11,13 @@ from uuid import uuid4
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from .data_sources import DataSourceManager, get_data_source_manager
+from .data_validation import (
+    DataValidationEngine,
+    InvalidValidationRuleError,
+    ValidationFailedError,
+    ValidationRule,
+    get_data_validation_engine,
+)
 from .transformation_engine import (
     DataTransformationEngine,
     InvalidTransformationStepError,
@@ -172,6 +179,13 @@ class ETLWorkflowEngine:
                 raise UnsupportedPostProcessingActionError(action)
         return tuple(actions)
 
+    def _validate_stage(
+        self, rows: list, validation: DataValidationEngine, rules: list, stage_label: str
+    ) -> None:
+        report = validation.validate(rows, rules)
+        if not report.passed:
+            raise ValidationFailedError(f"{stage_label} validation failed with {len(report.issues)} issue(s)")
+
     def execute(
         self,
         name: str,
@@ -179,6 +193,9 @@ class ETLWorkflowEngine:
         *,
         sources: Optional[DataSourceManager] = None,
         transformation_engine: Optional[DataTransformationEngine] = None,
+        validation: Optional[DataValidationEngine] = None,
+        pre_transform_rules: Optional[list] = None,
+        post_transform_rules: Optional[list] = None,
     ) -> ExecutionResult:
         workflow = self.get_workflow(name)
         transformation_engine = transformation_engine or DataTransformationEngine()
@@ -194,9 +211,13 @@ class ETLWorkflowEngine:
 
         try:
             extracted = self.extract(rows, sources=sources, source_name=workflow.source_name)
+            if validation is not None and pre_transform_rules:
+                self._validate_stage(extracted, validation, pre_transform_rules, ETLStage.EXTRACT.value)
             stages_completed.append(ETLStage.EXTRACT.value)
 
             transform_result = self.transform(extracted, list(workflow.transform_steps), transformation_engine)
+            if validation is not None and post_transform_rules:
+                self._validate_stage(list(transform_result.rows), validation, post_transform_rules, ETLStage.TRANSFORM.value)
             stages_completed.append(ETLStage.TRANSFORM.value)
             transform_result_id = transform_result.result_id
 
@@ -279,13 +300,22 @@ def execute_workflow_endpoint(
     engine: ETLWorkflowEngine = Depends(get_etl_workflow_engine),
     transformation_engine: DataTransformationEngine = Depends(get_data_transformation_engine),
     sources: DataSourceManager = Depends(get_data_source_manager),
+    validation: DataValidationEngine = Depends(get_data_validation_engine),
 ) -> dict:
+    try:
+        pre_transform_rules = [ValidationRule.from_dict(rule) for rule in payload.get("pre_transform_rules", [])]
+        post_transform_rules = [ValidationRule.from_dict(rule) for rule in payload.get("post_transform_rules", [])]
+    except (ValueError, InvalidValidationRuleError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     try:
         result = engine.execute(
             payload.get("name", ""),
             payload.get("rows", []),
             sources=sources,
             transformation_engine=transformation_engine,
+            validation=validation,
+            pre_transform_rules=pre_transform_rules,
+            post_transform_rules=post_transform_rules,
         )
     except UnknownWorkflowError:
         raise HTTPException(status_code=404, detail="unknown workflow")
