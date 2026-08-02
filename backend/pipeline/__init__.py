@@ -66,6 +66,16 @@ from .schema_registry import (
     get_schema_registry,
     router as schema_registry_router,
 )
+from .pipeline_scheduler import (
+    InvalidTriggerError,
+    PipelineSchedule,
+    PipelineScheduler,
+    ScheduleTrigger,
+    TriggerType,
+    UnknownScheduleError,
+    get_pipeline_scheduler,
+    router as pipeline_scheduler_router,
+)
 
 __all__ = [
     "Pipeline",
@@ -124,4 +134,12 @@ __all__ = [
     "UnknownSchemaVersionError",
     "get_schema_registry",
     "schema_registry_router",
+    "InvalidTriggerError",
+    "PipelineSchedule",
+    "PipelineScheduler",
+    "ScheduleTrigger",
+    "TriggerType",
+    "UnknownScheduleError",
+    "get_pipeline_scheduler",
+    "pipeline_scheduler_router",
 ]

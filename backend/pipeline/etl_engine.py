@@ -154,6 +154,10 @@ class ETLWorkflowEngine:
             raise UnknownWorkflowError(name)
         return workflow
 
+    def workflow_exists(self, name: str) -> bool:
+        with self._lock:
+            return name in self._workflows
+
     def extract(
         self,
         rows: list,
