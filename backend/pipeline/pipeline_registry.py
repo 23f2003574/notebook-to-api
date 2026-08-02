@@ -7,6 +7,8 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
+from .data_sources import DataSourceManager
+
 
 class PipelineAlreadyRegisteredError(ValueError):
     pass
@@ -75,6 +77,9 @@ class PipelineRegistry:
         name: str,
         version: str,
         metadata: Optional[PipelineMetadata] = None,
+        *,
+        sources: Optional[DataSourceManager] = None,
+        source_name: Optional[str] = None,
     ) -> Pipeline:
         if not name:
             raise ValueError("pipeline name is required")
@@ -94,6 +99,8 @@ class PipelineRegistry:
             versions[version] = pipeline
             for tag in metadata.tags:
                 self._tag_index.setdefault(tag, set()).add(name)
+        if sources is not None and source_name is not None:
+            sources.connect(source_name)
         return pipeline
 
     def remove(self, name: str, version: Optional[str] = None) -> None:

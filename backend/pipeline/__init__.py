@@ -7,6 +7,17 @@ from .pipeline_registry import (
     get_pipeline_registry,
     router as pipeline_registry_router,
 )
+from .data_sources import (
+    ConnectionProfile,
+    DataSource,
+    DataSourceAlreadyRegisteredError,
+    DataSourceManager,
+    InvalidConnectionProfileError,
+    SourceType,
+    UnknownDataSourceError,
+    get_data_source_manager,
+    router as data_sources_router,
+)
 
 __all__ = [
     "Pipeline",
@@ -16,4 +27,13 @@ __all__ = [
     "UnknownPipelineError",
     "get_pipeline_registry",
     "pipeline_registry_router",
+    "ConnectionProfile",
+    "DataSource",
+    "DataSourceAlreadyRegisteredError",
+    "DataSourceManager",
+    "InvalidConnectionProfileError",
+    "SourceType",
+    "UnknownDataSourceError",
+    "get_data_source_manager",
+    "data_sources_router",
 ]
