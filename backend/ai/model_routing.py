@@ -204,6 +204,14 @@ class ModelRoutingEngine:
                 raise UnknownRouteError(route_name)
         return self._resolve_fallback(rule, registry)
 
+    def resolve_candidates(self, route_name: str, *, registry: ModelRegistry) -> list:
+        """The models a route would currently consider, without affecting routing stats."""
+        with self._lock:
+            rule = self._rules.get(route_name)
+            if rule is None:
+                raise UnknownRouteError(route_name)
+        return self._candidate_models(rule, registry, random_value=None)
+
     def route_stats(self, route_name: Optional[str] = None) -> dict:
         with self._lock:
             if route_name is not None:

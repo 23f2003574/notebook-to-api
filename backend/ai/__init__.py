@@ -68,6 +68,15 @@ from .model_routing import (
     get_model_routing_engine,
     router as model_routing_router,
 )
+from .model_benchmark import (
+    BenchmarkResult,
+    BenchmarkSuite,
+    ModelBenchmarkService,
+    UnknownBenchmarkError,
+    UnknownSuiteError,
+    get_model_benchmark_service,
+    router as model_benchmark_router,
+)
 from .prompt_management_engine import (
     PromptAsset,
     PromptManagementEngine
