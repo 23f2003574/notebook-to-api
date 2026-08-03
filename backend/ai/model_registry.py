@@ -25,6 +25,8 @@ class ModelMetadata:
     capabilities: tuple = ()
     source: str = ""
     entry_point: str = ""
+    latency_ms: float = 0.0
+    weight: float = 1.0
 
     def to_dict(self) -> dict:
         return {
@@ -33,6 +35,8 @@ class ModelMetadata:
             "capabilities": list(self.capabilities),
             "source": self.source,
             "entry_point": self.entry_point,
+            "latency_ms": self.latency_ms,
+            "weight": self.weight,
         }
 
     @classmethod
@@ -44,6 +48,8 @@ class ModelMetadata:
             capabilities=tuple(payload.get("capabilities", ())),
             source=payload.get("source", ""),
             entry_point=payload.get("entry_point", ""),
+            latency_ms=payload.get("latency_ms", 0.0),
+            weight=payload.get("weight", 1.0),
         )
 
 

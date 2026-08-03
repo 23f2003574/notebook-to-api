@@ -57,6 +57,17 @@ from .batch_inference import (
     get_batch_inference_engine,
     router as batch_inference_router,
 )
+from .model_routing import (
+    InvalidStrategyError,
+    ModelRoutingEngine,
+    NoAvailableModelError,
+    RouteAlreadyRegisteredError,
+    RoutingDecision,
+    RoutingRule,
+    UnknownRouteError,
+    get_model_routing_engine,
+    router as model_routing_router,
+)
 from .prompt_management_engine import (
     PromptAsset,
     PromptManagementEngine
