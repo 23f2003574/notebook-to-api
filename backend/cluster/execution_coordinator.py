@@ -7,6 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from .distributed_scheduler import DistributedScheduler, get_distributed_scheduler
 from .job_dispatcher import DispatchRequest, DistributedJobDispatcher, get_job_dispatcher
 
 QUEUED = "queued"
@@ -74,8 +75,14 @@ class ExecutionSession:
 class ExecutionCoordinator:
     """Coordinates a job's distributed lifecycle on top of the dispatcher: queued -> ... -> terminal."""
 
-    def __init__(self, dispatcher: DistributedJobDispatcher) -> None:
+    def __init__(
+        self,
+        dispatcher: DistributedJobDispatcher,
+        *,
+        scheduler: Optional[DistributedScheduler] = None,
+    ) -> None:
         self._dispatcher = dispatcher
+        self._scheduler = scheduler
         self._sessions: dict = {}
         self._lock = Lock()
 
@@ -88,6 +95,7 @@ class ExecutionCoordinator:
         policy: str = "least_loaded",
         payload: Optional[dict] = None,
         format: str = "json",
+        affinity_worker_id: Optional[str] = None,
     ) -> ExecutionSession:
         if not job_id:
             raise ValueError("job_id must be non-empty")
@@ -99,8 +107,17 @@ class ExecutionCoordinator:
             if existing is not None and existing.state not in _TERMINAL_STATES:
                 raise ValueError(f"execution '{job_id}' is already in progress")
 
+        if self._scheduler is not None:
+            plan = self._scheduler.schedule(job_id, capability, priority=priority, affinity_worker_id=affinity_worker_id)
+            if plan.decision.worker_id is not None:
+                self._scheduler.reserve(job_id)
+
         request = DispatchRequest(job_id=job_id, capability=capability, priority=priority, policy=policy)
         result = self._dispatcher.dispatch(request, payload=payload, format=format)
+
+        if self._scheduler is not None:
+            self._scheduler.release(job_id)
+
         state = ASSIGNED if result.worker_id else QUEUED
         session = ExecutionSession(
             execution_id=job_id,
@@ -188,7 +205,7 @@ class ExecutionCoordinator:
         session.history.append(ExecutionState(state=new_state, occurred_at=datetime.now(timezone.utc), detail=detail))
 
 
-_execution_coordinator = ExecutionCoordinator(get_job_dispatcher())
+_execution_coordinator = ExecutionCoordinator(get_job_dispatcher(), scheduler=get_distributed_scheduler())
 
 
 def get_execution_coordinator() -> ExecutionCoordinator:
@@ -211,6 +228,7 @@ def submit_endpoint(
             policy=payload.get("policy", "least_loaded"),
             payload=payload.get("payload"),
             format=payload.get("format", "json"),
+            affinity_worker_id=payload.get("affinity_worker_id"),
         )
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))

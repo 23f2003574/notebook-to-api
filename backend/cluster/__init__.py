@@ -34,3 +34,9 @@ from .worker_health import (
     WorkerHealthManager,
     get_worker_health_manager,
 )
+from .distributed_scheduler import (
+    SchedulingDecision,
+    SchedulingPlan,
+    DistributedScheduler,
+    get_distributed_scheduler,
+)
