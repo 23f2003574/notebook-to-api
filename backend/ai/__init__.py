@@ -26,6 +26,15 @@ from .inference_engine import (
     get_inference_engine,
     router as inference_engine_router,
 )
+from .model_versioning import (
+    InvalidVersionError,
+    ModelVersion,
+    ModelVersionManager,
+    VersionNotFoundError,
+    VersionRecord,
+    get_model_version_manager,
+    router as model_versioning_router,
+)
 from .prompt_management_engine import (
     PromptAsset,
     PromptManagementEngine

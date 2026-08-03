@@ -133,6 +133,13 @@ class ModelRegistry:
                 raise UnknownModelError(f"{name}@{version}")
             return model
 
+    def versions(self, name: str) -> list:
+        with self._lock:
+            registered = self._models.get(name)
+            if not registered:
+                raise UnknownModelError(name)
+            return sorted(registered.values(), key=lambda model: model.registered_at)
+
     def is_registered(self, name: str, version: Optional[str] = None) -> bool:
         with self._lock:
             versions = self._models.get(name)
