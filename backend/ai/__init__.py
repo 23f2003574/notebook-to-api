@@ -93,10 +93,18 @@ from .inference_analytics import (
     get_inference_analytics_service,
     router as inference_analytics_router,
 )
+from .export_service import (
+    ExportFormat,
+    ExportManifest,
+    ModelExport,
+    ModelExportService,
+    get_model_export_service,
+)
 from .dashboard import (
     ModelDashboardAPI,
     get_model_dashboard_api,
     router as ai_dashboard_router,
+    export_router as ai_export_router,
 )
 from .prompt_management_engine import (
     PromptAsset,

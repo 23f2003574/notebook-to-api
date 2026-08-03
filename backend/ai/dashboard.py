@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
+from .export_service import ExportFormat, ModelExportService, get_model_export_service
 from .inference_analytics import InferenceAnalyticsService, get_inference_analytics_service
 from .model_benchmark import ModelBenchmarkService, get_model_benchmark_service
 from .model_deployment import ModelDeploymentManager, get_model_deployment_manager
@@ -103,3 +104,53 @@ def get_dashboard_deployments(api: ModelDashboardAPI = Depends(get_model_dashboa
 @router.get("/analytics")
 def get_dashboard_analytics(api: ModelDashboardAPI = Depends(get_model_dashboard_api)) -> dict:
     return api.analytics()
+
+
+export_router = APIRouter(prefix="/ai/export", tags=["ai-export"])
+
+
+def _parse_format(value: str) -> ExportFormat:
+    try:
+        return ExportFormat(value)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="unknown export format")
+
+
+@export_router.get("/models")
+def export_models_endpoint(
+    format: str = "json",
+    service: ModelExportService = Depends(get_model_export_service),
+) -> dict:
+    fmt = _parse_format(format)
+    export = service.export_models(fmt=fmt)
+    return export.to_dict()
+
+
+@export_router.get("/deployments")
+def export_deployments_endpoint(
+    format: str = "json",
+    service: ModelExportService = Depends(get_model_export_service),
+) -> dict:
+    fmt = _parse_format(format)
+    export = service.export_deployments(fmt=fmt)
+    return export.to_dict()
+
+
+@export_router.get("/benchmarks")
+def export_benchmarks_endpoint(
+    format: str = "json",
+    service: ModelExportService = Depends(get_model_export_service),
+) -> dict:
+    fmt = _parse_format(format)
+    export = service.export_benchmarks(fmt=fmt)
+    return export.to_dict()
+
+
+@export_router.get("/all")
+def export_all_endpoint(
+    format: str = "json",
+    service: ModelExportService = Depends(get_model_export_service),
+) -> dict:
+    fmt = _parse_format(format)
+    manifest = service.export_all(fmt=fmt)
+    return manifest.to_dict()
