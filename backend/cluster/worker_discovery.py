@@ -19,6 +19,7 @@ class DiscoveryRecord:
     is_stale: bool
     seconds_since_heartbeat: float
     active_jobs: int = 0
+    health: str = "healthy"
 
     def to_dict(self) -> dict:
         return {
@@ -28,6 +29,7 @@ class DiscoveryRecord:
             "is_stale": self.is_stale,
             "seconds_since_heartbeat": self.seconds_since_heartbeat,
             "active_jobs": self.active_jobs,
+            "health": self.health,
         }
 
 
@@ -56,6 +58,7 @@ class WorkerDiscoveryService:
         self._registry = registry
         self._stale_after_seconds = stale_after_seconds
         self._load: dict = {}
+        self._health: dict = {}
 
     def heartbeat(self, worker_id: str, *, active_jobs: Optional[int] = None) -> HeartbeatStatus:
         node = self._registry.touch(worker_id)
@@ -80,9 +83,16 @@ class WorkerDiscoveryService:
                     is_stale=elapsed > self._stale_after_seconds,
                     seconds_since_heartbeat=elapsed,
                     active_jobs=self.get_load(node.worker_id),
+                    health=self.get_health(node.worker_id),
                 )
             )
         return records
+
+    def get_health(self, worker_id: str) -> str:
+        return self._health.get(worker_id, "healthy")
+
+    def set_health(self, worker_id: str, status: str) -> None:
+        self._health[worker_id] = status
 
     def get_load(self, worker_id: str) -> int:
         return self._load.get(worker_id, 0)
@@ -118,7 +128,8 @@ class WorkerDiscoveryService:
 
     def available_workers(self, *, capability: Optional[str] = None) -> list:
         self.refresh()
-        return self._registry.list_workers(status="online", capability=capability)
+        candidates = self._registry.list_workers(status="online", capability=capability)
+        return [worker for worker in candidates if self.get_health(worker.worker_id) != "unhealthy"]
 
     def _seconds_since_heartbeat(self, last_seen_at: datetime) -> float:
         return (datetime.now(timezone.utc) - last_seen_at).total_seconds()

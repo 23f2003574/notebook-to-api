@@ -28,3 +28,9 @@ from .execution_coordinator import (
     ExecutionCoordinator,
     get_execution_coordinator,
 )
+from .worker_health import (
+    HealthReport,
+    HealthStatus,
+    WorkerHealthManager,
+    get_worker_health_manager,
+)
