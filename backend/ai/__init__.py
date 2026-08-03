@@ -46,6 +46,17 @@ from .prompt_templates import (
     get_prompt_template_manager,
     router as prompt_templates_router,
 )
+from .batch_inference import (
+    BatchInferenceEngine,
+    BatchItemResult,
+    BatchRequest,
+    BatchResult,
+    BatchState,
+    InvalidBatchStateError,
+    UnknownBatchError,
+    get_batch_inference_engine,
+    router as batch_inference_router,
+)
 from .prompt_management_engine import (
     PromptAsset,
     PromptManagementEngine

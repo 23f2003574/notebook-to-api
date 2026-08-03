@@ -39,6 +39,7 @@ class InferenceRequest:
     input: object
     mode: str
     submitted_at: datetime
+    priority: int = 0
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,7 @@ class InferenceResult:
             "request_id": self.request.request_id,
             "model_name": self.request.model_name,
             "mode": self.request.mode,
+            "priority": self.request.priority,
             "state": self.state.value,
             "output": self.output,
             "error": self.error,
@@ -113,6 +115,7 @@ class InferenceEngine:
         *,
         loader: ModelLoader,
         mode: str = "sync",
+        priority: int = 0,
         templates: Optional[PromptTemplateManager] = None,
         template_name: Optional[str] = None,
         template_values: Optional[dict] = None,
@@ -133,6 +136,7 @@ class InferenceEngine:
             input=input,
             mode=mode,
             submitted_at=datetime.now(timezone.utc),
+            priority=priority,
         )
         queued = InferenceResult(
             request=request,
@@ -276,6 +280,7 @@ def infer_endpoint(
             payload.get("input"),
             loader=loader,
             mode=payload.get("mode", "sync"),
+            priority=payload.get("priority", 0),
             templates=templates,
             template_name=payload.get("template_name"),
             template_values=payload.get("template_values"),
