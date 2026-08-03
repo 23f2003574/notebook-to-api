@@ -88,6 +88,19 @@ from backend.ai.dashboard import (
 )
 from backend.ai.model_registry import router as ai_model_registry_router
 from backend.ai.bootstrap import bootstrap_ai_subsystem
+from backend.cluster.worker_registry import router as cluster_worker_registry_router
+from backend.cluster.worker_discovery import router as cluster_worker_discovery_router
+from backend.cluster.job_dispatcher import router as cluster_job_dispatcher_router
+from backend.cluster.task_serializer import router as cluster_task_serializer_router
+from backend.cluster.execution_coordinator import router as cluster_execution_coordinator_router
+from backend.cluster.worker_health import router as cluster_worker_health_router
+from backend.cluster.distributed_scheduler import router as cluster_distributed_scheduler_router
+from backend.cluster.auto_scaling import router as cluster_auto_scaling_router
+from backend.cluster.fault_tolerance import router as cluster_fault_tolerance_router
+from backend.cluster.cluster_analytics import router as cluster_analytics_router
+from backend.cluster.dashboard import router as cluster_dashboard_router
+from backend.cluster.export_service import router as cluster_export_router
+from backend.cluster.bootstrap import bootstrap_cluster_subsystem
 
 app = FastAPI(
     title="notebook-to-api Dashboard",
@@ -257,6 +270,27 @@ app.include_router(ai_dashboard_router)
 app.include_router(ai_export_router)
 app.include_router(ai_model_registry_router)
 bootstrap_ai_subsystem()
+
+# Distributed Execution & Compute Orchestration subsystem
+# Each router owns its own distinct top-level path segment under "/cluster/"
+# (workers, discovery, dispatch, tasks, executions, health, schedule/
+# scheduler, scaling, recovery, analytics, dashboard, export), so unlike the
+# plugin/pipeline/ai registries above there's no catch-all "/{name}" route
+# for a sibling router's static path to collide with, and inclusion order is
+# not significant here.
+app.include_router(cluster_worker_registry_router)
+app.include_router(cluster_worker_discovery_router)
+app.include_router(cluster_job_dispatcher_router)
+app.include_router(cluster_task_serializer_router)
+app.include_router(cluster_execution_coordinator_router)
+app.include_router(cluster_worker_health_router)
+app.include_router(cluster_distributed_scheduler_router)
+app.include_router(cluster_auto_scaling_router)
+app.include_router(cluster_fault_tolerance_router)
+app.include_router(cluster_analytics_router)
+app.include_router(cluster_dashboard_router)
+app.include_router(cluster_export_router)
+bootstrap_cluster_subsystem()
 
 
 @app.get("/")
