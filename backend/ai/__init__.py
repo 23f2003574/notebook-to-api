@@ -7,6 +7,15 @@ from .model_registry import (
     get_model_registry,
     router as model_registry_router,
 )
+from .model_loader import (
+    LoadedModel,
+    ModelLoader,
+    ModelManifest,
+    ModelNotLoadedError,
+    ModelValidationError,
+    get_model_loader,
+    router as model_loader_router,
+)
 from .prompt_management_engine import (
     PromptAsset,
     PromptManagementEngine

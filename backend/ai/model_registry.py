@@ -24,6 +24,7 @@ class ModelMetadata:
     provider: str = ""
     capabilities: tuple = ()
     source: str = ""
+    entry_point: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -31,6 +32,7 @@ class ModelMetadata:
             "provider": self.provider,
             "capabilities": list(self.capabilities),
             "source": self.source,
+            "entry_point": self.entry_point,
         }
 
     @classmethod
@@ -41,6 +43,7 @@ class ModelMetadata:
             provider=payload.get("provider", ""),
             capabilities=tuple(payload.get("capabilities", ())),
             source=payload.get("source", ""),
+            entry_point=payload.get("entry_point", ""),
         )
 
 
