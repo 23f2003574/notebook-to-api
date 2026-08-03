@@ -56,6 +56,7 @@ class ExecutionSession:
     progress: float = 0.0
     result: Optional[dict] = None
     error: Optional[str] = None
+    attempt: int = 1
     history: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -68,6 +69,7 @@ class ExecutionSession:
             "progress": self.progress,
             "result": self.result,
             "error": self.error,
+            "attempt": self.attempt,
             "history": [event.to_dict() for event in self.history],
         }
 
@@ -106,6 +108,8 @@ class ExecutionCoordinator:
             existing = self._sessions.get(job_id)
             if existing is not None and existing.state not in _TERMINAL_STATES:
                 raise ValueError(f"execution '{job_id}' is already in progress")
+            attempt = existing.attempt + 1 if existing is not None else 1
+            carried_history = list(existing.history) if existing is not None else []
 
         if self._scheduler is not None:
             plan = self._scheduler.schedule(job_id, capability, priority=priority, affinity_worker_id=affinity_worker_id)
@@ -119,6 +123,7 @@ class ExecutionCoordinator:
             self._scheduler.release(job_id)
 
         state = ASSIGNED if result.worker_id else QUEUED
+        detail = result.reason if attempt == 1 else f"attempt {attempt}: {result.reason or 'resubmitted'}"
         session = ExecutionSession(
             execution_id=job_id,
             job_id=job_id,
@@ -126,11 +131,30 @@ class ExecutionCoordinator:
             worker_id=result.worker_id,
             state=state,
             progress=_PROGRESS_BY_STATE[state],
-            history=[ExecutionState(state=state, occurred_at=datetime.now(timezone.utc), detail=result.reason)],
+            attempt=attempt,
+            history=carried_history + [ExecutionState(state=state, occurred_at=datetime.now(timezone.utc), detail=detail)],
         )
         with self._lock:
             self._sessions[job_id] = session
         return session
+
+    def get_session(self, execution_id: str) -> Optional[ExecutionSession]:
+        return self._sessions.get(execution_id)
+
+    def reassign(self, execution_id: str) -> ExecutionSession:
+        with self._lock:
+            session = self._sessions.get(execution_id)
+            if session is None:
+                raise KeyError(execution_id)
+            if session.state in _TERMINAL_STATES:
+                raise ValueError(f"execution '{execution_id}' is already in terminal state '{session.state}'")
+
+            result = self._dispatcher.reassign(execution_id)
+            new_state = ASSIGNED if result.worker_id else QUEUED
+            detail = f"reassigned to {result.worker_id}" if result.worker_id else (result.reason or "no worker available")
+            session.worker_id = result.worker_id
+            self._transition(session, new_state, detail=detail)
+            return session
 
     def monitor(self, execution_id: str) -> ExecutionSession:
         with self._lock:

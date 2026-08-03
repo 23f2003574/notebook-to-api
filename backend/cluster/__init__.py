@@ -46,3 +46,9 @@ from .auto_scaling import (
     AutoScalingEngine,
     get_auto_scaling_engine,
 )
+from .fault_tolerance import (
+    FailureEvent,
+    RecoveryPlan,
+    FaultToleranceManager,
+    get_fault_tolerance_manager,
+)
