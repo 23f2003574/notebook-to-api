@@ -12,6 +12,7 @@ from backend.ai.inference_engine import (
 )
 from backend.ai.model_loader import ModelLoader, ModelNotLoadedError, get_model_loader
 from backend.ai.model_registry import ModelMetadata, ModelRegistry
+from backend.ai.prompt_templates import PromptTemplateManager, TemplateVariable, get_prompt_template_manager
 
 
 @pytest.fixture
@@ -30,11 +31,17 @@ def engine() -> InferenceEngine:
 
 
 @pytest.fixture
-def client(engine: InferenceEngine, loader: ModelLoader) -> TestClient:
+def templates() -> PromptTemplateManager:
+    return PromptTemplateManager()
+
+
+@pytest.fixture
+def client(engine: InferenceEngine, loader: ModelLoader, templates: PromptTemplateManager) -> TestClient:
     app = FastAPI()
     app.include_router(inference_router)
     app.dependency_overrides[get_inference_engine] = lambda: engine
     app.dependency_overrides[get_model_loader] = lambda: loader
+    app.dependency_overrides[get_prompt_template_manager] = lambda: templates
     return TestClient(app)
 
 
@@ -201,3 +208,39 @@ def test_api_cancel_unknown_request_returns_404(client: TestClient):
     response = client.delete("/ai/inference/does-not-exist")
 
     assert response.status_code == 404
+
+
+def test_infer_renders_prompt_template_as_input(
+    registry: ModelRegistry, loader: ModelLoader, engine: InferenceEngine, templates: PromptTemplateManager
+):
+    load_model(registry, loader)
+    templates.create("greeting", "Hello {name}", [TemplateVariable(name="name")])
+
+    result = engine.infer(
+        "gpt-embed", None, loader=loader, templates=templates,
+        template_name="greeting", template_values={"name": "Ada"},
+    )
+
+    assert result.output["output"] == "Hello Ada"
+
+
+def test_infer_template_name_without_manager_raises(registry: ModelRegistry, loader: ModelLoader, engine: InferenceEngine):
+    load_model(registry, loader)
+
+    with pytest.raises(ValueError):
+        engine.infer("gpt-embed", None, loader=loader, template_name="greeting")
+
+
+def test_api_infer_with_template(
+    client: TestClient, registry: ModelRegistry, loader: ModelLoader, templates: PromptTemplateManager
+):
+    load_model(registry, loader)
+    templates.create("greeting", "Hello {name}", [TemplateVariable(name="name")])
+
+    response = client.post(
+        "/ai/inference",
+        json={"model_name": "gpt-embed", "template_name": "greeting", "template_values": {"name": "Ada"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["output"]["output"] == "Hello Ada"

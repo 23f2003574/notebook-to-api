@@ -11,6 +11,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from .model_loader import LoadedModel, ModelLoader, ModelNotLoadedError, get_model_loader
+from .prompt_templates import PromptTemplateManager, get_prompt_template_manager
 
 
 class InferenceState(str, Enum):
@@ -91,6 +92,20 @@ class InferenceEngine:
             return chunks or [""]
         return [input]
 
+    @staticmethod
+    def _resolve_input(
+        input: object,
+        *,
+        templates: Optional[PromptTemplateManager],
+        template_name: Optional[str],
+        template_values: Optional[dict],
+    ) -> object:
+        if template_name is None:
+            return input
+        if templates is None:
+            raise ValueError("a template manager is required when template_name is provided")
+        return templates.render(template_name, template_values)
+
     def infer(
         self,
         model_name: str,
@@ -98,9 +113,15 @@ class InferenceEngine:
         *,
         loader: ModelLoader,
         mode: str = "sync",
+        templates: Optional[PromptTemplateManager] = None,
+        template_name: Optional[str] = None,
+        template_values: Optional[dict] = None,
     ) -> InferenceResult:
         if mode not in ("sync", "batch", "async"):
             raise ValueError(f"unsupported mode '{mode}'; use stream() for streaming inference")
+        input = self._resolve_input(
+            input, templates=templates, template_name=template_name, template_values=template_values
+        )
         if mode == "batch" and not isinstance(input, list):
             raise ValueError("batch mode requires input to be a list")
 
@@ -157,7 +178,13 @@ class InferenceEngine:
         *,
         loader: ModelLoader,
         chunk_size: int = 1,
+        templates: Optional[PromptTemplateManager] = None,
+        template_name: Optional[str] = None,
+        template_values: Optional[dict] = None,
     ):
+        input = self._resolve_input(
+            input, templates=templates, template_name=template_name, template_values=template_values
+        )
         loaded = loader.get(model_name)
 
         request = InferenceRequest(
@@ -241,6 +268,7 @@ def infer_endpoint(
     payload: dict = Body(default={}),
     engine: InferenceEngine = Depends(get_inference_engine),
     loader: ModelLoader = Depends(get_model_loader),
+    templates: PromptTemplateManager = Depends(get_prompt_template_manager),
 ) -> dict:
     try:
         result = engine.infer(
@@ -248,6 +276,9 @@ def infer_endpoint(
             payload.get("input"),
             loader=loader,
             mode=payload.get("mode", "sync"),
+            templates=templates,
+            template_name=payload.get("template_name"),
+            template_values=payload.get("template_values"),
         )
     except ModelNotLoadedError:
         raise HTTPException(status_code=404, detail="model is not loaded")
@@ -261,6 +292,7 @@ def stream_endpoint(
     payload: dict = Body(default={}),
     engine: InferenceEngine = Depends(get_inference_engine),
     loader: ModelLoader = Depends(get_model_loader),
+    templates: PromptTemplateManager = Depends(get_prompt_template_manager),
 ) -> StreamingResponse:
     try:
         request_id, chunks = engine.stream(
@@ -268,9 +300,14 @@ def stream_endpoint(
             payload.get("input"),
             loader=loader,
             chunk_size=payload.get("chunk_size", 1),
+            templates=templates,
+            template_name=payload.get("template_name"),
+            template_values=payload.get("template_values"),
         )
     except ModelNotLoadedError:
         raise HTTPException(status_code=404, detail="model is not loaded")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     def body():
         for chunk in chunks:

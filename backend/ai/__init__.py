@@ -35,6 +35,17 @@ from .model_versioning import (
     get_model_version_manager,
     router as model_versioning_router,
 )
+from .prompt_templates import (
+    MissingVariableError,
+    PromptTemplate,
+    PromptTemplateManager,
+    TemplateAlreadyExistsError,
+    TemplateValidationError,
+    TemplateVariable,
+    UnknownTemplateError,
+    get_prompt_template_manager,
+    router as prompt_templates_router,
+)
 from .prompt_management_engine import (
     PromptAsset,
     PromptManagementEngine
