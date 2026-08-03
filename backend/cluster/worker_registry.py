@@ -120,6 +120,15 @@ class WorkerRegistry:
             node.last_seen_at = datetime.now(timezone.utc)
             return node
 
+    def touch(self, worker_id: str) -> WorkerNode:
+        """Update a worker's last_seen_at without changing its status."""
+        with self._lock:
+            node = self._workers.get(worker_id)
+            if node is None:
+                raise KeyError(worker_id)
+            node.last_seen_at = datetime.now(timezone.utc)
+            return node
+
     def _index_capabilities(self, node: WorkerNode) -> None:
         for capability in node.capabilities:
             self._capability_index.setdefault(capability, set()).add(node.worker_id)
