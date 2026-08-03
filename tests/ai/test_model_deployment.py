@@ -154,6 +154,16 @@ def test_status_unknown_deployment_raises(manager: ModelDeploymentManager):
         manager.status("does-not-exist")
 
 
+def test_list_deployments_returns_all(registry: ModelRegistry, manager: ModelDeploymentManager):
+    registry.register("gpt-a", "1.0.0")
+    first = manager.deploy("gpt-a", "1.0.0", registry=registry, target="development")
+    second = manager.deploy("gpt-a", "1.0.0", registry=registry, target="staging")
+
+    listed = manager.list_deployments()
+
+    assert [deployment.deployment_id for deployment in listed] == [first.deployment_id, second.deployment_id]
+
+
 def test_api_deploy(client: TestClient, registry: ModelRegistry):
     registry.register("gpt-a", "1.0.0")
 

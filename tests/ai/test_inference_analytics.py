@@ -158,3 +158,32 @@ def test_api_trends_invalid_bucket_returns_422(client: TestClient):
     response = client.get("/ai/analytics/trends", params={"bucket": "week"})
 
     assert response.status_code == 422
+
+
+def test_recent_returns_newest_first(service: InferenceAnalyticsService):
+    early = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    late = early + timedelta(hours=1)
+    service.record("gpt-a", "success", 100.0, 10, recorded_at=early)
+    service.record("gpt-a", "success", 100.0, 10, recorded_at=late)
+
+    recent = service.recent(limit=10)
+
+    assert recent[0].recorded_at == late
+    assert recent[1].recorded_at == early
+
+
+def test_recent_respects_limit(service: InferenceAnalyticsService):
+    for _ in range(5):
+        service.record("gpt-a", "success", 100.0, 10)
+
+    assert len(service.recent(limit=2)) == 2
+
+
+def test_recent_filters_by_model(service: InferenceAnalyticsService):
+    service.record("gpt-a", "success", 100.0, 10)
+    service.record("gpt-b", "success", 100.0, 10)
+
+    recent = service.recent(limit=10, model_name="gpt-a")
+
+    assert len(recent) == 1
+    assert recent[0].model_name == "gpt-a"

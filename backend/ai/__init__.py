@@ -93,6 +93,11 @@ from .inference_analytics import (
     get_inference_analytics_service,
     router as inference_analytics_router,
 )
+from .dashboard import (
+    ModelDashboardAPI,
+    get_model_dashboard_api,
+    router as ai_dashboard_router,
+)
 from .prompt_management_engine import (
     PromptAsset,
     PromptManagementEngine

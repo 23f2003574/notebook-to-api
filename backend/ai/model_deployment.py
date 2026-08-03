@@ -152,6 +152,10 @@ class ModelDeploymentManager:
             raise UnknownDeploymentError(deployment_id)
         return deployment
 
+    def list_deployments(self) -> list:
+        with self._lock:
+            return sorted(self._deployments.values(), key=lambda deployment: deployment.created_at)
+
 
 _model_deployment_manager = ModelDeploymentManager()
 

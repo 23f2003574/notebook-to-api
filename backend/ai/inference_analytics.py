@@ -92,6 +92,11 @@ class InferenceAnalyticsService:
     def list_records(self, model_name: Optional[str] = None) -> list:
         return self._filtered_records(model_name)
 
+    def recent(self, limit: int = 10, model_name: Optional[str] = None) -> list:
+        """The most recently recorded metrics (by timestamp, not insertion order), newest first."""
+        records = self._filtered_records(model_name)
+        return sorted(records, key=lambda record: record.recorded_at, reverse=True)[:limit]
+
     def summary(self, model_name: Optional[str] = None) -> dict:
         records = self._filtered_records(model_name)
         request_count = len(records)
