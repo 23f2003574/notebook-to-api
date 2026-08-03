@@ -7,6 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from .cluster_analytics import ClusterAnalyticsService, get_cluster_analytics_service
 from .distributed_scheduler import DistributedScheduler, get_distributed_scheduler
 from .job_dispatcher import DispatchRequest, DistributedJobDispatcher, get_job_dispatcher
 
@@ -82,9 +83,11 @@ class ExecutionCoordinator:
         dispatcher: DistributedJobDispatcher,
         *,
         scheduler: Optional[DistributedScheduler] = None,
+        analytics: Optional[ClusterAnalyticsService] = None,
     ) -> None:
         self._dispatcher = dispatcher
         self._scheduler = scheduler
+        self._analytics = analytics
         self._sessions: dict = {}
         self._lock = Lock()
 
@@ -193,6 +196,17 @@ class ExecutionCoordinator:
             else:
                 session.error = error
                 self._transition(session, FAILED, detail=error or "execution failed")
+
+            if self._analytics is not None:
+                self._analytics.record(
+                    session.capability,
+                    worker_count=0,
+                    active_jobs=0,
+                    queue_depth=len(self._dispatcher.queue_status()),
+                    completed_count=1 if success else 0,
+                    failed_count=0 if success else 1,
+                    scheduling_latency_ms=self._scheduling_latency_ms(session),
+                )
             return session
 
     def cancel(self, execution_id: str) -> ExecutionSession:
@@ -228,8 +242,19 @@ class ExecutionCoordinator:
         session.progress = _PROGRESS_BY_STATE[new_state]
         session.history.append(ExecutionState(state=new_state, occurred_at=datetime.now(timezone.utc), detail=detail))
 
+    def _scheduling_latency_ms(self, session: ExecutionSession) -> Optional[float]:
+        if not session.history:
+            return None
+        created_at = session.history[0].occurred_at
+        assigned_event = next((event for event in session.history if event.state == ASSIGNED), None)
+        if assigned_event is None:
+            return None
+        return (assigned_event.occurred_at - created_at).total_seconds() * 1000
 
-_execution_coordinator = ExecutionCoordinator(get_job_dispatcher(), scheduler=get_distributed_scheduler())
+
+_execution_coordinator = ExecutionCoordinator(
+    get_job_dispatcher(), scheduler=get_distributed_scheduler(), analytics=get_cluster_analytics_service()
+)
 
 
 def get_execution_coordinator() -> ExecutionCoordinator:

@@ -52,3 +52,9 @@ from .fault_tolerance import (
     FaultToleranceManager,
     get_fault_tolerance_manager,
 )
+from .cluster_analytics import (
+    ClusterMetrics,
+    ClusterTrend,
+    ClusterAnalyticsService,
+    get_cluster_analytics_service,
+)
