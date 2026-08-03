@@ -110,6 +110,11 @@ class ClusterAnalyticsService:
     def list_records(self, capability: Optional[str] = None) -> list:
         return self._filtered_records(capability)
 
+    def capabilities(self) -> list:
+        """Distinct capability pools that have recorded metrics, sorted."""
+        with self._lock:
+            return sorted({record.capability for record in self._records})
+
     def summary(self, capability: Optional[str] = None) -> dict:
         records = self._filtered_records(capability)
         total_completed = sum(record.completed_count for record in records)

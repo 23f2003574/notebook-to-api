@@ -58,3 +58,7 @@ from .cluster_analytics import (
     ClusterAnalyticsService,
     get_cluster_analytics_service,
 )
+from .dashboard import (
+    ClusterDashboardAPI,
+    get_cluster_dashboard_api,
+)
