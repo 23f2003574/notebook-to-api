@@ -128,6 +128,13 @@ class ModelLoader:
                 raise ModelNotLoadedError(name)
             del self._loaded[name]
 
+    def get(self, name: str) -> LoadedModel:
+        with self._lock:
+            loaded = self._loaded.get(name)
+        if loaded is None:
+            raise ModelNotLoadedError(name)
+        return loaded
+
     def is_loaded(self, name: str) -> bool:
         with self._lock:
             return name in self._loaded

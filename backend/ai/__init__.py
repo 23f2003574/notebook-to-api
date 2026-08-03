@@ -16,6 +16,16 @@ from .model_loader import (
     get_model_loader,
     router as model_loader_router,
 )
+from .inference_engine import (
+    InferenceEngine,
+    InferenceRequest,
+    InferenceResult,
+    InferenceState,
+    InvalidStateTransitionError,
+    UnknownRequestError,
+    get_inference_engine,
+    router as inference_engine_router,
+)
 from .prompt_management_engine import (
     PromptAsset,
     PromptManagementEngine
