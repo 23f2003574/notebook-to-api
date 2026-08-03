@@ -1,3 +1,12 @@
+from .model_registry import (
+    ModelAlreadyRegisteredError,
+    ModelInfo,
+    ModelMetadata,
+    ModelRegistry,
+    UnknownModelError,
+    get_model_registry,
+    router as model_registry_router,
+)
 from .prompt_management_engine import (
     PromptAsset,
     PromptManagementEngine
