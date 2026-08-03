@@ -172,6 +172,13 @@ class ModelVersionManager:
             raise UnknownModelError(name)
         return list(records)
 
+    def active_version(self, name: str) -> str:
+        with self._lock:
+            version = self._active.get(name)
+        if version is None:
+            raise UnknownModelError(name)
+        return version
+
 
 _model_version_manager = ModelVersionManager()
 

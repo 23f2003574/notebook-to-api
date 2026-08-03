@@ -77,6 +77,15 @@ from .model_benchmark import (
     get_model_benchmark_service,
     router as model_benchmark_router,
 )
+from .model_deployment import (
+    Deployment,
+    DeploymentTarget,
+    InvalidDeploymentStateError,
+    ModelDeploymentManager,
+    UnknownDeploymentError,
+    get_model_deployment_manager,
+    router as model_deployment_router,
+)
 from .prompt_management_engine import (
     PromptAsset,
     PromptManagementEngine
