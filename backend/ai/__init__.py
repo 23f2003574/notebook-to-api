@@ -86,6 +86,13 @@ from .model_deployment import (
     get_model_deployment_manager,
     router as model_deployment_router,
 )
+from .inference_analytics import (
+    InferenceAnalyticsService,
+    InferenceMetrics,
+    InferenceTrend,
+    get_inference_analytics_service,
+    router as inference_analytics_router,
+)
 from .prompt_management_engine import (
     PromptAsset,
     PromptManagementEngine

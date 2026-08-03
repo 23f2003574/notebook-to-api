@@ -10,6 +10,7 @@ from backend.ai.inference_engine import (
     get_inference_engine,
     router as inference_router,
 )
+from backend.ai.inference_analytics import InferenceAnalyticsService, get_inference_analytics_service
 from backend.ai.model_loader import ModelLoader, ModelNotLoadedError, get_model_loader
 from backend.ai.model_registry import ModelMetadata, ModelRegistry
 from backend.ai.prompt_templates import PromptTemplateManager, TemplateVariable, get_prompt_template_manager
@@ -36,12 +37,23 @@ def templates() -> PromptTemplateManager:
 
 
 @pytest.fixture
-def client(engine: InferenceEngine, loader: ModelLoader, templates: PromptTemplateManager) -> TestClient:
+def analytics() -> InferenceAnalyticsService:
+    return InferenceAnalyticsService()
+
+
+@pytest.fixture
+def client(
+    engine: InferenceEngine,
+    loader: ModelLoader,
+    templates: PromptTemplateManager,
+    analytics: InferenceAnalyticsService,
+) -> TestClient:
     app = FastAPI()
     app.include_router(inference_router)
     app.dependency_overrides[get_inference_engine] = lambda: engine
     app.dependency_overrides[get_model_loader] = lambda: loader
     app.dependency_overrides[get_prompt_template_manager] = lambda: templates
+    app.dependency_overrides[get_inference_analytics_service] = lambda: analytics
     return TestClient(app)
 
 
@@ -244,3 +256,36 @@ def test_api_infer_with_template(
 
     assert response.status_code == 200
     assert response.json()["output"]["output"] == "Hello Ada"
+
+
+def test_infer_records_analytics_on_success(
+    registry: ModelRegistry, loader: ModelLoader, engine: InferenceEngine, analytics: InferenceAnalyticsService
+):
+    load_model(registry, loader)
+
+    engine.infer("gpt-embed", "hello world", loader=loader, analytics=analytics)
+
+    records = analytics.list_records("gpt-embed")
+    assert len(records) == 1
+    assert records[0].status == "success"
+    assert records[0].token_count == 2
+
+
+def test_infer_without_analytics_records_nothing(
+    registry: ModelRegistry, loader: ModelLoader, engine: InferenceEngine, analytics: InferenceAnalyticsService
+):
+    load_model(registry, loader)
+
+    engine.infer("gpt-embed", "hello world", loader=loader)
+
+    assert analytics.list_records("gpt-embed") == []
+
+
+def test_api_infer_records_analytics(
+    client: TestClient, registry: ModelRegistry, loader: ModelLoader, analytics: InferenceAnalyticsService
+):
+    load_model(registry, loader)
+
+    client.post("/ai/inference", json={"model_name": "gpt-embed", "input": "hello world"})
+
+    assert len(analytics.list_records("gpt-embed")) == 1

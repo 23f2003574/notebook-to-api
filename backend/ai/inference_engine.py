@@ -10,6 +10,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
+from .inference_analytics import InferenceAnalyticsService, get_inference_analytics_service
 from .model_loader import LoadedModel, ModelLoader, ModelNotLoadedError, get_model_loader
 from .prompt_templates import PromptTemplateManager, get_prompt_template_manager
 
@@ -108,6 +109,14 @@ class InferenceEngine:
             raise ValueError("a template manager is required when template_name is provided")
         return templates.render(template_name, template_values)
 
+    @staticmethod
+    def _estimate_tokens(input: object) -> int:
+        if isinstance(input, str):
+            return len(input.split())
+        if isinstance(input, list):
+            return sum(InferenceEngine._estimate_tokens(item) for item in input)
+        return 0
+
     def infer(
         self,
         model_name: str,
@@ -119,6 +128,7 @@ class InferenceEngine:
         templates: Optional[PromptTemplateManager] = None,
         template_name: Optional[str] = None,
         template_values: Optional[dict] = None,
+        analytics: Optional[InferenceAnalyticsService] = None,
     ) -> InferenceResult:
         if mode not in ("sync", "batch", "async"):
             raise ValueError(f"unsupported mode '{mode}'; use stream() for streaming inference")
@@ -173,6 +183,8 @@ class InferenceEngine:
         )
         with self._lock:
             self._results[request.request_id] = finished
+        if analytics is not None:
+            analytics.record(model_name, "success", duration_ms, self._estimate_tokens(input))
         return finished
 
     def stream(
@@ -273,6 +285,7 @@ def infer_endpoint(
     engine: InferenceEngine = Depends(get_inference_engine),
     loader: ModelLoader = Depends(get_model_loader),
     templates: PromptTemplateManager = Depends(get_prompt_template_manager),
+    analytics: InferenceAnalyticsService = Depends(get_inference_analytics_service),
 ) -> dict:
     try:
         result = engine.infer(
@@ -284,6 +297,7 @@ def infer_endpoint(
             templates=templates,
             template_name=payload.get("template_name"),
             template_values=payload.get("template_values"),
+            analytics=analytics,
         )
     except ModelNotLoadedError:
         raise HTTPException(status_code=404, detail="model is not loaded")
