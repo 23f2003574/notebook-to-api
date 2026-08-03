@@ -174,6 +174,29 @@ class DistributedJobDispatcher:
             self._dispatches[job_id] = result
             return result
 
+    def cancel(self, job_id: str) -> bool:
+        """Abandon a job: release any held worker load and discard its dispatch history."""
+        with self._lock:
+            previous = self._dispatches.get(job_id)
+            if previous is None:
+                return False
+            if previous.worker_id is not None:
+                self._discovery.decrement_load(previous.worker_id)
+            self._remove_from_queue(job_id)
+            self._dispatches.pop(job_id, None)
+            self._requests.pop(job_id, None)
+            self._serialized.pop(job_id, None)
+            return True
+
+    def release(self, job_id: str) -> bool:
+        """Free the worker slot held by a finished job, keeping its dispatch history intact."""
+        with self._lock:
+            previous = self._dispatches.get(job_id)
+            if previous is None or previous.worker_id is None:
+                return False
+            self._discovery.decrement_load(previous.worker_id)
+            return True
+
     def queue_status(self) -> list:
         with self._lock:
             queued = list(self._queue)
