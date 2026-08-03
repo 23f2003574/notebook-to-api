@@ -73,6 +73,21 @@ from backend.pipeline.dashboard import (
 )
 from backend.pipeline.pipeline_registry import router as pipeline_registry_router
 from backend.pipeline.bootstrap import bootstrap_pipeline_subsystem
+from backend.ai.model_loader import router as ai_model_loader_router
+from backend.ai.inference_engine import router as ai_inference_router
+from backend.ai.model_versioning import router as ai_model_versioning_router
+from backend.ai.prompt_templates import router as ai_prompt_templates_router
+from backend.ai.batch_inference import router as ai_batch_inference_router
+from backend.ai.model_routing import router as ai_model_routing_router
+from backend.ai.model_benchmark import router as ai_model_benchmark_router
+from backend.ai.model_deployment import router as ai_model_deployment_router
+from backend.ai.inference_analytics import router as ai_inference_analytics_router
+from backend.ai.dashboard import (
+    router as ai_dashboard_router,
+    export_router as ai_export_router,
+)
+from backend.ai.model_registry import router as ai_model_registry_router
+from backend.ai.bootstrap import bootstrap_ai_subsystem
 
 app = FastAPI(
     title="notebook-to-api Dashboard",
@@ -213,6 +228,35 @@ app.include_router(pipeline_dashboard_router)
 app.include_router(pipeline_export_router)
 app.include_router(pipeline_registry_router)
 bootstrap_pipeline_subsystem()
+
+# AI Model Management & Inference Platform subsystem
+# Route ordering matters here for the same reason as the plugin and pipeline
+# subsystems above: model_registry_router's catch-all "/ai/models/{name}"
+# route must be included LAST, since any other router adding a static
+# second-segment path under "/ai/models/" (e.g. "/loaded") would otherwise be
+# shadowed by it.
+#   - model_loader's bare "GET /ai/models/loaded" would otherwise be shadowed
+#     by the registry's "/ai/models/{name}" route (its "POST /load",
+#     "/reload/{model}", and "/unload/{model}" sub-paths don't collide with
+#     anything).
+# inference_engine, model_versioning, prompt_templates, batch_inference,
+# model_routing, model_benchmark, model_deployment, inference_analytics, and
+# dashboard/export are order-independent relative to the registry: none of
+# them define a bare 2-segment GET under "/ai/models/", so they never collide
+# with "/{name}".
+app.include_router(ai_model_loader_router)
+app.include_router(ai_inference_router)
+app.include_router(ai_model_versioning_router)
+app.include_router(ai_prompt_templates_router)
+app.include_router(ai_batch_inference_router)
+app.include_router(ai_model_routing_router)
+app.include_router(ai_model_benchmark_router)
+app.include_router(ai_model_deployment_router)
+app.include_router(ai_inference_analytics_router)
+app.include_router(ai_dashboard_router)
+app.include_router(ai_export_router)
+app.include_router(ai_model_registry_router)
+bootstrap_ai_subsystem()
 
 
 @app.get("/")

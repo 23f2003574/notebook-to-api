@@ -106,6 +106,17 @@ from .dashboard import (
     router as ai_dashboard_router,
     export_router as ai_export_router,
 )
+from .bootstrap import (
+    REQUIRED_SERVICES,
+    SUBSYSTEM_NAME,
+    AIBootstrapError,
+    AIBootstrapValidationResult,
+    AINotInitializedError,
+    AIPlatformBootstrap,
+    UnknownServiceError,
+    bootstrap_ai_subsystem,
+    get_ai_bootstrap,
+)
 from .prompt_management_engine import (
     PromptAsset,
     PromptManagementEngine
