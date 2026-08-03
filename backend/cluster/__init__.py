@@ -16,3 +16,9 @@ from .job_dispatcher import (
     DistributedJobDispatcher,
     get_job_dispatcher,
 )
+from .task_serializer import (
+    SerializationMetadata,
+    SerializedTask,
+    TaskSerializationEngine,
+    get_task_serialization_engine,
+)

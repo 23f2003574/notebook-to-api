@@ -7,6 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from .task_serializer import SerializedTask, TaskSerializationEngine, get_task_serialization_engine
 from .worker_discovery import WorkerDiscoveryService, get_worker_discovery_service
 
 _VALID_POLICIES = {"round_robin", "least_loaded", "capability_match", "priority"}
@@ -53,11 +54,19 @@ class DispatchResult:
 class DistributedJobDispatcher:
     """Assigns jobs to worker nodes using a pluggable selection policy, queuing what it can't place."""
 
-    def __init__(self, discovery: WorkerDiscoveryService, *, default_policy: str = "least_loaded") -> None:
+    def __init__(
+        self,
+        discovery: WorkerDiscoveryService,
+        *,
+        default_policy: str = "least_loaded",
+        serializer: Optional[TaskSerializationEngine] = None,
+    ) -> None:
         self._discovery = discovery
         self._default_policy = default_policy
+        self._serializer = serializer or get_task_serialization_engine()
         self._dispatches: dict = {}
         self._requests: dict = {}
+        self._serialized: dict = {}
         self._queue: list = []
         self._seq = 0
         self._round_robin_cursor: dict = {}
@@ -86,14 +95,30 @@ class DistributedJobDispatcher:
         self._round_robin_cursor[capability] = index + 1
         return candidates[index]
 
-    def dispatch(self, request: DispatchRequest) -> DispatchResult:
+    def dispatch(
+        self,
+        request: DispatchRequest,
+        *,
+        payload: Optional[dict] = None,
+        format: str = "json",
+    ) -> DispatchResult:
         if not request.job_id:
             raise ValueError("job_id must be non-empty")
         if not request.capability:
             raise ValueError("capability must be non-empty")
 
+        task = self._serializer.serialize(
+            request.job_id,
+            request.capability,
+            payload,
+            priority=request.priority,
+            policy=request.policy,
+            format=format,
+        )
+
         with self._lock:
             self._requests[request.job_id] = request
+            self._serialized[request.job_id] = task
             worker = self.select_worker(request)
             if worker is None:
                 self._enqueue(request.job_id)
@@ -169,6 +194,9 @@ class DistributedJobDispatcher:
     def get_dispatch(self, job_id: str) -> Optional[DispatchResult]:
         return self._dispatches.get(job_id)
 
+    def get_serialized_task(self, job_id: str) -> Optional[SerializedTask]:
+        return self._serialized.get(job_id)
+
     def _enqueue(self, job_id: str) -> None:
         self._seq += 1
         self._queue.append((self._seq, job_id))
@@ -200,7 +228,11 @@ def dispatch_endpoint(
             priority=payload.get("priority", 0),
             policy=payload.get("policy", "least_loaded"),
         )
-        result = dispatcher.dispatch(request)
+        result = dispatcher.dispatch(
+            request,
+            payload=payload.get("payload"),
+            format=payload.get("format", "json"),
+        )
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return result.to_dict()
