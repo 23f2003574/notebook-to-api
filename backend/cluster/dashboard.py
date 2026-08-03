@@ -93,6 +93,15 @@ class ClusterDashboardAPI:
             "by_capability": {cap: self._analytics.summary(cap) for cap in self._analytics.capabilities()},
         }
 
+    def snapshot(self) -> dict:
+        """A single combined view of every dashboard section, e.g. for a full export or one-shot page load."""
+        return {
+            "overview": self.overview(),
+            "workers": self.workers(),
+            "executions": self.executions(),
+            "analytics": self.analytics(),
+        }
+
 
 _cluster_dashboard_api = ClusterDashboardAPI(
     get_worker_registry(),
