@@ -40,3 +40,9 @@ from .distributed_scheduler import (
     DistributedScheduler,
     get_distributed_scheduler,
 )
+from .auto_scaling import (
+    ScalingDecision,
+    ScalingPolicy,
+    AutoScalingEngine,
+    get_auto_scaling_engine,
+)

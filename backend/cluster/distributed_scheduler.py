@@ -151,6 +151,23 @@ class DistributedScheduler:
     def get_plan(self, job_id: str) -> Optional[SchedulingPlan]:
         return self._plans.get(job_id)
 
+    def capacity_report(self, *, capability: Optional[str] = None) -> dict:
+        """A snapshot of current placement pressure, used to drive auto-scaling decisions."""
+        with self._lock:
+            reservations_active = len(self._reservations)
+        candidates = self._discovery.available_workers(capability=capability)
+        worker_count = len(candidates)
+        average_load = (
+            sum(self._effective_load(worker.worker_id) for worker in candidates) / worker_count
+            if worker_count
+            else 0.0
+        )
+        return {
+            "worker_count": worker_count,
+            "reservations_active": reservations_active,
+            "average_load": average_load,
+        }
+
     def stats(self) -> dict:
         with self._lock:
             return {
