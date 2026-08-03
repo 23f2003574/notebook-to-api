@@ -10,3 +10,9 @@ from .worker_discovery import (
     WorkerDiscoveryService,
     get_worker_discovery_service,
 )
+from .job_dispatcher import (
+    DispatchRequest,
+    DispatchResult,
+    DistributedJobDispatcher,
+    get_job_dispatcher,
+)
