@@ -92,6 +92,14 @@ class MetricsRegistry:
     def export_samples(self) -> Dict[str, List[MetricSample]]:
         return {name: list(samples) for name, samples in self._samples.items()}
 
+    def latest(
+        self,
+        metric_name: str,
+        labels: Optional[Dict[str, str]] = None,
+    ) -> Optional[MetricSample]:
+        samples = self.query(metric_name, labels=labels)
+        return samples[-1] if samples else None
+
 
 def _utc_now_iso() -> str:
     from datetime import datetime, timezone

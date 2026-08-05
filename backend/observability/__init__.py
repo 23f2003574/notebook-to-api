@@ -16,6 +16,11 @@ from .log_aggregation import (
     LogBatch,
     LogAggregationService
 )
+from .alert_engine import (
+    AlertRule,
+    AlertEvent,
+    AlertRuleEngine
+)
 from .structured_logging_engine import (
     StructuredLogRecord,
     StructuredLoggingEngine
