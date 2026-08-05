@@ -47,6 +47,12 @@ class MetricsStorageEngine:
         self._enforce_retention(series, self._retention_policy)
         return series
 
+    def values(self, metric_name: str) -> List[float]:
+        series = self._series.get(metric_name)
+        if series is None:
+            raise KeyError(f"No stored series for '{metric_name}'")
+        return [point["value"] for point in series.points]
+
     def read(
         self,
         metric_name: str,

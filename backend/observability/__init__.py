@@ -26,6 +26,11 @@ from .metrics_storage import (
     RetentionPolicy,
     MetricsStorageEngine
 )
+from .anomaly_detection import (
+    DetectionBaseline,
+    AnomalyEvent,
+    AnomalyDetectionEngine
+)
 from .health_checks import (
     HealthCheck,
     HealthReport,
