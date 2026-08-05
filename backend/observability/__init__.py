@@ -36,6 +36,11 @@ from .observability_analytics import (
     AnalyticsSnapshot,
     ObservabilityAnalyticsService
 )
+from .export_service import (
+    TelemetryExport,
+    ExportManifest,
+    TelemetryExportService
+)
 from .dashboard import (
     ObservabilityDashboardAPI
 )

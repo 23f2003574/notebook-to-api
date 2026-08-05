@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from backend.observability.alert_engine import AlertRuleEngine
+from backend.observability.export_service import ExportManifest, TelemetryExportService
 from backend.observability.health_checks import HealthCheckFramework
 from backend.observability.observability_analytics import ObservabilityAnalyticsService
 
@@ -12,10 +13,12 @@ class ObservabilityDashboardAPI:
         analytics_service: ObservabilityAnalyticsService,
         alert_engine: AlertRuleEngine,
         health_framework: HealthCheckFramework,
+        export_service: Optional[TelemetryExportService] = None,
     ):
         self._analytics_service = analytics_service
         self._alert_engine = alert_engine
         self._health_framework = health_framework
+        self._export_service = export_service
 
     def metrics(self) -> Dict[str, Dict[str, float]]:
         snapshot = self._analytics_service.summary()
@@ -40,6 +43,11 @@ class ObservabilityDashboardAPI:
     def health(self) -> Dict:
         report = self._health_framework.aggregate()
         return {"status": report.status, "checked_at": report.checked_at}
+
+    def export(self, metric_names: List[str], format: str = "json") -> ExportManifest:
+        if self._export_service is None:
+            raise ValueError("No export_service configured for this dashboard")
+        return self._export_service.export_all(metric_names, format=format)
 
     def overview(self) -> Dict:
         return {
