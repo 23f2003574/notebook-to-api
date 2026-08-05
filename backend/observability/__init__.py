@@ -6,6 +6,11 @@ from .metrics_registry import (
     MetricDefinition,
     MetricsRegistry
 )
+from .telemetry_collector import (
+    TelemetryRecord,
+    CollectionBatch,
+    TelemetryCollector
+)
 from .structured_logging_engine import (
     StructuredLogRecord,
     StructuredLoggingEngine

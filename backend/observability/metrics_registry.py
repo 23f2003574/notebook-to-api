@@ -89,6 +89,9 @@ class MetricsRegistry:
     def list_metrics(self) -> List[MetricDefinition]:
         return list(self._definitions.values())
 
+    def export_samples(self) -> Dict[str, List[MetricSample]]:
+        return {name: list(samples) for name, samples in self._samples.items()}
+
 
 def _utc_now_iso() -> str:
     from datetime import datetime, timezone
