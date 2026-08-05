@@ -21,6 +21,11 @@ from .service_discovery import (
     TopologySnapshot,
     ServiceDiscoveryMonitor
 )
+from .metrics_storage import (
+    MetricSeries,
+    RetentionPolicy,
+    MetricsStorageEngine
+)
 from .health_checks import (
     HealthCheck,
     HealthReport,

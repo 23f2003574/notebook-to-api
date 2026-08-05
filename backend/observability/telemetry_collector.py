@@ -5,6 +5,7 @@ from uuid import uuid4
 from backend.observability.distributed_tracing import DistributedTracingEngine
 from backend.observability.log_aggregation import LogAggregationService
 from backend.observability.metrics_registry import MetricsRegistry
+from backend.observability.metrics_storage import MetricSeries, MetricsStorageEngine
 
 
 VALID_SOURCES = ("metrics", "events", "logs", "traces")
@@ -118,6 +119,19 @@ class TelemetryCollector:
                 )
             )
         return collected
+
+    def persist_metrics(self, storage_engine: MetricsStorageEngine) -> List[MetricSeries]:
+        persisted = []
+        for record in self._buffer:
+            if record.source != "metrics":
+                continue
+            series = storage_engine.write(
+                metric_name=record.event_type,
+                timestamp=record.timestamp,
+                value=record.payload.get("value"),
+            )
+            persisted.append(series)
+        return persisted
 
 
 def _utc_now_iso() -> str:
