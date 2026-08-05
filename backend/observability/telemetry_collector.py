@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional
 from uuid import uuid4
 
+from backend.observability.distributed_tracing import DistributedTracingEngine
 from backend.observability.metrics_registry import MetricsRegistry
 
 
@@ -77,6 +78,27 @@ class TelemetryCollector:
                         timestamp=sample.timestamp,
                     )
                 )
+        return collected
+
+    def collect_traces(
+        self, tracing_engine: DistributedTracingEngine, trace_id: str
+    ) -> List[TelemetryRecord]:
+        collected = []
+        for span in tracing_engine.trace(trace_id):
+            collected.append(
+                self.collect(
+                    source="traces",
+                    event_type=span.name,
+                    payload={
+                        "span_id": span.span_id,
+                        "trace_id": span.trace_id,
+                        "parent_span_id": span.parent_span_id,
+                        "span_type": span.span_type,
+                        "duration_ms": span.duration_ms,
+                    },
+                    timestamp=span.start_time,
+                )
+            )
         return collected
 
 
