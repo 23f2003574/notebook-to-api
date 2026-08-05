@@ -2,6 +2,10 @@ from .metrics_collection_engine import (
     MetricSample,
     MetricsCollectionEngine
 )
+from .metrics_registry import (
+    MetricDefinition,
+    MetricsRegistry
+)
 from .structured_logging_engine import (
     StructuredLogRecord,
     StructuredLoggingEngine
