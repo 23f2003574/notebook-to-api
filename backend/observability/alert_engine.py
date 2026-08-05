@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from uuid import uuid4
 
+from backend.observability.health_checks import HealthReport
 from backend.observability.metrics_registry import MetricsRegistry
 
 
@@ -83,6 +84,19 @@ class AlertRuleEngine:
                     f"(value={sample.value})"
                 ),
             )
+
+        existing = self._active_alerts.get(rule_name)
+        if existing is not None:
+            self.resolve(existing.alert_id)
+        return None
+
+    def evaluate_health(self, rule_name: str, report: HealthReport) -> Optional[AlertEvent]:
+        rule = self._rules.get(rule_name)
+        if rule is None:
+            raise KeyError(f"Rule '{rule_name}' is not registered")
+
+        if report.status != "healthy":
+            return self.trigger(rule_name, message=report.error or f"{report.name} is {report.status}")
 
         existing = self._active_alerts.get(rule_name)
         if existing is not None:

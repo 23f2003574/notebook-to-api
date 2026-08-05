@@ -16,6 +16,11 @@ from .log_aggregation import (
     LogBatch,
     LogAggregationService
 )
+from .health_checks import (
+    HealthCheck,
+    HealthReport,
+    HealthCheckFramework
+)
 from .alert_engine import (
     AlertRule,
     AlertEvent,
