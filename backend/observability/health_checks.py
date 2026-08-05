@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional
 
+from backend.observability.service_discovery import ServiceNode
+
 
 VALID_CHECK_TYPES = ("liveness", "readiness", "startup", "dependency")
 VALID_STATUSES = ("healthy", "unhealthy", "unknown")
@@ -93,6 +95,31 @@ class HealthCheckFramework:
         if report is None:
             raise KeyError(f"No health report available for '{name}'")
         return report
+
+    def is_registered(self, name: str) -> bool:
+        return name in self._checks
+
+    def register_from_topology(
+        self,
+        nodes: List[ServiceNode],
+        check_fn: Callable[[ServiceNode], bool],
+    ) -> List[HealthCheck]:
+        registered = []
+        for node in nodes:
+            if self.is_registered(node.name):
+                continue
+
+            depends_on = [dep for dep in node.depends_on if self.is_registered(dep)]
+            check = self.register(
+                HealthCheck(
+                    name=node.name,
+                    check_type="dependency",
+                    check_fn=lambda node=node: check_fn(node),
+                    depends_on=depends_on,
+                )
+            )
+            registered.append(check)
+        return registered
 
 
 def _utc_now_iso() -> str:

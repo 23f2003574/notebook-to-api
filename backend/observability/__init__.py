@@ -16,6 +16,11 @@ from .log_aggregation import (
     LogBatch,
     LogAggregationService
 )
+from .service_discovery import (
+    ServiceNode,
+    TopologySnapshot,
+    ServiceDiscoveryMonitor
+)
 from .health_checks import (
     HealthCheck,
     HealthReport,
