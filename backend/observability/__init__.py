@@ -11,6 +11,11 @@ from .telemetry_collector import (
     CollectionBatch,
     TelemetryCollector
 )
+from .log_aggregation import (
+    LogEntry,
+    LogBatch,
+    LogAggregationService
+)
 from .structured_logging_engine import (
     StructuredLogRecord,
     StructuredLoggingEngine

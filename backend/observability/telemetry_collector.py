@@ -3,6 +3,7 @@ from typing import Dict, Iterable, List, Optional
 from uuid import uuid4
 
 from backend.observability.distributed_tracing import DistributedTracingEngine
+from backend.observability.log_aggregation import LogAggregationService
 from backend.observability.metrics_registry import MetricsRegistry
 
 
@@ -97,6 +98,23 @@ class TelemetryCollector:
                         "duration_ms": span.duration_ms,
                     },
                     timestamp=span.start_time,
+                )
+            )
+        return collected
+
+    def collect_logs(self, log_service: LogAggregationService) -> List[TelemetryRecord]:
+        collected = []
+        for entry in log_service.query():
+            collected.append(
+                self.collect(
+                    source="logs",
+                    event_type=entry.severity,
+                    payload={
+                        "source": entry.source,
+                        "message": entry.message,
+                        "attributes": entry.attributes,
+                    },
+                    timestamp=entry.timestamp,
                 )
             )
         return collected
