@@ -44,6 +44,10 @@ from .export_service import (
 from .dashboard import (
     ObservabilityDashboardAPI
 )
+from .bootstrap import (
+    ObservabilityRuntime,
+    ObservabilityBootstrap
+)
 from .health_checks import (
     HealthCheck,
     HealthReport,
