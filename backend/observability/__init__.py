@@ -36,6 +36,9 @@ from .observability_analytics import (
     AnalyticsSnapshot,
     ObservabilityAnalyticsService
 )
+from .dashboard import (
+    ObservabilityDashboardAPI
+)
 from .health_checks import (
     HealthCheck,
     HealthReport,

@@ -55,6 +55,15 @@ class ObservabilityAnalyticsService:
         self._storage_engine.write(metric_name, entry.timestamp, value)
         return entry
 
+    def latest(self, metric_name: str) -> Optional[float]:
+        if metric_name not in VALID_ANALYTICS_METRICS:
+            raise ValueError(
+                f"Unsupported analytics metric '{metric_name}'. "
+                f"Expected one of {VALID_ANALYTICS_METRICS}."
+            )
+        entries = self._records.get(metric_name, [])
+        return entries[-1].value if entries else None
+
     def summary(self) -> AnalyticsSnapshot:
         averages = {
             name: sum(entry.value for entry in entries) / len(entries)
