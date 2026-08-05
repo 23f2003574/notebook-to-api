@@ -47,6 +47,9 @@ class MetricsStorageEngine:
         self._enforce_retention(series, self._retention_policy)
         return series
 
+    def series_names(self) -> List[str]:
+        return list(self._series.keys())
+
     def values(self, metric_name: str) -> List[float]:
         series = self._series.get(metric_name)
         if series is None:
