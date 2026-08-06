@@ -85,6 +85,15 @@ class StorageDashboardAPI:
             "snapshot_count": len(self._analytics.history()),
         }
 
+    def snapshot(self) -> dict:
+        """Bundle every dashboard section into a single payload, e.g. for export."""
+        return {
+            "overview": self.overview(),
+            "artifacts": self.artifacts(),
+            "capacity": self.capacity(),
+            "analytics": self.analytics(),
+        }
+
 
 _storage_dashboard_api = StorageDashboardAPI(
     artifact_manager=get_artifact_manager(),
