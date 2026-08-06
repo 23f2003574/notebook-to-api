@@ -83,6 +83,7 @@ class ObjectStorageEngine:
         backend: ObjectStorageBackend = ObjectStorageBackend.LOCAL,
         content_type: str = "application/octet-stream",
         backend_id: Optional[str] = None,
+        expected_checksum: Optional[str] = None,
     ) -> StorageObject:
         if not key:
             raise ValueError("key must be non-empty")
@@ -90,6 +91,8 @@ class ObjectStorageEngine:
 
         payload = data if isinstance(data, (bytes, bytearray)) else b"".join(data)
         payload = bytes(payload)
+        if expected_checksum is not None and _checksum(payload) != expected_checksum:
+            raise ValueError(f"checksum mismatch for key '{key}'")
         now = datetime.now(timezone.utc)
 
         with self._lock:
