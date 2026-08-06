@@ -130,6 +130,17 @@ class ArtifactManager:
             artifacts = [artifact for artifact in artifacts if artifact.artifact_type == artifact_type]
         return sorted(artifacts, key=lambda artifact: artifact.artifact_id)
 
+    def update_manifest(self, artifact_id: str, object_key: str, manifest: ArtifactManifest) -> Artifact:
+        """Repoint an artifact at a new object_key/manifest, e.g. after a version rollback."""
+        with self._lock:
+            artifact = self._artifacts.get(artifact_id)
+            if artifact is None:
+                raise KeyError(artifact_id)
+            artifact.object_key = object_key
+            artifact.manifest = manifest
+            artifact.updated_at = datetime.now(timezone.utc)
+        return artifact
+
     def move(self, artifact_id: str, new_namespace: str) -> Artifact:
         if not new_namespace:
             raise ValueError("new_namespace must be non-empty")

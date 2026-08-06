@@ -30,3 +30,10 @@ from .blob_upload import (
     get_blob_upload_service,
     router as blob_upload_router,
 )
+from .storage_versioning import (
+    StorageVersion,
+    StorageVersionManager,
+    VersionSnapshot,
+    get_storage_version_manager,
+    router as storage_versioning_router,
+)
