@@ -108,6 +108,11 @@ class StorageRegistry:
             backends = [backend for backend in backends if backend.status == status]
         return sorted(backends, key=lambda backend: backend.backend_id)
 
+    def is_active(self, backend_id: str) -> bool:
+        with self._lock:
+            backend = self._backends.get(backend_id)
+            return backend is not None and backend.status == "active"
+
     def set_status(self, backend_id: str, status: str) -> StorageBackend:
         if status not in _VALID_STATUSES:
             raise ValueError(f"unsupported status '{status}'; expected one of {sorted(_VALID_STATUSES)}")
