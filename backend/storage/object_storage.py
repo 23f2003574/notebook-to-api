@@ -74,6 +74,12 @@ class ObjectStorageEngine:
         self._objects: dict = {}
         self._lock = Lock()
         self._registry = registry
+        self._listeners: list = []
+
+    def add_listener(self, callback) -> None:
+        """Register a callback invoked with the StorageObject after every successful put()."""
+        with self._lock:
+            self._listeners.append(callback)
 
     def put(
         self,
@@ -111,6 +117,9 @@ class ObjectStorageEngine:
                 ),
             )
             self._objects[key] = obj
+            listeners = list(self._listeners)
+        for listener in listeners:
+            listener(obj)
         return obj
 
     def get(self, key: str) -> Optional[StorageObject]:

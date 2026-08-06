@@ -37,3 +37,11 @@ from .storage_versioning import (
     get_storage_version_manager,
     router as storage_versioning_router,
 )
+from .artifact_integrity import (
+    ArtifactIntegrityEngine,
+    ChecksumAlgorithm,
+    ChecksumRecord,
+    IntegrityReport,
+    get_artifact_integrity_engine,
+    router as artifact_integrity_router,
+)
