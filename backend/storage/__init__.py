@@ -54,3 +54,12 @@ from .lifecycle_policy import (
     get_lifecycle_policy_manager,
     router as lifecycle_policy_router,
 )
+from .storage_replication import (
+    JobStatus,
+    ReplicationJob,
+    ReplicationMode,
+    ReplicationStatus,
+    StorageReplicationEngine,
+    get_storage_replication_engine,
+    router as storage_replication_router,
+)

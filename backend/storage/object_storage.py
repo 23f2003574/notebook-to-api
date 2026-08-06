@@ -126,6 +126,10 @@ class ObjectStorageEngine:
         with self._lock:
             return self._objects.get(key)
 
+    def list_keys(self) -> list:
+        with self._lock:
+            return sorted(self._objects.keys())
+
     def get_stream(self, key: str, *, chunk_size: int = _STREAM_CHUNK_SIZE) -> Iterator[bytes]:
         obj = self.get(key)
         if obj is None:
