@@ -45,3 +45,12 @@ from .artifact_integrity import (
     get_artifact_integrity_engine,
     router as artifact_integrity_router,
 )
+from .lifecycle_policy import (
+    LifecyclePolicy,
+    LifecyclePolicyManager,
+    PolicyExecution,
+    PolicyType,
+    RetentionRule,
+    get_lifecycle_policy_manager,
+    router as lifecycle_policy_router,
+)

@@ -51,6 +51,7 @@ class Artifact:
     namespace: str
     object_key: str
     manifest: ArtifactManifest
+    tier: str = "standard"
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -62,6 +63,7 @@ class Artifact:
             "namespace": self.namespace,
             "object_key": self.object_key,
             "manifest": self.manifest.to_dict(),
+            "tier": self.tier,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
         }
@@ -138,6 +140,18 @@ class ArtifactManager:
                 raise KeyError(artifact_id)
             artifact.object_key = object_key
             artifact.manifest = manifest
+            artifact.updated_at = datetime.now(timezone.utc)
+        return artifact
+
+    def set_tier(self, artifact_id: str, tier: str) -> Artifact:
+        """Move an artifact to a new storage tier, e.g. as directed by a lifecycle policy."""
+        if not tier:
+            raise ValueError("tier must be non-empty")
+        with self._lock:
+            artifact = self._artifacts.get(artifact_id)
+            if artifact is None:
+                raise KeyError(artifact_id)
+            artifact.tier = tier
             artifact.updated_at = datetime.now(timezone.utc)
         return artifact
 
