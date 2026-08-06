@@ -13,3 +13,11 @@ from .object_storage import (
     get_object_storage_engine,
     router as object_storage_router,
 )
+from .artifact_manager import (
+    Artifact,
+    ArtifactManager,
+    ArtifactManifest,
+    ArtifactType,
+    get_artifact_manager,
+    router as artifact_manager_router,
+)

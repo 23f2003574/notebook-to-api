@@ -126,6 +126,24 @@ class ObjectStorageEngine:
         with self._lock:
             return self._objects.pop(key, None) is not None
 
+    def move(self, old_key: str, new_key: str) -> StorageObject:
+        if not new_key:
+            raise ValueError("new_key must be non-empty")
+        with self._lock:
+            if old_key not in self._objects:
+                raise KeyError(old_key)
+            if new_key in self._objects:
+                raise ValueError(f"key '{new_key}' already exists")
+            obj = self._objects.pop(old_key)
+            moved = StorageObject(
+                key=new_key,
+                backend=obj.backend,
+                data=obj.data,
+                metadata=obj.metadata,
+            )
+            self._objects[new_key] = moved
+        return moved
+
     def exists(self, key: str) -> bool:
         with self._lock:
             return key in self._objects
