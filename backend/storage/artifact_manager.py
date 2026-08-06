@@ -52,6 +52,7 @@ class Artifact:
     object_key: str
     manifest: ArtifactManifest
     tier: str = "standard"
+    status: str = "active"
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -64,6 +65,7 @@ class Artifact:
             "object_key": self.object_key,
             "manifest": self.manifest.to_dict(),
             "tier": self.tier,
+            "status": self.status,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
         }
@@ -152,6 +154,16 @@ class ArtifactManager:
             if artifact is None:
                 raise KeyError(artifact_id)
             artifact.tier = tier
+            artifact.updated_at = datetime.now(timezone.utc)
+        return artifact
+
+    def mark_failed(self, artifact_id: str) -> Artifact:
+        """Flag an artifact as failed, e.g. so the garbage collector reclaims its payload."""
+        with self._lock:
+            artifact = self._artifacts.get(artifact_id)
+            if artifact is None:
+                raise KeyError(artifact_id)
+            artifact.status = "failed"
             artifact.updated_at = datetime.now(timezone.utc)
         return artifact
 

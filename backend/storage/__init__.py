@@ -63,3 +63,11 @@ from .storage_replication import (
     get_storage_replication_engine,
     router as storage_replication_router,
 )
+from .storage_gc import (
+    CleanupReport,
+    CleanupTarget,
+    GarbageCandidate,
+    StorageGarbageCollector,
+    get_storage_garbage_collector,
+    router as storage_gc_router,
+)
