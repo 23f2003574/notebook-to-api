@@ -101,6 +101,10 @@ class StorageAnalyticsService:
                 return self._history[-1]
         return self.record()
 
+    def history(self) -> list:
+        with self._lock:
+            return list(self._history)
+
     def trends(self, *, metric: Optional[str] = None) -> list:
         with self._lock:
             history = list(self._history)

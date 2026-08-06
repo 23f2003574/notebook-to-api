@@ -78,3 +78,8 @@ from .storage_analytics import (
     get_storage_analytics_service,
     router as storage_analytics_router,
 )
+from .dashboard import (
+    StorageDashboardAPI,
+    get_storage_dashboard_api,
+    router as storage_dashboard_router,
+)
