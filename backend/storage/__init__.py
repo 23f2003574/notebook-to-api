@@ -71,3 +71,10 @@ from .storage_gc import (
     get_storage_garbage_collector,
     router as storage_gc_router,
 )
+from .storage_analytics import (
+    StorageAnalyticsService,
+    StorageMetrics,
+    StorageTrend,
+    get_storage_analytics_service,
+    router as storage_analytics_router,
+)

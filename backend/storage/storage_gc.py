@@ -88,6 +88,7 @@ class StorageGarbageCollector:
         self._last_scan: Optional[list] = None
         self._marked: Optional[list] = None
         self._last_report: Optional[CleanupReport] = None
+        self._report_history: list = []
         self._lock = Lock()
 
     def add_candidate_provider(self, provider) -> None:
@@ -189,6 +190,7 @@ class StorageGarbageCollector:
         )
         with self._lock:
             self._last_report = report
+            self._report_history.append(report)
             if not dry_run:
                 self._marked = None
                 self._last_scan = None
@@ -198,6 +200,10 @@ class StorageGarbageCollector:
         self.scan()
         self.mark()
         return self.sweep(dry_run=dry_run)
+
+    def history(self) -> list:
+        with self._lock:
+            return list(self._report_history)
 
     def report(self) -> Optional[CleanupReport]:
         with self._lock:
