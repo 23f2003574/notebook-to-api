@@ -90,6 +90,20 @@ def test_revoke_not_granted_raises(engine: PermissionEngine):
         engine.revoke("alice", "orders", "Read")
 
 
+def test_revoke_all_clears_every_direct_grant(engine: PermissionEngine):
+    engine.grant("alice", "orders", "Read", timestamp=BASE_TIME)
+    engine.grant("alice", "invoices", "Write", timestamp=BASE_TIME)
+
+    engine.revoke_all("alice")
+
+    assert engine.list_permissions("alice", include_inherited=False) == []
+    assert engine.check("alice", "orders", "Read") is False
+
+
+def test_revoke_all_unknown_identity_is_a_noop(engine: PermissionEngine):
+    engine.revoke_all("does-not-exist")
+
+
 def test_list_permissions_returns_direct_grants(engine: PermissionEngine):
     engine.grant("alice", "orders", "Read", timestamp=BASE_TIME)
     engine.grant("alice", "invoices", "Write", timestamp=BASE_TIME)

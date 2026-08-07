@@ -123,6 +123,11 @@ class PermissionEngine:
             del identity_permissions[permission_id]
             self._invalidate_cache_for(identity)
 
+    def revoke_all(self, identity: str) -> None:
+        with self._lock:
+            self._identity_permissions.pop(identity, None)
+            self._invalidate_cache_for(identity)
+
     def _invalidate_cache_for(self, identity: str) -> None:
         for key in [key for key in self._cache if key[0] == identity]:
             del self._cache[key]
