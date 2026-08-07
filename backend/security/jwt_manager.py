@@ -120,6 +120,9 @@ class JWTTokenManager:
         self._refresh_tokens: dict = {}
         self._lock = Lock()
 
+    def ttl_for(self, token_type: str) -> timedelta:
+        return self._ttls[token_type]
+
     def _sign(self, header: dict, payload: dict) -> str:
         header_segment = _b64url_encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
         payload_segment = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
