@@ -224,6 +224,11 @@ from .security_metrics import (
     get_security_analytics_service as get_security_metrics_service,
     router as security_metrics_router,
 )
+from .ops_dashboard import (
+    SecurityDashboardAPI as SecurityOpsDashboardAPI,
+    get_security_dashboard_api as get_security_ops_dashboard_api,
+    router as ops_dashboard_router,
+)
 from .identity_registry import (
     Identity,
     IdentityAlreadyExistsError,
@@ -431,6 +436,9 @@ __all__ = [
     "SecuritySnapshot",
     "get_security_metrics_service",
     "security_metrics_router",
+    "SecurityOpsDashboardAPI",
+    "get_security_ops_dashboard_api",
+    "ops_dashboard_router",
     "Identity",
     "IdentityAlreadyExistsError",
     "IdentityMetadata",

@@ -125,6 +125,23 @@ def test_trends_rejects_non_positive_bucket(service: SecurityAnalyticsService):
         service.trends(bucket_seconds=0)
 
 
+def test_risk_indicators_zero_with_no_events(service: SecurityAnalyticsService):
+    indicators = service.risk_indicators()
+
+    assert indicators["risk_score"] == 0.0
+    assert indicators["authentication_failures"] == 0
+    assert indicators["permission_denials"] == 0
+
+
+def test_risk_indicators_weighs_failures_and_denials(service: SecurityAnalyticsService, audit_log: AuditLogService):
+    audit_log.record("Authentication", "alice", "user:alice", "login", outcome="failure")
+    audit_log.record("Authorization", "alice", "orders", "read", outcome="denied")
+
+    indicators = service.risk_indicators()
+
+    assert indicators["risk_score"] == pytest.approx(2 + 3)
+
+
 def test_export_returns_summary_and_trends(service: SecurityAnalyticsService):
     service.record("Authentication", "alice", "login", "attempt", outcome="failure", timestamp=BASE_TIME)
 

@@ -129,6 +129,20 @@ class SecurityAnalyticsService:
             window_end=window_end,
         )
 
+    def risk_indicators(
+        self,
+        *,
+        window_start: Optional[datetime] = None,
+        window_end: Optional[datetime] = None,
+    ) -> dict:
+        metrics = self.summary(window_start=window_start, window_end=window_end)
+        score = metrics.authentication_failures * 2 + metrics.permission_denials * 3
+        return {
+            "risk_score": float(min(score, 100.0)),
+            "authentication_failures": metrics.authentication_failures,
+            "permission_denials": metrics.permission_denials,
+        }
+
     def trends(self, *, bucket_seconds: float = _DEFAULT_BUCKET_SECONDS) -> list:
         if bucket_seconds <= 0:
             raise ValueError("bucket_seconds must be positive")
