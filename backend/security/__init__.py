@@ -239,6 +239,15 @@ from .security_export import (
     get_security_export_service as get_security_export_bundle_service,
     router as security_export_bundle_router,
 )
+from .security_bootstrap import (
+    REQUIRED_SERVICES as V2_REQUIRED_SERVICES,
+    SUBSYSTEM_NAME as V2_SUBSYSTEM_NAME,
+    SecurityBootstrap as V2SecurityBootstrap,
+    SecurityBootstrapError as V2SecurityBootstrapError,
+    UnknownServiceError as UnknownV2ServiceError,
+    bootstrap_security_subsystem as bootstrap_security_subsystem_v2,
+    get_security_bootstrap as get_v2_security_bootstrap,
+)
 from .identity_registry import (
     Identity,
     IdentityAlreadyExistsError,
@@ -457,6 +466,13 @@ __all__ = [
     "UnknownBundleExportError",
     "get_security_export_bundle_service",
     "security_export_bundle_router",
+    "V2_REQUIRED_SERVICES",
+    "V2_SUBSYSTEM_NAME",
+    "V2SecurityBootstrap",
+    "V2SecurityBootstrapError",
+    "UnknownV2ServiceError",
+    "bootstrap_security_subsystem_v2",
+    "get_v2_security_bootstrap",
     "Identity",
     "IdentityAlreadyExistsError",
     "IdentityMetadata",
