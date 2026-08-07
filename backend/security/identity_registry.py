@@ -100,6 +100,14 @@ class IdentityRegistry:
                 for identity_id, metadata in self._identities.items()
             ]
 
+    def find_by_display_name(self, display_name: str) -> Optional[Identity]:
+        with self._lock:
+            identity_id = self._by_display_name.get(display_name)
+            if identity_id is None:
+                return None
+            metadata = self._identities[identity_id]
+        return Identity(identity_id=identity_id, metadata=metadata)
+
     def update(
         self,
         identity_id: str,
