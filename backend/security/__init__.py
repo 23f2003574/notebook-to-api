@@ -119,6 +119,15 @@ from .export_service import (
     get_security_export_service,
     router as security_export_router,
 )
+from .identity_registry import (
+    Identity,
+    IdentityAlreadyExistsError,
+    IdentityMetadata,
+    IdentityRegistry,
+    UnknownIdentityError,
+    get_identity_registry,
+    router as identity_registry_router,
+)
 from .bootstrap import (
     DEFAULT_PERMISSIONS,
     DEFAULT_POLICY_NAMES,
@@ -230,6 +239,13 @@ __all__ = [
     "UnknownExportError",
     "get_security_export_service",
     "security_export_router",
+    "Identity",
+    "IdentityAlreadyExistsError",
+    "IdentityMetadata",
+    "IdentityRegistry",
+    "UnknownIdentityError",
+    "get_identity_registry",
+    "identity_registry_router",
     "DEFAULT_PERMISSIONS",
     "DEFAULT_POLICY_NAMES",
     "REQUIRED_SERVICES",
