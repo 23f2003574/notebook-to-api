@@ -109,6 +109,16 @@ def test_revoke_role_not_assigned_raises(rbac: RoleBasedAccessControl, user_id: 
         rbac.revoke_role(user_id, "Developer")
 
 
+def test_version_increments_on_assign_and_revoke(rbac: RoleBasedAccessControl, user_id: str):
+    initial = rbac.version()
+
+    rbac.assign_role(user_id, "Developer", timestamp=BASE_TIME)
+    assert rbac.version() == initial + 1
+
+    rbac.revoke_role(user_id, "Developer")
+    assert rbac.version() == initial + 2
+
+
 def test_assignments_for_user(rbac: RoleBasedAccessControl, user_id: str):
     rbac.assign_role(user_id, "Viewer", timestamp=BASE_TIME)
 

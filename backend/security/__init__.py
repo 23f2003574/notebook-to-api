@@ -172,6 +172,16 @@ from .rbac_engine import (
     get_rbac_engine,
     router as rbac_engine_router,
 )
+from .permission_engine import (
+    PERMISSION_TYPES as FINE_GRAINED_PERMISSION_TYPES,
+    InvalidPermissionTypeError as InvalidFineGrainedPermissionTypeError,
+    Permission as FineGrainedPermission,
+    PermissionAssignment as FineGrainedPermissionAssignment,
+    PermissionEngine as FineGrainedPermissionEngine,
+    PermissionNotGrantedError as FineGrainedPermissionNotGrantedError,
+    get_permission_engine as get_fine_grained_permission_engine,
+    router as permission_engine_router,
+)
 from .identity_registry import (
     Identity,
     IdentityAlreadyExistsError,
@@ -337,6 +347,14 @@ __all__ = [
     "EngineUnknownRoleError",
     "get_rbac_engine",
     "rbac_engine_router",
+    "FINE_GRAINED_PERMISSION_TYPES",
+    "InvalidFineGrainedPermissionTypeError",
+    "FineGrainedPermission",
+    "FineGrainedPermissionAssignment",
+    "FineGrainedPermissionEngine",
+    "FineGrainedPermissionNotGrantedError",
+    "get_fine_grained_permission_engine",
+    "permission_engine_router",
     "Identity",
     "IdentityAlreadyExistsError",
     "IdentityMetadata",

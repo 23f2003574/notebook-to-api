@@ -80,6 +80,7 @@ class RoleBasedAccessControl:
         self._authentication_manager = authentication_manager or get_authentication_manager()
         self._roles: dict[str, Role] = {}
         self._assignments: dict[str, dict[str, RoleAssignment]] = {}
+        self._version = 0
         self._lock = Lock()
         if seed_default_roles:
             for name, inherits in DEFAULT_ROLES.items():
@@ -126,6 +127,7 @@ class RoleBasedAccessControl:
                 assigned_at=timestamp or datetime.now(timezone.utc),
             )
             self._assignments.setdefault(user_id, {})[role] = assignment
+            self._version += 1
         return assignment
 
     def revoke_role(self, user_id: str, role: str) -> None:
@@ -134,6 +136,11 @@ class RoleBasedAccessControl:
             if role not in user_assignments:
                 raise RoleNotAssignedError(role)
             del user_assignments[role]
+            self._version += 1
+
+    def version(self) -> int:
+        with self._lock:
+            return self._version
 
     def _resolve_inherited(self, role_name: str, resolved: set) -> None:
         if role_name in resolved:
