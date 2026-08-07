@@ -108,6 +108,14 @@ def test_query_filters_by_time_range(logger: SecurityAuditLogger):
     assert len(results) == 1
 
 
+def test_count_matches_query_length(logger: SecurityAuditLogger):
+    logger.record("Authentication", "alice", "user:alice", "login", timestamp=BASE_TIME)
+    logger.record("Session", "alice", "session:1", "create", timestamp=BASE_TIME)
+
+    assert logger.count() == 2
+    assert logger.count(AuditFilter(event_type="Session")) == 1
+
+
 def test_export_returns_serializable_dicts(logger: SecurityAuditLogger):
     logger.record("Authentication", "alice", "user:alice", "login", timestamp=BASE_TIME)
 

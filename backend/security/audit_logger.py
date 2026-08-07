@@ -197,6 +197,9 @@ class SecurityAuditLogger:
             events = list(self._events)
         return [event for event in events if filter_.matches(event)]
 
+    def count(self, filter_: Optional[AuditFilter] = None) -> int:
+        return len(self.query(filter_))
+
     def export(self, filter_: Optional[AuditFilter] = None) -> list:
         return [event.to_dict() for event in self.query(filter_)]
 

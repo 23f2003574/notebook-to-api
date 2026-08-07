@@ -217,6 +217,13 @@ from .audit_logger import (
     get_security_audit_logger,
     router as audit_logger_router,
 )
+from .security_metrics import (
+    SecurityAnalyticsService as SecurityMetricsAnalyticsService,
+    SecurityMetrics as SecurityMetricsSnapshot,
+    SecuritySnapshot,
+    get_security_analytics_service as get_security_metrics_service,
+    router as security_metrics_router,
+)
 from .identity_registry import (
     Identity,
     IdentityAlreadyExistsError,
@@ -419,6 +426,11 @@ __all__ = [
     "UnknownSecurityAuditEventError",
     "get_security_audit_logger",
     "audit_logger_router",
+    "SecurityMetricsAnalyticsService",
+    "SecurityMetricsSnapshot",
+    "SecuritySnapshot",
+    "get_security_metrics_service",
+    "security_metrics_router",
     "Identity",
     "IdentityAlreadyExistsError",
     "IdentityMetadata",
