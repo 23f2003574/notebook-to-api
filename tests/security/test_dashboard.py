@@ -96,6 +96,13 @@ def test_overview_combines_all_sections(dashboard: SecurityDashboardAPI, audit_l
     assert result["sessions"]["active_sessions"] == 1
 
 
+def test_manifest_lists_datasets(dashboard: SecurityDashboardAPI):
+    manifest = dashboard.manifest()
+
+    assert manifest["datasets"] == ["authentication", "authorization", "sessions", "analytics"]
+    assert "generated_at" in manifest
+
+
 @pytest.fixture
 def client() -> TestClient:
     app = FastAPI()

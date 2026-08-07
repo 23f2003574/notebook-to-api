@@ -77,6 +77,12 @@ class SecurityDashboardAPI:
             "analytics": self.analytics(),
         }
 
+    def manifest(self, *, timestamp: Optional[datetime] = None) -> dict:
+        return {
+            "datasets": ["authentication", "authorization", "sessions", "analytics"],
+            "generated_at": _generated_at(timestamp),
+        }
+
 
 _security_dashboard_api = SecurityDashboardAPI()
 

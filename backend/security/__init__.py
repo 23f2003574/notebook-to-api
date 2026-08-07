@@ -229,6 +229,16 @@ from .ops_dashboard import (
     get_security_dashboard_api as get_security_ops_dashboard_api,
     router as ops_dashboard_router,
 )
+from .security_export import (
+    EXPORT_FORMATS as BUNDLE_EXPORT_FORMATS,
+    ExportManifest,
+    InvalidExportFormatError as InvalidBundleExportFormatError,
+    SecurityExport,
+    SecurityExportService as SecurityExportBundleService,
+    UnknownExportError as UnknownBundleExportError,
+    get_security_export_service as get_security_export_bundle_service,
+    router as security_export_bundle_router,
+)
 from .identity_registry import (
     Identity,
     IdentityAlreadyExistsError,
@@ -439,6 +449,14 @@ __all__ = [
     "SecurityOpsDashboardAPI",
     "get_security_ops_dashboard_api",
     "ops_dashboard_router",
+    "BUNDLE_EXPORT_FORMATS",
+    "ExportManifest",
+    "InvalidBundleExportFormatError",
+    "SecurityExport",
+    "SecurityExportBundleService",
+    "UnknownBundleExportError",
+    "get_security_export_bundle_service",
+    "security_export_bundle_router",
     "Identity",
     "IdentityAlreadyExistsError",
     "IdentityMetadata",
