@@ -4,6 +4,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.security.audit_logger import SecurityAuditLogger
 from backend.security.authentication import (
     AuthenticationManager,
     AuthenticationResult,
@@ -18,8 +19,13 @@ BASE_TIME = datetime(2026, 7, 27, 18, 0, 0, tzinfo=timezone.utc)
 
 
 @pytest.fixture
-def manager() -> AuthenticationManager:
-    return AuthenticationManager()
+def audit_logger() -> SecurityAuditLogger:
+    return SecurityAuditLogger()
+
+
+@pytest.fixture
+def manager(audit_logger: SecurityAuditLogger) -> AuthenticationManager:
+    return AuthenticationManager(audit_logger=audit_logger)
 
 
 def test_register_creates_credential(manager: AuthenticationManager):
@@ -93,6 +99,56 @@ def test_logout_ends_session(manager: AuthenticationManager):
 def test_logout_unknown_session_raises(manager: AuthenticationManager):
     with pytest.raises(UnknownSessionError):
         manager.logout("does-not-exist")
+
+
+def test_register_records_audit_event(manager: AuthenticationManager, audit_logger: SecurityAuditLogger):
+    credential = manager.register("alice", "hunter2", timestamp=BASE_TIME)
+
+    events = audit_logger.query()
+    assert len(events) == 1
+    assert events[0].event_type == "Authentication"
+    assert events[0].actor == credential.user_id
+    assert events[0].action == "register"
+
+
+def test_login_success_records_info_severity_event(
+    manager: AuthenticationManager, audit_logger: SecurityAuditLogger
+):
+    manager.register("alice", "hunter2", timestamp=BASE_TIME)
+
+    manager.login("alice", "hunter2", timestamp=BASE_TIME)
+
+    events = audit_logger.query()
+    login_events = [event for event in events if event.action == "login"]
+    assert len(login_events) == 1
+    assert login_events[0].outcome == "success"
+    assert login_events[0].severity == "Info"
+
+
+def test_login_failure_records_warning_severity_event(
+    manager: AuthenticationManager, audit_logger: SecurityAuditLogger
+):
+    manager.register("alice", "hunter2", timestamp=BASE_TIME)
+
+    manager.login("alice", "wrong-pass", timestamp=BASE_TIME)
+
+    events = audit_logger.query()
+    login_events = [event for event in events if event.action == "login"]
+    assert len(login_events) == 1
+    assert login_events[0].outcome == "failure"
+    assert login_events[0].severity == "Warning"
+
+
+def test_logout_records_audit_event(manager: AuthenticationManager, audit_logger: SecurityAuditLogger):
+    manager.register("alice", "hunter2", timestamp=BASE_TIME)
+    result = manager.login("alice", "hunter2", timestamp=BASE_TIME)
+
+    manager.logout(result.session_token, timestamp=BASE_TIME)
+
+    events = audit_logger.query()
+    logout_events = [event for event in events if event.action == "logout"]
+    assert len(logout_events) == 1
+    assert logout_events[0].actor == result.user_id
 
 
 @pytest.fixture
