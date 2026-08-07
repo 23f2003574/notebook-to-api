@@ -194,6 +194,17 @@ from .api_key_manager import (
     get_api_key_manager as get_scoped_api_key_manager,
     router as api_key_manager_router,
 )
+from .secret_vault import (
+    SECRET_TYPES as VAULT_SECRET_TYPES,
+    InvalidSecretTypeError as InvalidVaultSecretTypeError,
+    SecretAlreadyExistsError as VaultSecretAlreadyExistsError,
+    SecretEntry,
+    SecretMetadata as VaultSecretMetadata,
+    SecretVaultService,
+    UnknownSecretError as UnknownVaultSecretError,
+    get_secret_vault_service,
+    router as secret_vault_router,
+)
 from .identity_registry import (
     Identity,
     IdentityAlreadyExistsError,
@@ -377,6 +388,15 @@ __all__ = [
     "UnknownScopedAPIKeyError",
     "get_scoped_api_key_manager",
     "api_key_manager_router",
+    "VAULT_SECRET_TYPES",
+    "InvalidVaultSecretTypeError",
+    "VaultSecretAlreadyExistsError",
+    "SecretEntry",
+    "VaultSecretMetadata",
+    "SecretVaultService",
+    "UnknownVaultSecretError",
+    "get_secret_vault_service",
+    "secret_vault_router",
     "Identity",
     "IdentityAlreadyExistsError",
     "IdentityMetadata",

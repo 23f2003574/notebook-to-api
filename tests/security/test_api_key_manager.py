@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from backend.security.rbac import RoleBasedAccessControl
 from backend.security.permission_engine import PermissionEngine
+from backend.security.secret_vault import SecretVaultService, UnknownSecretError as UnknownVaultSecretError
 from backend.security.api_key_manager import (
     APIKey,
     APIKeyExpiredError,
@@ -31,8 +32,13 @@ def permission_engine(rbac: RoleBasedAccessControl) -> PermissionEngine:
 
 
 @pytest.fixture
-def manager(permission_engine: PermissionEngine) -> APIKeyManager:
-    return APIKeyManager(permission_engine=permission_engine)
+def secret_vault() -> SecretVaultService:
+    return SecretVaultService(encryption_key=b"1" * 32)
+
+
+@pytest.fixture
+def manager(permission_engine: PermissionEngine, secret_vault: SecretVaultService) -> APIKeyManager:
+    return APIKeyManager(permission_engine=permission_engine, secret_vault=secret_vault)
 
 
 def test_create_key_returns_key_with_secret(manager: APIKeyManager):
@@ -159,6 +165,34 @@ def test_revoke_key_clears_scoped_permissions(manager: APIKeyManager, permission
     manager.revoke_key(api_key.metadata.key_id, timestamp=BASE_TIME)
 
     assert permission_engine.check(api_key.metadata.key_id, "orders", "Read") is False
+
+
+def test_create_key_stores_secret_in_vault(manager: APIKeyManager, secret_vault: SecretVaultService):
+    api_key = manager.create_key("alice", "ci-key", "User", timestamp=BASE_TIME)
+
+    entry = secret_vault.retrieve(f"api-key:{api_key.metadata.key_id}", timestamp=BASE_TIME)
+
+    assert entry.value == api_key.secret
+
+
+def test_revoke_key_destroys_vault_entry(manager: APIKeyManager, secret_vault: SecretVaultService):
+    api_key = manager.create_key("alice", "ci-key", "User", timestamp=BASE_TIME)
+
+    manager.revoke_key(api_key.metadata.key_id, timestamp=BASE_TIME)
+
+    with pytest.raises(UnknownVaultSecretError):
+        secret_vault.retrieve(f"api-key:{api_key.metadata.key_id}")
+
+
+def test_rotate_key_migrates_vault_entry(manager: APIKeyManager, secret_vault: SecretVaultService):
+    api_key = manager.create_key("alice", "ci-key", "User", timestamp=BASE_TIME)
+
+    rotated = manager.rotate_key(api_key.metadata.key_id, timestamp=BASE_TIME)
+
+    with pytest.raises(UnknownVaultSecretError):
+        secret_vault.retrieve(f"api-key:{api_key.metadata.key_id}")
+    entry = secret_vault.retrieve(f"api-key:{rotated.metadata.key_id}", timestamp=BASE_TIME)
+    assert entry.value == rotated.secret
 
 
 @pytest.fixture

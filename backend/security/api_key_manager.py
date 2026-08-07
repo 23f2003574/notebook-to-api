@@ -11,6 +11,7 @@ from typing import Iterable, Optional
 from fastapi import APIRouter, Body, HTTPException
 
 from .permission_engine import PermissionEngine, get_permission_engine
+from .secret_vault import SecretVaultService, UnknownSecretError as UnknownVaultSecretError, get_secret_vault_service
 
 _KEY_PREFIX = "ntbkv2"
 
@@ -89,8 +90,13 @@ class APIKey:
 class APIKeyManager:
     """Issues, rotates, validates, and revokes API keys with scoped permissions."""
 
-    def __init__(self, permission_engine: Optional[PermissionEngine] = None) -> None:
+    def __init__(
+        self,
+        permission_engine: Optional[PermissionEngine] = None,
+        secret_vault: Optional[SecretVaultService] = None,
+    ) -> None:
         self._permission_engine = permission_engine or get_permission_engine()
+        self._secret_vault = secret_vault or get_secret_vault_service()
         self._keys: dict[str, APIKeyMetadata] = {}
         self._hash_to_id: dict[str, str] = {}
         self._lock = Lock()
@@ -103,6 +109,15 @@ class APIKeyManager:
         for scope in scopes:
             resource, _, action = scope.partition(":")
             self._permission_engine.grant(key_id, resource, action, timestamp=timestamp)
+
+    def _vault_name(self, key_id: str) -> str:
+        return f"api-key:{key_id}"
+
+    def _destroy_vault_entry(self, key_id: str) -> None:
+        try:
+            self._secret_vault.destroy(self._vault_name(key_id))
+        except UnknownVaultSecretError:
+            pass
 
     def create_key(
         self,
@@ -131,6 +146,7 @@ class APIKeyManager:
             self._keys[metadata.key_id] = metadata
             self._hash_to_id[_hash_secret(secret)] = metadata.key_id
         self._grant_scopes(metadata.key_id, scopes, timestamp=now)
+        self._secret_vault.store(self._vault_name(metadata.key_id), "API Keys", secret, timestamp=now)
         return APIKey(metadata=metadata, secret=secret)
 
     def validate_key(self, secret: str, *, timestamp: Optional[datetime] = None) -> APIKeyMetadata:
@@ -174,6 +190,8 @@ class APIKeyManager:
             self._hash_to_id[_hash_secret(new_secret)] = new_metadata.key_id
         self._grant_scopes(new_metadata.key_id, metadata.scopes, timestamp=now)
         self._permission_engine.revoke_all(key_id)
+        self._secret_vault.store(self._vault_name(new_metadata.key_id), "API Keys", new_secret, timestamp=now)
+        self._destroy_vault_entry(key_id)
         return APIKey(metadata=new_metadata, secret=new_secret)
 
     def revoke_key(self, key_id: str, *, timestamp: Optional[datetime] = None) -> APIKeyMetadata:
@@ -184,6 +202,7 @@ class APIKeyManager:
             updated = replace(metadata, revoked=True, revoked_at=timestamp or datetime.now(timezone.utc))
             self._keys[key_id] = updated
         self._permission_engine.revoke_all(key_id)
+        self._destroy_vault_entry(key_id)
         return updated
 
     def check_scope(
