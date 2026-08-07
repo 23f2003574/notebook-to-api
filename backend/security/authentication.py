@@ -136,6 +136,10 @@ class AuthenticationManager:
             raise UnknownUserError(user_id)
         return credential
 
+    def user_exists(self, user_id: str) -> bool:
+        with self._lock:
+            return user_id in self._users
+
     def get_user_id(self, username: str) -> str:
         with self._lock:
             user_id = self._username_to_id.get(username)
