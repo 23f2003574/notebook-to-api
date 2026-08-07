@@ -164,6 +164,19 @@ class SessionManager:
             "Session", metadata.user_id, f"session:{session_id}", "terminate", timestamp=now
         )
 
+    def session_roles(self, session_id: str, *, timestamp: Optional[datetime] = None) -> tuple:
+        with self._lock:
+            metadata = self._sessions.get(session_id)
+            tokens = self._active_tokens.get(session_id)
+        if metadata is None:
+            raise UnknownSessionError(session_id)
+        if metadata.terminated:
+            raise SessionTerminatedError(session_id)
+        if tokens is None:
+            raise UnknownSessionError(session_id)
+        claims = self._jwt_service.validate(tokens["access_token"], timestamp=timestamp)
+        return claims.roles
+
     def sessions_for_user(self, user_id: str) -> list:
         with self._lock:
             session_ids = list(self._user_sessions.get(user_id, set()))

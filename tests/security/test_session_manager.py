@@ -150,6 +150,27 @@ def test_sessions_for_user_empty_when_none(manager: SessionManager):
     assert manager.sessions_for_user("does-not-exist") == []
 
 
+def test_session_roles_returns_roles_embedded_in_access_token(manager: SessionManager, user_id: str):
+    session = manager.create(user_id, roles=["Developer", "Viewer"], timestamp=BASE_TIME)
+
+    roles = manager.session_roles(session.metadata.session_id, timestamp=BASE_TIME)
+
+    assert set(roles) == {"Developer", "Viewer"}
+
+
+def test_session_roles_unknown_session_raises(manager: SessionManager):
+    with pytest.raises(UnknownSessionError):
+        manager.session_roles("does-not-exist")
+
+
+def test_session_roles_terminated_session_raises(manager: SessionManager, user_id: str):
+    session = manager.create(user_id, timestamp=BASE_TIME)
+    manager.terminate(session.metadata.session_id, timestamp=BASE_TIME)
+
+    with pytest.raises(SessionTerminatedError):
+        manager.session_roles(session.metadata.session_id)
+
+
 @pytest.fixture
 def client() -> TestClient:
     app = FastAPI()
