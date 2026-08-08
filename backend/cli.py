@@ -348,6 +348,21 @@ def main():
         help="Path to write the OpenAPI JSON file."
     )
 
+    # python SDK export command
+    sdk_parser = subparsers.add_parser(
+        "export-sdk", help="Generate a Python SDK client from an exported OpenAPI schema."
+    )
+    sdk_parser.add_argument(
+        "--openapi",
+        default="generated/openapi.json",
+        help="Path to the OpenAPI JSON file to generate the client from (see export-openapi)."
+    )
+    sdk_parser.add_argument(
+        "--output",
+        default="generated/sdk/python_client.py",
+        help="Path to write the generated Python SDK client."
+    )
+
     # serve command (live notebook server)
     serve_parser = subparsers.add_parser("serve", help="Serve notebook as live API with hot recompilation.")
     serve_parser.add_argument("notebook", help="Path to the notebook file.")
@@ -5094,6 +5109,9 @@ def main():
     elif args.command == "export-openapi":
         from backend.exporters.openapi_exporter import export_openapi_schema
         export_openapi_schema(args.output)
+    elif args.command == "export-sdk":
+        from backend.exporters.sdk_generator import generate_python_sdk
+        generate_python_sdk(args.openapi, args.output)
     elif args.command == "serve":
         serve_notebook(args.notebook, args.output)
     elif args.command == "governance":
