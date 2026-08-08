@@ -9,6 +9,7 @@ from backend.parser.notebook_parser import (
 from backend.parser.ast_parser import (
     extract_functions_from_code,
     extract_imports_from_code,
+    deduplicate_functions_by_name,
 )
 
 
@@ -31,6 +32,8 @@ def inspect_notebook(notebook_path, output_dir="generated"):
 
         all_functions.extend(funcs)
         all_imports.update(imports)
+
+    all_functions = deduplicate_functions_by_name(all_functions)
 
     print("\nNotebook Analysis Report")
     print("=" * 30)
@@ -129,6 +132,8 @@ def inspect_notebook_data(
 
         all_functions.extend(funcs)
         all_imports.update(imports)
+
+    all_functions = deduplicate_functions_by_name(all_functions)
 
     generated_path = Path(output_dir)
 

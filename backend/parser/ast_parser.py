@@ -1,6 +1,28 @@
 import ast
 
 
+def deduplicate_functions_by_name(functions):
+    """Collapse repeated function definitions, keeping the last one.
+
+    Notebooks are edited iteratively: a cell defining `def add(...)` is
+    commonly re-run later with a fixed/changed body under the same name.
+    If every extracted definition were kept, the generated FastAPI app
+    would register multiple routes for the identical path/method pair.
+    Route matching resolves to whichever was registered *first*, while the
+    OpenAPI schema (a dict keyed by path) reflects whichever was
+    registered *last* -- so the served behaviour and the documented
+    behaviour would silently diverge. Keeping only the last definition per
+    name matches what actually happens if the whole notebook were executed
+    top to bottom in a single kernel: the later `def` always wins.
+    """
+    deduped = {}
+
+    for func in functions:
+        deduped[func["name"]] = func
+
+    return list(deduped.values())
+
+
 def is_parseable_python(code):
     """Return True if `code` is syntactically valid Python.
 

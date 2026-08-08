@@ -9,6 +9,7 @@ from backend.parser.notebook_parser import (
 )
 from backend.parser.ast_parser import (
     extract_functions_from_code,
+    deduplicate_functions_by_name,
 )
 
 router = APIRouter(
@@ -118,6 +119,8 @@ async def inspect_notebook_endpoint(
 
             functions.extend(funcs)
 
+        functions = deduplicate_functions_by_name(functions)
+
         return {
             "status": "success",
             "functions": functions
@@ -181,6 +184,8 @@ async def compile_notebook_endpoint(
             )
 
             functions.extend(funcs)
+
+        functions = deduplicate_functions_by_name(functions)
 
         compile_notebook(
             full_path,

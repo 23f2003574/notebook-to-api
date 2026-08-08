@@ -1,6 +1,7 @@
 from backend.parser.ast_parser import (
     extract_functions_from_code,
-    extract_imports_from_code
+    extract_imports_from_code,
+    deduplicate_functions_by_name
 )
 
 
@@ -129,3 +130,32 @@ except ImportError:
     funcs = extract_functions_from_code(code)
 
     assert [f["name"] for f in funcs] == ["fallback_func", "fallback_func"]
+
+
+def test_deduplicate_functions_by_name_keeps_last_definition():
+
+    functions = [
+        {"name": "add", "args": [], "return_type": "int", "version": "buggy"},
+        {"name": "multiply", "args": [], "return_type": "int", "version": "only"},
+        {"name": "add", "args": [], "return_type": "int", "version": "fixed"},
+    ]
+
+    deduped = deduplicate_functions_by_name(functions)
+
+    assert len(deduped) == 2
+    assert [f["name"] for f in deduped] == ["add", "multiply"]
+
+    add_func = next(f for f in deduped if f["name"] == "add")
+    assert add_func["version"] == "fixed"
+
+
+def test_deduplicate_functions_by_name_no_duplicates_is_unchanged():
+
+    functions = [
+        {"name": "add", "args": [], "return_type": "int"},
+        {"name": "multiply", "args": [], "return_type": "int"},
+    ]
+
+    deduped = deduplicate_functions_by_name(functions)
+
+    assert deduped == functions

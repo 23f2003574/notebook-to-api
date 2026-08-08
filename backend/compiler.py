@@ -33,7 +33,8 @@ from backend.parser.notebook_parser import (
 from backend.parser.ast_parser import (
     extract_functions_from_code,
     extract_imports_from_code,
-    is_parseable_python
+    is_parseable_python,
+    deduplicate_functions_by_name
 )
 
 from backend.generator.api_generator import (
@@ -117,6 +118,8 @@ def compile_notebook_to_api(
         funcs = extract_functions_from_code(cell)
 
         functions.extend(funcs)
+
+    functions = deduplicate_functions_by_name(functions)
 
     write_runtime_module(code_cells)
 
