@@ -1,8 +1,29 @@
 import ast
 
 
+def is_parseable_python(code):
+    """Return True if `code` is syntactically valid Python.
+
+    Used to drop cells whose content is still not valid Python after magic
+    stripping (e.g. the body of a `%%bash` cell magic) before they are
+    written into the generated runtime module, rather than shipping a
+    module that fails to import.
+    """
+    try:
+        ast.parse(code)
+        return True
+    except SyntaxError:
+        return False
+
+
 def extract_functions_from_code(code):
-    tree = ast.parse(code)
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        # A cell can still contain unparseable content after magic-command
+        # stripping (e.g. the body of a `%%bash` cell magic). Skip it rather
+        # than failing the whole notebook compilation over one cell.
+        return []
 
     functions = []
 
@@ -260,7 +281,10 @@ def generate_example_payload(args):
 
 
 def extract_imports_from_code(code):
-    tree = ast.parse(code)
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return set()
 
     imports = set()
 

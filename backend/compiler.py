@@ -32,7 +32,8 @@ from backend.parser.notebook_parser import (
 
 from backend.parser.ast_parser import (
     extract_functions_from_code,
-    extract_imports_from_code
+    extract_imports_from_code,
+    is_parseable_python
 )
 
 from backend.generator.api_generator import (
@@ -104,7 +105,10 @@ def compile_notebook_to_api(
 
     notebook = load_notebook(notebook_path)
 
-    code_cells = extract_code_cells(notebook)
+    code_cells = [
+        cell for cell in extract_code_cells(notebook)
+        if is_parseable_python(cell)
+    ]
 
     functions = []
 
@@ -116,9 +120,11 @@ def compile_notebook_to_api(
 
     write_runtime_module(code_cells)
 
-    all_code = "\n\n".join(code_cells)
+    imports = set()
 
-    imports = extract_imports_from_code(all_code)
+    for cell in code_cells:
+
+        imports.update(extract_imports_from_code(cell))
 
     filtered_imports = [
         imp for imp in imports
