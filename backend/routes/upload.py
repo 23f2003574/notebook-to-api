@@ -1,4 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
+from pathlib import Path
 import shutil
 import os
 
@@ -24,6 +25,40 @@ os.makedirs(
 )
 
 
+def resolve_upload_path(name: str) -> Path:
+    """Resolve `name` against UPLOAD_DIR, rejecting anything that would
+    escape it.
+
+    `name` comes straight from client input (an uploaded file's filename,
+    or a notebook_path field in a JSON body). Both os.path.join and
+    pathlib's `/` operator discard the left-hand side entirely when the
+    right-hand side is absolute (`Path("uploads") / "/etc/passwd" ==
+    Path("/etc/passwd")`), and plain `../` segments escape just as
+    easily. Without this check, /upload allows writing arbitrary files
+    outside UPLOAD_DIR, and /inspect and /compile allow reading them
+    (confirmed: both were exploitable before this check existed).
+    """
+
+    if not name or Path(name).is_absolute():
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid path: must be a relative filename within the uploads directory"
+        )
+
+    upload_root = Path(UPLOAD_DIR).resolve()
+    candidate = (upload_root / name).resolve()
+
+    try:
+        candidate.relative_to(upload_root)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid path: must stay within the uploads directory"
+        )
+
+    return candidate
+
+
 @router.post("/upload")
 async def upload_notebook(
     file: UploadFile = File(...)
@@ -37,12 +72,9 @@ async def upload_notebook(
             detail="File must be a .ipynb notebook"
         )
 
-    try:
+    file_path = resolve_upload_path(file.filename)
 
-        file_path = os.path.join(
-            UPLOAD_DIR,
-            file.filename
-        )
+    try:
 
         with open(
             file_path,
@@ -57,7 +89,7 @@ async def upload_notebook(
         return {
             "status": "success",
             "filename": file.filename,
-            "path": file_path
+            "path": str(file_path)
         }
 
     except Exception as e:
@@ -85,14 +117,9 @@ async def inspect_notebook_endpoint(
             detail="notebook_path is required"
         )
 
-    full_path = os.path.join(
-        UPLOAD_DIR,
-        notebook_path
-    )
+    full_path = resolve_upload_path(notebook_path)
 
-    if not os.path.exists(
-        full_path
-    ):
+    if not full_path.exists():
 
         raise HTTPException(
             status_code=404,
@@ -102,7 +129,7 @@ async def inspect_notebook_endpoint(
     try:
 
         notebook = load_notebook(
-            full_path
+            str(full_path)
         )
 
         code_cells = extract_code_cells(
@@ -151,14 +178,9 @@ async def compile_notebook_endpoint(
             detail="notebook_path is required"
         )
 
-    full_path = os.path.join(
-        UPLOAD_DIR,
-        notebook_path
-    )
+    full_path = resolve_upload_path(notebook_path)
 
-    if not os.path.exists(
-        full_path
-    ):
+    if not full_path.exists():
 
         raise HTTPException(
             status_code=404,
@@ -168,7 +190,7 @@ async def compile_notebook_endpoint(
     try:
 
         notebook = load_notebook(
-            full_path
+            str(full_path)
         )
 
         code_cells = extract_code_cells(
@@ -188,7 +210,7 @@ async def compile_notebook_endpoint(
         functions = deduplicate_functions_by_name(functions)
 
         compile_notebook(
-            full_path,
+            str(full_path),
             "generated"
         )
 
