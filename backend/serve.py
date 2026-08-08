@@ -5,7 +5,7 @@ from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-from backend.compiler import compile_notebook
+from backend.compiler import compile_notebook, package_name_for_output_dir
 
 
 class NotebookChangeHandler(FileSystemEventHandler):
@@ -68,12 +68,13 @@ def serve_notebook(notebook_path, output_dir="generated"):
     print("Press Ctrl+C to stop.\n")
 
     # Start Uvicorn server with reload
+    package_name = package_name_for_output_dir(output_dir)
     server_process = subprocess.Popen(
         [
             sys.executable,
             "-m",
             "uvicorn",
-            "generated.app:app",
+            f"{package_name}.app:app",
             "--reload",
             "--host",
             "0.0.0.0",

@@ -1,3 +1,4 @@
+import keyword
 import os
 import sys
 import pathlib
@@ -47,11 +48,35 @@ from backend.generator.docker_generator import (
 )
 
 
-def write_runtime_module(code_cells):
+def package_name_for_output_dir(output_dir):
+    """The generated app imports its runtime module as
+    `<package_name>.runtime.notebook_module`, so the output directory's
+    basename must double as a valid Python package name. This was
+    previously just hardcoded to "generated" everywhere, which silently
+    broke the documented --output flag for any other directory: the
+    runtime module ended up written to a fixed generated/runtime/ path
+    while app.py (written wherever --output pointed) still imported from
+    it by the fixed name "generated", regardless of where it actually
+    landed on disk.
+    """
+    name = os.path.basename(os.path.normpath(output_dir))
 
-    runtime_path = Path(
-        "generated/runtime/notebook_module.py"
-    )
+    if not name.isidentifier() or keyword.iskeyword(name):
+        raise ValueError(
+            f"Output directory {output_dir!r} (basename {name!r}) can't be "
+            "used as a Python package name for the generated app's "
+            "`import <name>.runtime.notebook_module` statement. Choose an "
+            "--output directory whose final path segment is a valid Python "
+            "identifier (letters, digits, underscores; not starting with a "
+            "digit; not a reserved keyword like 'import')."
+        )
+
+    return name
+
+
+def write_runtime_module(code_cells, output_dir):
+
+    runtime_path = Path(output_dir) / "runtime" / "notebook_module.py"
 
     runtime_path.parent.mkdir(
         parents=True,
@@ -104,6 +129,8 @@ def compile_notebook_to_api(
 
     os.makedirs(output_dir, exist_ok=True)
 
+    package_name = package_name_for_output_dir(output_dir)
+
     notebook = load_notebook(notebook_path)
 
     code_cells = [
@@ -121,7 +148,7 @@ def compile_notebook_to_api(
 
     functions = deduplicate_functions_by_name(functions)
 
-    write_runtime_module(code_cells)
+    write_runtime_module(code_cells, output_dir)
 
     imports = set()
 
@@ -139,7 +166,7 @@ def compile_notebook_to_api(
         output_dir
     )
 
-    api_code = generate_fastapi_code(functions)
+    api_code = generate_fastapi_code(functions, package_name)
 
     write_generated_api(
         api_code,
@@ -151,7 +178,7 @@ def compile_notebook_to_api(
         "Dockerfile"
     )
 
-    generate_dockerfile(dockerfile_path)
+    generate_dockerfile(dockerfile_path, package_name)
 
     print(
         f"Successfully generated FastAPI app at: {output_path}"

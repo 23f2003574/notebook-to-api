@@ -22,13 +22,18 @@ def _call_arg_expr(arg):
 
 
 # Template for generating the FastAPI application source code
-def generate_fastapi_code(functions):
+def generate_fastapi_code(functions, package_name="generated"):
     """Generate FastAPI app code for the given functions.
 
     Each function is examined; if its name contains any of the
     LONG_RUNNING_KEYWORDS, an endpoint is created that enqueues the
     function as a BackgroundTask and returns a task_id. Otherwise a
     regular synchronous endpoint is generated.
+
+    package_name is the top-level package the generated app imports its
+    runtime module from (`<package_name>.runtime.notebook_module`). It
+    must match the basename of wherever this generated code actually gets
+    written -- see compiler.package_name_for_output_dir.
     """
     lines = []
     # Imports for the generated FastAPI app
@@ -42,7 +47,7 @@ def generate_fastapi_code(functions):
     lines.append("from datetime import datetime")
     lines.append("import time")
     lines.append("from pydantic import BaseModel, Field")
-    lines.append("import generated.runtime.notebook_module as notebook_module")
+    lines.append(f"import {package_name}.runtime.notebook_module as notebook_module")
     lines.append("")
     lines.append(
         'app = FastAPI('

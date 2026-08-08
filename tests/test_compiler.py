@@ -1,11 +1,18 @@
 import ast
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import nbformat
+import pytest
 
 from backend.compiler import (
-    compile_notebook
+    compile_notebook,
+    package_name_for_output_dir
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_compiler_pipeline():
@@ -222,3 +229,134 @@ def test_compiler_pipeline_calls_keyword_only_args_by_keyword(tmp_path):
     ast.parse(generated_app)
 
     assert "notebook_module.score(req.data, epochs=req.epochs)" in generated_app
+
+
+def test_package_name_for_output_dir_uses_basename():
+
+    assert package_name_for_output_dir("generated") == "generated"
+    assert package_name_for_output_dir("my_output") == "my_output"
+    assert package_name_for_output_dir("build/my_output") == "my_output"
+
+
+def test_package_name_for_output_dir_rejects_invalid_identifier():
+
+    with pytest.raises(ValueError):
+        package_name_for_output_dir("my-output")
+
+
+def test_package_name_for_output_dir_rejects_python_keyword():
+
+    with pytest.raises(ValueError):
+        package_name_for_output_dir("import")
+
+
+def test_compiler_pipeline_respects_custom_output_dir(tmp_path):
+    """The --output flag is documented as configurable (it has a CLI flag
+    with a default), but write_runtime_module used to hardcode
+    "generated/runtime/..." regardless of output_dir while the generated
+    app.py always imported the fixed name "generated" -- so any non-
+    default --output directory produced files in the wrong place with an
+    import that could never resolve them.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n"
+            "    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "my_custom_output"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    # The runtime module must live under the actual output directory, not
+    # the old hardcoded "generated/runtime/" path.
+    assert (output_dir / "runtime" / "notebook_module.py").exists()
+
+    generated_app = (output_dir / "app.py").read_text(encoding="utf-8")
+    ast.parse(generated_app)
+    assert "import my_custom_output.runtime.notebook_module" in generated_app
+
+    dockerfile = (output_dir / "Dockerfile").read_text(encoding="utf-8")
+    assert "COPY . my_custom_output/" in dockerfile
+    assert '"my_custom_output.app:app"' in dockerfile
+
+
+def test_compiler_pipeline_custom_output_dir_actually_runs(tmp_path):
+    """Static checks confirm the generated files are consistent with each
+    other; this drives a real request through the compiled app with a
+    custom --output directory to confirm it actually imports and runs,
+    not just that the generated source text looks right. Run in a fresh
+    subprocess/cwd since the generated package name and its import must
+    be resolved by a real Python import machinery run from the directory
+    compilation happened in.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n"
+                            "    return a + b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "my_custom_output")
+
+from my_custom_output.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+resp = client.post(
+    "/add",
+    json={{"a": 2, "b": 3}},
+    headers={{"X-API-Key": "notebook-to-api-dev-key"}},
+)
+assert resp.status_code == 200, resp.text
+assert resp.json() == {{"result": 5}}, resp.json()
+print("CUSTOM_OUTPUT_DIR_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "CUSTOM_OUTPUT_DIR_E2E_OK" in proc.stdout
