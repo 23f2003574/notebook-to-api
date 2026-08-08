@@ -3,6 +3,7 @@ Dashboard API Server
 Serves the React dashboard frontend and provides API endpoints for compilation
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -108,10 +109,46 @@ app = FastAPI(
     version="0.1.0"
 )
 
-# Enable CORS for React frontend
+DEFAULT_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:5174",
+]
+
+
+def allowed_origins():
+    """Origins allowed to make credentialed cross-origin requests.
+
+    Combining a literal "*" with allow_credentials=True (the previous
+    config) doesn't just allow every origin: Starlette's CORSMiddleware
+    reflects the actual requesting Origin header back with
+    Access-Control-Allow-Credentials: true whenever allow_credentials is
+    set and "*" is in allow_origins (confirmed against the installed
+    starlette.middleware.cors source, and live against this app -- an
+    arbitrary Origin got reflected with credentials enabled). That lets
+    any website make authenticated cross-origin requests to this
+    dashboard, including /api/upload, /api/inspect and /api/compile.
+
+    Defaults to the known local frontend dev-server ports; set
+    NOTEBOOK_API_ALLOWED_ORIGINS (comma-separated) to configure this for
+    a real deployment instead of hardcoding one fixed list.
+    """
+    raw = os.getenv("NOTEBOOK_API_ALLOWED_ORIGINS")
+
+    if raw:
+        origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+        if origins:
+            return origins
+
+    return DEFAULT_ALLOWED_ORIGINS
+
+
+# Enable CORS for the frontend, credentialed requests restricted to a
+# known allowlist -- see allowed_origins() docstring.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://localhost:5174", "*"],
+    allow_origins=allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
