@@ -5,20 +5,17 @@ import pathlib
 
 from pathlib import Path
 
-STANDARD_LIBS = {
-    "os",
-    "sys",
-    "json",
-    "math",
-    "pathlib",
-    "typing",
-    "datetime",
-    "collections",
-    "itertools",
-    "functools",
-    "re",
-    "time"
-}
+# sys.stdlib_module_names (Python 3.10+) is the authoritative list of
+# standard-library module names. The previous hand-picked set of 12 names
+# missed the vast majority of the standard library (asyncio, random,
+# logging, subprocess, csv, sqlite3, uuid, hashlib, threading, ...), so any
+# notebook using one of them got that name written into requirements.txt
+# as if it were a third-party PyPI package. That's not just noise: PyPI
+# has real (unofficial, unrelated) packages published under some stdlib
+# names -- e.g. `pip install asyncio` installs a bogus package that
+# shadows the built-in module -- so this could actively break the
+# generated app rather than just add a redundant line.
+STANDARD_LIBS = set(sys.stdlib_module_names)
 
 # Ensure project root is in sys.path for proper imports
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]

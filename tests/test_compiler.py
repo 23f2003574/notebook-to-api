@@ -9,7 +9,8 @@ import pytest
 
 from backend.compiler import (
     compile_notebook,
-    package_name_for_output_dir
+    package_name_for_output_dir,
+    STANDARD_LIBS
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -360,3 +361,62 @@ print("CUSTOM_OUTPUT_DIR_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "CUSTOM_OUTPUT_DIR_E2E_OK" in proc.stdout
+
+
+def test_standard_libs_covers_common_stdlib_modules_beyond_the_old_hardcoded_list():
+    """The old STANDARD_LIBS was a hand-picked set of 12 names, missing
+    the vast majority of the standard library. Any notebook using one of
+    the missed modules got it written into requirements.txt as if it were
+    a third-party PyPI package -- and for some names (e.g. "asyncio"),
+    PyPI has an unrelated real package that pip actually installs,
+    shadowing the built-in module.
+    """
+
+    commonly_missed = {
+        "asyncio", "random", "logging", "subprocess", "csv", "sqlite3",
+        "uuid", "hashlib", "threading", "shutil", "glob", "base64",
+        "enum", "dataclasses", "copy", "pickle", "warnings", "traceback",
+        "inspect", "urllib", "string", "decimal", "tempfile", "io",
+    }
+
+    assert commonly_missed <= STANDARD_LIBS
+
+
+def test_standard_libs_does_not_exclude_third_party_packages():
+
+    third_party = {"pandas", "numpy", "requests", "sklearn", "fastapi"}
+
+    assert not (third_party & STANDARD_LIBS)
+
+
+def test_compiler_pipeline_excludes_stdlib_modules_from_requirements(tmp_path):
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import asyncio\n"
+            "import random\n"
+            "import pandas as pd\n\n"
+            "def compute(x: int) -> int:\n"
+            "    return x\n"
+        )
+    )
+
+    notebook_path = tmp_path / "stdlib_imports.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    requirements = (output_dir / "requirements.txt").read_text(
+        encoding="utf-8"
+    )
+    deps = set(requirements.split())
+
+    assert "asyncio" not in deps
+    assert "random" not in deps
+    assert "pandas" in deps
