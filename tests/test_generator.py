@@ -27,6 +27,35 @@ def test_api_generation():
     assert "@app.post" in code
 
 
+def test_api_key_check_uses_constant_time_comparison():
+    """A plain `x_api_key != API_KEY` short-circuits on the first
+    differing byte, leaking via response timing how many leading
+    characters of a guess were correct -- a classic timing side-channel
+    for guessing the key byte by byte. Must use hmac.compare_digest.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "import hmac" in code
+    assert "hmac.compare_digest(x_api_key, API_KEY)" in code
+    assert "x_api_key != API_KEY" not in code
+
+
+def test_api_key_check_still_rejects_missing_header():
+    """hmac.compare_digest raises TypeError on None, so the missing-header
+    case (x_api_key defaults to None) must be checked before calling it,
+    not delegated to it.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "if x_api_key is None or not hmac.compare_digest" in code
+
+
 def test_route_generation():
 
     functions = [

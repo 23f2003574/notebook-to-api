@@ -492,3 +492,78 @@ print("OPTIONAL_NONE_DEFAULT_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "OPTIONAL_NONE_DEFAULT_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_api_key_auth_still_works_end_to_end(tmp_path):
+    """Behavioral check that switching the API key comparison to
+    hmac.compare_digest didn't change any of the three real outcomes:
+    missing header and wrong key both 401, correct key succeeds.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n"
+                            "    return a + b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+payload = {{"a": 1, "b": 2}}
+
+no_header = client.post("/add", json=payload)
+assert no_header.status_code == 401, no_header.text
+
+wrong_key = client.post("/add", json=payload, headers={{"X-API-Key": "wrong"}})
+assert wrong_key.status_code == 401, wrong_key.text
+
+correct_key = client.post(
+    "/add", json=payload, headers={{"X-API-Key": "notebook-to-api-dev-key"}}
+)
+assert correct_key.status_code == 200, correct_key.text
+assert correct_key.json() == {{"result": 3}}, correct_key.json()
+
+print("API_KEY_AUTH_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "API_KEY_AUTH_E2E_OK" in proc.stdout
