@@ -96,7 +96,8 @@ def extract_functions_from_code(code):
                 arg_info = {
                     "name": arg.arg,
                     "type": None,
-                    "default": None
+                    "default": None,
+                    "kind": "positional"
                 }
 
                 if arg.annotation:
@@ -112,6 +113,36 @@ def extract_functions_from_code(code):
                     except Exception:
                         arg_info["default"] = ast.unparse(
                             defaults[default_index]
+                        )
+
+                args.append(arg_info)
+
+            # Keyword-only args (those after a bare `*` or `*args`), e.g.
+            # `def train(data, *, epochs=10, lr=0.01)`. These live in a
+            # separate ast.arguments field and are paired positionally with
+            # kw_defaults, where a `None` entry means "no default" (the arg
+            # is required) rather than "default value None".
+            for idx, arg in enumerate(node.args.kwonlyargs):
+                arg_info = {
+                    "name": arg.arg,
+                    "type": None,
+                    "default": None,
+                    "kind": "keyword_only"
+                }
+
+                if arg.annotation:
+                    arg_info["type"] = ast.unparse(arg.annotation)
+
+                default_node = node.args.kw_defaults[idx]
+
+                if default_node is not None:
+                    try:
+                        arg_info["default"] = ast.literal_eval(
+                            default_node
+                        )
+                    except Exception:
+                        arg_info["default"] = ast.unparse(
+                            default_node
                         )
 
                 args.append(arg_info)

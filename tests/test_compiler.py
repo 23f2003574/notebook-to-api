@@ -190,3 +190,35 @@ def test_compiler_pipeline_generates_awaitable_endpoint_for_async_function(
 
     assert "async def fetch_data(" in generated_app
     assert "await notebook_module.fetch_data(" in generated_app
+
+
+def test_compiler_pipeline_calls_keyword_only_args_by_keyword(tmp_path):
+    """`def train(data, *, epochs=10)` is a common ML-notebook signature.
+    Keyword-only params must be forwarded as `epochs=req.epochs`, not
+    positionally, or the generated endpoint raises a TypeError on every
+    call.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def score(data: list, *, epochs: int = 10) -> dict:\n"
+            "    return {'data': data, 'epochs': epochs}\n"
+        )
+    )
+
+    notebook_path = tmp_path / "kwonly.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    generated_app = (output_dir / "app.py").read_text(encoding="utf-8")
+
+    ast.parse(generated_app)
+
+    assert "notebook_module.score(req.data, epochs=req.epochs)" in generated_app

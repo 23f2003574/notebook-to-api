@@ -170,6 +170,57 @@ class Model:
     assert funcs == []
 
 
+def test_function_extraction_includes_keyword_only_args():
+
+    code = """
+def train(data: list, *, epochs: int = 10, lr: float) -> dict:
+    return {}
+"""
+
+    funcs = extract_functions_from_code(code)
+
+    arg_names = [a["name"] for a in funcs[0]["args"]]
+
+    assert arg_names == ["data", "epochs", "lr"]
+
+
+def test_function_extraction_marks_positional_vs_keyword_only_kind():
+
+    code = """
+def train(data: list, *, epochs: int = 10) -> dict:
+    return {}
+"""
+
+    args = {a["name"]: a for a in extract_functions_from_code(code)[0]["args"]}
+
+    assert args["data"]["kind"] == "positional"
+    assert args["epochs"]["kind"] == "keyword_only"
+
+
+def test_function_extraction_keyword_only_default_value():
+
+    code = """
+def train(data: list, *, epochs: int = 10) -> dict:
+    return {}
+"""
+
+    args = {a["name"]: a for a in extract_functions_from_code(code)[0]["args"]}
+
+    assert args["epochs"]["default"] == 10
+
+
+def test_function_extraction_required_keyword_only_arg_has_no_default():
+
+    code = """
+def train(data: list, *, lr: float) -> dict:
+    return {}
+"""
+
+    args = {a["name"]: a for a in extract_functions_from_code(code)[0]["args"]}
+
+    assert args["lr"]["default"] is None
+
+
 def test_deduplicate_functions_by_name_keeps_last_definition():
 
     functions = [

@@ -78,6 +78,48 @@ def test_sync_function_generates_unawaited_sync_endpoint():
     assert "result = notebook_module.add(" in code
 
 
+def test_keyword_only_arg_is_passed_by_keyword_in_generated_call():
+
+    functions = [
+        {
+            # Deliberately not a LONG_RUNNING_KEYWORDS name, so this takes
+            # the direct-call endpoint path rather than the background-task
+            # path (which forwards args differently, through add_task).
+            "name": "score",
+            "args": [
+                {"name": "data", "type": "list", "kind": "positional"},
+                {"name": "epochs", "type": "int", "default": 10, "kind": "keyword_only"},
+            ],
+            "return_type": "dict",
+        }
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    assert "notebook_module.score(req.data, epochs=req.epochs)" in code
+
+
+def test_keyword_only_arg_forwarded_by_keyword_through_background_task():
+
+    functions = [
+        {
+            "name": "train",
+            "args": [
+                {"name": "data", "type": "list", "kind": "positional"},
+                {"name": "epochs", "type": "int", "default": 10, "kind": "keyword_only"},
+            ],
+            "return_type": "dict",
+        }
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    assert (
+        "background_tasks.add_task(_run_background_task, notebook_module.train, "
+        "task_id, req.data, epochs=req.epochs)"
+    ) in code
+
+
 def test_pydantic_model_generation():
 
     functions = [

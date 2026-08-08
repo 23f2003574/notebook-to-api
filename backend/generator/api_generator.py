@@ -9,6 +9,18 @@ LONG_RUNNING_KEYWORDS = [
     "scrape",
 ]
 
+def _call_arg_expr(arg):
+    """Render a single argument for the notebook_module.<fn>(...) call.
+
+    Keyword-only parameters (those after a bare `*`, e.g.
+    `def train(data, *, epochs=10)`) cannot be passed positionally, so
+    they must be forwarded as `name=req.name` rather than plain `req.name`.
+    """
+    if arg.get("kind") == "keyword_only":
+        return f"{arg['name']}=req.{arg['name']}"
+    return f"req.{arg['name']}"
+
+
 # Template for generating the FastAPI application source code
 def generate_fastapi_code(functions):
     """Generate FastAPI app code for the given functions.
@@ -515,7 +527,7 @@ def generate_fastapi_code(functions):
             f"Returns {return_type}"
         )
         model_name = f"{func_name[0].upper()}{func_name[1:]}Request"
-        call_args = ", ".join(f"req.{arg['name']}" for arg in args)
+        call_args = ", ".join(_call_arg_expr(arg) for arg in args)
         is_background = any(kw in func_name.lower() for kw in LONG_RUNNING_KEYWORDS)
         summary = (
             func_name
@@ -541,7 +553,7 @@ def generate_fastapi_code(functions):
             lines.append("    task_id = uuid.uuid4().hex")
             lines.append("    TASKS[task_id] = {\"status\": \"processing\"}")
             # Pass positional arguments to the background function
-            args_expr = ", ".join(f"req.{arg['name']}" for arg in args)
+            args_expr = ", ".join(_call_arg_expr(arg) for arg in args)
             lines.append(f"    background_tasks.add_task(_run_background_task, notebook_module.{func_name}, task_id, {args_expr})")
             lines.append("    return {\"task_id\": task_id, \"status\": \"processing\"}")
         else:
