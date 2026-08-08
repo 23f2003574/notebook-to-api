@@ -189,11 +189,11 @@ from fastapi.testclient import TestClient
 
 compile_notebook({str(notebook_path)!r}, "generated")
 
-# openapi_exporter imports generated.app at module load time (see the
-# lazy-import comment in backend/cli.py), so it must not be imported
-# until after compile_notebook has written a fresh generated/app.py --
-# otherwise it can resolve a stale generated/app.py from elsewhere on
-# sys.path instead of the one just compiled here.
+# openapi_exporter dynamically imports <package_name>.app inside
+# export_openapi_schema (not at this module's own load time), so it must
+# not be called until after compile_notebook has written a fresh
+# generated/app.py -- otherwise it can resolve a stale generated/app.py
+# from elsewhere on sys.path instead of the one just compiled here.
 from backend.exporters.openapi_exporter import export_openapi_schema
 export_openapi_schema("generated/openapi.json")
 generate_python_sdk("generated/openapi.json", "generated/sdk/python_client.py")
@@ -240,3 +240,79 @@ print("SDK_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "SDK_E2E_OK" in proc.stdout
+
+
+def test_export_openapi_schema_uses_the_freshly_compiled_app_for_custom_output_dir(
+    tmp_path
+):
+    """Confirmed exploitable before this fix: export_openapi_schema always
+    imported the fixed name "generated.app" regardless of what --output
+    directory compilation actually used, so with any custom --output it
+    silently exported the schema for whatever stale, unrelated app
+    happened to already be importable as "generated.app" elsewhere on
+    sys.path -- reproduced by compiling a uniquely-named function into a
+    custom directory and finding it *missing* from the exported schema,
+    with an unrelated stale endpoint present instead.
+
+    Uses a distinctive, never-reused function name so a false pass can't
+    be explained by another test's leftover "generated/" state.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def distinctive_marker_endpoint_9f3a(q: int) -> int:\n"
+                            "    return q\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook, package_name_for_output_dir
+from backend.exporters.openapi_exporter import export_openapi_schema
+
+compile_notebook({str(notebook_path)!r}, "my_custom_api_dir")
+export_openapi_schema(
+    "my_custom_api_dir/openapi.json",
+    package_name_for_output_dir("my_custom_api_dir"),
+)
+
+import json
+schema = json.load(open("my_custom_api_dir/openapi.json"))
+paths = schema.get("paths", {{}})
+assert "/distinctive_marker_endpoint_9f3a" in paths, paths
+print("CUSTOM_DIR_OPENAPI_EXPORT_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "CUSTOM_DIR_OPENAPI_EXPORT_OK" in proc.stdout

@@ -343,6 +343,11 @@ def main():
         "export-openapi", help="Export OpenAPI schema from generated FastAPI app."
     )
     openapi_parser.add_argument(
+        "--app-dir",
+        default="generated",
+        help="Directory the app was compiled into (the --output used with `compile`)."
+    )
+    openapi_parser.add_argument(
         "--output",
         default="generated/openapi.json",
         help="Path to write the OpenAPI JSON file."
@@ -5108,7 +5113,8 @@ def main():
         inspect_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
     elif args.command == "export-openapi":
         from backend.exporters.openapi_exporter import export_openapi_schema
-        export_openapi_schema(args.output)
+        from backend.compiler import package_name_for_output_dir
+        export_openapi_schema(args.output, package_name_for_output_dir(args.app_dir))
     elif args.command == "export-sdk":
         from backend.exporters.sdk_generator import generate_python_sdk
         generate_python_sdk(args.openapi, args.output)
