@@ -219,6 +219,38 @@ def train(data: list, *, lr: float) -> dict:
     args = {a["name"]: a for a in extract_functions_from_code(code)[0]["args"]}
 
     assert args["lr"]["default"] is None
+    assert args["lr"]["has_default"] is False
+
+
+def test_function_extraction_distinguishes_explicit_none_default_from_no_default():
+    """`def greet(name, title=None)` and `def greet(name, title)` both end
+    up with default=None from ast.literal_eval, but only the first one
+    actually has a default -- has_default is what tells them apart.
+    """
+
+    code = """
+def greet(name: str, title: str = None) -> str:
+    return name
+"""
+
+    args = {a["name"]: a for a in extract_functions_from_code(code)[0]["args"]}
+
+    assert args["title"]["default"] is None
+    assert args["title"]["has_default"] is True
+    assert args["name"]["has_default"] is False
+
+
+def test_function_extraction_keyword_only_explicit_none_default_has_default_true():
+
+    code = """
+def train(data: list, *, callback=None) -> dict:
+    return {}
+"""
+
+    args = {a["name"]: a for a in extract_functions_from_code(code)[0]["args"]}
+
+    assert args["callback"]["default"] is None
+    assert args["callback"]["has_default"] is True
 
 
 def test_deduplicate_functions_by_name_keeps_last_definition():

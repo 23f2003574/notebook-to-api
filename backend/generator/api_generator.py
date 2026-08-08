@@ -478,7 +478,7 @@ def generate_fastapi_code(functions, package_name="generated"):
 
             default_value = arg.get("default")
 
-            if default_value is not None:
+            if arg.get("has_default"):
                 lines.append(
                     f'    {arg_name}: {arg_type} = Field('
                     f'default={repr(default_value)}, '

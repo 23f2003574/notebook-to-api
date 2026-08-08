@@ -88,7 +88,7 @@ def test_keyword_only_arg_is_passed_by_keyword_in_generated_call():
             "name": "score",
             "args": [
                 {"name": "data", "type": "list", "kind": "positional"},
-                {"name": "epochs", "type": "int", "default": 10, "kind": "keyword_only"},
+                {"name": "epochs", "type": "int", "default": 10, "has_default": True, "kind": "keyword_only"},
             ],
             "return_type": "dict",
         }
@@ -106,7 +106,7 @@ def test_keyword_only_arg_forwarded_by_keyword_through_background_task():
             "name": "train",
             "args": [
                 {"name": "data", "type": "list", "kind": "positional"},
-                {"name": "epochs", "type": "int", "default": 10, "kind": "keyword_only"},
+                {"name": "epochs", "type": "int", "default": 10, "has_default": True, "kind": "keyword_only"},
             ],
             "return_type": "dict",
         }
@@ -118,6 +118,49 @@ def test_keyword_only_arg_forwarded_by_keyword_through_background_task():
         "background_tasks.add_task(_run_background_task, notebook_module.train, "
         "task_id, req.data, epochs=req.epochs)"
     ) in code
+
+
+def test_field_with_explicit_none_default_is_not_required():
+    """A default of None (has_default=True, default=None) must produce an
+    optional Pydantic field, not a required one -- otherwise the generated
+    endpoint 422s on any call that omits the field, even though the
+    underlying notebook function has a perfectly valid default.
+    """
+
+    functions = [
+        {
+            "name": "greet",
+            "args": [
+                {"name": "name", "type": "str", "has_default": False, "kind": "positional"},
+                {"name": "title", "type": "str", "default": None, "has_default": True, "kind": "positional"},
+            ],
+            "return_type": "str",
+        }
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    assert "title: str = Field(default=None," in code
+    assert "name: str = Field(description=" in code
+    assert "name: str = Field(default=" not in code
+
+
+def test_field_with_no_default_is_required():
+
+    functions = [
+        {
+            "name": "greet",
+            "args": [
+                {"name": "name", "type": "str", "has_default": False, "kind": "positional"},
+            ],
+            "return_type": "str",
+        }
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    assert "name: str = Field(description=" in code
+    assert "default=" not in code.split("class GreetRequest(BaseModel):")[1].split("\n\n")[0]
 
 
 def test_pydantic_model_generation():

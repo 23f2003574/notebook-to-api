@@ -420,3 +420,75 @@ def test_compiler_pipeline_excludes_stdlib_modules_from_requirements(tmp_path):
     assert "asyncio" not in deps
     assert "random" not in deps
     assert "pandas" in deps
+
+
+def test_compiler_pipeline_optional_none_default_param_is_actually_optional(
+    tmp_path
+):
+    """`def greet(name, title=None)` is an extremely common Python idiom
+    for an optional parameter. Confirmed live before this fix: the
+    generated endpoint 422'd on a request that omitted `title`, because
+    the generated Pydantic field was marked required -- default=None was
+    indistinguishable from "no default" once extracted.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def greet(name: str, title: str = None) -> str:\n"
+                            "    return ((title or '') + ' ' + name).strip()\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+resp = client.post(
+    "/greet",
+    json={{"name": "Ada"}},
+    headers={{"X-API-Key": "notebook-to-api-dev-key"}},
+)
+assert resp.status_code == 200, resp.text
+assert resp.json() == {{"result": "Ada"}}, resp.json()
+print("OPTIONAL_NONE_DEFAULT_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "OPTIONAL_NONE_DEFAULT_E2E_OK" in proc.stdout

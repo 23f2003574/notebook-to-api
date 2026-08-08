@@ -97,6 +97,7 @@ def extract_functions_from_code(code):
                     "name": arg.arg,
                     "type": None,
                     "default": None,
+                    "has_default": False,
                     "kind": "positional"
                 }
 
@@ -106,6 +107,8 @@ def extract_functions_from_code(code):
                 default_index = idx - default_offset
 
                 if default_index >= 0:
+                    arg_info["has_default"] = True
+
                     try:
                         arg_info["default"] = ast.literal_eval(
                             defaults[default_index]
@@ -127,6 +130,7 @@ def extract_functions_from_code(code):
                     "name": arg.arg,
                     "type": None,
                     "default": None,
+                    "has_default": False,
                     "kind": "keyword_only"
                 }
 
@@ -136,6 +140,8 @@ def extract_functions_from_code(code):
                 default_node = node.args.kw_defaults[idx]
 
                 if default_node is not None:
+                    arg_info["has_default"] = True
+
                     try:
                         arg_info["default"] = ast.literal_eval(
                             default_node
