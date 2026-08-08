@@ -75,3 +75,41 @@ def test_compiler_pipeline_handles_magics_and_broken_cells(tmp_path):
     )
 
     assert "pandas" in requirements
+
+
+def test_compiler_pipeline_does_not_expose_class_methods_or_nested_functions(
+    tmp_path
+):
+    """A class method or a closure nested inside another function is not
+    callable as a standalone module-level function, so it must not be
+    turned into its own generated API endpoint.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "class Model:\n"
+            "    def predict(self, x: int) -> int:\n"
+            "        return x * 2\n\n"
+            "def run(x: int) -> int:\n"
+            "    def helper(y: int) -> int:\n"
+            "        return y + 1\n"
+            "    return helper(x)\n"
+        )
+    )
+
+    notebook_path = tmp_path / "methods.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    generated_app = (output_dir / "app.py").read_text(encoding="utf-8")
+
+    assert '"/run"' in generated_app or "'/run'" in generated_app
+    assert '"/predict"' not in generated_app
+    assert '"/helper"' not in generated_app

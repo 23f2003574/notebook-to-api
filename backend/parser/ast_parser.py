@@ -16,6 +16,38 @@ def is_parseable_python(code):
         return False
 
 
+# Node types that introduce a new Python scope. A function defined inside
+# one of these (a class method, or a function nested inside another
+# function) is not callable as a free-standing module-level function, so it
+# must not be walked into when looking for API-exposable functions.
+_SCOPE_BOUNDARY_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+
+# Compound-statement fields that do NOT introduce a new scope (if/try/for/
+# while/with at module level), so definitions inside them are still
+# reachable as module-level functions and should be walked into.
+_TRANSPARENT_BODY_FIELDS = ("body", "orelse", "finalbody")
+
+
+def _iter_module_level_statements(nodes):
+    """Yield statements reachable at module scope, without descending into
+    function/class bodies (which define their own, unrelated scope)."""
+
+    for node in nodes:
+        yield node
+
+        if isinstance(node, _SCOPE_BOUNDARY_NODES):
+            continue
+
+        for field in _TRANSPARENT_BODY_FIELDS:
+            children = getattr(node, field, None)
+
+            if children:
+                yield from _iter_module_level_statements(children)
+
+        for handler in getattr(node, "handlers", []):
+            yield from _iter_module_level_statements(handler.body)
+
+
 def extract_functions_from_code(code):
     try:
         tree = ast.parse(code)
@@ -27,7 +59,7 @@ def extract_functions_from_code(code):
 
     functions = []
 
-    for node in ast.walk(tree):
+    for node in _iter_module_level_statements(tree.body):
         if isinstance(node, ast.FunctionDef):
             args = []
 

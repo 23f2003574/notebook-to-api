@@ -56,3 +56,76 @@ def test_import_extraction_skips_unparseable_code_instead_of_raising():
     imports = extract_imports_from_code(code)
 
     assert imports == set()
+
+
+def test_function_extraction_excludes_class_methods():
+
+    code = """
+class Model:
+    def predict(self, x: int) -> int:
+        return x * 2
+"""
+
+    funcs = extract_functions_from_code(code)
+
+    assert [f["name"] for f in funcs] == []
+
+
+def test_function_extraction_excludes_nested_functions():
+
+    code = """
+def outer(a: int) -> int:
+    def inner(b: int) -> int:
+        return b + 1
+    return inner(a)
+"""
+
+    funcs = extract_functions_from_code(code)
+
+    assert [f["name"] for f in funcs] == ["outer"]
+
+
+def test_function_extraction_includes_module_level_function_beside_a_class():
+
+    code = """
+class Model:
+    def predict(self, x: int) -> int:
+        return x * 2
+
+def run(x: int) -> int:
+    model = Model()
+    return model.predict(x)
+"""
+
+    funcs = extract_functions_from_code(code)
+
+    assert [f["name"] for f in funcs] == ["run"]
+
+
+def test_function_extraction_includes_functions_defined_inside_if_block():
+
+    code = """
+if True:
+    def conditional_func(y: int) -> int:
+        return y
+"""
+
+    funcs = extract_functions_from_code(code)
+
+    assert [f["name"] for f in funcs] == ["conditional_func"]
+
+
+def test_function_extraction_includes_functions_defined_inside_try_block():
+
+    code = """
+try:
+    def fallback_func(z: int) -> int:
+        return z
+except ImportError:
+    def fallback_func(z: int) -> int:
+        return -1
+"""
+
+    funcs = extract_functions_from_code(code)
+
+    assert [f["name"] for f in funcs] == ["fallback_func", "fallback_func"]
