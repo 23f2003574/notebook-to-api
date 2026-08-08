@@ -82,7 +82,7 @@ def extract_functions_from_code(code):
     functions = []
 
     for node in _iter_module_level_statements(tree.body):
-        if isinstance(node, ast.FunctionDef):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             args = []
 
             defaults = node.args.defaults
@@ -124,6 +124,7 @@ def extract_functions_from_code(code):
                 "name": node.name,
                 "args": args,
                 "return_type": return_type,
+                "is_async": isinstance(node, ast.AsyncFunctionDef),
                 "example_payload": generate_example_payload(args),
                 "example_response": generate_example_response(
                     return_type

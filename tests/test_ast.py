@@ -132,6 +132,44 @@ except ImportError:
     assert [f["name"] for f in funcs] == ["fallback_func", "fallback_func"]
 
 
+def test_function_extraction_detects_async_functions():
+
+    code = """
+async def fetch_data(url: str) -> dict:
+    return {}
+"""
+
+    funcs = extract_functions_from_code(code)
+
+    assert funcs[0]["name"] == "fetch_data"
+    assert funcs[0]["is_async"] is True
+
+
+def test_function_extraction_marks_sync_functions_not_async():
+
+    code = """
+def add(a: int, b: int) -> int:
+    return a + b
+"""
+
+    funcs = extract_functions_from_code(code)
+
+    assert funcs[0]["is_async"] is False
+
+
+def test_function_extraction_excludes_async_class_methods():
+
+    code = """
+class Model:
+    async def predict(self, x: int) -> int:
+        return x
+"""
+
+    funcs = extract_functions_from_code(code)
+
+    assert funcs == []
+
+
 def test_deduplicate_functions_by_name_keeps_last_definition():
 
     functions = [

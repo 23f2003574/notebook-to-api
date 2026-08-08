@@ -42,6 +42,42 @@ def test_route_generation():
     assert "/predict" in code
 
 
+def test_async_function_generates_awaited_async_endpoint():
+
+    functions = [
+        {
+            "name": "fetch_data",
+            "args": [{"name": "url", "type": "str"}],
+            "return_type": "dict",
+            "is_async": True,
+        }
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    assert "async def fetch_data(" in code
+    assert "await notebook_module.fetch_data(" in code
+
+
+def test_sync_function_generates_unawaited_sync_endpoint():
+
+    functions = [
+        {
+            "name": "add",
+            "args": [{"name": "a", "type": "int"}],
+            "return_type": "int",
+            "is_async": False,
+        }
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    assert "def add(" in code
+    assert "async def add(" not in code
+    assert "await notebook_module.add(" not in code
+    assert "result = notebook_module.add(" in code
+
+
 def test_pydantic_model_generation():
 
     functions = [

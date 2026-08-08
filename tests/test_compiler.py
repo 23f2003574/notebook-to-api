@@ -155,3 +155,38 @@ def test_compiler_pipeline_deduplicates_functions_redefined_across_cells(
 
     assert generated_app.count('"/add"') == 1
     assert generated_app.count("def add(") == 1
+
+
+def test_compiler_pipeline_generates_awaitable_endpoint_for_async_function(
+    tmp_path
+):
+    """`async def` functions are common in notebooks that call external
+    APIs (httpx/aiohttp). Compiling one must produce a valid, importable
+    generated app whose endpoint actually awaits the coroutine instead of
+    returning it unresolved.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "async def fetch_data(url: str) -> dict:\n"
+            "    return {'url': url}\n"
+        )
+    )
+
+    notebook_path = tmp_path / "async_func.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    generated_app = (output_dir / "app.py").read_text(encoding="utf-8")
+
+    ast.parse(generated_app)
+
+    assert "async def fetch_data(" in generated_app
+    assert "await notebook_module.fetch_data(" in generated_app

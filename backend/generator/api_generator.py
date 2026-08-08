@@ -26,6 +26,7 @@ def generate_fastapi_code(functions):
     lines.append("import uuid")
     lines.append("import os")
     lines.append("import sys")
+    lines.append("import inspect")
     lines.append("from datetime import datetime")
     lines.append("import time")
     lines.append("from pydantic import BaseModel, Field")
@@ -429,9 +430,11 @@ def generate_fastapi_code(functions):
     lines.append("    }")
 
     lines.append("")
-    lines.append("def _run_background_task(func, task_id, *args, **kwargs):")
+    lines.append("async def _run_background_task(func, task_id, *args, **kwargs):")
     lines.append("    try:")
     lines.append("        result = func(*args, **kwargs)")
+    lines.append("        if inspect.isawaitable(result):")
+    lines.append("            result = await result")
     lines.append("        TASKS[task_id][\"status\"] = \"completed\"")
     lines.append("        TASKS[task_id][\"result\"] = result")
     lines.append("    except Exception as e:")
@@ -551,8 +554,11 @@ def generate_fastapi_code(functions):
                 f'openapi_extra={{"x-notebook-to-api-category": "{category}", "security": [{{"ApiKeyAuth": []}}]}}, '
                 f'responses={{200: {{"description": "{response_description}", "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
             )
-            lines.append(f"def {func_name}(req: {model_name}, _: None = Depends(verify_api_key)):")
-            lines.append(f"    result = notebook_module.{func_name}({call_args})")
+            is_async = func.get("is_async", False)
+            def_keyword = "async def" if is_async else "def"
+            call_prefix = "await " if is_async else ""
+            lines.append(f"{def_keyword} {func_name}(req: {model_name}, _: None = Depends(verify_api_key)):")
+            lines.append(f"    result = {call_prefix}notebook_module.{func_name}({call_args})")
             lines.append("    return {\"result\": result}")
         lines.append("")
     return "\n".join(lines)
