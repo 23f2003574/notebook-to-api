@@ -71,8 +71,8 @@ def test_compiler_pipeline_handles_magics_and_broken_cells(tmp_path):
 
     compile_notebook(str(notebook_path), str(output_dir))
 
-    runtime_module = Path(
-        "generated/runtime/notebook_module.py"
+    runtime_module = (
+        output_dir / "runtime" / "notebook_module.py"
     ).read_text(encoding="utf-8")
 
     # The generated runtime module must itself be valid, importable Python.
@@ -230,6 +230,38 @@ def test_compiler_pipeline_calls_keyword_only_args_by_keyword(tmp_path):
     ast.parse(generated_app)
 
     assert "notebook_module.score(req.data, epochs=req.epochs)" in generated_app
+
+
+def test_compiler_pipeline_positional_only_args_work_end_to_end(tmp_path):
+    """Confirmed exploitable before this fix: positional-only params (those
+    before a bare `/`) were dropped during extraction, so the generated
+    endpoint called notebook_module.f(...) without them and every request
+    raised a TypeError for missing required arguments.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def combine(a: int, b: int, /, c: int) -> int:\n"
+            "    return a + b + c\n"
+        )
+    )
+
+    notebook_path = tmp_path / "posonly.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    generated_app = (output_dir / "app.py").read_text(encoding="utf-8")
+
+    ast.parse(generated_app)
+
+    assert "notebook_module.combine(req.a, req.b, req.c)" in generated_app
 
 
 def test_package_name_for_output_dir_uses_basename():

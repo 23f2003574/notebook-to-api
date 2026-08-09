@@ -280,3 +280,104 @@ def test_deduplicate_functions_by_name_no_duplicates_is_unchanged():
     deduped = deduplicate_functions_by_name(functions)
 
     assert deduped == functions
+
+
+def test_function_extraction_includes_positional_only_args():
+    """Confirmed exploitable before this fix: only node.args.args and
+    node.args.kwonlyargs were read, so positional-only params (those
+    before a bare `/`) were silently dropped from extraction entirely --
+    the generated endpoint then called notebook_module.f(...) without
+    them, raising a TypeError for missing required arguments on every
+    request instead of ever exposing them.
+    """
+
+    code = """
+def f(a, b, /, c, d=1):
+    return a + b + c + d
+"""
+
+    funcs = extract_functions_from_code(code)
+
+    arg_names = [a["name"] for a in funcs[0]["args"]]
+
+    assert arg_names == ["a", "b", "c", "d"]
+
+
+def test_function_extraction_positional_only_args_are_marked_positional():
+
+    code = """
+def f(a, b, /, c):
+    return a + b + c
+"""
+
+    args = {a["name"]: a for a in extract_functions_from_code(code)[0]["args"]}
+
+    assert args["a"]["kind"] == "positional"
+    assert args["b"]["kind"] == "positional"
+
+
+def test_function_extraction_positional_only_default_applies_to_trailing_arg():
+    """Defaults apply to the trailing N of posonlyargs+args combined, same
+    rule as for a plain positional list -- verify merging posonlyargs in
+    doesn't shift which parameter a default is attributed to.
+    """
+
+    code = """
+def f(a, b=2, /, c=3):
+    return a + b + c
+"""
+
+    args = {a["name"]: a for a in extract_functions_from_code(code)[0]["args"]}
+
+    assert args["a"]["has_default"] is False
+    assert args["b"]["has_default"] is True
+    assert args["b"]["default"] == 2
+    assert args["c"]["has_default"] is True
+    assert args["c"]["default"] == 3
+
+
+def test_function_extraction_excludes_function_with_var_args():
+    """*args can't be represented as a fixed set of Pydantic request
+    fields -- the generated endpoint would silently ignore whatever
+    callers actually put there. The whole function must be skipped,
+    same policy as class methods/nested functions.
+    """
+
+    code = """
+def f(a, *args):
+    return a
+"""
+
+    funcs = extract_functions_from_code(code)
+
+    assert funcs == []
+
+
+def test_function_extraction_excludes_function_with_kwargs():
+
+    code = """
+def f(a, **kwargs):
+    return a
+"""
+
+    funcs = extract_functions_from_code(code)
+
+    assert funcs == []
+
+
+def test_function_extraction_still_includes_sibling_function_beside_var_args_function():
+    """One function using **kwargs must not cause the whole notebook's
+    other, perfectly representable functions to be dropped too.
+    """
+
+    code = """
+def unsupported(a, **kwargs):
+    return a
+
+def add(a: int, b: int) -> int:
+    return a + b
+"""
+
+    funcs = extract_functions_from_code(code)
+
+    assert [f["name"] for f in funcs] == ["add"]

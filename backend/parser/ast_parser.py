@@ -83,16 +83,35 @@ def extract_functions_from_code(code):
 
     for node in _iter_module_level_statements(tree.body):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # A `*args`/`**kwargs` catch-all can't be represented as a
+            # fixed set of Pydantic request fields -- the generated
+            # endpoint would silently ignore whatever callers actually put
+            # there. Skip the whole function (same policy already applied
+            # to class methods/nested functions) rather than generating an
+            # endpoint that quietly drops part of its own signature.
+            if node.args.vararg or node.args.kwarg:
+                continue
+
             args = []
+
+            # Positional-only params (those before a bare `/`, e.g.
+            # `def f(a, b, /, c)`) are extracted alongside regular
+            # positional params: both are passed positionally in the
+            # generated notebook_module.func(...) call, in the same
+            # left-to-right order they appear in `positional_params`, so
+            # merging them here preserves correct call ordering. Defaults
+            # apply to the trailing N of this *combined* list, exactly as
+            # for node.args.args alone.
+            positional_params = node.args.posonlyargs + node.args.args
 
             defaults = node.args.defaults
 
             default_offset = (
-                len(node.args.args)
+                len(positional_params)
                 - len(defaults)
             )
 
-            for idx, arg in enumerate(node.args.args):
+            for idx, arg in enumerate(positional_params):
                 arg_info = {
                     "name": arg.arg,
                     "type": None,
