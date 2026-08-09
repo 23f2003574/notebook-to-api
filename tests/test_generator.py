@@ -301,6 +301,24 @@ def test_pydantic_model_generation():
     assert "BaseModel" in code
 
 
+def test_zero_argument_function_produces_a_valid_request_model():
+    """Confirmed exploitable before this fix: a zero-parameter notebook
+    function (e.g. `def health(): ...`) produced `class HealthRequest
+    (BaseModel):` with no fields and no model_config -- an empty class
+    body, which is a SyntaxError that fails to compile the *entire*
+    generated app, not just this one endpoint.
+    """
+
+    functions = [
+        {"name": "get_status", "args": [], "return_type": "dict"},
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    compile(code, "<generated>", "exec")
+    assert "class Get_statusRequest(BaseModel):\n    pass" in code
+
+
 def test_pipeline_model_generator():
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
     from backend.generator import PipelineModelGenerator

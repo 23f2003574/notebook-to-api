@@ -555,6 +555,13 @@ def generate_fastapi_code(functions, package_name="generated"):
             {}
         )
         lines.append(f"class {model_name}(BaseModel):")
+        if not func.get("args"):
+            # A zero-parameter notebook function (e.g. `def health(): ...`)
+            # produces a class body with no fields and, since
+            # example_payload is empty too, no model_config block either --
+            # an empty class body is a SyntaxError, which would fail to
+            # compile the *entire* generated app, not just this endpoint.
+            lines.append("    pass")
         for arg in func.get("args", []):
             arg_name = arg.get("name", "param")
             raw_arg_type = arg.get("type")

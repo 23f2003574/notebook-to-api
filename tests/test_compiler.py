@@ -264,6 +264,38 @@ def test_compiler_pipeline_positional_only_args_work_end_to_end(tmp_path):
     assert "notebook_module.combine(req.a, req.b, req.c)" in generated_app
 
 
+def test_compiler_pipeline_zero_argument_function_compiles_end_to_end(tmp_path):
+    """Confirmed exploitable before this fix: a zero-parameter notebook
+    function produced an empty Pydantic model class body (no fields, no
+    model_config), which is a SyntaxError -- app.py failed to even
+    `compile()`, breaking every endpoint in the generated API, not just
+    the zero-arg one.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def get_status() -> dict:\n"
+            "    return {'ok': True}\n"
+        )
+    )
+
+    notebook_path = tmp_path / "zeroarg.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    generated_app = (output_dir / "app.py").read_text(encoding="utf-8")
+
+    ast.parse(generated_app)
+    compile(generated_app, "app.py", "exec")
+
+
 def test_package_name_for_output_dir_uses_basename():
 
     assert package_name_for_output_dir("generated") == "generated"
