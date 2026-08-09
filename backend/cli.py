@@ -348,9 +348,19 @@ def main():
         help="Directory the app was compiled into (the --output used with `compile`)."
     )
     openapi_parser.add_argument(
+        "--format",
+        choices=["json", "yaml"],
+        default="json",
+        help="Output format for the exported schema. Default: json."
+    )
+    openapi_parser.add_argument(
         "--output",
-        default="generated/openapi.json",
-        help="Path to write the OpenAPI JSON file."
+        default=None,
+        help=(
+            "Path to write the OpenAPI schema. Defaults to "
+            "generated/openapi.json for --format json, or "
+            "generated/openapi.yaml for --format yaml."
+        )
     )
 
     # SDK export command
@@ -5140,7 +5150,13 @@ def main():
     elif args.command == "export-openapi":
         from backend.exporters.openapi_exporter import export_openapi_schema
         from backend.compiler import package_name_for_output_dir
-        export_openapi_schema(args.output, package_name_for_output_dir(args.app_dir))
+        default_output = (
+            "generated/openapi.yaml" if args.format == "yaml" else "generated/openapi.json"
+        )
+        output = args.output or default_output
+        export_openapi_schema(
+            output, package_name_for_output_dir(args.app_dir), format=args.format
+        )
     elif args.command == "export-sdk":
         if args.language == "typescript":
             from backend.exporters.sdk_generator import generate_typescript_sdk
