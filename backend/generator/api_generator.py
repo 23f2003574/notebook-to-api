@@ -67,6 +67,34 @@ class _AnnotationNameQualifier(ast.NodeTransformer):
         )
 
 
+def _build_model_names(functions):
+    """Map each function's name to a Pydantic request-model class name,
+    guaranteed unique even when two function names collide once reduced
+    to a class name (e.g. "get_data" and "Get_data" -- only the first
+    character was ever uppercased, so both produced the identical class
+    name "Get_dataRequest", and the second definition silently shadowed
+    the first's fields: whichever endpoint referenced that name ended up
+    validating requests against the *other* function's parameters).
+    """
+    used_names = set()
+    model_names = {}
+
+    for func in functions:
+        func_name = func["name"]
+        base_name = f"{func_name[0].upper()}{func_name[1:]}Request"
+        candidate = base_name
+        suffix = 2
+
+        while candidate in used_names:
+            candidate = f"{base_name}_{suffix}"
+            suffix += 1
+
+        used_names.add(candidate)
+        model_names[func_name] = candidate
+
+    return model_names
+
+
 def _resolve_annotation_source(type_str):
     """Turn a raw `ast.unparse`d annotation string (as stored in
     arg["type"] by the parser) into source the generated app can actually
@@ -114,6 +142,8 @@ def generate_fastapi_code(functions, package_name="generated"):
         for arg in func.get("args", []):
             _, typing_names = _resolve_annotation_source(arg.get("type"))
             needed_typing_names |= typing_names
+
+    model_names = _build_model_names(functions)
 
     lines = []
     # Imports for the generated FastAPI app
@@ -549,7 +579,7 @@ def generate_fastapi_code(functions, package_name="generated"):
     # Generate Pydantic models for request bodies
     for func in functions:
         func_name = func["name"]
-        model_name = f"{func_name[0].upper()}{func_name[1:]}Request"
+        model_name = model_names[func_name]
         example_payload = func.get(
             "example_payload",
             {}
@@ -627,7 +657,7 @@ def generate_fastapi_code(functions, package_name="generated"):
         response_description = (
             f"Returns {return_type}"
         )
-        model_name = f"{func_name[0].upper()}{func_name[1:]}Request"
+        model_name = model_names[func_name]
         call_args = ", ".join(_call_arg_expr(arg) for arg in args)
         is_background = any(kw in func_name.lower() for kw in LONG_RUNNING_KEYWORDS)
         summary = (

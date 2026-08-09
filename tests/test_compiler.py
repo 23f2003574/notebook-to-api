@@ -296,6 +296,48 @@ def test_compiler_pipeline_zero_argument_function_compiles_end_to_end(tmp_path):
     compile(generated_app, "app.py", "exec")
 
 
+def test_compiler_pipeline_case_colliding_function_names_get_distinct_models(tmp_path):
+    """Confirmed exploitable before this fix: two notebook functions
+    differing only by the case of their first letter (e.g. "get_data" and
+    "Get_data") produced identically-named Pydantic request model classes,
+    so the second class definition silently shadowed the first -- one
+    endpoint ended up validating requests against the *other* function's
+    fields.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def get_data(query: str) -> dict:\n"
+            "    return {'query': query}\n"
+        )
+    )
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def Get_data(id: int) -> dict:\n"
+            "    return {'id': id}\n"
+        )
+    )
+
+    notebook_path = tmp_path / "collide.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    generated_app = (output_dir / "app.py").read_text(encoding="utf-8")
+
+    ast.parse(generated_app)
+    compile(generated_app, "app.py", "exec")
+
+    assert generated_app.count("class Get_dataRequest(BaseModel):") == 1
+    assert generated_app.count("class Get_dataRequest_2(BaseModel):") == 1
+
+
 def test_package_name_for_output_dir_uses_basename():
 
     assert package_name_for_output_dir("generated") == "generated"

@@ -319,6 +319,45 @@ def test_zero_argument_function_produces_a_valid_request_model():
     assert "class Get_statusRequest(BaseModel):\n    pass" in code
 
 
+def test_functions_colliding_on_request_model_name_get_distinct_classes():
+    """Confirmed exploitable before this fix: model_name only uppercased
+    the function name's first character, so "get_data" and "Get_data"
+    (two distinct, valid Python function names) both produced the class
+    name "Get_dataRequest". The second class definition silently shadowed
+    the first, so BOTH endpoints resolved to the same class -- the first
+    function's endpoint ended up validating requests against the
+    *second* function's fields, with no compile-time or runtime error.
+    """
+
+    functions = [
+        {
+            "name": "get_data",
+            "args": [{"name": "query", "type": "str", "has_default": False, "kind": "positional"}],
+            "return_type": "dict",
+        },
+        {
+            "name": "Get_data",
+            "args": [{"name": "id", "type": "int", "has_default": False, "kind": "positional"}],
+            "return_type": "dict",
+        },
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    compile(code, "<generated>", "exec")
+
+    assert code.count("class Get_dataRequest(BaseModel):") == 1
+    assert code.count("class Get_dataRequest_2(BaseModel):") == 1
+    assert "def get_data(req: Get_dataRequest, " in code
+    assert "def Get_data(req: Get_dataRequest_2, " in code
+
+    namespace = {"notebook_module": type("notebook_module", (), {})}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    assert "query" in namespace["Get_dataRequest"].model_fields
+    assert "id" in namespace["Get_dataRequest_2"].model_fields
+
+
 def test_pipeline_model_generator():
     from backend.analyzer.pipeline_endpoint_spec import PipelineEndpointSpec
     from backend.generator import PipelineModelGenerator
