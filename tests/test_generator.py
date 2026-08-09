@@ -1,9 +1,38 @@
+import sys
+import types
+
 import pytest
 
 from backend.generator.api_generator import (
     generate_fastapi_code,
     ReservedFunctionNameError,
 )
+
+
+def _register_fake_notebook_module(monkeypatch, package_name="generated"):
+    """Generated code always contains a real
+    `import <package_name>.runtime.notebook_module as notebook_module`
+    statement (see api_generator.py). A plain `namespace = {"notebook_module":
+    ...}` dict passed to exec() does NOT satisfy that -- `import X as Y`
+    always performs a real import of X via sys.modules/sys.path and
+    ignores whatever's already bound to the name Y, so exec()ing generated
+    code without actually registering these modules only "works" by
+    accident if a real `<package_name>/runtime/notebook_module.py`
+    happens to already exist somewhere importable (e.g. a stray leftover
+    `generated/` directory from a previous local run) -- which silently
+    passes locally but fails with ModuleNotFoundError in a clean checkout.
+    """
+    parent = types.ModuleType(package_name)
+    runtime_pkg = types.ModuleType(f"{package_name}.runtime")
+    notebook_module = types.ModuleType(f"{package_name}.runtime.notebook_module")
+
+    monkeypatch.setitem(sys.modules, package_name, parent)
+    monkeypatch.setitem(sys.modules, f"{package_name}.runtime", runtime_pkg)
+    monkeypatch.setitem(
+        sys.modules, f"{package_name}.runtime.notebook_module", notebook_module
+    )
+
+    return notebook_module
 
 
 def test_api_generation():
@@ -242,7 +271,7 @@ def test_field_with_no_default_is_required():
     assert "default=" not in code.split("class GreetRequest(BaseModel):")[1].split("\n\n")[0]
 
 
-def test_typing_generic_argument_types_get_a_matching_typing_import():
+def test_typing_generic_argument_types_get_a_matching_typing_import(monkeypatch):
     """Confirmed exploitable before this fix: arg["type"] (a raw
     ast.unparse'd annotation like "List[float]" or "Optional[str]") was
     written straight into the generated Pydantic model with no matching
@@ -272,7 +301,8 @@ def test_typing_generic_argument_types_get_a_matching_typing_import():
     assert "name: Optional[str] = Field(" in code
     assert "meta: Dict[str, Any] = Field(" in code
 
-    namespace = {"notebook_module": type("notebook_module", (), {})}
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
     exec(compile(code, "<generated>", "exec"), namespace)
 
     schema = namespace["PredictRequest"].model_json_schema()
@@ -415,7 +445,7 @@ def test_non_colliding_functions_alongside_a_reserved_name_still_raise():
         generate_fastapi_code(functions)
 
 
-def test_functions_colliding_on_request_model_name_get_distinct_classes():
+def test_functions_colliding_on_request_model_name_get_distinct_classes(monkeypatch):
     """Confirmed exploitable before this fix: model_name only uppercased
     the function name's first character, so "get_data" and "Get_data"
     (two distinct, valid Python function names) both produced the class
@@ -447,7 +477,8 @@ def test_functions_colliding_on_request_model_name_get_distinct_classes():
     assert "def get_data(req: Get_dataRequest, " in code
     assert "def Get_data(req: Get_dataRequest_2, " in code
 
-    namespace = {"notebook_module": type("notebook_module", (), {})}
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
     exec(compile(code, "<generated>", "exec"), namespace)
 
     assert "query" in namespace["Get_dataRequest"].model_fields
