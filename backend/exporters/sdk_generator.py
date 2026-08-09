@@ -78,3 +78,83 @@ def generate_python_sdk(
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     print(f"Python SDK generated at {output_path}")
+
+
+def generate_typescript_sdk(
+    openapi_path: str = "generated/openapi.json",
+    output_path: str = "generated/sdk/typescript_client.ts",
+):
+    """Generate a minimal TypeScript SDK client from a FastAPI OpenAPI schema.
+
+    Mirrors :func:`generate_python_sdk`: the generated client contains a
+    ``NotebookAPIClient`` class with a method for each POST endpoint defined
+    in the OpenAPI spec. Each method performs a ``fetch`` call to the
+    corresponding endpoint and returns the parsed JSON response.
+    """
+    # Load OpenAPI schema
+    with open(openapi_path, "r", encoding="utf-8") as f:
+        schema = json.load(f)
+
+    paths = schema.get("paths", {})
+    # Prepare client code lines
+    lines = []
+    lines.append("export interface NotebookAPIClientOptions {")
+    lines.append("  apiKey?: string;")
+    lines.append("}")
+    lines.append("")
+    lines.append("export class NotebookAPIClient {")
+    lines.append("  private baseUrl: string;")
+    lines.append("  private apiKey: string;")
+    lines.append("")
+    lines.append(
+        "  constructor(baseUrl: string, options: NotebookAPIClientOptions = {}) {"
+    )
+    lines.append('    this.baseUrl = baseUrl.replace(/\\/+$/, "");')
+    # Generated endpoints require the same X-API-Key header the generated
+    # app itself defaults to (see NOTEBOOK_API_KEY in api_generator.py) so
+    # the client works out of the box locally, matching the Python client.
+    lines.append(
+        '    this.apiKey = options.apiKey ?? "notebook-to-api-dev-key";'
+    )
+    lines.append("  }")
+    lines.append("")
+    lines.append(
+        "  private async request(path: string, payload: unknown): Promise<any> {"
+    )
+    lines.append("    const response = await fetch(`${this.baseUrl}${path}`, {")
+    lines.append('      method: "POST",')
+    lines.append("      headers: {")
+    lines.append('        "Content-Type": "application/json",')
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      body: JSON.stringify(payload),")
+    lines.append("    });")
+    lines.append("    if (!response.ok) {")
+    lines.append(
+        "      throw new Error(`Request to ${path} failed with status "
+        "${response.status}`);"
+    )
+    lines.append("    }")
+    lines.append("    return response.json();")
+    lines.append("  }")
+    for path, methods in paths.items():
+        # Only generate for POST methods (typical for notebook functions)
+        post_op = methods.get("post")
+        if not post_op:
+            continue
+        method_name = _method_name_from_path(path)
+        lines.append("")
+        lines.append(
+            f"  async {method_name}(payload: Record<string, unknown>): "
+            "Promise<any> {"
+        )
+        lines.append(f'    return this.request("{path}", payload);')
+        lines.append("  }")
+    lines.append("}")
+    lines.append("")
+    # Write to file
+    output_file = Path(output_path)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    print(f"TypeScript SDK generated at {output_path}")

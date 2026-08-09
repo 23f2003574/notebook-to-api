@@ -1,11 +1,14 @@
 import ast
 import json
+import shutil
 import subprocess
 import sys
 import types
 from pathlib import Path
 
-from backend.exporters.sdk_generator import generate_python_sdk
+import pytest
+
+from backend.exporters.sdk_generator import generate_python_sdk, generate_typescript_sdk
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -141,6 +144,144 @@ def test_generate_python_sdk_client_sends_correct_request(tmp_path, monkeypatch)
     assert calls[0]["url"] == "http://localhost:8000/train_model"
     assert calls[0]["json"] == {"a": 1}
     assert calls[0]["headers"] == {"X-API-Key": "notebook-to-api-dev-key"}
+
+
+def test_generate_typescript_sdk_produces_expected_structure(tmp_path):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert "export class NotebookAPIClient {" in source
+    assert "async train_model(payload: Record<string, unknown>): Promise<any> {" in source
+    # Braces must balance -- a mismatch is the most common way hand-built
+    # string-concatenated codegen produces invalid syntax.
+    assert source.count("{") == source.count("}")
+
+
+def test_generate_typescript_sdk_skips_non_post_endpoints(tmp_path):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/train_model": {"post": {"operationId": "train_model"}},
+            "/health": {"get": {"operationId": "health_check"}},
+        },
+    )
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert "async train_model(" in source
+    assert "async health_check(" not in source
+
+
+def test_generate_typescript_sdk_sends_api_key_header(tmp_path):
+    """Mirrors test_generate_python_sdk_sends_api_key_header: the generated
+    app rejects every request without an X-API-Key header, so the
+    TypeScript client must default one too instead of silently 401ing.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert '"X-API-Key": this.apiKey' in source
+    assert "notebook-to-api-dev-key" in source
+
+
+def test_generate_typescript_sdk_method_name_handles_multi_segment_paths(tmp_path):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/tasks/cleanup": {"post": {"operationId": "cleanup_tasks"}}},
+    )
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert "async tasks_cleanup(payload: Record<string, unknown>): Promise<any> {" in source
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_client_sends_correct_request(tmp_path):
+    """Load the generated client in a real Node.js process (mocking global
+    fetch) to confirm the method actually builds the right URL/payload/
+    header, rather than only checking the source text contains the right
+    tokens -- same rigor as
+    test_generate_python_sdk_client_sends_correct_request.
+
+    Modern Node.js runs .ts files directly by stripping type annotations,
+    so no separate `tsc`/bundler toolchain is required.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        globalThis.fetch = async (url, opts) => {{
+          globalThis.__calls.push({{
+            url,
+            method: opts.method,
+            apiKey: opts.headers["X-API-Key"],
+            body: opts.body,
+          }});
+          return {{ ok: true, json: async () => ({{ result: 42 }}) }};
+        }};
+        globalThis.__calls = [];
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+        const result = await client.train_model({{ a: 1 }});
+
+        console.log(JSON.stringify({{ result, calls: globalThis.__calls }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["result"] == {"result": 42}
+    assert len(output["calls"]) == 1
+    call = output["calls"][0]
+    assert call["url"] == "http://localhost:8000/train_model"
+    assert call["method"] == "POST"
+    assert call["apiKey"] == "notebook-to-api-dev-key"
+    assert json.loads(call["body"]) == {"a": 1}
 
 
 def test_sdk_pipeline_end_to_end_against_real_compiled_app(tmp_path):

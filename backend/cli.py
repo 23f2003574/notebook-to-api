@@ -353,9 +353,9 @@ def main():
         help="Path to write the OpenAPI JSON file."
     )
 
-    # python SDK export command
+    # SDK export command
     sdk_parser = subparsers.add_parser(
-        "export-sdk", help="Generate a Python SDK client from an exported OpenAPI schema."
+        "export-sdk", help="Generate an SDK client from an exported OpenAPI schema."
     )
     sdk_parser.add_argument(
         "--openapi",
@@ -363,9 +363,19 @@ def main():
         help="Path to the OpenAPI JSON file to generate the client from (see export-openapi)."
     )
     sdk_parser.add_argument(
+        "--language",
+        choices=["python", "typescript"],
+        default="python",
+        help="Target language for the generated SDK client (default: python)."
+    )
+    sdk_parser.add_argument(
         "--output",
-        default="generated/sdk/python_client.py",
-        help="Path to write the generated Python SDK client."
+        default=None,
+        help=(
+            "Path to write the generated SDK client. Defaults to "
+            "generated/sdk/python_client.py for --language python, or "
+            "generated/sdk/typescript_client.ts for --language typescript."
+        )
     )
 
     # serve command (live notebook server)
@@ -5116,8 +5126,14 @@ def main():
         from backend.compiler import package_name_for_output_dir
         export_openapi_schema(args.output, package_name_for_output_dir(args.app_dir))
     elif args.command == "export-sdk":
-        from backend.exporters.sdk_generator import generate_python_sdk
-        generate_python_sdk(args.openapi, args.output)
+        if args.language == "typescript":
+            from backend.exporters.sdk_generator import generate_typescript_sdk
+            output = args.output or "generated/sdk/typescript_client.ts"
+            generate_typescript_sdk(args.openapi, output)
+        else:
+            from backend.exporters.sdk_generator import generate_python_sdk
+            output = args.output or "generated/sdk/python_client.py"
+            generate_python_sdk(args.openapi, output)
     elif args.command == "serve":
         serve_notebook(args.notebook, args.output)
     elif args.command == "governance":
