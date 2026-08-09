@@ -25,6 +25,40 @@ def _method_name_from_path(path: str) -> str:
     return name
 
 
+def _build_method_names(paths):
+    """Map each POST path to a collision-free client method name.
+
+    Two different paths can sanitize to the same identifier -- e.g. a
+    notebook function literally named "tasks_cleanup" (path
+    "/tasks_cleanup") collides with the always-present built-in
+    "/tasks/cleanup" route, since both reduce to "tasks_cleanup" once
+    slashes become underscores. Confirmed before this fix: the second
+    `def`/method definition silently shadowed the first at class-body
+    evaluation time (Python) or produced a duplicate-method TypeScript
+    compile error, either way permanently hiding one endpoint from the
+    generated SDK with no error surfaced anywhere.
+    """
+    used_names = set()
+    method_names = {}
+
+    for path, methods in paths.items():
+        if not methods.get("post"):
+            continue
+
+        base_name = _method_name_from_path(path)
+        candidate = base_name
+        suffix = 2
+
+        while candidate in used_names:
+            candidate = f"{base_name}_{suffix}"
+            suffix += 1
+
+        used_names.add(candidate)
+        method_names[path] = candidate
+
+    return method_names
+
+
 def generate_python_sdk(
     openapi_path: str = "generated/openapi.json",
     output_path: str = "generated/sdk/python_client.py",
@@ -40,6 +74,7 @@ def generate_python_sdk(
         schema = json.load(f)
 
     paths = schema.get("paths", {})
+    method_names = _build_method_names(paths)
     # Prepare client code lines
     lines = []
     lines.append("import os")
@@ -55,12 +90,7 @@ def generate_python_sdk(
     lines.append("            'NOTEBOOK_API_KEY', 'notebook-to-api-dev-key'")
     lines.append("        )")
     lines.append("")
-    for path, methods in paths.items():
-        # Only generate for POST methods (typical for notebook functions)
-        post_op = methods.get("post")
-        if not post_op:
-            continue
-        method_name = _method_name_from_path(path)
+    for path, method_name in method_names.items():
         # Determine parameter schema (simple request body expecting JSON)
         lines.append(f"    def {method_name}(self, payload: dict):")
         lines.append(f'        """Call the `{path}` endpoint with JSON payload."""')
@@ -96,6 +126,7 @@ def generate_typescript_sdk(
         schema = json.load(f)
 
     paths = schema.get("paths", {})
+    method_names = _build_method_names(paths)
     # Prepare client code lines
     lines = []
     lines.append("export interface NotebookAPIClientOptions {")
@@ -137,12 +168,7 @@ def generate_typescript_sdk(
     lines.append("    }")
     lines.append("    return response.json();")
     lines.append("  }")
-    for path, methods in paths.items():
-        # Only generate for POST methods (typical for notebook functions)
-        post_op = methods.get("post")
-        if not post_op:
-            continue
-        method_name = _method_name_from_path(path)
+    for path, method_name in method_names.items():
         lines.append("")
         lines.append(
             f"  async {method_name}(payload: Record<string, unknown>): "

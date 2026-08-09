@@ -99,6 +99,33 @@ def test_generate_python_sdk_method_name_handles_multi_segment_paths(tmp_path):
     assert "def tasks_cleanup(self, payload: dict):" in source
 
 
+def test_generate_python_sdk_disambiguates_paths_that_collide_on_method_name(tmp_path):
+    """Confirmed exploitable before this fix: a notebook function literally
+    named "tasks_cleanup" (path "/tasks_cleanup") collides with the
+    always-present built-in "/tasks/cleanup" route -- both sanitize to
+    the same identifier "tasks_cleanup". The second `def` silently
+    shadowed the first at class-body evaluation time, permanently hiding
+    one endpoint from the generated SDK with no error anywhere.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/tasks/cleanup": {"post": {"operationId": "cleanup_tasks"}},
+            "/tasks_cleanup": {"post": {"operationId": "tasks_cleanup"}},
+        },
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    ast.parse(source)
+    assert source.count("def tasks_cleanup(self, payload: dict):") == 1
+    assert source.count("def tasks_cleanup_2(self, payload: dict):") == 1
+
+
 def test_generate_python_sdk_client_sends_correct_request(tmp_path, monkeypatch):
     """Load the generated client in isolation (mocking requests.post) to
     confirm the method actually builds the right URL/payload/header,
@@ -217,6 +244,31 @@ def test_generate_typescript_sdk_method_name_handles_multi_segment_paths(tmp_pat
     source = output_path.read_text(encoding="utf-8")
 
     assert "async tasks_cleanup(payload: Record<string, unknown>): Promise<any> {" in source
+
+
+def test_generate_typescript_sdk_disambiguates_paths_that_collide_on_method_name(tmp_path):
+    """Same collision as the Python SDK test, but for TypeScript: a
+    duplicate `async tasks_cleanup(...)` class member is not just a
+    silently-shadowed method (TS classes reject duplicate method names
+    outright), it breaks `tsc` compilation of the generated client
+    entirely.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/tasks/cleanup": {"post": {"operationId": "cleanup_tasks"}},
+            "/tasks_cleanup": {"post": {"operationId": "tasks_cleanup"}},
+        },
+    )
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert source.count("async tasks_cleanup(payload: Record<string, unknown>): Promise<any> {") == 1
+    assert source.count("async tasks_cleanup_2(payload: Record<string, unknown>): Promise<any> {") == 1
 
 
 @pytest.mark.skipif(
