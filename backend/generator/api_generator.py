@@ -460,7 +460,7 @@ def generate_fastapi_code(functions, package_name="generated"):
     lines.append("    }")
     lines.append("")
     lines.append("@app.get('/tasks')")
-    lines.append("def list_tasks():")
+    lines.append("def list_tasks(_: None = Depends(verify_api_key)):")
 
     lines.append("    completed_tasks = sum(")
     lines.append("        1")
@@ -489,7 +489,7 @@ def generate_fastapi_code(functions, package_name="generated"):
     lines.append("    }")
     lines.append("")
     lines.append("@app.get('/tasks/{task_id}')")
-    lines.append("def get_task(task_id: str):")
+    lines.append("def get_task(task_id: str, _: None = Depends(verify_api_key)):")
     lines.append("    task = TASKS.get(task_id)")
     lines.append("")
     lines.append("    if not task:")
@@ -500,7 +500,7 @@ def generate_fastapi_code(functions, package_name="generated"):
     lines.append("    return task")
     lines.append("")
     lines.append("@app.delete('/tasks/completed')")
-    lines.append("def delete_completed_tasks():")
+    lines.append("def delete_completed_tasks(_: None = Depends(verify_api_key)):")
 
     lines.append("    completed_task_ids = [")
     lines.append("        task_id")
@@ -518,7 +518,7 @@ def generate_fastapi_code(functions, package_name="generated"):
 
     lines.append("")
     lines.append("@app.delete('/tasks/failed')")
-    lines.append("def delete_failed_tasks():")
+    lines.append("def delete_failed_tasks(_: None = Depends(verify_api_key)):")
 
     lines.append("    failed_task_ids = [")
     lines.append("        task_id")
@@ -536,7 +536,7 @@ def generate_fastapi_code(functions, package_name="generated"):
 
     lines.append("")
     lines.append("@app.post('/tasks/cleanup')")
-    lines.append("def cleanup_tasks():")
+    lines.append("def cleanup_tasks(_: None = Depends(verify_api_key)):")
 
     lines.append("    completed_deleted = 0")
     lines.append("    failed_deleted = 0")
@@ -599,7 +599,7 @@ def generate_fastapi_code(functions, package_name="generated"):
 
     lines.append("")
     lines.append("@app.post('/tasks/reset')")
-    lines.append("def reset_tasks():")
+    lines.append("def reset_tasks(_: None = Depends(verify_api_key)):")
 
     lines.append("    deleted_tasks = len(TASKS)")
 
@@ -611,7 +611,7 @@ def generate_fastapi_code(functions, package_name="generated"):
 
     lines.append("")
     lines.append("@app.delete('/tasks/{task_id}')")
-    lines.append("def delete_task(task_id: str):")
+    lines.append("def delete_task(task_id: str, _: None = Depends(verify_api_key)):")
 
     lines.append("    if task_id not in TASKS:")
     lines.append("        return {")

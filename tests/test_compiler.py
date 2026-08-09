@@ -875,3 +875,67 @@ print("TASK_TTL_EVICTION_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "TASK_TTL_EVICTION_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_tasks_endpoints_reject_unauthenticated_requests(tmp_path):
+    """Confirmed exploitable before this fix: GET /tasks and GET
+    /tasks/{task_id} returned stored function call inputs/outputs with no
+    API key at all, and the DELETE/POST tasks endpoints let anyone wipe
+    task state -- every other endpoint in the generated app (including
+    /auth/validate) required Depends(verify_api_key), but the entire
+    /tasks family was left open.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def process_data(x: int) -> int:\n"
+            "    return x\n"
+        )
+    )
+
+    notebook_path = tmp_path / "tasksauth.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(output_dir.parent)!r})
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+
+assert client.get("/tasks").status_code == 401
+assert client.get("/tasks/whatever").status_code == 401
+assert client.delete("/tasks/completed").status_code == 401
+assert client.delete("/tasks/failed").status_code == 401
+assert client.post("/tasks/cleanup").status_code == 401
+assert client.post("/tasks/reset").status_code == 401
+assert client.delete("/tasks/whatever").status_code == 401
+
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+assert client.get("/tasks", headers=headers).status_code == 200
+assert client.post("/tasks/reset", headers=headers).status_code == 200
+
+print("TASKS_AUTH_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(output_dir.parent),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "TASKS_AUTH_E2E_OK" in proc.stdout

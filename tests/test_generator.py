@@ -131,6 +131,28 @@ def test_keyword_only_arg_is_passed_by_keyword_in_generated_call():
     assert "notebook_module.score(req.data, epochs=req.epochs)" in code
 
 
+def test_tasks_endpoints_require_api_key_auth():
+    """Confirmed exploitable before this fix: the /tasks family of
+    endpoints (which return stored function call inputs/outputs, or let
+    a caller wipe task state) omitted Depends(verify_api_key) even though
+    every per-function endpoint and /auth/validate require it -- anyone
+    could read past task results or delete all task state with no
+    credentials at all.
+    """
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "def list_tasks(_: None = Depends(verify_api_key)):" in code
+    assert "def get_task(task_id: str, _: None = Depends(verify_api_key)):" in code
+    assert "def delete_completed_tasks(_: None = Depends(verify_api_key)):" in code
+    assert "def delete_failed_tasks(_: None = Depends(verify_api_key)):" in code
+    assert "def cleanup_tasks(_: None = Depends(verify_api_key)):" in code
+    assert "def reset_tasks(_: None = Depends(verify_api_key)):" in code
+    assert "def delete_task(task_id: str, _: None = Depends(verify_api_key)):" in code
+
+
 def test_background_task_creation_evicts_expired_tasks_and_stamps_created_at():
     """Confirmed exploitable before this fix: TASKS is an in-memory dict
     with no automatic eviction anywhere in the generated app -- nothing
