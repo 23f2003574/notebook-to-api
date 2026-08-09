@@ -38,6 +38,78 @@ def test_compiler_pipeline():
     ).exists()
 
 
+def test_compiler_pipeline_dockerfile_runs_as_non_root_with_a_healthcheck(tmp_path):
+    """Confirmed exploitable before this fix: the generated Dockerfile had
+    no USER directive (the container ran as root, needlessly widening the
+    blast radius of any RCE-class bug) and no HEALTHCHECK, even though
+    the generated app already exposes GET /health for exactly that
+    purpose -- so orchestrators (Compose, Swarm, a bare `docker run`) had
+    no way to tell a hung/crashed process apart from a healthy one.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n"
+            "    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    dockerfile = (output_dir / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "USER appuser" in dockerfile
+    assert "HEALTHCHECK" in dockerfile
+    assert "/health" in dockerfile
+    # USER must come after the app's files are owned by that user, and
+    # before the CMD that actually runs the app as it.
+    assert dockerfile.index("chown") < dockerfile.index("USER appuser") < dockerfile.index("CMD [")
+
+
+def test_compiler_pipeline_generates_a_dockerignore_excluding_git_and_caches(tmp_path):
+    """Confirmed exploitable before this fix: nothing wrote a
+    .dockerignore alongside the Dockerfile, so `COPY . {package_name}/`
+    picked up .git, __pycache__, local venvs, and notebooks from the
+    build context into the image -- bloating it and, for .git, risking
+    shipping history that was never meant to be in the image.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n"
+            "    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    dockerignore_path = output_dir / ".dockerignore"
+    assert dockerignore_path.exists()
+
+    dockerignore = dockerignore_path.read_text(encoding="utf-8")
+    assert ".git/" in dockerignore
+    assert "__pycache__/" in dockerignore
+    assert ".venv/" in dockerignore
+
+
 def test_compiler_pipeline_handles_magics_and_broken_cells(tmp_path):
     """A notebook with Jupyter magics/shell escapes, and a cell that is
     still unparseable after stripping them, must compile end-to-end

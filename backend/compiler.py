@@ -41,7 +41,8 @@ from backend.generator.api_generator import (
 )
 
 from backend.generator.docker_generator import (
-    generate_dockerfile
+    generate_dockerfile,
+    generate_dockerignore
 )
 
 
@@ -176,6 +177,13 @@ def compile_notebook_to_api(
     )
 
     generate_dockerfile(dockerfile_path, package_name)
+
+    dockerignore_path = os.path.join(
+        output_dir,
+        ".dockerignore"
+    )
+
+    generate_dockerignore(dockerignore_path)
 
     print(
         f"Successfully generated FastAPI app at: {output_path}"
