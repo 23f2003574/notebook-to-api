@@ -387,6 +387,22 @@ def main():
         help="Output directory where the FastAPI app will be written."
     )
 
+    # deploy command (compile + build a Docker image)
+    deploy_parser = subparsers.add_parser(
+        "deploy", help="Compile a notebook and build a Docker image for the generated FastAPI app."
+    )
+    deploy_parser.add_argument("notebook", help="Path to the notebook file.")
+    deploy_parser.add_argument(
+        "--output",
+        default="generated",
+        help="Output directory where the FastAPI app and assets will be written."
+    )
+    deploy_parser.add_argument(
+        "--tag",
+        default=None,
+        help="Docker image tag to build (default: <output-dir-basename>:latest)."
+    )
+
     # governance command group
     governance_parser = subparsers.add_parser(
         "governance", help="Inspect and manage deployment governance capabilities."
@@ -6403,9 +6419,15 @@ def main():
         dockerfile_path = output_dir / "Dockerfile"
         if not dockerfile_path.is_file():
             raise FileNotFoundError(f"Dockerfile not found at {dockerfile_path}. Ensure the compiler generated it.")
-        print(f"Building Docker image '{args.tag}' from {output_dir} …")
-        subprocess.run(["docker", "build", "-t", args.tag, "."], cwd=str(output_dir), check=True)
-        print(f"Docker image '{args.tag}' built successfully.")
+        tag = args.tag or f"{output_dir.name.lower()}:latest"
+        print(f"Building Docker image '{tag}' from {output_dir} …")
+        try:
+            subprocess.run(["docker", "build", "-t", tag, "."], cwd=str(output_dir), check=True)
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                "Docker CLI not found. Install Docker and ensure `docker` is on PATH to use `deploy`."
+            ) from exc
+        print(f"Docker image '{tag}' built successfully.")
 
 if __name__ == "__main__":
     main()
