@@ -13,7 +13,7 @@ from pathlib import Path
 # anywhere. Rejecting these outright avoids ever emitting that endpoint
 # ordering trap.
 RESERVED_INFRASTRUCTURE_NAMES = frozenset({
-    "app", "TASKS", "API_KEY", "API_KEY_HEADER_NAME", "START_TIME",
+    "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "START_TIME",
     "GENERATED_AT", "PYTHON_VERSION",
     "verify_api_key", "custom_openapi",
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
@@ -223,9 +223,23 @@ def generate_fastapi_code(functions, package_name="generated"):
         '))'
     )
     lines.append(
-        'API_KEY = os.getenv('
+        '# A comma-separated list, not a single value, so a key can be'
+    )
+    lines.append(
+        '# rotated with zero downtime: add the new key alongside the old'
+    )
+    lines.append(
+        '# one, restart, let clients switch over, then remove the old key'
+    )
+    lines.append(
+        '# and restart again -- requests are never rejected mid-rotation.'
+    )
+    lines.append(
+        'API_KEYS = tuple('
+        'k.strip() for k in os.getenv('
         '"NOTEBOOK_API_KEY", '
         '"notebook-to-api-dev-key"'
+        ').split(",") if k.strip()'
         ')'
     )
     lines.append("API_KEY_HEADER_NAME = 'X-API-Key'")
@@ -253,8 +267,13 @@ def generate_fastapi_code(functions, package_name="generated"):
     lines.append("    # comparison short-circuits on the first differing byte, which")
     lines.append("    # makes response time leak how many leading characters of a")
     lines.append("    # guess were correct -- a classic timing side-channel for")
-    lines.append("    # guessing the key byte by byte.")
-    lines.append("    if x_api_key is None or not hmac.compare_digest(x_api_key, API_KEY):")
+    lines.append("    # guessing the key byte by byte. Checked against every")
+    lines.append("    # configured key (not just the first) so rotation doesn't")
+    lines.append("    # reintroduce that leak by short-circuiting once a candidate")
+    lines.append("    # key's own length/prefix happens to fail fast.")
+    lines.append("    if x_api_key is None or not any(")
+    lines.append("        hmac.compare_digest(x_api_key, key) for key in API_KEYS")
+    lines.append("    ):")
     lines.append("        raise HTTPException(")
     lines.append("            status_code=401,")
     lines.append("            detail='Invalid API key'")
@@ -417,7 +436,7 @@ def generate_fastapi_code(functions, package_name="generated"):
 
     lines.append("    return {")
     lines.append("        'authentication': 'enabled',")
-    lines.append("        'api_key_configured': bool(API_KEY)")
+    lines.append("        'api_key_configured': bool(API_KEYS)")
     lines.append("    }")
 
     lines.append("")
@@ -430,6 +449,7 @@ def generate_fastapi_code(functions, package_name="generated"):
     lines.append("        'environment_variable': 'NOTEBOOK_API_KEY',")
     lines.append("        'rate_limiting': False,")
     lines.append("        'key_rotation': True,")
+    lines.append("        'configured_keys': len(API_KEYS),")
     lines.append(
         f"        'protected_endpoints': {protected_endpoint_count}"
     )

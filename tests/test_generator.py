@@ -42,8 +42,9 @@ def test_api_key_check_uses_constant_time_comparison():
     code = generate_fastapi_code(functions)
 
     assert "import hmac" in code
-    assert "hmac.compare_digest(x_api_key, API_KEY)" in code
-    assert "x_api_key != API_KEY" not in code
+    assert "hmac.compare_digest(x_api_key, key) for key in API_KEYS" in code
+    assert "x_api_key != " not in code
+    assert "x_api_key in API_KEYS" not in code
 
 
 def test_api_key_check_still_rejects_missing_header():
@@ -56,7 +57,7 @@ def test_api_key_check_still_rejects_missing_header():
 
     code = generate_fastapi_code(functions)
 
-    assert "if x_api_key is None or not hmac.compare_digest" in code
+    assert "if x_api_key is None or not any(" in code
 
 
 def test_route_generation():

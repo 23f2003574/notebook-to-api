@@ -704,6 +704,90 @@ print("API_KEY_AUTH_E2E_OK")
     assert "API_KEY_AUTH_E2E_OK" in proc.stdout
 
 
+def test_compiler_pipeline_supports_zero_downtime_api_key_rotation(tmp_path):
+    """Confirmed exploitable before this fix: /auth/info advertised
+    'key_rotation': True, but the generated app only ever read a single
+    key from NOTEBOOK_API_KEY -- there was no way to accept an old and a
+    new key at once, so "rotating" the key meant a hard cutover where
+    every client using the old key started getting 401s the moment the
+    env var changed. NOTEBOOK_API_KEY is now a comma-separated list, so
+    both an old and a new key can be valid at once during a rotation
+    window.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n"
+                            "    return a + b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import os
+import sys
+
+os.environ["NOTEBOOK_API_KEY"] = "old-key, new-key"
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+payload = {{"a": 1, "b": 2}}
+
+old_key = client.post("/add", json=payload, headers={{"X-API-Key": "old-key"}})
+assert old_key.status_code == 200, old_key.text
+
+new_key = client.post("/add", json=payload, headers={{"X-API-Key": "new-key"}})
+assert new_key.status_code == 200, new_key.text
+
+unrelated_key = client.post("/add", json=payload, headers={{"X-API-Key": "someone-elses-key"}})
+assert unrelated_key.status_code == 401, unrelated_key.text
+
+info = client.get("/auth/info")
+assert info.json()["configured_keys"] == 2, info.json()
+
+print("API_KEY_ROTATION_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "API_KEY_ROTATION_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_typing_generic_and_enum_params_work_end_to_end(tmp_path):
     """Confirmed exploitable before this fix: a parameter typed with a
     typing-module generic (List[float], Optional[str], Dict[str, Any]) or
