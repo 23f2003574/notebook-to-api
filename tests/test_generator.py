@@ -192,6 +192,95 @@ def test_field_with_no_default_is_required():
     assert "default=" not in code.split("class GreetRequest(BaseModel):")[1].split("\n\n")[0]
 
 
+def test_typing_generic_argument_types_get_a_matching_typing_import():
+    """Confirmed exploitable before this fix: arg["type"] (a raw
+    ast.unparse'd annotation like "List[float]" or "Optional[str]") was
+    written straight into the generated Pydantic model with no matching
+    `from typing import ...`, so building the model at runtime raised
+    `PydanticUserError: 'PredictRequest' is not fully defined; you should
+    define 'List', then call 'PredictRequest.model_rebuild()'` the first
+    time FastAPI needed the schema (i.e. on the first request or /docs
+    load, not at compile time).
+    """
+
+    functions = [
+        {
+            "name": "predict",
+            "args": [
+                {"name": "items", "type": "List[float]", "has_default": False, "kind": "positional"},
+                {"name": "name", "type": "Optional[str]", "default": None, "has_default": True, "kind": "positional"},
+                {"name": "meta", "type": "Dict[str, Any]", "default": None, "has_default": True, "kind": "positional"},
+            ],
+            "return_type": "str",
+        }
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    assert "from typing import Any, Dict, List, Optional" in code
+    assert "items: List[float] = Field(" in code
+    assert "name: Optional[str] = Field(" in code
+    assert "meta: Dict[str, Any] = Field(" in code
+
+    namespace = {"notebook_module": type("notebook_module", (), {})}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    schema = namespace["PredictRequest"].model_json_schema()
+    assert schema["properties"]["items"]["type"] == "array"
+    assert schema["properties"]["name"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+
+
+def test_untyped_argument_defaults_to_str_not_the_literal_none_type():
+    """Confirmed exploitable before this fix: arg.get("type", "str") only
+    falls back to "str" when the "type" key is *absent*, but the parser
+    always sets it (to None when there's no annotation), so an untyped
+    notebook parameter produced a field literally annotated `: None`,
+    rejecting every value including its own default.
+    """
+
+    functions = [
+        {
+            "name": "greet",
+            "args": [
+                {"name": "name", "type": None, "has_default": True, "default": "world", "kind": "positional"},
+            ],
+            "return_type": "str",
+        }
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    assert "name: str = Field(" in code
+    assert ": None = Field(" not in code
+
+
+def test_notebook_defined_type_is_qualified_with_notebook_module():
+    """A bare class/Enum name from the notebook (e.g. a Status Enum used as
+    a parameter type) isn't defined anywhere in the generated app's own
+    namespace, so referencing it unqualified raises a NameError while
+    building the model. It must be qualified as `notebook_module.<name>`,
+    the alias the generated app already imports the notebook's runtime
+    module under.
+    """
+
+    functions = [
+        {
+            "name": "set_status",
+            "args": [
+                {"name": "status", "type": "Status", "has_default": False, "kind": "positional"},
+            ],
+            "return_type": "str",
+        }
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    assert "status: notebook_module.Status = Field(" in code
+    assert "status: Status = Field(" not in code
+    # The human-readable Field description should stay unqualified.
+    assert "of type Status" in code
+
+
 def test_pydantic_model_generation():
 
     functions = [

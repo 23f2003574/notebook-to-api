@@ -1,3 +1,6 @@
+import ast
+import builtins
+import typing
 from pathlib import Path
 
 # Keywords indicating a function should be run as a background task
@@ -21,6 +24,77 @@ def _call_arg_expr(arg):
     return f"req.{arg['name']}"
 
 
+_TYPING_EXPORTS = frozenset(
+    name for name in dir(typing) if not name.startswith("_")
+)
+_BUILTIN_NAMES = frozenset(dir(builtins))
+
+
+class _AnnotationNameQualifier(ast.NodeTransformer):
+    """Rewrites bare names in a type-annotation AST so every name the
+    generated Pydantic model references is actually resolvable.
+
+    A name that belongs to `typing` (List, Dict, Optional, Union, ...) is
+    left alone but recorded so the caller can emit the matching
+    `from typing import ...` line. Any other name that isn't a Python
+    builtin is assumed to come from the notebook itself -- a class/Enum it
+    defines, or something it imported at module level -- since the
+    function using it as an annotation lives in that same module, the bare
+    name must already resolve there. It's rewritten to
+    `notebook_module.<name>` (the alias the generated app already imports
+    the notebook's runtime module under) instead of failing with a
+    NameError/PydanticUserError when the model class is built.
+    """
+
+    def __init__(self):
+        self.typing_names = set()
+
+    def visit_Name(self, node):
+        if node.id in _TYPING_EXPORTS:
+            self.typing_names.add(node.id)
+            return node
+
+        if node.id in _BUILTIN_NAMES:
+            return node
+
+        return ast.copy_location(
+            ast.Attribute(
+                value=ast.Name(id="notebook_module", ctx=ast.Load()),
+                attr=node.id,
+                ctx=node.ctx,
+            ),
+            node,
+        )
+
+
+def _resolve_annotation_source(type_str):
+    """Turn a raw `ast.unparse`d annotation string (as stored in
+    arg["type"] by the parser) into source the generated app can actually
+    evaluate, plus the set of `typing` names it needs imported.
+
+    Before this, arg["type"] was written into the generated Pydantic model
+    verbatim: `List[float]`, `Optional[str]`, `Dict[str, Any]`, or a
+    notebook-defined class/Enum name all produced a field annotation
+    referencing a name nothing in the generated file ever imports, which
+    breaks model construction (`PredictRequest.model_json_schema()` /
+    `model_rebuild()`) the first time FastAPI actually needs the schema --
+    i.e. on the very first request or /docs load, not at compile time.
+    """
+    if not type_str:
+        return "str", set()
+
+    try:
+        tree = ast.parse(type_str, mode="eval")
+    except SyntaxError:
+        return type_str, set()
+
+    qualifier = _AnnotationNameQualifier()
+    rewritten = qualifier.visit(tree)
+    ast.fix_missing_locations(rewritten)
+
+    return ast.unparse(rewritten), qualifier.typing_names
+
+
 # Template for generating the FastAPI application source code
 def generate_fastapi_code(functions, package_name="generated"):
     """Generate FastAPI app code for the given functions.
@@ -35,6 +109,12 @@ def generate_fastapi_code(functions, package_name="generated"):
     must match the basename of wherever this generated code actually gets
     written -- see compiler.package_name_for_output_dir.
     """
+    needed_typing_names = set()
+    for func in functions:
+        for arg in func.get("args", []):
+            _, typing_names = _resolve_annotation_source(arg.get("type"))
+            needed_typing_names |= typing_names
+
     lines = []
     # Imports for the generated FastAPI app
     lines.append(
@@ -48,6 +128,8 @@ def generate_fastapi_code(functions, package_name="generated"):
     lines.append("from datetime import datetime")
     lines.append("import time")
     lines.append("from pydantic import BaseModel, Field")
+    if needed_typing_names:
+        lines.append(f"from typing import {', '.join(sorted(needed_typing_names))}")
     lines.append(f"import {package_name}.runtime.notebook_module as notebook_module")
     lines.append("")
     lines.append(
@@ -475,11 +557,12 @@ def generate_fastapi_code(functions, package_name="generated"):
         lines.append(f"class {model_name}(BaseModel):")
         for arg in func.get("args", []):
             arg_name = arg.get("name", "param")
-            arg_type = arg.get("type", "str")
+            raw_arg_type = arg.get("type")
+            arg_type, _ = _resolve_annotation_source(raw_arg_type)
 
             field_description = (
                 f"Parameter '{arg_name}' "
-                f"of type {arg_type}"
+                f"of type {raw_arg_type or 'str'}"
             )
 
             default_value = arg.get("default")

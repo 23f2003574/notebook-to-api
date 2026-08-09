@@ -567,3 +567,89 @@ print("API_KEY_AUTH_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "API_KEY_AUTH_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_typing_generic_and_enum_params_work_end_to_end(tmp_path):
+    """Confirmed exploitable before this fix: a parameter typed with a
+    typing-module generic (List[float], Optional[str], Dict[str, Any]) or
+    a notebook-defined Enum produced a generated Pydantic field
+    referencing a name nothing in the generated app imports. The class
+    definition itself didn't fail (deferred annotation evaluation), but
+    the very first real use -- building the schema for /docs, /openapi.json,
+    or the first request -- raised PydanticUserError/NameError.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "from typing import List, Optional, Dict, Any\n"
+                            "from enum import Enum\n\n"
+                            "class Priority(Enum):\n"
+                            "    LOW = 'low'\n"
+                            "    HIGH = 'high'\n\n"
+                            "def summarize(\n"
+                            "    scores: List[float],\n"
+                            "    label: Optional[str] = None,\n"
+                            "    meta: Dict[str, Any] = None,\n"
+                            "    priority: Optional[Priority] = None,\n"
+                            ") -> str:\n"
+                            "    return label or 'none'\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app, SummarizeRequest
+from fastapi.testclient import TestClient
+
+# Building the schema is exactly what raised PydanticUserError before this fix.
+schema = SummarizeRequest.model_json_schema()
+assert schema["properties"]["scores"]["type"] == "array", schema
+
+client = TestClient(app)
+resp = client.post(
+    "/summarize",
+    json={{"scores": [1.0, 2.0], "label": "x", "meta": {{"a": 1}}}},
+    headers={{"X-API-Key": "notebook-to-api-dev-key"}},
+)
+assert resp.status_code == 200, resp.text
+assert resp.json() == {{"result": "x"}}, resp.json()
+print("TYPING_GENERIC_ENUM_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "TYPING_GENERIC_ENUM_E2E_OK" in proc.stdout
