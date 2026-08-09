@@ -131,6 +131,30 @@ def test_keyword_only_arg_is_passed_by_keyword_in_generated_call():
     assert "notebook_module.score(req.data, epochs=req.epochs)" in code
 
 
+def test_background_task_creation_evicts_expired_tasks_and_stamps_created_at():
+    """Confirmed exploitable before this fix: TASKS is an in-memory dict
+    with no automatic eviction anywhere in the generated app -- nothing
+    calls the manual /tasks/cleanup-style endpoints on its own, so a
+    long-running deployment handling steady background-task traffic
+    accumulates one entry per call forever. A new task's creation must
+    both stamp a created_at timestamp (needed to determine expiry) and
+    sweep out anything already past TASK_TTL_SECONDS.
+    """
+
+    functions = [
+        {"name": "process_data", "args": [], "return_type": "dict"},
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    assert "TASK_TTL_SECONDS = int(os.getenv(" in code
+    assert '"created_at": time.time()' in code
+    assert "_evict_expired_tasks()" in code
+    # Eviction must run before the new task is recorded, not after --
+    # otherwise the brand new task could itself be swept if TTL is 0.
+    assert code.index("_evict_expired_tasks()") < code.index('TASKS[task_id] = {"status": "processing"')
+
+
 def test_keyword_only_arg_forwarded_by_keyword_through_background_task():
 
     functions = [

@@ -217,12 +217,36 @@ def generate_fastapi_code(functions, package_name="generated"):
     # Simple in‑memory task registry used by background endpoints
     lines.append("TASKS = {}")
     lines.append(
+        'TASK_TTL_SECONDS = int(os.getenv('
+        '"NOTEBOOK_API_TASK_TTL_SECONDS", '
+        '"3600"'
+        '))'
+    )
+    lines.append(
         'API_KEY = os.getenv('
         '"NOTEBOOK_API_KEY", '
         '"notebook-to-api-dev-key"'
         ')'
     )
     lines.append("API_KEY_HEADER_NAME = 'X-API-Key'")
+    lines.append("")
+    lines.append("def _evict_expired_tasks():")
+    lines.append("    # TASKS is an in-memory dict with no automatic eviction anywhere")
+    lines.append("    # else in this app -- without this, a long-running deployment")
+    lines.append("    # handling steady background-task traffic accumulates one entry")
+    lines.append("    # per call forever, growing memory usage without bound. Called")
+    lines.append("    # opportunistically on every new task's creation (lazy expiry)")
+    lines.append("    # rather than a periodic background loop, so it needs no extra")
+    lines.append("    # scheduler/thread and behaves the same whether or not anything")
+    lines.append("    # ever polls /tasks.")
+    lines.append("    now = time.time()")
+    lines.append("    expired_ids = [")
+    lines.append("        task_id")
+    lines.append("        for task_id, task in TASKS.items()")
+    lines.append("        if now - task.get('created_at', now) > TASK_TTL_SECONDS")
+    lines.append("    ]")
+    lines.append("    for task_id in expired_ids:")
+    lines.append("        TASKS.pop(task_id, None)")
     lines.append("")
     lines.append("def verify_api_key(x_api_key: str = Header(None)):")
     lines.append("    # hmac.compare_digest instead of != : a plain string")
@@ -719,8 +743,9 @@ def generate_fastapi_code(functions, package_name="generated"):
                 f'responses={{200: {{"description": "{response_description}", "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
             )
             lines.append(f"def {func_name}(req: {model_name}, background_tasks: BackgroundTasks, _: None = Depends(verify_api_key)):")
+            lines.append("    _evict_expired_tasks()")
             lines.append("    task_id = uuid.uuid4().hex")
-            lines.append("    TASKS[task_id] = {\"status\": \"processing\"}")
+            lines.append("    TASKS[task_id] = {\"status\": \"processing\", \"created_at\": time.time()}")
             # Pass positional arguments to the background function
             args_expr = ", ".join(_call_arg_expr(arg) for arg in args)
             lines.append(f"    background_tasks.add_task(_run_background_task, notebook_module.{func_name}, task_id, {args_expr})")

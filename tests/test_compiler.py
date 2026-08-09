@@ -788,3 +788,90 @@ print("TYPING_GENERIC_ENUM_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "TYPING_GENERIC_ENUM_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_background_tasks_are_evicted_after_ttl_expires(tmp_path):
+    """Confirmed exploitable before this fix: the generated TASKS registry
+    never evicted anything on its own -- a long-running deployment
+    handling steady background-task traffic accumulated one entry per
+    call forever. With TASK_TTL_SECONDS forced to 0 (via the
+    NOTEBOOK_API_TASK_TTL_SECONDS env var the generated app already
+    reads), a task created before a second task must be gone by the time
+    the second one is created, since eviction runs opportunistically on
+    every new task's creation.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def process_data(x: int) -> int:\n"
+                            "    return x\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import os
+import sys
+import time
+
+os.environ["NOTEBOOK_API_TASK_TTL_SECONDS"] = "0"
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+first = client.post("/process_data", json={{"x": 1}}, headers=headers)
+assert first.status_code == 200, first.text
+first_task_id = first.json()["task_id"]
+
+# Any nonzero elapsed time exceeds a TTL of 0, so the first task is
+# eligible for eviction by the time the second one is created.
+time.sleep(0.01)
+
+second = client.post("/process_data", json={{"x": 2}}, headers=headers)
+assert second.status_code == 200, second.text
+
+lookup = client.get(f"/tasks/{{first_task_id}}", headers=headers)
+assert lookup.json() == {{"error": "Task not found"}}, lookup.json()
+
+print("TASK_TTL_EVICTION_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "TASK_TTL_EVICTION_E2E_OK" in proc.stdout
