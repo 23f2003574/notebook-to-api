@@ -296,6 +296,35 @@ def test_compiler_pipeline_zero_argument_function_compiles_end_to_end(tmp_path):
     compile(generated_app, "app.py", "exec")
 
 
+def test_compiler_pipeline_rejects_notebook_function_named_verify_api_key(tmp_path):
+    """Confirmed exploitable before this fix: a notebook function named
+    verify_api_key rebinds the generated app's own auth-check function at
+    module load time, silently disabling API-key authentication for every
+    endpoint defined after it. compile_notebook must fail loudly instead
+    of producing that app.
+    """
+    from backend.generator.api_generator import ReservedFunctionNameError
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def verify_api_key() -> dict:\n"
+            "    return {'ok': True}\n"
+        )
+    )
+
+    notebook_path = tmp_path / "reserved.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    with pytest.raises(ReservedFunctionNameError):
+        compile_notebook(str(notebook_path), str(output_dir))
+
+
 def test_compiler_pipeline_case_colliding_function_names_get_distinct_models(tmp_path):
     """Confirmed exploitable before this fix: two notebook functions
     differing only by the case of their first letter (e.g. "get_data" and

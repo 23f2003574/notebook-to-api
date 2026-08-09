@@ -1,5 +1,8 @@
+import pytest
+
 from backend.generator.api_generator import (
-    generate_fastapi_code
+    generate_fastapi_code,
+    ReservedFunctionNameError,
 )
 
 
@@ -317,6 +320,52 @@ def test_zero_argument_function_produces_a_valid_request_model():
 
     compile(code, "<generated>", "exec")
     assert "class Get_statusRequest(BaseModel):\n    pass" in code
+
+
+def test_notebook_function_named_verify_api_key_is_rejected():
+    """Confirmed exploitable before this fix: a notebook function named
+    verify_api_key was emitted as `def verify_api_key(...)`, rebinding the
+    module-level name the real auth check is defined under. Since
+    Depends(verify_api_key) defaults are resolved at def-statement
+    execution time (top-to-bottom module load), every endpoint defined
+    *after* the collision silently got Depends(verify_api_key) pointing
+    at the notebook's own function instead of the real guard -- disabling
+    API-key authentication for the rest of the app with no error.
+    """
+
+    functions = [
+        {"name": "verify_api_key", "args": [], "return_type": "dict"},
+    ]
+
+    with pytest.raises(ReservedFunctionNameError, match="verify_api_key"):
+        generate_fastapi_code(functions)
+
+
+def test_notebook_function_named_after_other_reserved_infrastructure_is_rejected():
+
+    for reserved_name in ["custom_openapi", "root", "health_check", "notebook_module", "TASKS"]:
+        functions = [
+            {"name": reserved_name, "args": [], "return_type": "dict"},
+        ]
+
+        with pytest.raises(ReservedFunctionNameError):
+            generate_fastapi_code(functions)
+
+
+def test_non_colliding_functions_alongside_a_reserved_name_still_raise():
+    """The whole compile must fail clearly rather than silently dropping
+    just the colliding function -- a silently-dropped endpoint could be
+    just as confusing as a silent auth bypass, so this must be a loud,
+    actionable error, not a silent skip.
+    """
+
+    functions = [
+        {"name": "train_model", "args": [], "return_type": "dict"},
+        {"name": "verify_api_key", "args": [], "return_type": "dict"},
+    ]
+
+    with pytest.raises(ReservedFunctionNameError):
+        generate_fastapi_code(functions)
 
 
 def test_functions_colliding_on_request_model_name_get_distinct_classes():

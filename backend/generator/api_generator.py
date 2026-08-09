@@ -3,6 +3,32 @@ import builtins
 import typing
 from pathlib import Path
 
+# Top-level names the generated app itself defines. A notebook function
+# sharing one of these names would be emitted as `def <name>(...)`,
+# rebinding the real one at module-load time -- most dangerously
+# "verify_api_key": every endpoint defined *after* such a collision gets
+# `Depends(verify_api_key)` resolved (at def-statement time) against the
+# notebook's own function instead of the real auth guard, silently
+# disabling API-key authentication for the rest of the app with no error
+# anywhere. Rejecting these outright avoids ever emitting that endpoint
+# ordering trap.
+RESERVED_INFRASTRUCTURE_NAMES = frozenset({
+    "app", "TASKS", "API_KEY", "API_KEY_HEADER_NAME", "START_TIME",
+    "GENERATED_AT", "PYTHON_VERSION",
+    "verify_api_key", "custom_openapi",
+    "root", "health_check", "readiness_check", "auth_status", "auth_info",
+    "validate_auth", "service_info", "metrics", "uptime",
+    "get_task", "list_tasks", "delete_task", "cleanup_tasks",
+    "delete_completed_tasks", "delete_failed_tasks", "reset_tasks",
+    "notebook_module",
+})
+
+
+class ReservedFunctionNameError(ValueError):
+    """A notebook function's name collides with an identifier the
+    generated app itself defines."""
+
+
 # Keywords indicating a function should be run as a background task
 LONG_RUNNING_KEYWORDS = [
     "train",
@@ -137,6 +163,18 @@ def generate_fastapi_code(functions, package_name="generated"):
     must match the basename of wherever this generated code actually gets
     written -- see compiler.package_name_for_output_dir.
     """
+    colliding_names = sorted(
+        {func["name"] for func in functions} & RESERVED_INFRASTRUCTURE_NAMES
+    )
+    if colliding_names:
+        raise ReservedFunctionNameError(
+            "Notebook function name(s) "
+            f"{', '.join(colliding_names)} collide with identifiers the "
+            "generated app itself defines (auth, task management, or "
+            "infrastructure routes). Rename the function(s) in the "
+            "notebook and recompile."
+        )
+
     needed_typing_names = set()
     for func in functions:
         for arg in func.get("args", []):
