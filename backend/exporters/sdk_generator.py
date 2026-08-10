@@ -68,6 +68,15 @@ def generate_python_sdk(
     The generated client contains a ``NotebookAPIClient`` class with a method for each
     POST endpoint defined in the OpenAPI spec. Each method performs a ``requests.post``
     call to the corresponding endpoint and returns ``response.json()``.
+
+    Long-running notebook functions (see LONG_RUNNING_KEYWORDS in
+    api_generator.py) don't return their result directly -- their endpoint
+    enqueues a background task and immediately returns
+    ``{"task_id": ..., "status": "processing"}``. Before get_task/
+    wait_for_task existed, a caller of the generated client had no way to
+    actually retrieve that result short of hand-writing their own polling
+    loop against GET /tasks/{task_id}, even though the client already
+    knows the base_url and api_key needed to do it.
     """
     # Load OpenAPI schema
     with open(openapi_path, "r", encoding="utf-8") as f:
@@ -78,6 +87,7 @@ def generate_python_sdk(
     # Prepare client code lines
     lines = []
     lines.append("import os")
+    lines.append("import time")
     lines.append("import requests")
     lines.append("")
     lines.append("class NotebookAPIClient:")
@@ -89,6 +99,38 @@ def generate_python_sdk(
     lines.append("        self.api_key = api_key or os.getenv(")
     lines.append("            'NOTEBOOK_API_KEY', 'notebook-to-api-dev-key'")
     lines.append("        )")
+    lines.append("")
+    lines.append("    def get_task(self, task_id: str) -> dict:")
+    lines.append('        """Fetch the current status/result of a background task."""')
+    lines.append("        response = requests.get(")
+    lines.append(f'            f"{{self.base_url}}/tasks/{{task_id}}",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("        )")
+    lines.append("        response.raise_for_status()")
+    lines.append("        return response.json()")
+    lines.append("")
+    lines.append(
+        "    def wait_for_task(self, task_id: str, poll_interval: float = 1.0, "
+        "timeout: float = 60.0) -> dict:"
+    )
+    lines.append(
+        '        """Poll get_task(task_id) until its status leaves '
+        '"processing", returning the finished task record. Raises '
+        'TimeoutError if `timeout` seconds pass first."""'
+    )
+    lines.append("        deadline = time.time() + timeout")
+    lines.append("        while True:")
+    lines.append("            task = self.get_task(task_id)")
+    lines.append("            if task.get('status') != 'processing':")
+    lines.append("                return task")
+    lines.append("            if time.time() >= deadline:")
+    lines.append("                raise TimeoutError(")
+    lines.append(
+        '                    f"Task {task_id} did not complete within '
+        '{timeout} seconds"'
+    )
+    lines.append("                )")
+    lines.append("            time.sleep(poll_interval)")
     lines.append("")
     for path, method_name in method_names.items():
         # Determine parameter schema (simple request body expecting JSON)
@@ -167,6 +209,47 @@ def generate_typescript_sdk(
     )
     lines.append("    }")
     lines.append("    return response.json();")
+    lines.append("  }")
+    lines.append("")
+    lines.append("  async getTask(taskId: string): Promise<any> {")
+    lines.append(
+        "    const response = await fetch(`${this.baseUrl}/tasks/${taskId}`, {"
+    )
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("    });")
+    lines.append("    if (!response.ok) {")
+    lines.append(
+        "      throw new Error(`Request to /tasks/${taskId} failed with "
+        "status ${response.status}`);"
+    )
+    lines.append("    }")
+    lines.append("    return response.json();")
+    lines.append("  }")
+    lines.append("")
+    lines.append(
+        "  async waitForTask(taskId: string, options: { pollIntervalMs?: "
+        "number; timeoutMs?: number } = {}): Promise<any> {"
+    )
+    lines.append("    const pollIntervalMs = options.pollIntervalMs ?? 1000;")
+    lines.append("    const timeoutMs = options.timeoutMs ?? 60000;")
+    lines.append("    const deadline = Date.now() + timeoutMs;")
+    lines.append("    while (true) {")
+    lines.append("      const task = await this.getTask(taskId);")
+    lines.append('      if (task.status !== "processing") {')
+    lines.append("        return task;")
+    lines.append("      }")
+    lines.append("      if (Date.now() >= deadline) {")
+    lines.append(
+        "        throw new Error(`Task ${taskId} did not complete within "
+        "${timeoutMs}ms`);"
+    )
+    lines.append("      }")
+    lines.append(
+        "      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));"
+    )
+    lines.append("    }")
     lines.append("  }")
     for path, method_name in method_names.items():
         lines.append("")

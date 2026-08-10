@@ -173,6 +173,150 @@ def test_generate_python_sdk_client_sends_correct_request(tmp_path, monkeypatch)
     assert calls[0]["headers"] == {"X-API-Key": "notebook-to-api-dev-key"}
 
 
+def test_generate_python_sdk_includes_task_polling_helpers(tmp_path):
+    """A long-running notebook function's endpoint doesn't return its
+    result directly -- it enqueues a background task and returns
+    {"task_id": ..., "status": "processing"} (see LONG_RUNNING_KEYWORDS in
+    api_generator.py). Before get_task/wait_for_task existed, the
+    generated client had no way to actually retrieve that result short of
+    a caller hand-writing their own polling loop against GET
+    /tasks/{task_id}.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    ast.parse(source)
+    assert "def get_task(self, task_id: str) -> dict:" in source
+    assert "def wait_for_task(self, task_id: str" in source
+
+
+def test_generate_python_sdk_get_task_sends_correct_request(tmp_path, monkeypatch):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, headers=None):
+        calls.append({"url": url, "headers": headers})
+        return FakeResponse({"status": "completed", "result": 42})
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    task = client.get_task("abc123")
+
+    assert task == {"status": "completed", "result": 42}
+    assert calls[0]["url"] == "http://localhost:8000/tasks/abc123"
+    assert calls[0]["headers"] == {"X-API-Key": "notebook-to-api-dev-key"}
+
+
+def test_generate_python_sdk_wait_for_task_polls_until_terminal_status(tmp_path, monkeypatch):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    responses = [
+        {"status": "processing"},
+        {"status": "processing"},
+        {"status": "completed", "result": 42},
+    ]
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, headers=None):
+        calls.append(1)
+        return FakeResponse(responses[len(calls) - 1])
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    task = client.wait_for_task("abc123", poll_interval=0, timeout=5)
+
+    assert task == {"status": "completed", "result": 42}
+    assert len(calls) == 3
+
+
+def test_generate_python_sdk_wait_for_task_raises_timeout_error(tmp_path, monkeypatch):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"status": "processing"}
+
+    def fake_get(url, headers=None):
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+
+    with pytest.raises(TimeoutError):
+        client.wait_for_task("abc123", poll_interval=0, timeout=0)
+
+
 def test_generate_typescript_sdk_produces_expected_structure(tmp_path):
 
     schema_path = _write_schema(
@@ -187,6 +331,8 @@ def test_generate_typescript_sdk_produces_expected_structure(tmp_path):
 
     assert "export class NotebookAPIClient {" in source
     assert "async train_model(payload: Record<string, unknown>): Promise<any> {" in source
+    assert "async getTask(taskId: string): Promise<any> {" in source
+    assert "async waitForTask(taskId: string" in source
     # Braces must balance -- a mismatch is the most common way hand-built
     # string-concatenated codegen produces invalid syntax.
     assert source.count("{") == source.count("}")
@@ -334,6 +480,101 @@ def test_generate_typescript_sdk_client_sends_correct_request(tmp_path):
     assert call["method"] == "POST"
     assert call["apiKey"] == "notebook-to-api-dev-key"
     assert json.loads(call["body"]) == {"a": 1}
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_wait_for_task_polls_until_completion(tmp_path):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        let callCount = 0;
+        globalThis.fetch = async (url, opts) => {{
+          callCount += 1;
+          const status = callCount < 3 ? "processing" : "completed";
+          return {{ ok: true, json: async () => ({{ status, result: 42 }}) }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+        const task = await client.waitForTask("abc123", {{ pollIntervalMs: 0, timeoutMs: 5000 }});
+
+        console.log(JSON.stringify({{ task, callCount }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["task"] == {"status": "completed", "result": 42}
+    assert output["callCount"] == 3
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_wait_for_task_throws_on_timeout(tmp_path):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        globalThis.fetch = async (url, opts) => {{
+          return {{ ok: true, json: async () => ({{ status: "processing" }}) }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        try {{
+          await client.waitForTask("abc123", {{ pollIntervalMs: 0, timeoutMs: 0 }});
+          console.log(JSON.stringify({{ threw: false }}));
+        }} catch (err) {{
+          console.log(JSON.stringify({{ threw: true, message: err.message }}));
+        }}
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["threw"] is True
+    assert "did not complete" in output["message"]
 
 
 def test_sdk_pipeline_end_to_end_against_real_compiled_app(tmp_path):
