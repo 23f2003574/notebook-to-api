@@ -753,14 +753,28 @@ def generate_fastapi_code(functions, package_name="generated"):
             f"Parameters: {', '.join(arg['name'] for arg in args) if args else 'None'}."
         )
         if is_background:
+            # A background endpoint doesn't return `example_response`/
+            # `response_description` (the notebook function's own return
+            # value) at all -- it returns {"task_id": ..., "status":
+            # "processing"} (see the `return` statement below) and the
+            # real result only becomes available later via GET
+            # /tasks/{task_id}. Documenting the function's own return
+            # shape here instead was actively misleading: /docs, and any
+            # third-party tool generating a client from openapi.json,
+            # would expect a response this endpoint never actually sends.
+            task_response_description = (
+                f"Task enqueued. Poll GET /tasks/{{task_id}} for the "
+                f"completed {return_type} result."
+            )
+            task_example_response = {"task_id": "<uuid>", "status": "processing"}
             lines.append(
                 f'@app.post("/{func_name}", '
                 f'summary="{summary}", '
                 f'description="{description}", '
                 f'tags=["{tag}"], '
                 f'operation_id="{operation_id}", '
-                f'openapi_extra={{"x-notebook-to-api-category": "{category}", "security": [{{"ApiKeyAuth": []}}]}}, '
-                f'responses={{200: {{"description": "{response_description}", "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
+                f'openapi_extra={{"x-notebook-to-api-category": "{category}", "x-notebook-to-api-async": True, "security": [{{"ApiKeyAuth": []}}]}}, '
+                f'responses={{200: {{"description": "{task_response_description}", "content": {{"application/json": {{"example": {repr(task_example_response)}}}}}}}}})'
             )
             lines.append(f"def {func_name}(req: {model_name}, background_tasks: BackgroundTasks, _: None = Depends(verify_api_key)):")
             lines.append("    _evict_expired_tasks()")

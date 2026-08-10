@@ -207,6 +207,59 @@ def test_background_task_creation_evicts_expired_tasks_and_stamps_created_at():
     assert code.index("_evict_expired_tasks()") < code.index('TASKS[task_id] = {"status": "processing"')
 
 
+def test_background_endpoint_documents_the_task_response_it_actually_sends():
+    """Confirmed wrong before this fix: a background endpoint's decorator
+    documented `example_response`/the function's own return type (e.g.
+    {"result": ""}) as its 200 response -- but the function body actually
+    always `return`s {"task_id": ..., "status": "processing"} instead,
+    with the real result only available later via GET /tasks/{task_id}.
+    /docs, and any third-party tool generating a client from
+    openapi.json, would be told to expect a response this endpoint never
+    sends.
+    """
+
+    functions = [
+        {
+            "name": "train_model",
+            "args": [],
+            "return_type": "str",
+            "example_response": {"result": "trained"},
+        },
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    decorator_line = next(
+        line for line in code.splitlines() if '@app.post("/train_model"' in line
+    )
+
+    assert "'task_id': '<uuid>'" in decorator_line
+    assert "'status': 'processing'" in decorator_line
+    assert "trained" not in decorator_line
+    assert '"x-notebook-to-api-async": True' in decorator_line
+
+
+def test_non_background_endpoint_is_not_marked_async_and_documents_its_own_result():
+
+    functions = [
+        {
+            "name": "add",
+            "args": [],
+            "return_type": "int",
+            "example_response": {"result": 3},
+        },
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    decorator_line = next(
+        line for line in code.splitlines() if '@app.post("/add"' in line
+    )
+
+    assert "x-notebook-to-api-async" not in decorator_line
+    assert "'result': 3" in decorator_line
+
+
 def test_keyword_only_arg_forwarded_by_keyword_through_background_task():
 
     functions = [
