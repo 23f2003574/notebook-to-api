@@ -1,9 +1,10 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pathlib import Path
+import json
 import shutil
 import os
 
-from backend.compiler import compile_notebook
+from backend.compiler import compile_notebook, package_name_for_output_dir
 from backend.parser.notebook_parser import (
     load_notebook,
     extract_code_cells,
@@ -12,6 +13,15 @@ from backend.parser.ast_parser import (
     extract_functions_from_code,
     deduplicate_functions_by_name,
 )
+
+# Endpoints below that operate on the compiled app (export-openapi,
+# export-sdk) mirror /api/compile in always targeting this fixed directory
+# rather than accepting a client-supplied path: export_openapi_schema
+# dynamically imports "<package_name>.app" to read its live OpenAPI schema,
+# so letting a network caller pick an arbitrary package/directory to import
+# would be a far bigger trust boundary than the CLI's --app-dir (a local,
+# already-trusted operator flag).
+GENERATED_DIR = "generated"
 
 router = APIRouter(
     prefix="/api",
@@ -242,6 +252,136 @@ async def compile_notebook_endpoint(
             status_code=500,
             detail=f"Compilation error: {str(e)}"
         )
+
+@router.post("/export-openapi")
+async def export_openapi_endpoint(
+    data: dict = None
+):
+    """Export the OpenAPI schema for the most recently compiled app and
+    return it inline, so the dashboard frontend can show/download it
+    without shelling out to the `export-openapi` CLI command."""
+
+    from backend.exporters.openapi_exporter import export_openapi_schema
+
+    data = data or {}
+
+    export_format = data.get("format", "json")
+
+    if export_format not in ("json", "yaml"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="format must be 'json' or 'yaml'"
+        )
+
+    output_path = os.path.join(
+        GENERATED_DIR,
+        f"openapi.{export_format}"
+    )
+
+    try:
+
+        package_name = package_name_for_output_dir(GENERATED_DIR)
+
+        export_openapi_schema(
+            output_path,
+            package_name,
+            format=export_format
+        )
+
+    except ModuleNotFoundError:
+
+        raise HTTPException(
+            status_code=404,
+            detail="No compiled app found. Run /api/compile first."
+        )
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"OpenAPI export error: {str(e)}"
+        )
+
+    with open(output_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    response = {
+        "status": "success",
+        "format": export_format,
+        "path": output_path,
+    }
+
+    if export_format == "json":
+        response["schema"] = json.loads(content)
+    else:
+        response["content"] = content
+
+    return response
+
+
+@router.post("/export-sdk")
+async def export_sdk_endpoint(
+    data: dict = None
+):
+    """Generate an SDK client from the exported OpenAPI schema and return
+    its source inline, so the dashboard frontend can show/download it
+    without shelling out to the `export-sdk` CLI command."""
+
+    from backend.exporters.sdk_generator import (
+        generate_python_sdk,
+        generate_typescript_sdk,
+    )
+
+    data = data or {}
+
+    language = data.get("language", "python")
+
+    if language not in ("python", "typescript"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="language must be 'python' or 'typescript'"
+        )
+
+    openapi_path = os.path.join(GENERATED_DIR, "openapi.json")
+
+    if not os.path.isfile(openapi_path):
+
+        raise HTTPException(
+            status_code=404,
+            detail="No exported OpenAPI schema found. Run /api/export-openapi first."
+        )
+
+    if language == "typescript":
+        output_path = os.path.join(GENERATED_DIR, "sdk", "typescript_client.ts")
+    else:
+        output_path = os.path.join(GENERATED_DIR, "sdk", "python_client.py")
+
+    try:
+
+        if language == "typescript":
+            generate_typescript_sdk(openapi_path, output_path)
+        else:
+            generate_python_sdk(openapi_path, output_path)
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"SDK generation error: {str(e)}"
+        )
+
+    with open(output_path, "r", encoding="utf-8") as f:
+        code = f.read()
+
+    return {
+        "status": "success",
+        "language": language,
+        "path": output_path,
+        "code": code,
+    }
+
 
 @router.get("/health")
 async def health_check():

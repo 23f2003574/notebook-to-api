@@ -134,3 +134,102 @@ def test_inspect_missing_notebook_still_returns_404_not_400():
     )
 
     assert resp.status_code == 404
+
+
+def test_export_openapi_and_export_sdk_full_flow():
+    """The dashboard frontend can compile a notebook via /api/compile but,
+    before this, had no way to fetch the OpenAPI schema or an SDK client
+    without shelling out to the `export-openapi`/`export-sdk` CLI commands.
+    """
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "export_flow_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "export_flow_test.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    openapi_resp = client.post("/api/export-openapi", json={"format": "json"})
+    assert openapi_resp.status_code == 200
+    openapi_body = openapi_resp.json()
+    assert openapi_body["format"] == "json"
+    assert "/add" in openapi_body["schema"]["paths"]
+
+    yaml_resp = client.post("/api/export-openapi", json={"format": "yaml"})
+    assert yaml_resp.status_code == 200
+    yaml_body = yaml_resp.json()
+    assert yaml_body["format"] == "yaml"
+    assert "content" in yaml_body
+
+    sdk_resp = client.post("/api/export-sdk", json={"language": "python"})
+    assert sdk_resp.status_code == 200
+    sdk_body = sdk_resp.json()
+    assert sdk_body["language"] == "python"
+    assert "class NotebookAPIClient" in sdk_body["code"]
+    assert "def add" in sdk_body["code"]
+
+    ts_resp = client.post("/api/export-sdk", json={"language": "typescript"})
+    assert ts_resp.status_code == 200
+    ts_body = ts_resp.json()
+    assert ts_body["language"] == "typescript"
+    assert "class NotebookAPIClient" in ts_body["code"]
+
+
+def test_export_openapi_rejects_invalid_format():
+
+    resp = client.post("/api/export-openapi", json={"format": "xml"})
+
+    assert resp.status_code == 400
+
+
+def test_export_sdk_rejects_invalid_language():
+
+    resp = client.post("/api/export-sdk", json={"language": "rust"})
+
+    assert resp.status_code == 400
+
+
+def test_export_openapi_returns_404_when_nothing_compiled_yet(monkeypatch):
+    """Uses a package name that has never been compiled anywhere on
+    sys.path, so the dynamic `importlib.import_module` in
+    export_openapi_schema is guaranteed to raise ModuleNotFoundError
+    rather than risk resolving a stale cached "generated" module from an
+    earlier test in this same process.
+    """
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(
+        upload_module, "GENERATED_DIR", "generated_export_test_missing_dir"
+    )
+
+    resp = client.post("/api/export-openapi", json={"format": "json"})
+
+    assert resp.status_code == 404
+
+
+def test_export_sdk_returns_404_without_prior_openapi_export(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(
+        upload_module, "GENERATED_DIR", "generated_export_test_missing_dir_2"
+    )
+
+    resp = client.post("/api/export-sdk", json={"language": "python"})
+
+    assert resp.status_code == 404
