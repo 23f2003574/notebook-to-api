@@ -1,0 +1,240 @@
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _write_notebook(path):
+    path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n"
+                            "    return a + b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _run_cli(args, cwd):
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+    return subprocess.run(
+        [sys.executable, "-m", "backend.cli", *args],
+        cwd=str(cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+def test_compile_command_writes_the_generated_app(tmp_path):
+    """The `compile`, `inspect`, `export-openapi`, and `export-sdk`
+    subcommands were previously only exercised by calling their
+    underlying functions directly (see test_compiler.py,
+    test_openapi_exporter.py, test_sdk_generator.py) -- never through the
+    actual `backend.cli` argparse entry point, unlike `deploy`
+    (test_cli_deploy.py). That left the subparser wiring itself
+    untested: test_deploy_command_is_registered in test_cli_deploy.py
+    documents a real bug this exact gap already let through once (a
+    dispatch branch in main() with no matching add_parser(...)).
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "built" / "app.py").exists()
+    assert (workdir / "built" / "requirements.txt").exists()
+    assert (workdir / "built" / "Dockerfile").exists()
+    assert "Compilation finished" in proc.stdout
+
+
+def test_compile_command_defaults_output_to_generated(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(["compile", str(notebook_path)], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "generated" / "app.py").exists()
+
+
+def test_inspect_command_reports_the_notebooks_function(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["inspect", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "add(a: int, b: int) -> int" in proc.stdout
+    assert "Route: POST /add" in proc.stdout
+
+
+def test_export_openapi_command_writes_json_schema_by_default(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    compile_proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+    assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
+
+    proc = _run_cli(
+        ["export-openapi", "--app-dir", "built", "--output", "built/openapi.json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    schema_path = workdir / "built" / "openapi.json"
+    assert schema_path.exists()
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    assert "/add" in schema["paths"]
+
+
+def test_export_openapi_command_writes_yaml_when_requested(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    compile_proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+    assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
+
+    proc = _run_cli(
+        [
+            "export-openapi", "--app-dir", "built", "--format", "yaml",
+            "--output", "built/openapi.yaml",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    yaml_path = workdir / "built" / "openapi.yaml"
+    assert yaml_path.exists()
+    assert "/add:" in yaml_path.read_text(encoding="utf-8")
+
+
+def test_export_openapi_command_rejects_invalid_format_choice(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["export-openapi", "--format", "xml"], cwd=workdir)
+
+    assert proc.returncode != 0
+    assert "invalid choice: 'xml'" in proc.stderr
+
+
+def test_export_sdk_command_writes_python_client_by_default(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    compile_proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+    assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
+
+    openapi_proc = _run_cli(
+        ["export-openapi", "--app-dir", "built", "--output", "built/openapi.json"],
+        cwd=workdir,
+    )
+    assert openapi_proc.returncode == 0, openapi_proc.stdout + openapi_proc.stderr
+
+    proc = _run_cli(
+        [
+            "export-sdk", "--openapi", "built/openapi.json",
+            "--output", "built/sdk/python_client.py",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    client_path = workdir / "built" / "sdk" / "python_client.py"
+    assert client_path.exists()
+    client_source = client_path.read_text(encoding="utf-8")
+    assert "class NotebookAPIClient" in client_source
+    assert "def add(" in client_source
+
+
+def test_export_sdk_command_writes_typescript_client_when_requested(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    compile_proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+    assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
+
+    openapi_proc = _run_cli(
+        ["export-openapi", "--app-dir", "built", "--output", "built/openapi.json"],
+        cwd=workdir,
+    )
+    assert openapi_proc.returncode == 0, openapi_proc.stdout + openapi_proc.stderr
+
+    proc = _run_cli(
+        [
+            "export-sdk", "--openapi", "built/openapi.json", "--language", "typescript",
+            "--output", "built/sdk/typescript_client.ts",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    client_path = workdir / "built" / "sdk" / "typescript_client.ts"
+    assert client_path.exists()
+    assert "class NotebookAPIClient" in client_path.read_text(encoding="utf-8")
+
+
+def test_export_sdk_command_rejects_invalid_language_choice(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["export-sdk", "--language", "rust"], cwd=workdir)
+
+    assert proc.returncode != 0
+    assert "invalid choice: 'rust'" in proc.stderr
