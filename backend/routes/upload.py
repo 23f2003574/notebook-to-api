@@ -1,8 +1,11 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi.responses import StreamingResponse
 from pathlib import Path
+import io
 import json
 import shutil
 import os
+import zipfile
 
 from backend.compiler import compile_notebook, package_name_for_output_dir
 from backend.parser.notebook_parser import (
@@ -381,6 +384,54 @@ async def export_sdk_endpoint(
         "path": output_path,
         "code": code,
     }
+
+
+@router.get("/download")
+async def download_generated_app():
+    """Download the compiled app as a zip archive.
+
+    /api/compile only ever returned metadata (the function list and
+    endpoint names) -- it never gave the dashboard frontend any way to
+    retrieve the actual compiled artifacts (app.py, requirements.txt,
+    Dockerfile, .dockerignore, the runtime module) short of CLI or
+    filesystem access to the server. This packages the whole `generated`
+    output directory as a single zip so the frontend can offer a direct
+    download after compiling.
+    """
+
+    generated_path = Path(GENERATED_DIR)
+
+    if not (generated_path / "app.py").is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="No compiled app found. Run /api/compile first."
+        )
+
+    buffer = io.BytesIO()
+
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+
+        for file_path in sorted(generated_path.rglob("*")):
+
+            if file_path.is_file():
+
+                archive.write(
+                    file_path,
+                    file_path.relative_to(generated_path)
+                )
+
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{generated_path.name}.zip"'
+            )
+        }
+    )
 
 
 @router.get("/health")

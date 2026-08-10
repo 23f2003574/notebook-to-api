@@ -1,5 +1,6 @@
 import io
 import os
+import zipfile
 
 import nbformat
 import pytest
@@ -233,3 +234,60 @@ def test_export_sdk_returns_404_without_prior_openapi_export(monkeypatch):
     resp = client.post("/api/export-sdk", json={"language": "python"})
 
     assert resp.status_code == 404
+
+
+def test_download_returns_404_when_nothing_compiled_yet(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(
+        upload_module, "GENERATED_DIR", "generated_download_test_missing_dir"
+    )
+
+    resp = client.get("/api/download")
+
+    assert resp.status_code == 404
+
+
+def test_download_returns_a_zip_of_the_compiled_app():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "download_flow_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "download_flow_test.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    download_resp = client.get("/api/download")
+
+    assert download_resp.status_code == 200
+    assert download_resp.headers["content-type"] == "application/zip"
+    assert (
+        'attachment; filename="generated.zip"'
+        == download_resp.headers["content-disposition"]
+    )
+
+    archive = zipfile.ZipFile(io.BytesIO(download_resp.content))
+    names = set(archive.namelist())
+
+    assert "app.py" in names
+    assert "requirements.txt" in names
+    assert "Dockerfile" in names
+    assert "runtime/notebook_module.py" in names
+
+    app_source = archive.read("app.py").decode("utf-8")
+    assert "def add(" in app_source
