@@ -4,7 +4,6 @@ from pathlib import Path
 from datetime import datetime, timezone
 import io
 import json
-import shutil
 import os
 import subprocess
 import zipfile
@@ -39,6 +38,16 @@ os.makedirs(
     UPLOAD_DIR,
     exist_ok=True
 )
+
+# Matches the app's existing NOTEBOOK_API_* env-var convention (see
+# allowed_origins() in backend/dashboard.py and TASK_TTL_SECONDS in
+# api_generator.py) rather than hardcoding a fixed limit. Without this,
+# /api/upload accepted a file of any size onto disk before anything ever
+# tried to parse it.
+MAX_UPLOAD_BYTES = int(
+    os.getenv("NOTEBOOK_API_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))
+)
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 def resolve_upload_path(name: str) -> Path:
@@ -79,7 +88,18 @@ def resolve_upload_path(name: str) -> Path:
 async def upload_notebook(
     file: UploadFile = File(...)
 ):
-    """Upload a Jupyter notebook file."""
+    """Upload a Jupyter notebook file.
+
+    Previously only checked that the filename ended in ".ipynb" -- any
+    content at all (garbage bytes, an unrelated file, something huge) was
+    accepted onto disk with a 200 "success", and only failed later,
+    opaquely, whenever /api/inspect or /api/compile next tried to parse
+    it. This now enforces a configurable max size while streaming to
+    disk (rather than buffering an arbitrarily large body in memory
+    first) and validates the written file actually parses as a Jupyter
+    notebook, cleaning up and rejecting with a clear 4xx if either check
+    fails.
+    """
 
     if not file.filename.endswith(".ipynb"):
 
@@ -90,30 +110,66 @@ async def upload_notebook(
 
     file_path = resolve_upload_path(file.filename)
 
+    size = 0
+
     try:
 
-        with open(
-            file_path,
-            "wb"
-        ) as buffer:
+        with open(file_path, "wb") as buffer:
 
-            shutil.copyfileobj(
-                file.file,
-                buffer
-            )
+            while True:
 
-        return {
-            "status": "success",
-            "filename": file.filename,
-            "path": str(file_path)
-        }
+                chunk = await file.read(_UPLOAD_CHUNK_BYTES)
+
+                if not chunk:
+                    break
+
+                size += len(chunk)
+
+                if size > MAX_UPLOAD_BYTES:
+                    break
+
+                buffer.write(chunk)
 
     except Exception as e:
+
+        if file_path.exists():
+            os.remove(file_path)
 
         raise HTTPException(
             status_code=500,
             detail=str(e)
         )
+
+    if size > MAX_UPLOAD_BYTES:
+
+        os.remove(file_path)
+
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Notebook exceeds the maximum upload size of "
+                f"{MAX_UPLOAD_BYTES} bytes"
+            )
+        )
+
+    try:
+
+        load_notebook(str(file_path))
+
+    except Exception as e:
+
+        os.remove(file_path)
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+        )
+
+    return {
+        "status": "success",
+        "filename": file.filename,
+        "path": str(file_path)
+    }
 
 
 @router.get("/notebooks")

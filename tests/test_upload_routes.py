@@ -63,6 +63,67 @@ def test_upload_rejects_filename_that_escapes_upload_dir():
     assert not os.path.exists("escape_test.ipynb")
 
 
+def test_upload_rejects_content_that_is_not_a_valid_notebook():
+    """Before this fix, /api/upload only checked the filename ended in
+    ".ipynb" -- literally any content was accepted onto disk with a 200
+    "success", and only failed later, opaquely, whenever /api/inspect or
+    /api/compile next tried to parse it.
+    """
+
+    resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "garbage.ipynb",
+                io.BytesIO(b"this is not json, let alone a notebook"),
+                "application/json",
+            )
+        },
+    )
+
+    assert resp.status_code == 400
+    assert not os.path.exists(os.path.join(UPLOAD_DIR, "garbage.ipynb"))
+
+
+def test_upload_rejects_a_notebook_exceeding_the_configured_max_size(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_UPLOAD_BYTES", 10)
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    assert len(content) > 10
+
+    resp = client.post(
+        "/api/upload",
+        files={"file": ("too_big.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    assert resp.status_code == 413
+    assert not os.path.exists(os.path.join(UPLOAD_DIR, "too_big.ipynb"))
+
+
+def test_upload_accepts_a_notebook_within_a_raised_size_limit(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_UPLOAD_BYTES", 10 * 1024 * 1024)
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    resp = client.post(
+        "/api/upload",
+        files={"file": ("within_limit.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    assert resp.status_code == 200
+    assert os.path.exists(os.path.join(UPLOAD_DIR, "within_limit.ipynb"))
+
+
 def test_list_notebooks_includes_uploaded_files():
     """/api/upload was previously a one-way door: nothing in the API let
     a caller see what had already been uploaded, or remove it again.
