@@ -6,6 +6,7 @@ import io
 import json
 import shutil
 import os
+import subprocess
 import zipfile
 
 from backend.compiler import compile_notebook, package_name_for_output_dir
@@ -481,6 +482,87 @@ async def export_sdk_endpoint(
         "path": output_path,
         "code": code,
     }
+
+
+@router.post("/deploy")
+async def deploy_generated_app(data: dict = None):
+    """Build (and optionally push) a Docker image from the compiled app.
+
+    The CLI's `deploy` command already does this (compile + `docker
+    build`, optionally `docker push` -- see the deploy --push feature),
+    but the dashboard REST API had no equivalent: a user could compile a
+    notebook through the dashboard but had to drop back to a CLI/shell on
+    the server to actually build or push a deployable image.
+
+    Operates on the fixed `generated` directory like /api/export-openapi,
+    /api/export-sdk, and /api/download already do, rather than accepting
+    a client-supplied directory or Dockerfile to build.
+    """
+
+    generated_path = Path(GENERATED_DIR)
+
+    if not (generated_path / "Dockerfile").is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="No compiled app found. Run /api/compile first."
+        )
+
+    data = data or {}
+
+    tag = data.get("tag") or f"{generated_path.name.lower()}:latest"
+    push = bool(data.get("push", False))
+
+    try:
+
+        build_result = subprocess.run(
+            ["docker", "build", "-t", tag, "."],
+            cwd=str(generated_path),
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+
+    except FileNotFoundError:
+
+        raise HTTPException(
+            status_code=500,
+            detail="Docker CLI not found on the server. Install Docker to use /api/deploy."
+        )
+
+    if build_result.returncode != 0:
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Docker build failed: {build_result.stderr}"
+        )
+
+    response = {
+        "status": "success",
+        "tag": tag,
+        "pushed": False,
+    }
+
+    if push:
+
+        push_result = subprocess.run(
+            ["docker", "push", tag],
+            cwd=str(generated_path),
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+
+        if push_result.returncode != 0:
+
+            raise HTTPException(
+                status_code=500,
+                detail=f"Docker push failed: {push_result.stderr}"
+            )
+
+        response["pushed"] = True
+
+    return response
 
 
 @router.get("/download")

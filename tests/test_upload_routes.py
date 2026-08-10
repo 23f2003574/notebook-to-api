@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import stat
 import zipfile
 
 import nbformat
@@ -404,6 +405,150 @@ def test_export_sdk_returns_404_without_prior_openapi_export(monkeypatch):
     resp = client.post("/api/export-sdk", json={"language": "python"})
 
     assert resp.status_code == 404
+
+
+def _install_fake_docker(bin_dir, log_path):
+    """A fake `docker` executable that records how it was invoked instead
+    of actually building/pushing an image (mirrors the technique used in
+    tests/test_cli_deploy.py for the CLI's own `deploy` command). Appends
+    a record per invocation so build and push calls can each be
+    inspected independently, in order.
+    """
+
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    docker_stub = bin_dir / "docker"
+    docker_stub.write_text(
+        "#!/bin/sh\n"
+        f'{{ printf \'%s\\n\' "$@"; pwd; printf \'%s\\n\' "==CALL=="; }} >> "{log_path}"\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    docker_stub.chmod(docker_stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def _compile_a_notebook(filename):
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post("/api/compile", json={"notebook_path": filename})
+    assert compile_resp.status_code == 200
+
+
+def test_deploy_endpoint_returns_404_when_nothing_compiled_yet(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(
+        upload_module, "GENERATED_DIR", "generated_deploy_test_missing_dir"
+    )
+
+    resp = client.post("/api/deploy", json={})
+
+    assert resp.status_code == 404
+
+
+def test_deploy_endpoint_builds_image_with_default_tag(tmp_path, monkeypatch):
+
+    _compile_a_notebook("deploy_flow_test.ipynb")
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post("/api/deploy", json={})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["tag"] == "generated:latest"
+    assert body["pushed"] is False
+
+    calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
+    assert len(calls) == 1
+    build_call = calls[0].splitlines()
+    assert build_call[:-1] == ["build", "-t", "generated:latest", "."]
+    assert build_call[-1] == os.path.abspath("generated")
+
+
+def test_deploy_endpoint_respects_custom_tag(tmp_path, monkeypatch):
+
+    _compile_a_notebook("deploy_tag_test.ipynb")
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post("/api/deploy", json={"tag": "myregistry.example.com/myapp:v2"})
+
+    assert resp.status_code == 200
+    assert resp.json()["tag"] == "myregistry.example.com/myapp:v2"
+
+    calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
+    build_call = calls[0].splitlines()
+    assert build_call[:-1] == ["build", "-t", "myregistry.example.com/myapp:v2", "."]
+
+
+def test_deploy_endpoint_pushes_when_requested(tmp_path, monkeypatch):
+
+    _compile_a_notebook("deploy_push_test.ipynb")
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post(
+        "/api/deploy", json={"tag": "myregistry.example.com/myapp:v3", "push": True}
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["pushed"] is True
+
+    calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
+    assert len(calls) == 2
+    assert calls[0].splitlines()[:-1] == ["build", "-t", "myregistry.example.com/myapp:v3", "."]
+    assert calls[1].splitlines()[:-1] == ["push", "myregistry.example.com/myapp:v3"]
+
+
+def test_deploy_endpoint_does_not_push_by_default(tmp_path, monkeypatch):
+
+    _compile_a_notebook("deploy_no_push_test.ipynb")
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post("/api/deploy", json={})
+
+    assert resp.status_code == 200
+    assert resp.json()["pushed"] is False
+
+    calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
+    assert len(calls) == 1
+
+
+def test_deploy_endpoint_returns_500_when_docker_is_missing(tmp_path, monkeypatch):
+
+    _compile_a_notebook("deploy_missing_docker_test.ipynb")
+
+    empty_bin_dir = tmp_path / "empty_bin"
+    empty_bin_dir.mkdir()
+    monkeypatch.setenv("PATH", str(empty_bin_dir))
+
+    resp = client.post("/api/deploy", json={})
+
+    assert resp.status_code == 500
+    assert "Docker CLI not found" in resp.json()["detail"]
 
 
 def test_download_returns_404_when_nothing_compiled_yet(monkeypatch):
