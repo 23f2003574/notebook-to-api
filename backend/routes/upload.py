@@ -1,5 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pathlib import Path
 from datetime import datetime, timezone
 import io
@@ -185,6 +185,33 @@ async def delete_notebook(filename: str):
         "status": "success",
         "filename": filename,
     }
+
+
+@router.get("/notebooks/{filename}")
+async def get_notebook(filename: str):
+    """Download a previously uploaded notebook's raw content.
+
+    GET /api/notebooks lists what's been uploaded and DELETE removes it,
+    but there was previously no way to retrieve a specific notebook's
+    actual content again through the API -- a dashboard frontend could
+    show a list of uploaded notebooks but never let a user view or
+    re-download one, only re-upload a fresh copy from scratch.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    return FileResponse(
+        path=file_path,
+        media_type="application/x-ipynb+json",
+        filename=filename,
+    )
 
 
 @router.post("/inspect")

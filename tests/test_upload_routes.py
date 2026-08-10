@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import zipfile
 
@@ -115,6 +116,44 @@ def test_delete_notebook_returns_404_for_missing_file():
     resp = client.delete("/api/notebooks/does_not_exist_at_all.ipynb")
 
     assert resp.status_code == 404
+
+
+def test_get_notebook_returns_the_uploaded_content():
+    """GET /api/notebooks lists what's been uploaded and DELETE removes
+    it, but there was previously no way to retrieve a specific notebook's
+    actual content again -- only re-upload a fresh copy from scratch.
+    """
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={"file": ("get_test.ipynb", io.BytesIO(content), "application/json")},
+    )
+    assert upload_resp.status_code == 200
+
+    get_resp = client.get("/api/notebooks/get_test.ipynb")
+
+    assert get_resp.status_code == 200
+    assert get_resp.headers["content-type"] == "application/x-ipynb+json"
+    assert json.loads(get_resp.content) == json.loads(content)
+
+
+def test_get_notebook_returns_404_for_missing_file():
+
+    resp = client.get("/api/notebooks/does_not_exist_at_all.ipynb")
+
+    assert resp.status_code == 404
+
+
+def test_get_notebook_rejects_absolute_filename():
+
+    resp = client.get("/api/notebooks/%2Fetc%2Fpasswd")
+
+    assert resp.status_code in (400, 404)
+    assert "root:" not in resp.text
 
 
 def test_inspect_rejects_absolute_notebook_path():
