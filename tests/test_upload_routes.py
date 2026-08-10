@@ -137,6 +137,81 @@ def test_inspect_missing_notebook_still_returns_404_not_400():
     assert resp.status_code == 404
 
 
+def test_inspect_reports_dependencies_and_generated_files_after_a_compile():
+    """/api/inspect previously only ever returned "functions", even though
+    inspect_notebook_data (backend/inspector.py) already computed
+    dependencies and generated_files -- it just wasn't wired to this
+    route.
+    """
+
+    content = _notebook_bytes(
+        "import math\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "inspect_flow_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "inspect_flow_test.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    inspect_resp = client.post(
+        "/api/inspect", json={"notebook_path": "inspect_flow_test.ipynb"}
+    )
+    assert inspect_resp.status_code == 200
+    body = inspect_resp.json()
+
+    assert body["functions"][0]["name"] == "add"
+    assert body["dependencies"] == ["math"]
+    assert "app.py" in body["generated_files"]
+    assert "requirements.txt" in body["generated_files"]
+
+
+def test_inspect_generated_files_is_empty_before_any_compile(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(
+        upload_module, "GENERATED_DIR", "generated_inspect_test_missing_dir"
+    )
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "inspect_no_compile_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    inspect_resp = client.post(
+        "/api/inspect", json={"notebook_path": "inspect_no_compile_test.ipynb"}
+    )
+    assert inspect_resp.status_code == 200
+    body = inspect_resp.json()
+
+    assert body["functions"][0]["name"] == "add"
+    assert body["generated_files"] == []
+
+
 def test_export_openapi_and_export_sdk_full_flow():
     """The dashboard frontend can compile a notebook via /api/compile but,
     before this, had no way to fetch the OpenAPI schema or an SDK client

@@ -8,6 +8,7 @@ import os
 import zipfile
 
 from backend.compiler import compile_notebook, package_name_for_output_dir
+from backend.inspector import inspect_notebook_data
 from backend.parser.notebook_parser import (
     load_notebook,
     extract_code_cells,
@@ -117,7 +118,18 @@ async def upload_notebook(
 async def inspect_notebook_endpoint(
     data: dict
 ):
-    """Inspect notebook and return extracted functions."""
+    """Inspect notebook and return extracted functions, dependencies, and
+    any files already produced by a prior compile.
+
+    Delegates to inspect_notebook_data (backend/inspector.py), which was
+    written specifically to back a JSON endpoint like this one -- its
+    docstring literally says "Perfect for FastAPI endpoints and frontend
+    dashboards" -- but was never actually wired to any route. This
+    endpoint previously duplicated a subset of that same parsing logic
+    inline and only ever returned "functions", so callers had no way to
+    get a notebook's third-party dependencies or the compiled output file
+    list from the API at all.
+    """
 
     notebook_path = data.get(
         "notebook_path"
@@ -141,29 +153,14 @@ async def inspect_notebook_endpoint(
 
     try:
 
-        notebook = load_notebook(
-            str(full_path)
+        inspection = inspect_notebook_data(
+            str(full_path),
+            GENERATED_DIR
         )
-
-        code_cells = extract_code_cells(
-            notebook
-        )
-
-        functions = []
-
-        for cell in code_cells:
-
-            funcs = extract_functions_from_code(
-                cell
-            )
-
-            functions.extend(funcs)
-
-        functions = deduplicate_functions_by_name(functions)
 
         return {
             "status": "success",
-            "functions": functions
+            **inspection
         }
 
     except Exception as e:
