@@ -51,6 +51,23 @@ def _install_fake_docker(bin_dir, log_path):
     docker_stub.chmod(docker_stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
 
+def _install_fake_docker_recording_all_calls(bin_dir, log_path):
+    """Like _install_fake_docker, but appends a record per invocation
+    instead of overwriting, separated by a marker line -- so a test
+    exercising multiple docker calls in one run (build followed by push)
+    can inspect each call independently, in the order they happened.
+    """
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    docker_stub = bin_dir / "docker"
+    docker_stub.write_text(
+        "#!/bin/sh\n"
+        f'{{ printf \'%s\\n\' "$@"; pwd; printf \'%s\\n\' "==CALL=="; }} >> "{log_path}"\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    docker_stub.chmod(docker_stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+
 def _run_cli(args, cwd, path_dirs=None):
     env = dict(os.environ)
     env["PYTHONPATH"] = str(PROJECT_ROOT)
@@ -183,3 +200,85 @@ def test_deploy_reports_a_clear_error_when_docker_is_missing(tmp_path):
     assert "Docker CLI not found" in proc.stderr
     # The compile step must still have run before the docker lookup failed.
     assert (workdir / "generated" / "app.py").exists()
+
+
+def test_deploy_does_not_push_by_default(tmp_path):
+    """Without --push, only `docker build` should run -- no `docker push`
+    call at all.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker_recording_all_calls(bin_dir, log_path)
+
+    proc = _run_cli(
+        ["deploy", str(notebook_path), "--output", "generated"],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
+    assert len(calls) == 1
+    assert "Pushing Docker image" not in proc.stdout
+    assert "pushed successfully" not in proc.stdout
+
+
+def test_deploy_push_runs_docker_push_after_a_successful_build(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker_recording_all_calls(bin_dir, log_path)
+
+    proc = _run_cli(
+        [
+            "deploy", str(notebook_path), "--output", "generated",
+            "--tag", "registry.example.com/myapp:v1", "--push",
+        ],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
+    assert len(calls) == 2
+
+    build_call = calls[0].splitlines()
+    assert build_call[:-1] == ["build", "-t", "registry.example.com/myapp:v1", "."]
+    assert build_call[-1] == str((workdir / "generated").resolve())
+
+    push_call = calls[1].splitlines()
+    assert push_call[:-1] == ["push", "registry.example.com/myapp:v1"]
+    assert push_call[-1] == str((workdir / "generated").resolve())
+
+    assert "Docker image 'registry.example.com/myapp:v1' pushed successfully." in proc.stdout
+
+
+def test_deploy_push_help_documents_the_flag(tmp_path):
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "backend.cli", "deploy", "--help"],
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "--push" in proc.stdout

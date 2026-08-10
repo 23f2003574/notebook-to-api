@@ -412,6 +412,17 @@ def main():
         default=None,
         help="Docker image tag to build (default: <output-dir-basename>:latest)."
     )
+    deploy_parser.add_argument(
+        "--push",
+        action="store_true",
+        help=(
+            "Push the built image with `docker push <tag>` after a successful "
+            "build. The tag must already reference the target registry (e.g. "
+            "--tag registry.example.com/myapp:v1); this does not modify or "
+            "infer a registry, and assumes `docker login` has already been "
+            "done for it."
+        )
+    )
 
     # governance command group
     governance_parser = subparsers.add_parser(
@@ -6444,6 +6455,16 @@ def main():
                 "Docker CLI not found. Install Docker and ensure `docker` is on PATH to use `deploy`."
             ) from exc
         print(f"Docker image '{tag}' built successfully.")
+
+        if args.push:
+            print(f"Pushing Docker image '{tag}' …")
+            try:
+                subprocess.run(["docker", "push", tag], cwd=str(output_dir), check=True)
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    "Docker CLI not found. Install Docker and ensure `docker` is on PATH to use `deploy`."
+                ) from exc
+            print(f"Docker image '{tag}' pushed successfully.")
 
 if __name__ == "__main__":
     main()
