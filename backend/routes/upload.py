@@ -1,6 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
 from pathlib import Path
+from datetime import datetime, timezone
 import io
 import json
 import shutil
@@ -112,6 +113,78 @@ async def upload_notebook(
             status_code=500,
             detail=str(e)
         )
+
+
+@router.get("/notebooks")
+async def list_notebooks():
+    """List previously uploaded notebooks.
+
+    /api/upload was previously a one-way door: notebooks could be
+    uploaded but never listed or removed again through the API, so a
+    dashboard frontend had no way to let a user pick a previously
+    uploaded notebook without re-uploading it, and the uploads directory
+    could only grow.
+    """
+
+    upload_root = Path(UPLOAD_DIR)
+
+    notebooks = []
+
+    for entry in sorted(upload_root.iterdir()):
+
+        if entry.is_file() and entry.suffix == ".ipynb":
+
+            entry_stat = entry.stat()
+
+            notebooks.append({
+                "filename": entry.name,
+                "size_bytes": entry_stat.st_size,
+                "modified_at": datetime.fromtimestamp(
+                    entry_stat.st_mtime, tz=timezone.utc
+                ).isoformat(),
+            })
+
+    return {
+        "status": "success",
+        "notebooks": notebooks,
+    }
+
+
+@router.delete("/notebooks/{filename}")
+async def delete_notebook(filename: str):
+    """Delete a previously uploaded notebook.
+
+    Reuses resolve_upload_path for the same traversal protection already
+    applied to /inspect and /compile's notebook_path -- a filename here
+    comes from the URL path, but is exactly as much client input as a
+    JSON body field, and must be rejected the same way if it tries to
+    escape UPLOAD_DIR.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    try:
+
+        os.remove(file_path)
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+    return {
+        "status": "success",
+        "filename": filename,
+    }
 
 
 @router.post("/inspect")

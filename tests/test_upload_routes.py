@@ -61,6 +61,62 @@ def test_upload_rejects_filename_that_escapes_upload_dir():
     assert not os.path.exists("escape_test.ipynb")
 
 
+def test_list_notebooks_includes_uploaded_files():
+    """/api/upload was previously a one-way door: nothing in the API let
+    a caller see what had already been uploaded, or remove it again.
+    """
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={"file": ("list_test.ipynb", io.BytesIO(content), "application/json")},
+    )
+    assert upload_resp.status_code == 200
+
+    list_resp = client.get("/api/notebooks")
+    assert list_resp.status_code == 200
+
+    notebooks = list_resp.json()["notebooks"]
+    entry = next(nb for nb in notebooks if nb["filename"] == "list_test.ipynb")
+
+    assert entry["size_bytes"] == len(content)
+    assert "modified_at" in entry
+
+
+def test_delete_notebook_removes_an_uploaded_file():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={"file": ("delete_test.ipynb", io.BytesIO(content), "application/json")},
+    )
+    assert upload_resp.status_code == 200
+    assert os.path.exists(os.path.join(UPLOAD_DIR, "delete_test.ipynb"))
+
+    delete_resp = client.delete("/api/notebooks/delete_test.ipynb")
+    assert delete_resp.status_code == 200
+    assert delete_resp.json()["filename"] == "delete_test.ipynb"
+
+    assert not os.path.exists(os.path.join(UPLOAD_DIR, "delete_test.ipynb"))
+
+    list_resp = client.get("/api/notebooks")
+    filenames = {nb["filename"] for nb in list_resp.json()["notebooks"]}
+    assert "delete_test.ipynb" not in filenames
+
+
+def test_delete_notebook_returns_404_for_missing_file():
+
+    resp = client.delete("/api/notebooks/does_not_exist_at_all.ipynb")
+
+    assert resp.status_code == 404
+
+
 def test_inspect_rejects_absolute_notebook_path():
     """Confirmed exploitable before this fix: passing an absolute path
     like /etc/passwd caused the server to read that file and leak its
