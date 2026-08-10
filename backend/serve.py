@@ -35,7 +35,7 @@ class NotebookChangeHandler(FileSystemEventHandler):
                 print(f"❌ Compilation error: {e}\n")
 
 
-def serve_notebook(notebook_path, output_dir="generated"):
+def serve_notebook(notebook_path, output_dir="generated", port=8000):
     """
     Serve a notebook as a live API with hot recompilation.
 
@@ -45,6 +45,10 @@ def serve_notebook(notebook_path, output_dir="generated"):
     Args:
         notebook_path: Path to the notebook file
         output_dir: Output directory for generated API (default: "generated")
+        port: Port to run the API server on (default: 8000). Configurable
+            so more than one notebook can be served at once -- the port
+            was previously hardcoded, making that impossible without
+            editing this file.
     """
 
     # Initial compilation
@@ -62,8 +66,8 @@ def serve_notebook(notebook_path, output_dir="generated"):
     observer.start()
 
     print("🚀 Starting API server with hot reload...\n")
-    print(f"📍 API: http://localhost:8000")
-    print(f"📍 Docs: http://localhost:8000/docs")
+    print(f"📍 API: http://localhost:{port}")
+    print(f"📍 Docs: http://localhost:{port}/docs")
     print(f"📍 Watch: {Path(notebook_path).resolve()}\n")
     print("Press Ctrl+C to stop.\n")
 
@@ -79,7 +83,7 @@ def serve_notebook(notebook_path, output_dir="generated"):
             "--host",
             "0.0.0.0",
             "--port",
-            "8000",
+            str(port),
         ]
     )
 

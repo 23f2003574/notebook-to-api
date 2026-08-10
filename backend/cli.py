@@ -396,6 +396,12 @@ def main():
         default="generated",
         help="Output directory where the FastAPI app will be written."
     )
+    serve_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port to run the live API server on (default: 8000). Lets more than one notebook be served at once."
+    )
 
     # deploy command (compile + build a Docker image)
     deploy_parser = subparsers.add_parser(
@@ -5178,7 +5184,7 @@ def main():
             output = args.output or "generated/sdk/python_client.py"
             generate_python_sdk(args.openapi, output)
     elif args.command == "serve":
-        serve_notebook(args.notebook, args.output)
+        serve_notebook(args.notebook, args.output, args.port)
     elif args.command == "governance":
         if args.governance_command == "doctor":
             if args.batch_size <= 0:
