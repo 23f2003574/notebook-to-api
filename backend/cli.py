@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -7,7 +8,7 @@ from pathlib import Path
 # Import the compiler function
 from backend.compiler import compile_notebook
 # Import inspector for analysis
-from backend.inspector import inspect_notebook
+from backend.inspector import inspect_notebook, inspect_notebook_data
 from backend.serve import serve_notebook
 from backend.observability.deployment_governance_doctor import (
     run_deployment_governance_doctor,
@@ -336,6 +337,16 @@ def main():
         "--output",
         default="generated",
         help="Output directory where compilation artifacts would be placed (used to list generated files)."
+    )
+    inspect_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit machine-readable JSON (functions, dependencies, "
+            "generated_files) instead of the human-readable report, for "
+            "scripting/automation."
+        )
     )
 
     # openapi export command
@@ -5163,7 +5174,11 @@ def main():
     elif args.command == "inspect":
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
-        inspect_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
+        if args.json_output:
+            data = inspect_notebook_data(notebook_path=args.notebook, output_dir=str(output_dir))
+            print(json.dumps(data, indent=2))
+        else:
+            inspect_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
     elif args.command == "export-openapi":
         from backend.exporters.openapi_exporter import export_openapi_schema
         from backend.compiler import package_name_for_output_dir

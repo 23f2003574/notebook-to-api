@@ -102,6 +102,38 @@ def test_inspect_command_reports_the_notebooks_function(tmp_path):
     assert "Route: POST /add" in proc.stdout
 
 
+def test_inspect_command_json_flag_emits_machine_readable_output(tmp_path):
+    """Before --json existed, `inspect` only ever printed the
+    human-readable report (inspect_notebook) -- inspect_notebook_data,
+    which returns the same functions/dependencies/generated_files as
+    structured data, was only ever wired up to the REST API
+    (/api/inspect), never to the CLI. A script parsing `inspect`'s stdout
+    had nothing but that free-form text report to work with.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    compile_proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+    assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
+
+    proc = _run_cli(
+        ["inspect", str(notebook_path), "--output", "built", "--json"], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    data = json.loads(proc.stdout)
+    assert data["functions"][0]["name"] == "add"
+    assert "app.py" in data["generated_files"]
+    assert "requirements.txt" in data["generated_files"]
+    assert data["dependencies"] == []
+
+
 def test_export_openapi_command_writes_json_schema_by_default(tmp_path):
 
     workdir = tmp_path / "workdir"
