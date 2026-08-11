@@ -6,6 +6,7 @@ import io
 import json
 import os
 import subprocess
+import uuid
 import zipfile
 
 from backend.compiler import compile_notebook, package_name_for_output_dir
@@ -86,19 +87,29 @@ def resolve_upload_path(name: str) -> Path:
 
 @router.post("/upload")
 async def upload_notebook(
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    overwrite: bool = False,
 ):
     """Upload a Jupyter notebook file.
 
-    Previously only checked that the filename ended in ".ipynb" -- any
-    content at all (garbage bytes, an unrelated file, something huge) was
-    accepted onto disk with a 200 "success", and only failed later,
-    opaquely, whenever /api/inspect or /api/compile next tried to parse
-    it. This now enforces a configurable max size while streaming to
-    disk (rather than buffering an arbitrarily large body in memory
-    first) and validates the written file actually parses as a Jupyter
-    notebook, cleaning up and rejecting with a clear 4xx if either check
-    fails.
+    Streams to a temporary file inside UPLOAD_DIR first and only moves it
+    into place -- atomically, via os.replace -- after it passes the same
+    size and notebook-validity checks this endpoint already enforced.
+    Previously the upload was written straight to its final
+    "<filename>.ipynb" path as it streamed in: re-uploading a name that
+    already existed overwrote the previous file's bytes immediately, before
+    any validation ran, so an oversized or invalid re-upload permanently
+    destroyed a previously good notebook with no way to recover it
+    (confirmed: uploading garbage over an existing valid notebook silently
+    replaced it, then deleted the garbage too on the validation-failure
+    cleanup path, losing the original for good). There was also no way to
+    even detect a same-name collision was about to happen.
+
+    A same-named notebook is now rejected outright with 409 before the
+    upload body is even read, unless the caller passes ?overwrite=true to
+    confirm the replacement -- mirroring the explicit opt-in `deploy
+    --push` already uses elsewhere in this codebase for another
+    action with real, hard-to-undo consequences.
     """
 
     if not file.filename.endswith(".ipynb"):
@@ -110,11 +121,29 @@ async def upload_notebook(
 
     file_path = resolve_upload_path(file.filename)
 
+    if file_path.exists() and not overwrite:
+
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"A notebook named '{file.filename}' already exists. "
+                "Pass ?overwrite=true to replace it."
+            )
+        )
+
+    upload_root = Path(UPLOAD_DIR).resolve()
+    # A hidden, uniquely-suffixed name in the same directory as the final
+    # destination: hidden so it never shows up in GET /api/notebooks (which
+    # only lists ".ipynb" files, and this doesn't end in that suffix), and
+    # in the same directory so the final os.replace() below is an atomic
+    # rename rather than a cross-filesystem copy.
+    temp_path = upload_root / f".{file_path.name}.{uuid.uuid4().hex}.part"
+
     size = 0
 
     try:
 
-        with open(file_path, "wb") as buffer:
+        with open(temp_path, "wb") as buffer:
 
             while True:
 
@@ -132,8 +161,8 @@ async def upload_notebook(
 
     except Exception as e:
 
-        if file_path.exists():
-            os.remove(file_path)
+        if temp_path.exists():
+            os.remove(temp_path)
 
         raise HTTPException(
             status_code=500,
@@ -142,7 +171,7 @@ async def upload_notebook(
 
     if size > MAX_UPLOAD_BYTES:
 
-        os.remove(file_path)
+        os.remove(temp_path)
 
         raise HTTPException(
             status_code=413,
@@ -154,21 +183,42 @@ async def upload_notebook(
 
     try:
 
-        load_notebook(str(file_path))
+        load_notebook(str(temp_path))
 
     except Exception as e:
 
-        os.remove(file_path)
+        os.remove(temp_path)
 
         raise HTTPException(
             status_code=400,
             detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
         )
 
+    # Re-checked immediately before the swap (rather than trusting the
+    # early check above) so the "overwritten" flag in the response stays
+    # accurate even if a concurrent request created the file while this
+    # one's body was still streaming/validating.
+    overwritten = file_path.exists()
+
+    if overwritten and not overwrite:
+
+        os.remove(temp_path)
+
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"A notebook named '{file.filename}' already exists. "
+                "Pass ?overwrite=true to replace it."
+            )
+        )
+
+    os.replace(temp_path, file_path)
+
     return {
         "status": "success",
         "filename": file.filename,
-        "path": str(file_path)
+        "path": str(file_path),
+        "overwritten": overwritten,
     }
 
 

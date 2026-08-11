@@ -3,6 +3,7 @@ import json
 import os
 import stat
 import zipfile
+from pathlib import Path
 
 import nbformat
 import pytest
@@ -122,6 +123,139 @@ def test_upload_accepts_a_notebook_within_a_raised_size_limit(monkeypatch):
 
     assert resp.status_code == 200
     assert os.path.exists(os.path.join(UPLOAD_DIR, "within_limit.ipynb"))
+
+
+def test_upload_reports_overwritten_false_for_a_brand_new_notebook():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    resp = client.post(
+        "/api/upload",
+        files={"file": ("fresh.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["overwritten"] is False
+
+
+def test_upload_rejects_a_same_named_reupload_without_overwrite():
+    """Before overwrite protection existed, re-uploading an existing
+    filename silently replaced its bytes as they streamed in -- with no
+    conflict response and no way to opt out of the collision.
+    """
+
+    original_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    first_resp = client.post(
+        "/api/upload",
+        files={"file": ("collide.ipynb", io.BytesIO(original_content), "application/json")},
+    )
+    assert first_resp.status_code == 200
+
+    conflicting_content = _notebook_bytes(
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    second_resp = client.post(
+        "/api/upload",
+        files={"file": ("collide.ipynb", io.BytesIO(conflicting_content), "application/json")},
+    )
+
+    assert second_resp.status_code == 409
+    assert "already exists" in second_resp.json()["detail"]
+
+    # The original file must be completely untouched.
+    on_disk = Path(UPLOAD_DIR, "collide.ipynb").read_bytes()
+    assert on_disk == original_content
+
+
+def test_upload_replaces_a_same_named_notebook_when_overwrite_is_requested():
+
+    original_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    first_resp = client.post(
+        "/api/upload",
+        files={"file": ("replace_me.ipynb", io.BytesIO(original_content), "application/json")},
+    )
+    assert first_resp.status_code == 200
+
+    new_content = _notebook_bytes(
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    second_resp = client.post(
+        "/api/upload?overwrite=true",
+        files={"file": ("replace_me.ipynb", io.BytesIO(new_content), "application/json")},
+    )
+
+    assert second_resp.status_code == 200
+    assert second_resp.json()["overwritten"] is True
+
+    on_disk = Path(UPLOAD_DIR, "replace_me.ipynb").read_bytes()
+    assert on_disk == new_content
+
+
+def test_upload_with_overwrite_leaves_original_untouched_if_replacement_is_invalid():
+    """The critical data-loss case this fix closes: even with
+    ?overwrite=true, an invalid or corrupt re-upload must not destroy the
+    existing good notebook. Before streaming to a temp file first, the
+    write to the final path happened before validation, so this exact
+    scenario silently lost the original.
+    """
+
+    original_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    first_resp = client.post(
+        "/api/upload",
+        files={"file": ("dont_lose_me.ipynb", io.BytesIO(original_content), "application/json")},
+    )
+    assert first_resp.status_code == 200
+
+    second_resp = client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                "dont_lose_me.ipynb",
+                io.BytesIO(b"this is not json, let alone a notebook"),
+                "application/json",
+            )
+        },
+    )
+
+    assert second_resp.status_code == 400
+
+    on_disk = Path(UPLOAD_DIR, "dont_lose_me.ipynb").read_bytes()
+    assert on_disk == original_content
+
+
+def test_upload_leaves_no_temp_files_behind_after_a_rejected_reupload():
+
+    original_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={"file": ("no_debris.ipynb", io.BytesIO(original_content), "application/json")},
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("no_debris.ipynb", io.BytesIO(original_content), "application/json")},
+    )
+
+    leftover = [
+        name for name in os.listdir(UPLOAD_DIR)
+        if "no_debris" in name and not name.endswith(".ipynb")
+    ]
+    assert leftover == []
 
 
 def test_list_notebooks_includes_uploaded_files():
