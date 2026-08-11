@@ -366,6 +366,77 @@ def test_list_notebooks_currently_compiled_is_false_when_metadata_is_missing(
     entry = next(nb for nb in notebooks if nb["filename"] == "no_metadata_test.ipynb")
 
     assert entry["currently_compiled"] is False
+    # Not the currently-compiled notebook at all -- staleness is only
+    # meaningful (and only reported) for the one that is.
+    assert "notebook_changed_since_compile" not in entry
+
+
+def test_list_notebooks_reports_the_currently_compiled_notebook_as_unchanged_right_after_compile():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={"file": ("freshly_compiled.ipynb", io.BytesIO(content), "application/json")},
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "freshly_compiled.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    notebooks = client.get("/api/notebooks").json()["notebooks"]
+    entry = next(nb for nb in notebooks if nb["filename"] == "freshly_compiled.ipynb")
+
+    assert entry["currently_compiled"] is True
+    assert entry["notebook_changed_since_compile"] is False
+
+
+def test_list_notebooks_flags_a_notebook_changed_since_its_last_compile():
+    """The gap this closes: /api/notebooks could already say "this is the
+    notebook that produced generated/" (see
+    test_list_notebooks_marks_the_currently_compiled_notebook), but had
+    no way to tell a caller that notebook had since been edited and
+    re-uploaded -- e.g. via /api/upload?overwrite=true -- *after* that
+    compile, silently leaving the currently-served app stale relative to
+    what a caller might reasonably assume it still matches exactly.
+    """
+
+    original_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={"file": ("edited_after_compile.ipynb", io.BytesIO(original_content), "application/json")},
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "edited_after_compile.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    changed_content = _notebook_bytes(
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    overwrite_resp = client.post(
+        "/api/upload?overwrite=true",
+        files={"file": ("edited_after_compile.ipynb", io.BytesIO(changed_content), "application/json")},
+    )
+    assert overwrite_resp.status_code == 200
+
+    notebooks = client.get("/api/notebooks").json()["notebooks"]
+    entry = next(nb for nb in notebooks if nb["filename"] == "edited_after_compile.ipynb")
+
+    # Still the notebook that produced the current generated/ output --
+    # just no longer an exact match for what's actually on disk now.
+    assert entry["currently_compiled"] is True
+    assert entry["notebook_changed_since_compile"] is True
 
 
 def test_delete_notebook_removes_an_uploaded_file():

@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import importlib.metadata
 import json
 import keyword
@@ -155,8 +156,30 @@ def write_requirements(imports, output_dir):
 COMPILE_METADATA_FILENAME = ".compile_metadata.json"
 
 
+def hash_notebook_file(notebook_path):
+    """SHA-256 of `notebook_path`'s raw bytes, as a hex digest.
+
+    Used to detect when the notebook that produced the current
+    `generated/` output has since been modified (see
+    write_compile_metadata below and
+    list_notebooks/_currently_compiled_notebook_metadata in
+    routes/upload.py) -- a content hash survives a touch/copy/re-upload
+    that doesn't actually change the bytes, unlike comparing mtimes,
+    which would flag those as "changed" even though nothing meaningful
+    did.
+    """
+    hasher = hashlib.sha256()
+
+    with open(notebook_path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            hasher.update(chunk)
+
+    return hasher.hexdigest()
+
+
 def write_compile_metadata(notebook_path, output_dir):
-    """Record which notebook produced the app in `output_dir`, and when.
+    """Record which notebook produced the app in `output_dir`, its
+    content hash at that moment, and when.
 
     Without this, nothing -- on disk or via the API -- recorded which
     notebook a given `generated/` output actually came from. GET
@@ -166,15 +189,24 @@ def write_compile_metadata(notebook_path, output_dir):
     (lost on refresh) and wrong the moment a second compile happens
     (from this browser tab or another) without it finding out.
 
+    The content hash closes a related gap: even once "this is the
+    currently-compiled notebook" was known, there was still no way to
+    tell whether that notebook had since been edited and re-uploaded
+    (e.g. via /api/upload?overwrite=true) *after* the compile that
+    produced the current generated/ output -- silently leaving the
+    served app stale relative to the notebook a caller might think it
+    still matches.
+
     notebook_path is stored as an absolute path so it can be compared
     directly against a resolved upload path later (see
-    list_notebooks/_currently_compiled_notebook_path in
+    list_notebooks/_currently_compiled_notebook_metadata in
     routes/upload.py) regardless of whether it was originally relative.
     """
     metadata_path = os.path.join(output_dir, COMPILE_METADATA_FILENAME)
 
     metadata = {
         "source_notebook": os.path.abspath(notebook_path),
+        "source_notebook_sha256": hash_notebook_file(notebook_path),
         "compiled_at": (
             datetime.datetime.now(datetime.timezone.utc).isoformat()
         ),

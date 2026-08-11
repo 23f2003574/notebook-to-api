@@ -865,6 +865,62 @@ def test_recompiling_overwrites_the_previous_compile_metadata(tmp_path):
     assert metadata["source_notebook"] == str(notebook_b.resolve())
 
 
+def test_hash_notebook_file_is_deterministic_and_content_sensitive(tmp_path):
+
+    from backend.compiler import hash_notebook_file
+
+    notebook_a = tmp_path / "a.ipynb"
+    notebook_a.write_text('{"cells": []}', encoding="utf-8")
+
+    notebook_a_copy = tmp_path / "a_copy.ipynb"
+    notebook_a_copy.write_text('{"cells": []}', encoding="utf-8")
+
+    notebook_b = tmp_path / "b.ipynb"
+    notebook_b.write_text('{"cells": [1]}', encoding="utf-8")
+
+    # Same content (even in a different file) -> same hash.
+    assert hash_notebook_file(notebook_a) == hash_notebook_file(notebook_a_copy)
+    # Different content -> different hash.
+    assert hash_notebook_file(notebook_a) != hash_notebook_file(notebook_b)
+    # A plain hex sha256 digest, not some other encoding.
+    digest = hash_notebook_file(notebook_a)
+    assert len(digest) == 64
+    int(digest, 16)  # must not raise
+
+
+def test_compile_metadata_records_the_source_notebooks_content_hash(tmp_path):
+    """Closes the gap left by write_compile_metadata recording only
+    *which* notebook was compiled: even knowing that, there was no way to
+    tell whether the notebook had since been edited and re-uploaded,
+    leaving the currently-served app silently stale relative to it (see
+    test_list_notebooks_flags_a_notebook_changed_since_its_last_compile
+    in test_upload_routes.py for the end-to-end behavior this enables).
+    """
+
+    import json
+
+    from backend.compiler import COMPILE_METADATA_FILENAME, hash_notebook_file
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    metadata_path = output_dir / COMPILE_METADATA_FILENAME
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    assert metadata["source_notebook_sha256"] == hash_notebook_file(notebook_path)
+
+
 def test_compiler_pipeline_optional_none_default_param_is_actually_optional(
     tmp_path
 ):

@@ -12,6 +12,7 @@ import zipfile
 from backend.compiler import (
     COMPILE_METADATA_FILENAME,
     compile_notebook,
+    hash_notebook_file,
     package_name_for_output_dir,
 )
 from backend.generator.api_generator import (
@@ -239,20 +240,21 @@ async def upload_notebook(
     }
 
 
-def _currently_compiled_notebook_path():
-    """Resolved path of the notebook that produced the app currently in
-    GENERATED_DIR, if any -- read from the .compile_metadata.json every
-    successful compile writes (see write_compile_metadata in
-    backend/compiler.py). Returns None if nothing has been compiled yet,
-    or if the metadata file is missing/unreadable/corrupt -- list_notebooks
-    should degrade to reporting no notebook as currently compiled rather
-    than 500 over this being informational, best-effort metadata.
+def _currently_compiled_notebook_metadata():
+    """(resolved path, content sha256) of the notebook that produced the
+    app currently in GENERATED_DIR, if any -- read from the
+    .compile_metadata.json every successful compile writes (see
+    write_compile_metadata in backend/compiler.py). Returns (None, None)
+    if nothing has been compiled yet, or if the metadata file is
+    missing/unreadable/corrupt -- list_notebooks should degrade to
+    reporting no notebook as currently compiled rather than 500 over this
+    being informational, best-effort metadata.
     """
 
     metadata_path = Path(GENERATED_DIR) / COMPILE_METADATA_FILENAME
 
     if not metadata_path.is_file():
-        return None
+        return None, None
 
     try:
 
@@ -260,14 +262,14 @@ def _currently_compiled_notebook_path():
             metadata = json.load(f)
 
     except (OSError, ValueError):
-        return None
+        return None, None
 
     source_notebook = metadata.get("source_notebook")
 
     if not source_notebook:
-        return None
+        return None, None
 
-    return Path(source_notebook).resolve()
+    return Path(source_notebook).resolve(), metadata.get("source_notebook_sha256")
 
 
 @router.get("/notebooks")
@@ -287,11 +289,19 @@ async def list_notebooks():
     dashboard frontend had to track that itself client-side, which is
     fragile (lost on refresh) and wrong the moment a second compile
     happens without it finding out.
+
+    The currently-compiled entry additionally gets
+    "notebook_changed_since_compile": even once "this is the
+    currently-compiled notebook" was known, there was still no way to
+    tell whether it had since been edited and re-uploaded (e.g. via
+    /api/upload?overwrite=true) *after* the compile that produced the
+    current generated/ output -- silently leaving the served app stale
+    relative to a notebook a caller might think it still matches exactly.
     """
 
     upload_root = Path(UPLOAD_DIR)
 
-    currently_compiled_path = _currently_compiled_notebook_path()
+    compiled_path, compiled_sha256 = _currently_compiled_notebook_metadata()
 
     notebooks = []
 
@@ -301,17 +311,26 @@ async def list_notebooks():
 
             entry_stat = entry.stat()
 
-            notebooks.append({
+            is_currently_compiled = (
+                compiled_path is not None and entry.resolve() == compiled_path
+            )
+
+            notebook_entry = {
                 "filename": entry.name,
                 "size_bytes": entry_stat.st_size,
                 "modified_at": datetime.fromtimestamp(
                     entry_stat.st_mtime, tz=timezone.utc
                 ).isoformat(),
-                "currently_compiled": (
-                    currently_compiled_path is not None
-                    and entry.resolve() == currently_compiled_path
-                ),
-            })
+                "currently_compiled": is_currently_compiled,
+            }
+
+            if is_currently_compiled:
+                notebook_entry["notebook_changed_since_compile"] = (
+                    compiled_sha256 is not None
+                    and hash_notebook_file(entry) != compiled_sha256
+                )
+
+            notebooks.append(notebook_entry)
 
     return {
         "status": "success",
