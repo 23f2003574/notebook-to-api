@@ -9,7 +9,11 @@ import subprocess
 import uuid
 import zipfile
 
-from backend.compiler import compile_notebook, package_name_for_output_dir
+from backend.compiler import (
+    COMPILE_METADATA_FILENAME,
+    compile_notebook,
+    package_name_for_output_dir,
+)
 from backend.generator.api_generator import (
     LONG_RUNNING_KEYWORDS,
     ReservedFunctionNameError,
@@ -235,6 +239,37 @@ async def upload_notebook(
     }
 
 
+def _currently_compiled_notebook_path():
+    """Resolved path of the notebook that produced the app currently in
+    GENERATED_DIR, if any -- read from the .compile_metadata.json every
+    successful compile writes (see write_compile_metadata in
+    backend/compiler.py). Returns None if nothing has been compiled yet,
+    or if the metadata file is missing/unreadable/corrupt -- list_notebooks
+    should degrade to reporting no notebook as currently compiled rather
+    than 500 over this being informational, best-effort metadata.
+    """
+
+    metadata_path = Path(GENERATED_DIR) / COMPILE_METADATA_FILENAME
+
+    if not metadata_path.is_file():
+        return None
+
+    try:
+
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+
+    except (OSError, ValueError):
+        return None
+
+    source_notebook = metadata.get("source_notebook")
+
+    if not source_notebook:
+        return None
+
+    return Path(source_notebook).resolve()
+
+
 @router.get("/notebooks")
 async def list_notebooks():
     """List previously uploaded notebooks.
@@ -244,9 +279,19 @@ async def list_notebooks():
     dashboard frontend had no way to let a user pick a previously
     uploaded notebook without re-uploading it, and the uploads directory
     could only grow.
+
+    Each entry's "currently_compiled" flag -- added alongside this same
+    docstring's original feature, not a separate change -- says whether
+    this is the notebook that produced whatever's currently in
+    GENERATED_DIR, which nothing here previously exposed at all: a
+    dashboard frontend had to track that itself client-side, which is
+    fragile (lost on refresh) and wrong the moment a second compile
+    happens without it finding out.
     """
 
     upload_root = Path(UPLOAD_DIR)
+
+    currently_compiled_path = _currently_compiled_notebook_path()
 
     notebooks = []
 
@@ -262,6 +307,10 @@ async def list_notebooks():
                 "modified_at": datetime.fromtimestamp(
                     entry_stat.st_mtime, tz=timezone.utc
                 ).isoformat(),
+                "currently_compiled": (
+                    currently_compiled_path is not None
+                    and entry.resolve() == currently_compiled_path
+                ),
             })
 
     return {

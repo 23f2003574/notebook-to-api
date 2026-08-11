@@ -767,6 +767,104 @@ def test_pinned_requirement_helper_falls_back_for_an_unknown_package():
     )
 
 
+def test_compile_writes_metadata_recording_the_source_notebook(tmp_path):
+    """Nothing on disk (or via the API) previously recorded which
+    notebook produced a given `generated/` output -- GET /api/notebooks
+    had no way to say "this is the one currently compiled" as a result
+    (see test_list_notebooks_marks_the_currently_compiled_notebook in
+    test_upload_routes.py).
+    """
+
+    import json
+
+    from backend.compiler import COMPILE_METADATA_FILENAME
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    metadata_path = output_dir / COMPILE_METADATA_FILENAME
+    assert metadata_path.exists()
+
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    assert metadata["source_notebook"] == str(notebook_path.resolve())
+    assert "compiled_at" in metadata
+
+    # Must be a real, parseable ISO 8601 UTC timestamp, not just any string.
+    from datetime import datetime
+    parsed = datetime.fromisoformat(metadata["compiled_at"])
+    assert parsed.tzinfo is not None
+
+
+def test_compile_metadata_records_an_absolute_path_even_for_a_relative_input(
+    tmp_path, monkeypatch
+):
+
+    import json
+
+    from backend.compiler import COMPILE_METADATA_FILENAME
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    monkeypatch.chdir(tmp_path)
+
+    compile_notebook("nb.ipynb", "built")
+
+    metadata_path = Path("built") / COMPILE_METADATA_FILENAME
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    assert Path(metadata["source_notebook"]).is_absolute()
+    assert Path(metadata["source_notebook"]) == notebook_path.resolve()
+
+
+def test_recompiling_overwrites_the_previous_compile_metadata(tmp_path):
+
+    import json
+
+    from backend.compiler import COMPILE_METADATA_FILENAME
+
+    def _make_notebook(path, source):
+        notebook = nbformat.v4.new_notebook()
+        notebook.cells.append(nbformat.v4.new_code_cell(source))
+        with open(path, "w", encoding="utf-8") as f:
+            nbformat.write(notebook, f)
+
+    notebook_a = tmp_path / "a.ipynb"
+    notebook_b = tmp_path / "b.ipynb"
+    _make_notebook(notebook_a, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _make_notebook(notebook_b, "def sub(a: int, b: int) -> int:\n    return a - b\n")
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_a), str(output_dir))
+    compile_notebook(str(notebook_b), str(output_dir))
+
+    metadata_path = output_dir / COMPILE_METADATA_FILENAME
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    assert metadata["source_notebook"] == str(notebook_b.resolve())
+
+
 def test_compiler_pipeline_optional_none_default_param_is_actually_optional(
     tmp_path
 ):

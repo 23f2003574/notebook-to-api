@@ -1,4 +1,6 @@
+import datetime
 import importlib.metadata
+import json
 import keyword
 import os
 import sys
@@ -150,6 +152,38 @@ def write_requirements(imports, output_dir):
     )
 
 
+COMPILE_METADATA_FILENAME = ".compile_metadata.json"
+
+
+def write_compile_metadata(notebook_path, output_dir):
+    """Record which notebook produced the app in `output_dir`, and when.
+
+    Without this, nothing -- on disk or via the API -- recorded which
+    notebook a given `generated/` output actually came from. GET
+    /api/notebooks could list every uploaded notebook, but had no way to
+    say "this is the one currently reflected in generated/", so a
+    dashboard frontend had to track that itself client-side: fragile
+    (lost on refresh) and wrong the moment a second compile happens
+    (from this browser tab or another) without it finding out.
+
+    notebook_path is stored as an absolute path so it can be compared
+    directly against a resolved upload path later (see
+    list_notebooks/_currently_compiled_notebook_path in
+    routes/upload.py) regardless of whether it was originally relative.
+    """
+    metadata_path = os.path.join(output_dir, COMPILE_METADATA_FILENAME)
+
+    metadata = {
+        "source_notebook": os.path.abspath(notebook_path),
+        "compiled_at": (
+            datetime.datetime.now(datetime.timezone.utc).isoformat()
+        ),
+    }
+
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
+
+
 def compile_notebook_to_api(
     notebook_path,
     output_path
@@ -218,6 +252,8 @@ def compile_notebook_to_api(
     )
 
     generate_dockerignore(dockerignore_path)
+
+    write_compile_metadata(notebook_path, output_dir)
 
     print(
         f"Successfully generated FastAPI app at: {output_path}"

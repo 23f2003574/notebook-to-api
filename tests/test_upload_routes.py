@@ -282,6 +282,90 @@ def test_list_notebooks_includes_uploaded_files():
 
     assert entry["size_bytes"] == len(content)
     assert "modified_at" in entry
+    assert entry["currently_compiled"] is False
+
+
+def test_list_notebooks_marks_the_currently_compiled_notebook():
+    """Nothing previously recorded which uploaded notebook (if any)
+    produced whatever's currently in GENERATED_DIR -- a dashboard
+    frontend had to track that itself client-side, which is fragile
+    (lost on refresh) and wrong the moment a second compile happens
+    without it finding out.
+
+    /api/compile always targets the real "generated" directory (like
+    /api/export-openapi, /api/export-sdk, /api/download and /api/deploy
+    already do -- see their own docstrings), so this exercises that same
+    shared directory rather than an isolated one, matching how the other
+    compile-flow tests in this file already operate.
+    """
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    content_b = _notebook_bytes(
+        "def sub(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    for filename, content in (
+        ("currently_compiled_a.ipynb", content_a),
+        ("currently_compiled_b.ipynb", content_b),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "currently_compiled_a.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    after = {
+        nb["filename"]: nb["currently_compiled"]
+        for nb in client.get("/api/notebooks").json()["notebooks"]
+    }
+    assert after["currently_compiled_a.ipynb"] is True
+    assert after["currently_compiled_b.ipynb"] is False
+
+    # Recompiling a different notebook must flip which one is flagged.
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "currently_compiled_b.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    final = {
+        nb["filename"]: nb["currently_compiled"]
+        for nb in client.get("/api/notebooks").json()["notebooks"]
+    }
+    assert final["currently_compiled_a.ipynb"] is False
+    assert final["currently_compiled_b.ipynb"] is True
+
+
+def test_list_notebooks_currently_compiled_is_false_when_metadata_is_missing(
+    monkeypatch
+):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(
+        upload_module, "GENERATED_DIR", "generated_no_metadata_test_dir"
+    )
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    resp = client.post(
+        "/api/upload",
+        files={"file": ("no_metadata_test.ipynb", io.BytesIO(content), "application/json")},
+    )
+    assert resp.status_code == 200
+
+    notebooks = client.get("/api/notebooks").json()["notebooks"]
+    entry = next(nb for nb in notebooks if nb["filename"] == "no_metadata_test.ipynb")
+
+    assert entry["currently_compiled"] is False
 
 
 def test_delete_notebook_removes_an_uploaded_file():
