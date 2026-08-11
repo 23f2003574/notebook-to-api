@@ -270,3 +270,119 @@ def test_export_sdk_command_rejects_invalid_language_choice(tmp_path):
 
     assert proc.returncode != 0
     assert "invalid choice: 'rust'" in proc.stderr
+
+
+def _assert_clean_cli_error(proc, expected_message_fragment):
+    """A core command's expected failure modes (missing file, invalid
+    notebook, etc.) must produce a single-line "Error: ..." message on
+    stderr with exit code 1 -- not a raw multi-frame Python traceback.
+    Before CLI_USER_FACING_ERRORS existed, every one of these scenarios
+    dumped a full traceback instead (confirmed by running each command
+    directly against a missing/invalid notebook).
+    """
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "Traceback (most recent call last)" not in proc.stderr
+    assert expected_message_fragment in proc.stderr
+    assert any(
+        line.startswith("Error: ") for line in proc.stderr.splitlines()
+    )
+
+
+def test_compile_command_reports_a_clean_error_for_a_missing_notebook(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["compile", str(workdir / "does-not-exist.ipynb"), "--output", "built"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_compile_command_reports_a_clean_error_for_an_invalid_package_name(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "not-a-valid-package!"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "can't be used as a Python package name")
+
+
+def test_compile_command_reports_a_clean_error_for_a_non_notebook_file(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    bad_notebook = workdir / "bad.ipynb"
+    bad_notebook.write_text("this is not json at all", encoding="utf-8")
+
+    proc = _run_cli(["compile", str(bad_notebook), "--output", "built"], cwd=workdir)
+
+    _assert_clean_cli_error(proc, "does not appear to be JSON")
+
+
+def test_inspect_command_reports_a_clean_error_for_a_missing_notebook(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["inspect", str(workdir / "does-not-exist.ipynb")], cwd=workdir
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_export_openapi_command_reports_a_clean_error_when_nothing_compiled(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["export-openapi", "--app-dir", "nope"], cwd=workdir)
+
+    _assert_clean_cli_error(proc, "No module named 'nope'")
+
+
+def test_export_sdk_command_reports_a_clean_error_for_a_missing_openapi_file(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["export-sdk", "--openapi", "missing-openapi.json"], cwd=workdir
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_export_sdk_command_reports_a_clean_error_for_a_corrupt_openapi_file(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    (workdir / "openapi.json").write_text("not valid json", encoding="utf-8")
+
+    proc = _run_cli(
+        ["export-sdk", "--openapi", "openapi.json"], cwd=workdir
+    )
+
+    _assert_clean_cli_error(proc, "Expecting value")
+
+
+def test_serve_command_reports_a_clean_error_for_a_missing_notebook(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["serve", str(workdir / "does-not-exist.ipynb")], cwd=workdir
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")

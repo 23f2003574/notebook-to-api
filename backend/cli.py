@@ -5,6 +5,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+# ValidationError is the exception nbformat raises for a syntactically valid
+# JSON file that is nonetheless missing required notebook keys (e.g. no
+# "cells"). It's distinct from nbformat.reader.NotJSONError (already a
+# ValueError subclass) and needs to be named explicitly to be treated as a
+# clean, user-facing CLI error rather than a raw traceback -- see
+# CLI_USER_FACING_ERRORS below.
+from nbformat import ValidationError as NotebookValidationError
+
 # Import the compiler function
 from backend.compiler import compile_notebook
 # Import inspector for analysis
@@ -312,6 +320,103 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 # compiled notebook's top-level code as a side effect (stray stdout output).
 # Importing it eagerly here would leak that output into every CLI
 # invocation, including unrelated commands like `governance doctor --json`.
+
+# The core notebook-to-API commands (as opposed to the `governance`
+# subcommand tree, which manages its own process exit codes and error
+# reporting entirely internally -- every governance branch ends in its own
+# sys.exit(exit_code)). Kept as a set so main() can route these six, and
+# only these six, through _dispatch_core_command's shared error handling.
+_CORE_COMMANDS = frozenset({
+    "compile", "inspect", "export-openapi", "export-sdk", "serve", "deploy",
+})
+
+# Exception types raised by real, expected failure conditions in the core
+# commands -- a missing/unreadable notebook file, an invalid --output
+# package name, a malformed .ipynb, a compiled app that doesn't exist yet,
+# a corrupt openapi.json, Docker not being installed, or `docker build`/
+# `docker push` exiting non-zero. Before this, none of the six core
+# commands caught any of these: a plain `notebook-to-api compile
+# missing.ipynb` crashed with a raw multi-frame Python traceback (confirmed
+# by running it) instead of a one-line, actionable error message -- the
+# worst possible first impression for a CLI's most common failure mode.
+CLI_USER_FACING_ERRORS = (
+    OSError,  # covers FileNotFoundError, PermissionError, etc.
+    ValueError,  # covers json.JSONDecodeError and nbformat's NotJSONError
+    ModuleNotFoundError,
+    RuntimeError,
+    NotebookValidationError,
+    subprocess.CalledProcessError,
+)
+
+
+def _dispatch_core_command(args):
+    """Run one of the core notebook-to-API commands.
+
+    Split out from main() so every one of its expected failure modes can be
+    caught in a single place (see CLI_USER_FACING_ERRORS in main()) instead
+    of needing its own try/except at each of the six call sites.
+    """
+    if args.command == "compile":
+        output_dir = Path(args.output)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        compile_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
+        print("\nCompilation finished. FastAPI app is ready in", output_dir)
+    elif args.command == "inspect":
+        output_dir = Path(args.output)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        if args.json_output:
+            data = inspect_notebook_data(notebook_path=args.notebook, output_dir=str(output_dir))
+            print(json.dumps(data, indent=2))
+        else:
+            inspect_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
+    elif args.command == "export-openapi":
+        from backend.exporters.openapi_exporter import export_openapi_schema
+        from backend.compiler import package_name_for_output_dir
+        default_output = (
+            "generated/openapi.yaml" if args.format == "yaml" else "generated/openapi.json"
+        )
+        output = args.output or default_output
+        export_openapi_schema(
+            output, package_name_for_output_dir(args.app_dir), format=args.format
+        )
+    elif args.command == "export-sdk":
+        if args.language == "typescript":
+            from backend.exporters.sdk_generator import generate_typescript_sdk
+            output = args.output or "generated/sdk/typescript_client.ts"
+            generate_typescript_sdk(args.openapi, output)
+        else:
+            from backend.exporters.sdk_generator import generate_python_sdk
+            output = args.output or "generated/sdk/python_client.py"
+            generate_python_sdk(args.openapi, output)
+    elif args.command == "serve":
+        serve_notebook(args.notebook, args.output, args.port)
+    elif args.command == "deploy":
+        output_dir = Path(args.output)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        compile_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
+        # Build Docker image
+        dockerfile_path = output_dir / "Dockerfile"
+        if not dockerfile_path.is_file():
+            raise FileNotFoundError(f"Dockerfile not found at {dockerfile_path}. Ensure the compiler generated it.")
+        tag = args.tag or f"{output_dir.name.lower()}:latest"
+        print(f"Building Docker image '{tag}' from {output_dir} …")
+        try:
+            subprocess.run(["docker", "build", "-t", tag, "."], cwd=str(output_dir), check=True)
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                "Docker CLI not found. Install Docker and ensure `docker` is on PATH to use `deploy`."
+            ) from exc
+        print(f"Docker image '{tag}' built successfully.")
+
+        if args.push:
+            print(f"Pushing Docker image '{tag}' …")
+            try:
+                subprocess.run(["docker", "push", tag], cwd=str(output_dir), check=True)
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    "Docker CLI not found. Install Docker and ensure `docker` is on PATH to use `deploy`."
+                ) from exc
+            print(f"Docker image '{tag}' pushed successfully.")
 
 
 def main():
@@ -5166,40 +5271,12 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "compile":
-        output_dir = Path(args.output)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        compile_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
-        print("\nCompilation finished. FastAPI app is ready in", output_dir)
-    elif args.command == "inspect":
-        output_dir = Path(args.output)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        if args.json_output:
-            data = inspect_notebook_data(notebook_path=args.notebook, output_dir=str(output_dir))
-            print(json.dumps(data, indent=2))
-        else:
-            inspect_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
-    elif args.command == "export-openapi":
-        from backend.exporters.openapi_exporter import export_openapi_schema
-        from backend.compiler import package_name_for_output_dir
-        default_output = (
-            "generated/openapi.yaml" if args.format == "yaml" else "generated/openapi.json"
-        )
-        output = args.output or default_output
-        export_openapi_schema(
-            output, package_name_for_output_dir(args.app_dir), format=args.format
-        )
-    elif args.command == "export-sdk":
-        if args.language == "typescript":
-            from backend.exporters.sdk_generator import generate_typescript_sdk
-            output = args.output or "generated/sdk/typescript_client.ts"
-            generate_typescript_sdk(args.openapi, output)
-        else:
-            from backend.exporters.sdk_generator import generate_python_sdk
-            output = args.output or "generated/sdk/python_client.py"
-            generate_python_sdk(args.openapi, output)
-    elif args.command == "serve":
-        serve_notebook(args.notebook, args.output, args.port)
+    if args.command in _CORE_COMMANDS:
+        try:
+            _dispatch_core_command(args)
+        except CLI_USER_FACING_ERRORS as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
     elif args.command == "governance":
         if args.governance_command == "doctor":
             if args.batch_size <= 0:
@@ -6459,33 +6536,6 @@ def main():
                 json_output=args.json_output,
             )
             sys.exit(exit_code)
-    elif args.command == "deploy":
-        output_dir = Path(args.output)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        compile_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
-        # Build Docker image
-        dockerfile_path = output_dir / "Dockerfile"
-        if not dockerfile_path.is_file():
-            raise FileNotFoundError(f"Dockerfile not found at {dockerfile_path}. Ensure the compiler generated it.")
-        tag = args.tag or f"{output_dir.name.lower()}:latest"
-        print(f"Building Docker image '{tag}' from {output_dir} …")
-        try:
-            subprocess.run(["docker", "build", "-t", tag, "."], cwd=str(output_dir), check=True)
-        except FileNotFoundError as exc:
-            raise RuntimeError(
-                "Docker CLI not found. Install Docker and ensure `docker` is on PATH to use `deploy`."
-            ) from exc
-        print(f"Docker image '{tag}' built successfully.")
-
-        if args.push:
-            print(f"Pushing Docker image '{tag}' …")
-            try:
-                subprocess.run(["docker", "push", tag], cwd=str(output_dir), check=True)
-            except FileNotFoundError as exc:
-                raise RuntimeError(
-                    "Docker CLI not found. Install Docker and ensure `docker` is on PATH to use `deploy`."
-                ) from exc
-            print(f"Docker image '{tag}' pushed successfully.")
 
 if __name__ == "__main__":
     main()

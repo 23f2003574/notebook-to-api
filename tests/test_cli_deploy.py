@@ -196,10 +196,72 @@ def test_deploy_reports_a_clear_error_when_docker_is_missing(tmp_path):
         timeout=60,
     )
 
-    assert proc.returncode != 0
-    assert "Docker CLI not found" in proc.stderr
+    assert proc.returncode == 1
+    assert "Traceback (most recent call last)" not in proc.stderr
+    assert "Error: Docker CLI not found" in proc.stderr
     # The compile step must still have run before the docker lookup failed.
     assert (workdir / "generated" / "app.py").exists()
+
+
+def _install_fake_docker_that_fails_build(bin_dir):
+    """A fake `docker` whose `build` subcommand always exits non-zero, to
+    exercise the subprocess.CalledProcessError path from `docker build`
+    itself failing (as opposed to Docker not being installed at all).
+    """
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    docker_stub = bin_dir / "docker"
+    docker_stub.write_text(
+        "#!/bin/sh\n"
+        'echo "docker: build failed: no space left on device" >&2\n'
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    docker_stub.chmod(docker_stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def test_deploy_reports_a_clean_error_when_docker_build_fails(tmp_path):
+    """Before CLI_USER_FACING_ERRORS existed, only "Docker CLI not found"
+    (a FileNotFoundError converted to RuntimeError) was ever caught -- a
+    `docker build` that ran but exited non-zero raised an uncaught
+    subprocess.CalledProcessError, dumping a raw traceback instead of a
+    clean error.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    _install_fake_docker_that_fails_build(bin_dir)
+
+    proc = _run_cli(
+        ["deploy", str(notebook_path), "--output", "generated"],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 1
+    assert "Traceback (most recent call last)" not in proc.stderr
+    assert "Error: Command" in proc.stderr
+    assert "returned non-zero exit status 1" in proc.stderr
+    # The compile step must still have run before the failed docker build.
+    assert (workdir / "generated" / "app.py").exists()
+
+
+def test_deploy_reports_a_clean_error_for_a_missing_notebook(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["deploy", str(workdir / "does-not-exist.ipynb")], cwd=workdir
+    )
+
+    assert proc.returncode == 1
+    assert "Traceback (most recent call last)" not in proc.stderr
+    assert "Error: " in proc.stderr
+    assert "No such file or directory" in proc.stderr
 
 
 def test_deploy_does_not_push_by_default(tmp_path):
