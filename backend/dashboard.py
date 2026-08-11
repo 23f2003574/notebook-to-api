@@ -340,10 +340,40 @@ async def root():
     }
 
 
+def dashboard_host():
+    """Host the dashboard API server binds to when run directly (`python
+    -m backend.dashboard`).
+
+    Matches the app's existing NOTEBOOK_API_* env-var convention (see
+    allowed_origins() above, MAX_UPLOAD_BYTES and
+    DEPLOY_SUBPROCESS_TIMEOUT_SECONDS in routes/upload.py) rather than the
+    fixed "0.0.0.0" previously hardcoded directly into the uvicorn.run()
+    call below, with no way to bind to a specific interface instead
+    without editing this file.
+    """
+    return os.getenv("NOTEBOOK_API_DASHBOARD_HOST", "0.0.0.0")
+
+
+def dashboard_port():
+    """Port the dashboard API server binds to when run directly.
+
+    Defaults to 8001 -- the same port previously hardcoded here, and the
+    one the bundled frontend (see frontend/src/components/Dashboard.jsx
+    and NotebookUpload.jsx) already calls the dashboard API on. This is
+    deliberately a different port than the *generated* app's own default
+    of 8000 (see `serve --port` and the generated Dockerfile's EXPOSE
+    8000): the dashboard and a compiled/served app are two separate
+    services a developer commonly runs side by side, and defaulting both
+    to the same port would make that impossible without one of them
+    already overriding it.
+    """
+    return int(os.getenv("NOTEBOOK_API_DASHBOARD_PORT", "8001"))
+
+
 if __name__ == "__main__":
     uvicorn.run(
         "backend.dashboard:app",
-        host="0.0.0.0",
-        port=8001,
+        host=dashboard_host(),
+        port=dashboard_port(),
         reload=True
     )
