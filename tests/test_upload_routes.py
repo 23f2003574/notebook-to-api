@@ -2,6 +2,7 @@ import io
 import json
 import os
 import stat
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -562,6 +563,40 @@ def test_inspect_generated_files_is_empty_before_any_compile(monkeypatch):
     assert body["generated_files"] == []
 
 
+def test_compile_returns_400_for_a_reserved_function_name():
+    """generate_fastapi_code (backend/generator/api_generator.py) refuses
+    to compile a function named "health_check" -- it collides with an
+    identifier the generated app itself defines. Before this, that
+    ReservedFunctionNameError (the notebook's own fault, not this
+    server's) fell through the endpoint's generic `except Exception` and
+    came back as a misleading 500, identical to what a genuine server-side
+    bug would produce.
+    """
+
+    content = _notebook_bytes(
+        "def health_check() -> dict:\n    return {}\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "reserved_name_compile_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "reserved_name_compile_test.ipynb"}
+    )
+
+    assert compile_resp.status_code == 400
+    assert "health_check" in compile_resp.json()["detail"]
+
+
 def test_export_openapi_and_export_sdk_full_flow():
     """The dashboard frontend can compile a notebook via /api/compile but,
     before this, had no way to fetch the OpenAPI schema or an SDK client
@@ -803,6 +838,100 @@ def test_deploy_endpoint_returns_500_when_docker_is_missing(tmp_path, monkeypatc
 
     assert resp.status_code == 500
     assert "Docker CLI not found" in resp.json()["detail"]
+
+
+def test_deploy_endpoint_returns_500_when_docker_is_missing_for_push(monkeypatch):
+    """Before this fix, only the `docker build` call handled Docker being
+    missing at all -- `docker push` had no FileNotFoundError handling
+    whatsoever, so losing Docker between a successful build and the push
+    step crashed the request instead of returning a clean error.
+    """
+
+    from backend.routes import upload as upload_module
+
+    _compile_a_notebook("deploy_missing_docker_for_push_test.ipynb")
+
+    def fake_run(args, **kwargs):
+        if args[1] == "build":
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        raise FileNotFoundError("docker not found")
+
+    monkeypatch.setattr(upload_module.subprocess, "run", fake_run)
+
+    resp = client.post("/api/deploy", json={"push": True})
+
+    assert resp.status_code == 500
+    assert "Docker CLI not found" in resp.json()["detail"]
+
+
+def test_deploy_endpoint_returns_504_when_docker_build_times_out(monkeypatch):
+    """subprocess.run(..., timeout=...) raises TimeoutExpired, not
+    FileNotFoundError -- before this fix, that exception type wasn't
+    caught anywhere in /api/deploy at all, so a `docker build` that ran
+    past the timeout crashed the request with FastAPI's generic
+    unhandled-exception 500 instead of an actionable error.
+    """
+
+    from backend.routes import upload as upload_module
+
+    _compile_a_notebook("deploy_build_timeout_test.ipynb")
+
+    def fake_run(args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args, timeout=kwargs.get("timeout"))
+
+    monkeypatch.setattr(upload_module.subprocess, "run", fake_run)
+
+    resp = client.post("/api/deploy", json={})
+
+    assert resp.status_code == 504
+    assert "did not finish within" in resp.json()["detail"]
+
+
+def test_deploy_endpoint_returns_504_when_docker_push_times_out(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    _compile_a_notebook("deploy_push_timeout_test.ipynb")
+
+    def fake_run(args, **kwargs):
+        if args[1] == "build":
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        raise subprocess.TimeoutExpired(cmd=args, timeout=kwargs.get("timeout"))
+
+    monkeypatch.setattr(upload_module.subprocess, "run", fake_run)
+
+    resp = client.post("/api/deploy", json={"push": True})
+
+    assert resp.status_code == 504
+    assert "did not finish within" in resp.json()["detail"]
+
+
+def test_deploy_subprocess_timeout_is_configurable(monkeypatch):
+    """DEPLOY_SUBPROCESS_TIMEOUT_SECONDS matches the existing
+    NOTEBOOK_API_* env-var convention (see MAX_UPLOAD_BYTES) instead of
+    the fixed 600s previously hardcoded directly into each subprocess.run
+    call, so a deploy environment that needs longer (a slow/cold layer
+    cache) or wants it clamped shorter (fail fast in CI) can configure it.
+    """
+
+    from backend.routes import upload as upload_module
+
+    _compile_a_notebook("deploy_custom_timeout_test.ipynb")
+
+    monkeypatch.setattr(upload_module, "DEPLOY_SUBPROCESS_TIMEOUT_SECONDS", 5)
+
+    captured_kwargs = {}
+
+    def fake_run(args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(upload_module.subprocess, "run", fake_run)
+
+    resp = client.post("/api/deploy", json={})
+
+    assert resp.status_code == 200
+    assert captured_kwargs["timeout"] == 5
 
 
 def test_download_returns_404_when_nothing_compiled_yet(monkeypatch):

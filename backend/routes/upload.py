@@ -10,6 +10,7 @@ import uuid
 import zipfile
 
 from backend.compiler import compile_notebook, package_name_for_output_dir
+from backend.generator.api_generator import ReservedFunctionNameError
 from backend.inspector import inspect_notebook_data
 from backend.parser.notebook_parser import (
     load_notebook,
@@ -49,6 +50,15 @@ MAX_UPLOAD_BYTES = int(
     os.getenv("NOTEBOOK_API_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))
 )
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+# Same NOTEBOOK_API_* convention as MAX_UPLOAD_BYTES above, rather than the
+# fixed 600s every `docker build`/`docker push` call in /api/deploy
+# previously hardcoded -- some deploy environments legitimately need
+# longer (a slow/cold image layer cache) or want it clamped shorter (fail
+# fast in CI) than a one-size-fits-all default allows.
+DEPLOY_SUBPROCESS_TIMEOUT_SECONDS = int(
+    os.getenv("NOTEBOOK_API_DEPLOY_TIMEOUT_SECONDS", "600")
+)
 
 
 def resolve_upload_path(name: str) -> Path:
@@ -453,6 +463,20 @@ async def compile_notebook_endpoint(
             "message": "Notebook compiled successfully"
         }
 
+    except ReservedFunctionNameError as e:
+
+        # The notebook itself is the problem (a function name collides
+        # with an identifier the generated app defines -- see
+        # RESERVED_INFRASTRUCTURE_NAMES in generator/api_generator.py),
+        # not this server, so this is a 400 the caller can act on by
+        # renaming the function and recompiling -- not a 500, which
+        # previously made this look like a server-side bug and would
+        # misfire any 5xx-based alerting watching this endpoint.
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+
     except Exception as e:
 
         raise HTTPException(
@@ -590,6 +614,48 @@ async def export_sdk_endpoint(
     }
 
 
+def _run_docker_command(args, cwd):
+    """Run a `docker ...` subprocess for /api/deploy, translating the two
+    ways it can fail to even complete into a clean HTTPException instead
+    of an uncaught exception surfacing as FastAPI's generic 500.
+
+    Before this, only the `docker build` call was wrapped at all, and only
+    for FileNotFoundError -- `docker push` had no handling whatsoever (a
+    missing Docker CLI between a successful build and the push step
+    crashed the request), and neither call handled
+    subprocess.TimeoutExpired, so a build or push that ran past
+    DEPLOY_SUBPROCESS_TIMEOUT_SECONDS also crashed the request instead of
+    returning an actionable error.
+    """
+    try:
+
+        return subprocess.run(
+            args,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=DEPLOY_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+
+    except FileNotFoundError:
+
+        raise HTTPException(
+            status_code=500,
+            detail="Docker CLI not found on the server. Install Docker to use /api/deploy."
+        )
+
+    except subprocess.TimeoutExpired:
+
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                f"`{' '.join(args)}` did not finish within "
+                f"{DEPLOY_SUBPROCESS_TIMEOUT_SECONDS} seconds. Set "
+                "NOTEBOOK_API_DEPLOY_TIMEOUT_SECONDS to allow more time."
+            )
+        )
+
+
 @router.post("/deploy")
 async def deploy_generated_app(data: dict = None):
     """Build (and optionally push) a Docker image from the compiled app.
@@ -619,22 +685,9 @@ async def deploy_generated_app(data: dict = None):
     tag = data.get("tag") or f"{generated_path.name.lower()}:latest"
     push = bool(data.get("push", False))
 
-    try:
-
-        build_result = subprocess.run(
-            ["docker", "build", "-t", tag, "."],
-            cwd=str(generated_path),
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-
-    except FileNotFoundError:
-
-        raise HTTPException(
-            status_code=500,
-            detail="Docker CLI not found on the server. Install Docker to use /api/deploy."
-        )
+    build_result = _run_docker_command(
+        ["docker", "build", "-t", tag, "."], generated_path
+    )
 
     if build_result.returncode != 0:
 
@@ -651,12 +704,8 @@ async def deploy_generated_app(data: dict = None):
 
     if push:
 
-        push_result = subprocess.run(
-            ["docker", "push", tag],
-            cwd=str(generated_path),
-            capture_output=True,
-            text=True,
-            timeout=600,
+        push_result = _run_docker_command(
+            ["docker", "push", tag], generated_path
         )
 
         if push_result.returncode != 0:
