@@ -6,14 +6,23 @@ from backend import serve as serve_module
 class _FakePopen:
     """Records the command it was invoked with instead of actually
     launching uvicorn, and no-ops terminate/wait so serve_notebook's
-    shutdown path can be exercised without a real subprocess."""
+    shutdown path can be exercised without a real subprocess.
+
+    default_poll_returncode is a class attribute (reset in _reset_fakes)
+    so a test can set it before calling serve_notebook to simulate the
+    server process having already exited (e.g. `port` already in use) --
+    None means "still running", matching subprocess.Popen.poll()'s own
+    contract.
+    """
 
     instances = []
+    default_poll_returncode = None
 
     def __init__(self, cmd, *args, **kwargs):
         self.cmd = cmd
         self.terminated = False
         self.waited_timeout = None
+        self.poll_returncode = _FakePopen.default_poll_returncode
         _FakePopen.instances.append(self)
 
     def terminate(self):
@@ -21,6 +30,9 @@ class _FakePopen:
 
     def wait(self, timeout=None):
         self.waited_timeout = timeout
+
+    def poll(self):
+        return self.poll_returncode
 
 
 class _FakeObserver:
@@ -56,6 +68,7 @@ def _raise_keyboard_interrupt(*args, **kwargs):
 @pytest.fixture(autouse=True)
 def _reset_fakes():
     _FakePopen.instances.clear()
+    _FakePopen.default_poll_returncode = None
     _FakeObserver.instances.clear()
     yield
 
@@ -150,6 +163,81 @@ def test_serve_notebook_stops_server_and_observer_on_keyboard_interrupt(tmp_path
     assert _FakePopen.instances[0].waited_timeout == 5
     assert _FakeObserver.instances[0].stopped is True
     assert _FakeObserver.instances[0].joined is True
+
+
+def test_serve_notebook_raises_when_the_server_process_exits_unexpectedly(tmp_path, monkeypatch):
+    """subprocess.Popen doesn't raise or notify anything when the process
+    it started exits on its own -- before polling it in the loop, a
+    uvicorn that died immediately (most commonly: another process already
+    had the port bound) left serve_notebook sleeping forever, looking
+    like a healthy running server with no indication anything had gone
+    wrong, until the user eventually gave up and hit Ctrl+C themselves.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out: None)
+    monkeypatch.setattr(serve_module, "Observer", _FakeObserver)
+    monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
+    # time.sleep must never be reached on this path -- the crash is
+    # detected on the very first poll, before the loop ever sleeps.
+    monkeypatch.setattr(
+        serve_module.time, "sleep",
+        lambda *a, **k: pytest.fail("must not sleep after the process has already exited")
+    )
+
+    _FakePopen.default_poll_returncode = 1
+
+    with pytest.raises(RuntimeError, match="exited unexpectedly"):
+        serve_module.serve_notebook(str(notebook_path), str(output_dir), 8123)
+
+
+def test_serve_notebook_reports_the_exit_code_and_port_when_the_server_dies(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out: None)
+    monkeypatch.setattr(serve_module, "Observer", _FakeObserver)
+    monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
+
+    _FakePopen.default_poll_returncode = 1
+
+    with pytest.raises(RuntimeError) as exc_info:
+        serve_module.serve_notebook(str(notebook_path), str(output_dir), 8123)
+
+    assert "exit code 1" in str(exc_info.value)
+    assert "port 8123" in str(exc_info.value)
+
+
+def test_serve_notebook_stops_and_joins_the_observer_when_the_server_dies(tmp_path, monkeypatch):
+    """Cleanup must happen on this failure path too, not just the
+    KeyboardInterrupt path -- otherwise the filesystem watcher thread
+    from _FakeObserver's real counterpart would keep running after
+    serve_notebook has already given up and raised.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out: None)
+    monkeypatch.setattr(serve_module, "Observer", _FakeObserver)
+    monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
+
+    _FakePopen.default_poll_returncode = 1
+
+    with pytest.raises(RuntimeError):
+        serve_module.serve_notebook(str(notebook_path), str(output_dir), 8123)
+
+    assert _FakeObserver.instances[0].stopped is True
+    assert _FakeObserver.instances[0].joined is True
+    # Nothing to terminate/wait on -- the process was already dead, unlike
+    # the KeyboardInterrupt shutdown path.
+    assert _FakePopen.instances[0].terminated is False
 
 
 def test_notebook_change_handler_recompiles_on_matching_notebook_modification(tmp_path, monkeypatch):

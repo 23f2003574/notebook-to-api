@@ -89,6 +89,29 @@ def serve_notebook(notebook_path, output_dir="generated", port=8000):
 
     try:
         while True:
+
+            # subprocess.Popen doesn't raise or notify anything when the
+            # process it started exits on its own -- without polling it
+            # here, a uvicorn that dies immediately (most commonly:
+            # another process already has `port` bound) left this loop
+            # sleeping forever, looking like a healthy running server with
+            # no indication anything had gone wrong, until the user
+            # eventually gave up and hit Ctrl+C themselves.
+            exit_code = server_process.poll()
+
+            if exit_code is not None:
+
+                observer.stop()
+                observer.join()
+
+                raise RuntimeError(
+                    f"The API server exited unexpectedly (exit code "
+                    f"{exit_code}) while serving on port {port}. Check the "
+                    "output above for the underlying error -- a common "
+                    "cause is another process already listening on that "
+                    "port."
+                )
+
             time.sleep(1)
 
     except KeyboardInterrupt:
