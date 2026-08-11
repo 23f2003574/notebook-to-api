@@ -73,19 +73,36 @@ def _reset_fakes():
     yield
 
 
-def _run_serve(monkeypatch, notebook_path, output_dir, port=None, compiled_calls=None):
+def _run_serve(
+    monkeypatch, notebook_path, output_dir, port=None,
+    compiled_calls=None, summary_calls=None,
+):
     """serve_notebook only returns because time.sleep is patched to raise
     KeyboardInterrupt on its first call inside the `while True` loop --
     mirroring how a real user would Ctrl+C it -- so this exercises the
     full startup-through-shutdown path in one synchronous call.
+
+    print_compile_summary is stubbed alongside compile_notebook (rather
+    than left to run for real) because it calls inspect_notebook_data,
+    which would otherwise try to actually parse these tests' placeholder
+    "{}" notebook content as a real notebook and raise.
     """
     if compiled_calls is None:
         compiled_calls = []
 
+    if summary_calls is None:
+        summary_calls = []
+
     def fake_compile_notebook(nb_path, out_dir):
         compiled_calls.append((nb_path, out_dir))
 
+    def fake_print_compile_summary(nb_path, out_dir):
+        summary_calls.append((nb_path, out_dir))
+
     monkeypatch.setattr(serve_module, "compile_notebook", fake_compile_notebook)
+    monkeypatch.setattr(
+        serve_module, "print_compile_summary", fake_print_compile_summary
+    )
     monkeypatch.setattr(serve_module, "Observer", _FakeObserver)
     monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
     monkeypatch.setattr(serve_module.time, "sleep", _raise_keyboard_interrupt)
@@ -136,6 +153,23 @@ def test_serve_notebook_compiles_before_starting_the_server(tmp_path, monkeypatc
     assert compiled_calls == [(str(notebook_path), str(output_dir))]
 
 
+def test_serve_notebook_prints_a_compile_summary_after_the_initial_compile(tmp_path, monkeypatch):
+    """Before this, `serve`'s initial compile gave no feedback at all
+    about what had actually been generated -- just "Initial compilation
+    complete." -- even though `compile` already got this exact summary
+    (endpoint list, background markers, dependencies) in an earlier fix.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    summary_calls = []
+
+    _run_serve(monkeypatch, notebook_path, output_dir, summary_calls=summary_calls)
+
+    assert summary_calls == [(str(notebook_path), str(output_dir))]
+
+
 def test_serve_notebook_watches_the_notebooks_parent_directory(tmp_path, monkeypatch):
 
     notebook_path = tmp_path / "nb.ipynb"
@@ -179,6 +213,7 @@ def test_serve_notebook_raises_when_the_server_process_exits_unexpectedly(tmp_pa
     output_dir = tmp_path / "generated"
 
     monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out: None)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out: None)
     monkeypatch.setattr(serve_module, "Observer", _FakeObserver)
     monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
     # time.sleep must never be reached on this path -- the crash is
@@ -201,6 +236,7 @@ def test_serve_notebook_reports_the_exit_code_and_port_when_the_server_dies(tmp_
     output_dir = tmp_path / "generated"
 
     monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out: None)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out: None)
     monkeypatch.setattr(serve_module, "Observer", _FakeObserver)
     monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
 
@@ -225,6 +261,7 @@ def test_serve_notebook_stops_and_joins_the_observer_when_the_server_dies(tmp_pa
     output_dir = tmp_path / "generated"
 
     monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out: None)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out: None)
     monkeypatch.setattr(serve_module, "Observer", _FakeObserver)
     monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
 
@@ -251,6 +288,7 @@ def test_notebook_change_handler_recompiles_on_matching_notebook_modification(tm
         serve_module, "compile_notebook",
         lambda nb, out: compiled_calls.append((nb, out))
     )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out: None)
 
     handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
     handler.last_compile_time = 0
@@ -259,6 +297,62 @@ def test_notebook_change_handler_recompiles_on_matching_notebook_modification(tm
     handler.on_modified(event)
 
     assert compiled_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_notebook_change_handler_prints_a_compile_summary_after_recompiling(tmp_path, monkeypatch):
+    """A live `serve` session's entire point is a fast, informative
+    feedback loop after every save -- before this, a hot-recompile gave
+    no indication at all of what had changed, just "Recompilation
+    complete."
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out: None)
+
+    summary_calls = []
+    monkeypatch.setattr(
+        serve_module, "print_compile_summary",
+        lambda nb, out: summary_calls.append((nb, out))
+    )
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_modified(event)
+
+    assert summary_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_notebook_change_handler_does_not_print_a_summary_when_recompilation_fails(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    def fake_compile_notebook(nb, out):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(serve_module, "compile_notebook", fake_compile_notebook)
+
+    summary_calls = []
+    monkeypatch.setattr(
+        serve_module, "print_compile_summary",
+        lambda nb, out: summary_calls.append((nb, out))
+    )
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_modified(event)  # must not raise
+
+    assert summary_calls == []
 
 
 def test_notebook_change_handler_ignores_a_different_notebook_file(tmp_path, monkeypatch):
@@ -316,6 +410,7 @@ def test_notebook_change_handler_debounces_rapid_modifications(tmp_path, monkeyp
         serve_module, "compile_notebook",
         lambda nb, out: compiled_calls.append((nb, out))
     )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out: None)
 
     fake_now = [100.0]
     monkeypatch.setattr(serve_module.time, "time", lambda: fake_now[0])

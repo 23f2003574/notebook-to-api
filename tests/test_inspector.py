@@ -4,6 +4,7 @@ import pytest
 from backend.inspector import (
     inspect_notebook,
     inspect_notebook_data,
+    print_compile_summary,
     _reserved_name_conflicts,
 )
 from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
@@ -130,3 +131,63 @@ def test_inspect_notebook_omits_the_warning_section_for_a_clean_notebook(
 
     output = capsys.readouterr().out
     assert "Reserved Name Conflicts" not in output
+
+
+def test_print_compile_summary_lists_endpoints_and_flags_background_ones(
+    tmp_path, capsys
+):
+    """Shared by both `compile` and `serve` (see backend/cli.py and
+    backend/serve.py) so what a caller sees is identical either way, and
+    matches the same background/task_id-based marking POST /api/compile's
+    "endpoints" field already uses.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def train_model(epochs: int) -> str:\n    return 'done'\n",
+    )
+
+    print_compile_summary(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "Generated 2 endpoint(s):" in output
+    assert "POST /add" in output
+    assert "POST /train_model  [background]" in output
+
+    add_line = next(
+        line for line in output.splitlines() if line.strip() == "POST /add"
+    )
+    assert "[background]" not in add_line
+
+
+def test_print_compile_summary_lists_third_party_dependencies(tmp_path, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "import pandas as pd\n\n"
+        "def summarize(count: int) -> int:\n    return count * 2\n",
+    )
+
+    print_compile_summary(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "Dependencies: pandas" in output
+
+
+def test_print_compile_summary_omits_dependencies_line_when_there_are_none(
+    tmp_path, capsys
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    print_compile_summary(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "Dependencies:" not in output

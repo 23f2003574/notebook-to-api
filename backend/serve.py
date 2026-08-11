@@ -6,6 +6,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 from backend.compiler import compile_notebook, package_name_for_output_dir
+from backend.inspector import print_compile_summary
 
 
 class NotebookChangeHandler(FileSystemEventHandler):
@@ -30,7 +31,8 @@ class NotebookChangeHandler(FileSystemEventHandler):
 
             try:
                 compile_notebook(self.notebook_path, self.output_dir)
-                print("✅ Recompilation complete.\n")
+                print("✅ Recompilation complete.")
+                print_compile_summary(self.notebook_path, self.output_dir)
             except Exception as e:
                 print(f"❌ Compilation error: {e}\n")
 
@@ -54,7 +56,8 @@ def serve_notebook(notebook_path, output_dir="generated", port=8000):
     # Initial compilation
     print("📝 Initial compilation...")
     compile_notebook(notebook_path, output_dir)
-    print("✅ Initial compilation complete.\n")
+    print("✅ Initial compilation complete.")
+    print_compile_summary(notebook_path, output_dir)
 
     # Set up file watcher
     observer = Observer()

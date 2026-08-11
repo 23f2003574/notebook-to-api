@@ -16,7 +16,11 @@ from nbformat import ValidationError as NotebookValidationError
 # Import the compiler function
 from backend.compiler import compile_notebook
 # Import inspector for analysis
-from backend.inspector import inspect_notebook, inspect_notebook_data
+from backend.inspector import (
+    inspect_notebook,
+    inspect_notebook_data,
+    print_compile_summary,
+)
 from backend.serve import serve_notebook
 from backend.observability.deployment_governance_doctor import (
     run_deployment_governance_doctor,
@@ -349,40 +353,6 @@ CLI_USER_FACING_ERRORS = (
 )
 
 
-def _print_compile_summary(notebook_path, output_dir):
-    """Print what compiling `notebook_path` into `output_dir` actually
-    produced: its endpoints (flagging background/task_id-based ones the
-    same way POST /api/compile's "endpoints" field does) and third-party
-    dependencies.
-
-    Before this, `compile` printed a single "Compilation finished" line
-    and nothing else about what had actually been generated -- seeing the
-    endpoint list or dependencies required a separate `inspect` call,
-    even though the dashboard API's /api/compile response already
-    includes exactly this information.
-    """
-    from backend.generator.api_generator import LONG_RUNNING_KEYWORDS
-
-    data = inspect_notebook_data(
-        notebook_path=notebook_path, output_dir=str(output_dir)
-    )
-
-    functions = data["functions"]
-
-    print(f"\nGenerated {len(functions)} endpoint(s):")
-
-    for func in functions:
-        name = func["name"]
-        is_background = any(
-            kw in name.lower() for kw in LONG_RUNNING_KEYWORDS
-        )
-        suffix = "  [background]" if is_background else ""
-        print(f"  POST /{name}{suffix}")
-
-    if data["dependencies"]:
-        print(f"\nDependencies: {', '.join(data['dependencies'])}")
-
-
 def _dispatch_core_command(args):
     """Run one of the core notebook-to-API commands.
 
@@ -395,7 +365,7 @@ def _dispatch_core_command(args):
         output_dir.mkdir(parents=True, exist_ok=True)
         compile_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
         print("\nCompilation finished. FastAPI app is ready in", output_dir)
-        _print_compile_summary(args.notebook, output_dir)
+        print_compile_summary(args.notebook, output_dir)
     elif args.command == "inspect":
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)

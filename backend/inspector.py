@@ -12,7 +12,10 @@ from backend.parser.ast_parser import (
     deduplicate_functions_by_name,
 )
 
-from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
+from backend.generator.api_generator import (
+    LONG_RUNNING_KEYWORDS,
+    RESERVED_INFRASTRUCTURE_NAMES,
+)
 
 
 def _reserved_name_conflicts(functions):
@@ -193,3 +196,37 @@ def inspect_notebook_data(
         ),
         "reserved_name_conflicts": _reserved_name_conflicts(all_functions),
     }
+
+
+def print_compile_summary(notebook_path, output_dir="generated"):
+    """Print what compiling `notebook_path` into `output_dir` actually
+    produced: its endpoints (flagging background/task_id-based ones the
+    same way POST /api/compile's "endpoints" field does) and third-party
+    dependencies.
+
+    Shared by the CLI's `compile` command and `serve`'s initial compile
+    and every hot-recompile it triggers. Before this existed for `serve`,
+    a live dev session gave no feedback at all about what a recompile had
+    actually changed -- just "Recompilation complete." -- even though a
+    fast, informative feedback loop after every save is the entire point
+    of running a live server in the first place. `compile` had the same
+    gap until this was first added there and later reused here.
+    """
+    data = inspect_notebook_data(
+        notebook_path=notebook_path, output_dir=str(output_dir)
+    )
+
+    functions = data["functions"]
+
+    print(f"\nGenerated {len(functions)} endpoint(s):")
+
+    for func in functions:
+        name = func["name"]
+        is_background = any(
+            kw in name.lower() for kw in LONG_RUNNING_KEYWORDS
+        )
+        suffix = "  [background]" if is_background else ""
+        print(f"  POST /{name}{suffix}")
+
+    if data["dependencies"]:
+        print(f"\nDependencies: {', '.join(data['dependencies'])}")
