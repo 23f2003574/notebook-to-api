@@ -1,3 +1,4 @@
+import importlib.metadata
 import keyword
 import os
 import sys
@@ -89,6 +90,32 @@ def write_runtime_module(code_cells, output_dir):
     print("Runtime module generated.")
 
 
+def _pinned_requirement(package_name):
+    """Return "package_name==version" if `package_name`'s version can be
+    resolved in the environment compiling the notebook, else just
+    `package_name` unchanged.
+
+    Without pinning, every generated app's requirements.txt listed bare
+    package names ("fastapi", "pandas", ...), so `pip install -r
+    requirements.txt` resolved whichever release happened to be latest at
+    *deploy* time -- not the version the notebook was actually compiled
+    and tested against. A breaking release published upstream between
+    compile time and deploy time would silently change the generated
+    app's behavior (or break it outright) with nothing in the generated
+    output to indicate what had changed. Falling back to the bare name
+    when the package isn't installed in this environment (e.g. a
+    notebook imports a third-party library the compiling host doesn't
+    have) preserves the previous behavior instead of failing the whole
+    compile over a dependency this tool has no way to introspect.
+    """
+    try:
+        version = importlib.metadata.version(package_name)
+    except importlib.metadata.PackageNotFoundError:
+        return package_name
+
+    return f"{package_name}=={version}"
+
+
 def write_requirements(imports, output_dir):
 
     requirements_path = os.path.join(
@@ -96,23 +123,30 @@ def write_requirements(imports, output_dir):
         "requirements.txt"
     )
 
+    # watchdog is a dependency of this tool's own `serve` command (it
+    # watches the notebook file for changes to trigger a hot recompile --
+    # see backend/serve.py). The generated app itself never imports it
+    # (see generator/api_generator.py); every compiled app was shipping it
+    # as dead weight in requirements.txt and, from there, in its Docker
+    # image.
     core_dependencies = [
         "fastapi",
         "uvicorn",
         "pydantic",
-        "watchdog"
     ]
 
     final_deps = sorted(
         set(list(imports) + core_dependencies)
     )
 
+    pinned_deps = [_pinned_requirement(dep) for dep in final_deps]
+
     with open(requirements_path, "w", encoding="utf-8") as f:
-        for dep in final_deps:
+        for dep in pinned_deps:
             f.write(dep + "\n")
 
     print(
-        f"requirements.txt generated with dependencies: {final_deps}"
+        f"requirements.txt generated with dependencies: {pinned_deps}"
     )
 
 

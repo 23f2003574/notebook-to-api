@@ -622,11 +622,149 @@ def test_compiler_pipeline_excludes_stdlib_modules_from_requirements(tmp_path):
     requirements = (output_dir / "requirements.txt").read_text(
         encoding="utf-8"
     )
-    deps = set(requirements.split())
+    # Dependencies are pinned to "name==version" when the compiling
+    # environment has the package installed (see
+    # test_requirements_pins_installed_dependency_versions), so a
+    # dependency line no longer necessarily equals the bare package name.
+    dep_names = {line.split("==")[0] for line in requirements.split()}
 
-    assert "asyncio" not in deps
-    assert "random" not in deps
-    assert "pandas" in deps
+    assert "asyncio" not in dep_names
+    assert "random" not in dep_names
+    assert "pandas" in dep_names
+
+
+def test_requirements_omits_watchdog(tmp_path):
+    """watchdog is a dependency of this tool's own `serve` command (hot
+    recompilation while developing locally) -- the generated app itself
+    never imports it (see generator/api_generator.py). Before this fix,
+    every compiled app shipped it as an unused line in requirements.txt
+    and, from there, an unused package baked into its Docker image.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    requirements = (output_dir / "requirements.txt").read_text(encoding="utf-8")
+
+    assert "watchdog" not in requirements
+
+
+def test_requirements_pins_core_dependencies_to_installed_versions(tmp_path):
+
+    import importlib.metadata
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    requirements = (output_dir / "requirements.txt").read_text(encoding="utf-8")
+    lines = set(requirements.split())
+
+    for package in ("fastapi", "uvicorn", "pydantic"):
+        installed_version = importlib.metadata.version(package)
+        assert f"{package}=={installed_version}" in lines
+
+
+def test_requirements_pins_a_notebook_dependency_installed_in_this_environment(
+    tmp_path
+):
+    """Without pinning, requirements.txt just listed the bare "pandas"
+    name -- `pip install -r requirements.txt` at deploy time would then
+    resolve whatever the latest release happens to be, not the version
+    the notebook was actually compiled and tested against.
+    """
+
+    import importlib.metadata
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import pandas as pd\n\n"
+            "def summarize(count: int) -> int:\n    return count * 2\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    requirements = (output_dir / "requirements.txt").read_text(encoding="utf-8")
+
+    installed_pandas_version = importlib.metadata.version("pandas")
+    assert f"pandas=={installed_pandas_version}" in requirements.split()
+
+
+def test_requirements_falls_back_to_a_bare_name_for_an_uninstalled_dependency(
+    tmp_path
+):
+    """A notebook can import a third-party library the machine compiling
+    it doesn't happen to have installed -- this tool has no way to look up
+    a version it can't introspect, so the previous, unpinned behavior
+    (just the bare name) must still be used instead of failing the
+    compile outright.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import definitely_not_installed_pkg_hopefully\n\n"
+            "def noop() -> int:\n    return 1\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    requirements = (output_dir / "requirements.txt").read_text(encoding="utf-8")
+    lines = set(requirements.split())
+
+    assert "definitely_not_installed_pkg_hopefully" in lines
+
+
+def test_pinned_requirement_helper_pins_an_installed_package():
+
+    import importlib.metadata
+
+    from backend.compiler import _pinned_requirement
+
+    assert _pinned_requirement("pytest") == f"pytest=={importlib.metadata.version('pytest')}"
+
+
+def test_pinned_requirement_helper_falls_back_for_an_unknown_package():
+
+    from backend.compiler import _pinned_requirement
+
+    assert _pinned_requirement("definitely_not_a_real_package_xyz") == (
+        "definitely_not_a_real_package_xyz"
+    )
 
 
 def test_compiler_pipeline_optional_none_default_param_is_actually_optional(
