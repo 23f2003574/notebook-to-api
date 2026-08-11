@@ -414,7 +414,49 @@ def test_upload_inspect_compile_still_works_for_a_legitimate_notebook():
         "/api/compile", json={"notebook_path": "legit_test.ipynb"}
     )
     assert compile_resp.status_code == 200
-    assert compile_resp.json()["endpoints"] == ["/add"]
+    assert compile_resp.json()["endpoints"] == [
+        {"path": "/add", "method": "POST", "is_async": False}
+    ]
+
+
+def test_compile_endpoints_flag_background_functions_as_async():
+    """A dashboard frontend building a UI from /api/compile's response
+    previously had no way to tell a background/task_id-based endpoint
+    (see LONG_RUNNING_KEYWORDS in generator/api_generator.py) apart from
+    a synchronous one -- only the separately-fetched OpenAPI schema
+    marked these with x-notebook-to-api-async (see
+    test_background_endpoint_documents_the_task_response_it_actually_sends
+    in test_generator.py).
+    """
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "async_endpoints_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "async_endpoints_test.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    endpoints = {e["path"]: e for e in compile_resp.json()["endpoints"]}
+
+    assert endpoints["/add"] == {"path": "/add", "method": "POST", "is_async": False}
+    assert endpoints["/train_model"] == {
+        "path": "/train_model", "method": "POST", "is_async": True
+    }
 
 
 def test_inspect_missing_notebook_still_returns_404_not_400():

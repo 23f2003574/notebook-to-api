@@ -10,7 +10,10 @@ import uuid
 import zipfile
 
 from backend.compiler import compile_notebook, package_name_for_output_dir
-from backend.generator.api_generator import ReservedFunctionNameError
+from backend.generator.api_generator import (
+    LONG_RUNNING_KEYWORDS,
+    ReservedFunctionNameError,
+)
 from backend.inspector import inspect_notebook_data
 from backend.parser.notebook_parser import (
     load_notebook,
@@ -451,9 +454,26 @@ async def compile_notebook_endpoint(
 
                 if name:
 
-                    endpoints.append(
-                        f"/{name}"
+                    # Mirrors generate_fastapi_code's own is_background
+                    # check (generator/api_generator.py) exactly, so this
+                    # never drifts from which endpoints the compiled app
+                    # actually generates as background/task_id-based vs
+                    # synchronous. Before this, a caller building a UI
+                    # from /api/compile's response (rather than the
+                    # separately-fetched OpenAPI schema, which already
+                    # marks these with x-notebook-to-api-async) had no way
+                    # to tell the two apart short of re-implementing this
+                    # same keyword check itself.
+                    is_async = any(
+                        kw in name.lower()
+                        for kw in LONG_RUNNING_KEYWORDS
                     )
+
+                    endpoints.append({
+                        "path": f"/{name}",
+                        "method": "POST",
+                        "is_async": is_async,
+                    })
 
         return {
             "status": "success",
