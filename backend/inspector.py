@@ -12,6 +12,28 @@ from backend.parser.ast_parser import (
     deduplicate_functions_by_name,
 )
 
+from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
+
+
+def _reserved_name_conflicts(functions):
+    """Names in `functions` that generate_fastapi_code will refuse to
+    compile (see ReservedFunctionNameError in generator/api_generator.py),
+    because they collide with an identifier the generated app itself
+    defines (auth, task management, or infrastructure routes).
+
+    Before this, /api/inspect and the `inspect` CLI command -- the tool's
+    own "preview what compiling this notebook will do" step -- had no
+    idea this check existed. A notebook with a function named
+    "health_check" or "verify_api_key" inspected cleanly with no warning
+    at all, and the very first time its author learned about the
+    conflict was a compile failure (or, from the dashboard, a bare 500)
+    at the *next* step, for a problem the tool already had the exact
+    answer to.
+    """
+    return sorted(
+        {func["name"] for func in functions} & RESERVED_INFRASTRUCTURE_NAMES
+    )
+
 
 def inspect_notebook(notebook_path, output_dir="generated"):
     """
@@ -35,8 +57,16 @@ def inspect_notebook(notebook_path, output_dir="generated"):
 
     all_functions = deduplicate_functions_by_name(all_functions)
 
+    reserved_name_conflicts = _reserved_name_conflicts(all_functions)
+
     print("\nNotebook Analysis Report")
     print("=" * 30)
+
+    if reserved_name_conflicts:
+        print("\n⚠ Reserved Name Conflicts (compilation will fail):")
+        print("-" * 20)
+        for name in reserved_name_conflicts:
+            print(f"- {name}")
 
     print("\nFunctions Found:")
     print("-" * 20)
@@ -161,4 +191,5 @@ def inspect_notebook_data(
         "generated_files": sorted(
             generated_files
         ),
+        "reserved_name_conflicts": _reserved_name_conflicts(all_functions),
     }

@@ -132,6 +132,49 @@ def test_inspect_command_json_flag_emits_machine_readable_output(tmp_path):
     assert "app.py" in data["generated_files"]
     assert "requirements.txt" in data["generated_files"]
     assert data["dependencies"] == []
+    assert data["reserved_name_conflicts"] == []
+
+
+def test_inspect_command_reports_a_reserved_name_conflict(tmp_path):
+    """`inspect` is the CLI's own preview of what `compile` will do, but
+    had no idea a function named "health_check" collides with an
+    identifier the generated app itself defines (see
+    RESERVED_INFRASTRUCTURE_NAMES in generator/api_generator.py) until
+    `compile` actually failed on it.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": "def health_check() -> dict:\n    return {}\n",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    text_proc = _run_cli(["inspect", str(notebook_path)], cwd=workdir)
+    assert text_proc.returncode == 0, text_proc.stdout + text_proc.stderr
+    assert "Reserved Name Conflicts" in text_proc.stdout
+    assert "health_check" in text_proc.stdout
+
+    json_proc = _run_cli(["inspect", str(notebook_path), "--json"], cwd=workdir)
+    assert json_proc.returncode == 0, json_proc.stdout + json_proc.stderr
+    data = json.loads(json_proc.stdout)
+    assert data["reserved_name_conflicts"] == ["health_check"]
 
 
 def test_export_openapi_command_writes_json_schema_by_default(tmp_path):

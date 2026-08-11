@@ -469,6 +469,65 @@ def test_inspect_reports_dependencies_and_generated_files_after_a_compile():
     assert "requirements.txt" in body["generated_files"]
 
 
+def test_inspect_reports_reserved_name_conflicts_for_a_colliding_function():
+    """/api/inspect is the tool's own "preview what compiling this
+    notebook will do" step, but had no idea a function named
+    "health_check" collides with an identifier the generated app itself
+    defines (see RESERVED_INFRASTRUCTURE_NAMES in
+    generator/api_generator.py) until /api/compile actually failed on it.
+    """
+
+    content = _notebook_bytes(
+        "def health_check() -> dict:\n    return {}\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "reserved_name_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    inspect_resp = client.post(
+        "/api/inspect", json={"notebook_path": "reserved_name_test.ipynb"}
+    )
+    assert inspect_resp.status_code == 200
+
+    body = inspect_resp.json()
+    assert body["reserved_name_conflicts"] == ["health_check"]
+
+
+def test_inspect_reports_no_reserved_name_conflicts_for_a_clean_notebook():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "no_conflicts_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    inspect_resp = client.post(
+        "/api/inspect", json={"notebook_path": "no_conflicts_test.ipynb"}
+    )
+    assert inspect_resp.status_code == 200
+    assert inspect_resp.json()["reserved_name_conflicts"] == []
+
+
 def test_inspect_generated_files_is_empty_before_any_compile(monkeypatch):
 
     from backend.routes import upload as upload_module
