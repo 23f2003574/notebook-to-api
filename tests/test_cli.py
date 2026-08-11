@@ -86,6 +86,98 @@ def test_compile_command_defaults_output_to_generated(tmp_path):
     assert (workdir / "generated" / "app.py").exists()
 
 
+def test_compile_command_prints_a_summary_of_generated_endpoints(tmp_path):
+    """Before this, `compile` printed a single "Compilation finished"
+    line and nothing else -- seeing what had actually been generated
+    (the endpoint list, which ones are background/task_id-based,
+    dependencies) required a separate `inspect` call, even though
+    POST /api/compile's response already returns exactly this
+    information.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n"
+                            "    return a + b\n\n"
+                            "def train_model(epochs: int) -> str:\n"
+                            "    return 'done'\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Generated 2 endpoint(s):" in proc.stdout
+    assert "POST /add" in proc.stdout
+    assert "POST /train_model  [background]" in proc.stdout
+    # add itself must not be flagged as background.
+    add_line = next(
+        line for line in proc.stdout.splitlines() if line.strip() == "POST /add"
+    )
+    assert "[background]" not in add_line
+    # No third-party imports in this notebook -- the "Dependencies:" line
+    # is only printed when there's something to report.
+    assert "Dependencies:" not in proc.stdout
+
+
+def test_compile_command_summary_lists_third_party_dependencies(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "import pandas as pd\n\n"
+                            "def summarize(count: int) -> int:\n"
+                            "    return count * 2\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Dependencies: pandas" in proc.stdout
+
+
 def test_inspect_command_reports_the_notebooks_function(tmp_path):
 
     workdir = tmp_path / "workdir"
