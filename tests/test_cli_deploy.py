@@ -249,6 +249,88 @@ def test_deploy_reports_a_clean_error_when_docker_build_fails(tmp_path):
     assert (workdir / "generated" / "app.py").exists()
 
 
+def _install_fake_docker_that_hangs(bin_dir, seconds):
+    """A fake `docker` that sleeps instead of returning, to exercise the
+    subprocess timeout -- before it existed, `deploy`'s docker build/push
+    calls had no timeout at all, so a hung `docker build` (e.g. a stuck
+    base-image pull) blocked the CLI forever with no way to configure a
+    limit, unlike POST /api/deploy.
+    """
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    docker_stub = bin_dir / "docker"
+    docker_stub.write_text(
+        f"#!/bin/sh\nsleep {seconds}\nexit 0\n",
+        encoding="utf-8",
+    )
+    docker_stub.chmod(docker_stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def test_deploy_reports_a_clean_error_when_docker_build_times_out(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    _install_fake_docker_that_hangs(bin_dir, seconds=5)
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+    env["PATH"] = os.pathsep.join([str(bin_dir), env.get("PATH", "")])
+    env["NOTEBOOK_API_DEPLOY_TIMEOUT_SECONDS"] = "1"
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "backend.cli", "deploy", str(notebook_path), "--output", "generated"],
+        cwd=str(workdir),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 1
+    assert "Traceback (most recent call last)" not in proc.stderr
+    assert "Error: " in proc.stderr
+    assert "timed out after 1 seconds" in proc.stderr
+    # The compile step must still have run before the docker build hung.
+    assert (workdir / "generated" / "app.py").exists()
+
+
+def test_deploy_docker_timeout_is_configurable_via_env_var(tmp_path):
+    """Same NOTEBOOK_API_DEPLOY_TIMEOUT_SECONDS env var POST /api/deploy
+    already reads (see DEPLOY_SUBPROCESS_TIMEOUT_SECONDS in
+    routes/upload.py) -- a docker call that would exceed the old, fixed
+    600s default but comfortably finishes within a longer configured
+    timeout must still succeed, not be arbitrarily cut off.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    _install_fake_docker_that_hangs(bin_dir, seconds=1)
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+    env["PATH"] = os.pathsep.join([str(bin_dir), env.get("PATH", "")])
+    env["NOTEBOOK_API_DEPLOY_TIMEOUT_SECONDS"] = "30"
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "backend.cli", "deploy", str(notebook_path), "--output", "generated"],
+        cwd=str(workdir),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "built successfully" in proc.stdout
+
+
 def test_deploy_reports_a_clean_error_for_a_missing_notebook(tmp_path):
 
     workdir = tmp_path / "workdir"

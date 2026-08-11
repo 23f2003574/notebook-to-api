@@ -337,8 +337,9 @@ _CORE_COMMANDS = frozenset({
 # Exception types raised by real, expected failure conditions in the core
 # commands -- a missing/unreadable notebook file, an invalid --output
 # package name, a malformed .ipynb, a compiled app that doesn't exist yet,
-# a corrupt openapi.json, Docker not being installed, or `docker build`/
-# `docker push` exiting non-zero. Before this, none of the six core
+# a corrupt openapi.json, Docker not being installed, `docker build`/
+# `docker push` exiting non-zero, or one of them running past
+# DEPLOY_SUBPROCESS_TIMEOUT_SECONDS. Before this, none of the six core
 # commands caught any of these: a plain `notebook-to-api compile
 # missing.ipynb` crashed with a raw multi-frame Python traceback (confirmed
 # by running it) instead of a one-line, actionable error message -- the
@@ -350,7 +351,43 @@ CLI_USER_FACING_ERRORS = (
     RuntimeError,
     NotebookValidationError,
     subprocess.CalledProcessError,
+    subprocess.TimeoutExpired,
 )
+
+# Same NOTEBOOK_API_DEPLOY_TIMEOUT_SECONDS env var POST /api/deploy already
+# reads (see DEPLOY_SUBPROCESS_TIMEOUT_SECONDS in routes/upload.py), so one
+# setting controls both surfaces consistently. Before this, `deploy`'s
+# docker build/push subprocess.run calls had no timeout at all -- a hung
+# build (e.g. a stuck base-image pull) blocked the CLI forever with no way
+# to configure a limit, unlike /api/deploy.
+DEPLOY_SUBPROCESS_TIMEOUT_SECONDS = int(
+    os.getenv("NOTEBOOK_API_DEPLOY_TIMEOUT_SECONDS", "600")
+)
+
+
+def _run_deploy_docker_command(args, cwd):
+    """Run a `docker ...` subprocess for the `deploy` command.
+
+    Converts a missing Docker CLI into a friendlier RuntimeError, same as
+    before. subprocess.TimeoutExpired is left to propagate as-is -- its
+    default message (the command and configured timeout) is already
+    clear, and it's caught the same way as every other expected failure
+    here, via CLI_USER_FACING_ERRORS in main().
+    """
+    try:
+
+        return subprocess.run(
+            args,
+            cwd=str(cwd),
+            check=True,
+            timeout=DEPLOY_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+
+    except FileNotFoundError as exc:
+
+        raise RuntimeError(
+            "Docker CLI not found. Install Docker and ensure `docker` is on PATH to use `deploy`."
+        ) from exc
 
 
 def _dispatch_core_command(args):
@@ -405,22 +442,12 @@ def _dispatch_core_command(args):
             raise FileNotFoundError(f"Dockerfile not found at {dockerfile_path}. Ensure the compiler generated it.")
         tag = args.tag or f"{output_dir.name.lower()}:latest"
         print(f"Building Docker image '{tag}' from {output_dir} …")
-        try:
-            subprocess.run(["docker", "build", "-t", tag, "."], cwd=str(output_dir), check=True)
-        except FileNotFoundError as exc:
-            raise RuntimeError(
-                "Docker CLI not found. Install Docker and ensure `docker` is on PATH to use `deploy`."
-            ) from exc
+        _run_deploy_docker_command(["docker", "build", "-t", tag, "."], output_dir)
         print(f"Docker image '{tag}' built successfully.")
 
         if args.push:
             print(f"Pushing Docker image '{tag}' …")
-            try:
-                subprocess.run(["docker", "push", tag], cwd=str(output_dir), check=True)
-            except FileNotFoundError as exc:
-                raise RuntimeError(
-                    "Docker CLI not found. Install Docker and ensure `docker` is on PATH to use `deploy`."
-                ) from exc
+            _run_deploy_docker_command(["docker", "push", tag], output_dir)
             print(f"Docker image '{tag}' pushed successfully.")
 
 
