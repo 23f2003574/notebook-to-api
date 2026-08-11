@@ -689,10 +689,20 @@ def test_requirements_pins_core_dependencies_to_installed_versions(tmp_path):
 def test_requirements_pins_a_notebook_dependency_installed_in_this_environment(
     tmp_path
 ):
-    """Without pinning, requirements.txt just listed the bare "pandas"
+    """Without pinning, requirements.txt just listed the bare package
     name -- `pip install -r requirements.txt` at deploy time would then
     resolve whatever the latest release happens to be, not the version
     the notebook was actually compiled and tested against.
+
+    Uses nbformat as the notebook's import: it's a hard dependency of
+    this very test file (imported at the top), so it's guaranteed
+    installed in any environment capable of running this suite at all --
+    unlike pandas, which this test used before and which isn't listed in
+    the project's requirements.txt, so it's absent in a clean CI install
+    and importlib.metadata.version() raised PackageNotFoundError there
+    (confirmed: this test only ever passed locally by accident, because
+    pandas happened to already be installed in that environment for
+    unrelated reasons).
     """
 
     import importlib.metadata
@@ -700,7 +710,7 @@ def test_requirements_pins_a_notebook_dependency_installed_in_this_environment(
     notebook = nbformat.v4.new_notebook()
     notebook.cells.append(
         nbformat.v4.new_code_cell(
-            "import pandas as pd\n\n"
+            "import nbformat\n\n"
             "def summarize(count: int) -> int:\n    return count * 2\n"
         )
     )
@@ -714,8 +724,8 @@ def test_requirements_pins_a_notebook_dependency_installed_in_this_environment(
 
     requirements = (output_dir / "requirements.txt").read_text(encoding="utf-8")
 
-    installed_pandas_version = importlib.metadata.version("pandas")
-    assert f"pandas=={installed_pandas_version}" in requirements.split()
+    installed_nbformat_version = importlib.metadata.version("nbformat")
+    assert f"nbformat=={installed_nbformat_version}" in requirements.split()
 
 
 def test_requirements_falls_back_to_a_bare_name_for_an_uninstalled_dependency(
