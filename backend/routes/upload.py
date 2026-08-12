@@ -283,6 +283,33 @@ def _currently_compiled_notebook_metadata():
     )
 
 
+def _currently_compiled_notebook_is_stale():
+    """Whether the notebook that produced the app currently in
+    GENERATED_DIR has been edited since that compile -- the same
+    comparison list_notebooks' notebook_changed_since_compile field
+    already makes for the currently-compiled entry, reused here so
+    /api/deploy can warn before building (and possibly pushing) a Docker
+    image from code that no longer matches its source.
+
+    Returns False (nothing to warn about) if nothing has been compiled
+    yet, the metadata is missing/corrupt, or the source notebook file no
+    longer exists (e.g. deleted -- see was_currently_compiled on DELETE
+    /api/notebooks/{filename}) -- in every one of these cases there's no
+    current notebook content left to compare against, so there's nothing
+    this check can meaningfully flag either way.
+    """
+
+    compiled_path, compiled_sha256, _ = _currently_compiled_notebook_metadata()
+
+    if compiled_path is None or compiled_sha256 is None:
+        return False
+
+    if not compiled_path.is_file():
+        return False
+
+    return hash_notebook_file(compiled_path) != compiled_sha256
+
+
 @router.get("/notebooks")
 async def list_notebooks():
     """List previously uploaded notebooks.
@@ -795,6 +822,20 @@ async def deploy_generated_app(data: dict = None):
     Operates on the fixed `generated` directory like /api/export-openapi,
     /api/export-sdk, and /api/download already do, rather than accepting
     a client-supplied directory or Dockerfile to build.
+
+    Unlike the CLI's `deploy` command -- which always recompiles from the
+    given notebook path as its own first step, so it can never build a
+    stale image -- this endpoint deliberately builds whatever is already
+    sitting in GENERATED_DIR from an earlier, separate /api/compile call.
+    If the source notebook has since been edited (e.g. re-uploaded via
+    /api/upload?overwrite=true) without a matching recompile, that gap
+    previously went completely unchecked: this could silently build (and,
+    with "push": true, publish) a Docker image reflecting outdated code,
+    the exact staleness list_notebooks' notebook_changed_since_compile
+    field already exists to warn about elsewhere -- just never enforced
+    at the one place actually shipping that stale build somewhere. Pass
+    "force": true to deploy the stale build anyway (e.g. deliberately
+    re-deploying a known-good previous compile).
     """
 
     generated_path = Path(GENERATED_DIR)
@@ -807,6 +848,20 @@ async def deploy_generated_app(data: dict = None):
         )
 
     data = data or {}
+
+    force = bool(data.get("force", False))
+
+    if not force and _currently_compiled_notebook_is_stale():
+
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The currently-compiled app no longer matches its source "
+                "notebook's current content -- it was edited since the "
+                "last compile. Run /api/compile again first, or pass "
+                '"force": true to deploy the stale build anyway.'
+            )
+        )
 
     tag = data.get("tag") or f"{generated_path.name.lower()}:latest"
     push = bool(data.get("push", False))

@@ -1206,6 +1206,88 @@ def test_deploy_endpoint_returns_404_when_nothing_compiled_yet(monkeypatch):
     assert resp.status_code == 404
 
 
+def test_deploy_endpoint_returns_409_when_the_compiled_notebook_is_stale(
+    tmp_path, monkeypatch
+):
+    """Unlike the CLI's `deploy` command -- which always recompiles from
+    the notebook as its own first step, so it can never build a stale
+    image -- /api/deploy builds whatever is already sitting in
+    GENERATED_DIR from an earlier, separate /api/compile call. Before
+    this, editing the notebook after that compile (e.g. via
+    /api/upload?overwrite=true) without recompiling went completely
+    unchecked: this could silently build (and, with "push": true,
+    publish) a Docker image reflecting outdated code -- the exact
+    staleness list_notebooks' notebook_changed_since_compile field
+    already exists to warn about, just never enforced here.
+    """
+
+    filename = "deploy_stale_test.ipynb"
+    _compile_a_notebook(filename)
+
+    changed_content = _notebook_bytes(
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+    overwrite_resp = client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(changed_content), "application/json")},
+    )
+    assert overwrite_resp.status_code == 200
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post("/api/deploy", json={})
+
+    assert resp.status_code == 409
+    assert "edited since the last compile" in resp.json()["detail"]
+    # Docker must never have been invoked at all.
+    assert not log_path.exists()
+
+
+def test_deploy_endpoint_force_true_deploys_a_stale_build_anyway(tmp_path, monkeypatch):
+
+    filename = "deploy_stale_force_test.ipynb"
+    _compile_a_notebook(filename)
+
+    changed_content = _notebook_bytes(
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+    overwrite_resp = client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(changed_content), "application/json")},
+    )
+    assert overwrite_resp.status_code == 200
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post("/api/deploy", json={"force": True})
+
+    assert resp.status_code == 200
+    assert log_path.exists()
+
+
+def test_deploy_endpoint_does_not_require_force_when_the_notebook_is_unchanged(
+    tmp_path, monkeypatch
+):
+
+    _compile_a_notebook("deploy_not_stale_test.ipynb")
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post("/api/deploy", json={})
+
+    assert resp.status_code == 200
+    assert log_path.exists()
+
+
 def test_deploy_endpoint_builds_image_with_default_tag(tmp_path, monkeypatch):
 
     _compile_a_notebook("deploy_flow_test.ipynb")
