@@ -16,6 +16,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "START_TIME",
     "GENERATED_AT", "PYTHON_VERSION", "ALLOWED_ORIGINS",
     "MAX_REQUEST_BODY_BYTES", "MaxRequestBodySizeMiddleware",
+    "MAX_PENDING_TASKS",
     "verify_api_key", "custom_openapi",
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
     "validate_auth", "service_info", "metrics", "uptime",
@@ -312,6 +313,22 @@ def generate_fastapi_code(functions, package_name="generated"):
         'TASK_TTL_SECONDS = int(os.getenv('
         '"NOTEBOOK_API_TASK_TTL_SECONDS", '
         '"3600"'
+        '))'
+    )
+    # _evict_expired_tasks bounds TASKS' *long-term* growth (nothing
+    # older than TASK_TTL_SECONDS survives), but a burst of background
+    # requests arriving faster than that TTL still grows TASKS without
+    # limit in the meantime -- eviction alone doesn't stop a client
+    # (malicious, or just a retry loop against a stuck deploy) from
+    # submitting far more tasks than this process could ever actually
+    # get to, exhausting memory well before any of them would expire.
+    # Matches the same NOTEBOOK_API_* convention this generated app's
+    # other limits (API_KEYS, TASK_TTL_SECONDS, MAX_REQUEST_BODY_BYTES)
+    # already follow.
+    lines.append(
+        'MAX_PENDING_TASKS = int(os.getenv('
+        '"NOTEBOOK_API_MAX_TASKS", '
+        '"10000"'
         '))'
     )
     lines.append(
@@ -891,6 +908,15 @@ def generate_fastapi_code(functions, package_name="generated"):
             )
             lines.append(f"def {func_name}(req: {model_name}, background_tasks: BackgroundTasks, _: None = Depends(verify_api_key)):")
             lines.append("    _evict_expired_tasks()")
+            lines.append("    if len(TASKS) >= MAX_PENDING_TASKS:")
+            lines.append("        raise HTTPException(")
+            lines.append("            status_code=503,")
+            lines.append("            detail=(")
+            lines.append("                f'Too many pending background tasks (limit '")
+            lines.append("                f'{MAX_PENDING_TASKS}); try again once some have '")
+            lines.append("                'finished.'")
+            lines.append("            ),")
+            lines.append("        )")
             lines.append("    task_id = uuid.uuid4().hex")
             lines.append("    TASKS[task_id] = {\"status\": \"processing\", \"created_at\": time.time()}")
             # Pass positional arguments to the background function

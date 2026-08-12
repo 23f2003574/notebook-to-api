@@ -2155,6 +2155,89 @@ print("TASK_TTL_EVICTION_E2E_OK")
     assert "TASK_TTL_EVICTION_E2E_OK" in proc.stdout
 
 
+def test_compiler_pipeline_background_endpoint_rejects_tasks_past_the_configured_limit(
+    tmp_path,
+):
+    """Confirmed exploitable before this fix: _evict_expired_tasks only
+    bounds TASKS' *long-term* growth (nothing older than
+    TASK_TTL_SECONDS survives) -- a burst of requests arriving faster
+    than that TTL still grew TASKS without any limit in the meantime.
+    With NOTEBOOK_API_MAX_TASKS forced to 2, a third concurrent
+    background request must be refused with 503 instead of silently
+    accepted.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def train_model(epochs: int) -> str:\n"
+                            "    return 'done'\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import os
+import sys
+
+os.environ["NOTEBOOK_API_MAX_TASKS"] = "2"
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+first = client.post("/train_model", json={{"epochs": 1}}, headers=headers)
+assert first.status_code == 200, first.text
+
+second = client.post("/train_model", json={{"epochs": 1}}, headers=headers)
+assert second.status_code == 200, second.text
+
+third = client.post("/train_model", json={{"epochs": 1}}, headers=headers)
+assert third.status_code == 503, third.text
+assert "Too many pending background tasks" in third.text, third.text
+
+print("MAX_PENDING_TASKS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "MAX_PENDING_TASKS_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_tasks_endpoints_reject_unauthenticated_requests(tmp_path):
     """Confirmed exploitable before this fix: GET /tasks and GET
     /tasks/{task_id} returned stored function call inputs/outputs with no

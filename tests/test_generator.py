@@ -153,6 +153,51 @@ def test_notebook_function_named_max_request_body_bytes_is_rejected():
         generate_fastapi_code(functions)
 
 
+def test_background_endpoint_rejects_new_tasks_past_max_pending_tasks():
+    """_evict_expired_tasks bounds TASKS' long-term growth, but a burst of
+    background requests arriving faster than TASK_TTL_SECONDS still grew
+    TASKS without limit in the meantime -- nothing stopped a client from
+    submitting far more tasks than the process could ever get to,
+    exhausting memory well before any of them would expire.
+    """
+
+    functions = [{"name": "train_model", "args": [], "return_type": "str"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert 'os.getenv("NOTEBOOK_API_MAX_TASKS", "10000")' in code
+    assert "if len(TASKS) >= MAX_PENDING_TASKS:" in code
+    assert "status_code=503" in code
+
+
+def test_non_background_endpoint_has_no_max_pending_tasks_check():
+    """A synchronous endpoint never touches TASKS at all -- the check
+    only belongs in a background endpoint's own body.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "if len(TASKS) >= MAX_PENDING_TASKS:" not in code
+    # The constant itself is still always defined at module level.
+    assert "MAX_PENDING_TASKS = int(os.getenv(" in code
+
+
+def test_notebook_function_named_max_pending_tasks_is_rejected():
+    """MAX_PENDING_TASKS is a module-level name the generated app itself
+    defines (see RESERVED_INFRASTRUCTURE_NAMES) -- same collision hazard
+    class as TASKS, API_KEYS, or MAX_REQUEST_BODY_BYTES.
+    """
+
+    functions = [
+        {"name": "MAX_PENDING_TASKS", "args": [], "return_type": "dict"}
+    ]
+
+    with pytest.raises(ReservedFunctionNameError, match="MAX_PENDING_TASKS"):
+        generate_fastapi_code(functions)
+
+
 def test_route_generation():
 
     functions = [
