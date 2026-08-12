@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import shutil
 import stat
 import subprocess
 import zipfile
@@ -1222,3 +1223,41 @@ def test_download_returns_a_zip_of_the_compiled_app():
 
     app_source = archive.read("app.py").decode("utf-8")
     assert "def add(" in app_source
+
+
+def test_download_excludes_pycache_from_the_zip():
+    """__pycache__ is created by Python itself the first time the compiled
+    app or its runtime module gets imported (e.g. by a prior
+    /api/export-openapi call) -- it is not part of what the compiler
+    actually wrote, and its .pyc filenames are tied to whichever Python
+    version happened to import it. Before this fix, the downloaded
+    "compiled app" bundle could ship this non-portable bytecode cache
+    alongside the actual deliverable.
+    """
+
+    _compile_a_notebook("download_pycache_test.ipynb")
+
+    generated_dir = Path("generated")
+    pycache_dir = generated_dir / "__pycache__"
+    nested_pycache_dir = generated_dir / "runtime" / "__pycache__"
+
+    try:
+        pycache_dir.mkdir(exist_ok=True)
+        (pycache_dir / "app.cpython-314.pyc").write_bytes(b"\x00")
+
+        nested_pycache_dir.mkdir(parents=True, exist_ok=True)
+        (nested_pycache_dir / "notebook_module.cpython-314.pyc").write_bytes(b"\x00")
+
+        download_resp = client.get("/api/download")
+
+        assert download_resp.status_code == 200
+
+        archive = zipfile.ZipFile(io.BytesIO(download_resp.content))
+        names = archive.namelist()
+
+        assert "app.py" in names
+        assert not any("__pycache__" in name for name in names)
+        assert not any(name.endswith(".pyc") for name in names)
+    finally:
+        shutil.rmtree(pycache_dir, ignore_errors=True)
+        shutil.rmtree(nested_pycache_dir, ignore_errors=True)

@@ -19,7 +19,7 @@ from backend.generator.api_generator import (
     LONG_RUNNING_KEYWORDS,
     ReservedFunctionNameError,
 )
-from backend.inspector import inspect_notebook_data
+from backend.inspector import EXCLUDED_GENERATED_DIR_NAMES, inspect_notebook_data
 from backend.parser.notebook_parser import (
     load_notebook,
     extract_code_cells,
@@ -819,6 +819,16 @@ async def download_generated_app():
     filesystem access to the server. This packages the whole `generated`
     output directory as a single zip so the frontend can offer a direct
     download after compiling.
+
+    Excludes EXCLUDED_GENERATED_DIR_NAMES subtrees (currently just
+    __pycache__) the same way inspect_notebook_data's "generated_files"
+    field does -- __pycache__ is created by Python itself the first time
+    the compiled app or its runtime module gets imported (e.g. by a prior
+    /api/export-openapi call, which does exactly that), not by the
+    compiler, and its .pyc filenames are tied to whichever Python version
+    happened to import it. Left unfiltered, a downloaded "compiled app"
+    bundle could ship a stale, non-portable bytecode cache alongside the
+    actual deliverable (app.py, requirements.txt, Dockerfile, ...).
     """
 
     generated_path = Path(GENERATED_DIR)
@@ -836,7 +846,9 @@ async def download_generated_app():
 
         for file_path in sorted(generated_path.rglob("*")):
 
-            if file_path.is_file():
+            if file_path.is_file() and not (
+                EXCLUDED_GENERATED_DIR_NAMES & set(file_path.relative_to(generated_path).parts)
+            ):
 
                 archive.write(
                     file_path,

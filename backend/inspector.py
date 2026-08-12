@@ -17,6 +17,53 @@ from backend.generator.api_generator import (
     RESERVED_INFRASTRUCTURE_NAMES,
 )
 
+# Directory names to exclude when walking an output directory for
+# generated_files (below) and, via the same set, GET /api/download's zip
+# archive (see backend/routes/upload.py). __pycache__ is created by Python
+# itself the first time the compiled app or its runtime module gets
+# imported (e.g. by `serve`'s uvicorn subprocess, `export-openapi`, or a
+# test suite) -- it is not part of what compile_notebook_to_api actually
+# wrote, and its .pyc filenames are tied to the interpreter that happened
+# to import it (e.g. "app.cpython-314.pyc"), so they vary across machines
+# and Python versions for the exact same compiled output. Left unfiltered,
+# this polluted both `inspect`'s generated-files listing and the
+# downloadable app bundle with a non-deliverable, non-deterministic
+# implementation artifact that has nothing to do with what was actually
+# compiled (confirmed against this repo's own generated/ directory, which
+# already had a __pycache__ picked up by both).
+EXCLUDED_GENERATED_DIR_NAMES = frozenset({"__pycache__"})
+
+
+def _list_generated_files(output_dir):
+    """Files under `output_dir`, relative to it, excluding
+    EXCLUDED_GENERATED_DIR_NAMES subtrees. Shared by inspect_notebook and
+    inspect_notebook_data so their "Generated Files" listings can't drift
+    from each other.
+    """
+    generated_path = Path(output_dir)
+
+    generated_files = []
+
+    if generated_path.is_dir():
+
+        for root, dirs, files in os.walk(generated_path):
+
+            dirs[:] = [
+                d for d in dirs if d not in EXCLUDED_GENERATED_DIR_NAMES
+            ]
+
+            for f in files:
+
+                rel = (
+                    Path(root)
+                    .relative_to(generated_path)
+                    / f
+                )
+
+                generated_files.append(str(rel))
+
+    return generated_files
+
 
 def _is_background_function(name):
     """Whether generate_fastapi_code (generator/api_generator.py) will
@@ -158,23 +205,7 @@ def inspect_notebook(notebook_path, output_dir="generated"):
     for dep in sorted(all_imports):
         print(f"- {dep}")
 
-    generated_path = Path(output_dir)
-
-    generated_files = []
-
-    if generated_path.is_dir():
-
-        for root, _, files in os.walk(generated_path):
-
-            for f in files:
-
-                rel = (
-                    Path(root)
-                    .relative_to(generated_path)
-                    / f
-                )
-
-                generated_files.append(str(rel))
+    generated_files = _list_generated_files(output_dir)
 
     print("\nGenerated Files:")
     print("-" * 20)
@@ -209,31 +240,13 @@ def inspect_notebook_data(
 
     all_functions = deduplicate_functions_by_name(all_functions)
 
-    generated_path = Path(output_dir)
-
-    generated_files = []
-
-    if generated_path.is_dir():
-
-        for root, _, files in os.walk(generated_path):
-
-            for f in files:
-
-                rel = (
-                    Path(root)
-                    .relative_to(generated_path)
-                    / f
-                )
-
-                generated_files.append(str(rel))
-
     return {
         "functions": all_functions,
         "dependencies": sorted(
             list(all_imports)
         ),
         "generated_files": sorted(
-            generated_files
+            _list_generated_files(output_dir)
         ),
         "reserved_name_conflicts": _reserved_name_conflicts(all_functions),
         "endpoints": _endpoint_metadata(all_functions),

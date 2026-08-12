@@ -5,6 +5,7 @@ from backend.inspector import (
     inspect_notebook,
     inspect_notebook_data,
     print_compile_summary,
+    _list_generated_files,
     _reserved_name_conflicts,
 )
 from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
@@ -169,6 +170,81 @@ def test_inspect_notebook_data_endpoints_is_empty_for_a_notebook_with_no_functio
     data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
 
     assert data["endpoints"] == []
+
+
+def test_list_generated_files_excludes_pycache_directories(tmp_path):
+
+    output_dir = tmp_path / "generated"
+    (output_dir / "__pycache__").mkdir(parents=True)
+    (output_dir / "__pycache__" / "app.cpython-314.pyc").write_bytes(b"\x00")
+    (output_dir / "app.py").write_text("# app\n")
+
+    assert sorted(_list_generated_files(output_dir)) == ["app.py"]
+
+
+def test_list_generated_files_returns_an_empty_list_when_the_directory_does_not_exist(
+    tmp_path,
+):
+
+    assert _list_generated_files(tmp_path / "does_not_exist") == []
+
+
+def test_inspect_notebook_prints_generated_files_but_excludes_pycache(
+    tmp_path, capsys
+):
+
+    output_dir = tmp_path / "generated"
+    output_dir.mkdir()
+    (output_dir / "app.py").write_text("# app\n")
+
+    pycache_dir = output_dir / "__pycache__"
+    pycache_dir.mkdir()
+    (pycache_dir / "app.cpython-314.pyc").write_bytes(b"\x00")
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    inspect_notebook(str(notebook_path), str(output_dir))
+
+    output = capsys.readouterr().out
+    assert "- app.py" in output
+    assert "__pycache__" not in output
+    assert ".pyc" not in output
+
+
+def test_inspect_notebook_data_excludes_pycache_from_generated_files(tmp_path):
+    """__pycache__ is created by Python itself the first time the compiled
+    app or its runtime module gets imported (e.g. by `serve`, a prior
+    `export-openapi` call, or a test suite) -- it is not part of what the
+    compiler actually wrote, and its .pyc filenames are tied to whichever
+    Python version happened to import it, so they aren't even stable
+    across machines for the same compiled output. Before this fix, it
+    still showed up in generated_files as if it were.
+    """
+
+    output_dir = tmp_path / "generated"
+    output_dir.mkdir()
+    (output_dir / "app.py").write_text("# app\n")
+
+    pycache_dir = output_dir / "__pycache__"
+    pycache_dir.mkdir()
+    (pycache_dir / "app.cpython-314.pyc").write_bytes(b"\x00")
+
+    nested_pycache_dir = output_dir / "runtime" / "__pycache__"
+    nested_pycache_dir.mkdir(parents=True)
+    (nested_pycache_dir / "notebook_module.cpython-314.pyc").write_bytes(b"\x00")
+    (output_dir / "runtime" / "notebook_module.py").write_text("# runtime\n")
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(output_dir))
+
+    assert data["generated_files"] == ["app.py", "runtime/notebook_module.py"]
 
 
 def test_inspect_notebook_prints_the_background_marker_next_to_its_route(
