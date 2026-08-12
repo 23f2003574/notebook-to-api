@@ -49,6 +49,32 @@ def test_to_yaml_quotes_number_looking_strings():
     assert text.startswith('"200":\n')
 
 
+def test_to_yaml_quotes_a_string_containing_an_embedded_newline():
+    """Confirmed exploitable before this fix: an unquoted scalar
+    containing a literal "\\n" is written out with an actual line break
+    in the file, not an escaped one -- "description: line1\\nline2"
+    became two lines, the second ("line2") reading as a bare, keyless
+    entry instead of a continuation of the first line's value. Entirely
+    realistic content, not a theoretical edge case: a notebook parameter
+    default like `def f(text: str = "line1\\nline2")` flows straight into
+    this same scalar's example value in the exported schema.
+    """
+
+    text = _to_yaml({"description": "line1\nline2"})
+
+    assert text == 'description: "line1\\nline2"\n'
+    # Exactly one line in the *file* for this mapping entry -- the
+    # newline must be escaped text inside the quotes, not an actual line
+    # break splitting the entry in two.
+    assert text.count("\n") == 1
+
+
+def test_to_yaml_quotes_a_string_containing_a_tab_or_carriage_return():
+
+    assert _to_yaml({"x": "a\tb"}) == 'x: "a\\tb"\n'
+    assert _to_yaml({"x": "a\rb"}) == 'x: "a\\rb"\n'
+
+
 def test_to_yaml_renders_empty_dict_as_inline_mapping_not_a_string():
     """Confirmed exploitable before this fix: an empty dict value fell
     through to _yaml_scalar, which stringified it as the *text* "{}"
@@ -138,6 +164,90 @@ print("YAML_EXPORT_OK")
     assert "/add:" in yaml_text
     # Every line is either blank or starts with an even number of spaces
     # (this serializer only ever emits 2-space indents).
+    for line in yaml_text.splitlines():
+        if not line.strip():
+            continue
+        leading_spaces = len(line) - len(line.lstrip(" "))
+        assert leading_spaces % 2 == 0, line
+
+
+def test_export_openapi_schema_escapes_a_multiline_default_value_in_yaml(tmp_path):
+    """End-to-end version of test_to_yaml_quotes_a_string_containing_an_embedded_newline:
+    a notebook parameter defaulting to a multi-line string flows into
+    that same parameter's example value in the generated app's OpenAPI
+    schema (see example_payload in backend/parser/ast_parser.py). Before
+    the underlying fix, exporting that schema as YAML produced a file
+    where the second line of the default value split off into an
+    invalid, keyless entry instead of staying part of the same scalar.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def greet(text: str = 'line1\\nline2') -> str:\n"
+                            "    return text\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook, package_name_for_output_dir
+from backend.exporters.openapi_exporter import export_openapi_schema
+
+compile_notebook({str(notebook_path)!r}, "generated")
+export_openapi_schema(
+    "generated/openapi.yaml",
+    package_name_for_output_dir("generated"),
+    format="yaml",
+)
+print("MULTILINE_YAML_EXPORT_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "MULTILINE_YAML_EXPORT_OK" in proc.stdout
+
+    yaml_text = (workdir / "generated" / "openapi.yaml").read_text(encoding="utf-8")
+
+    # The escaped form must be present as literal backslash-n text inside
+    # a quoted scalar -- not an actual line break splitting "line2" onto
+    # its own, keyless line.
+    assert "line1\\nline2" in yaml_text
+    assert not any(
+        line.strip() == "line2" for line in yaml_text.splitlines()
+    )
+    # Every line is either blank or starts with an even number of spaces
+    # (this serializer only ever emits 2-space indents) -- a stray
+    # keyless "line2" entry would violate that too.
     for line in yaml_text.splitlines():
         if not line.strip():
             continue

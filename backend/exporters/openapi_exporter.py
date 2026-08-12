@@ -14,6 +14,18 @@ def _needs_yaml_quoting(text):
         return True
     if ": " in text or text.endswith(":") or " #" in text:
         return True
+    # A plain (unquoted) YAML scalar cannot contain a literal newline,
+    # carriage return, or tab without a block-scalar indicator ("|"/">")
+    # or explicit quoting -- written out raw, an embedded newline here
+    # doesn't get escaped, it becomes an actual line break in the file,
+    # so whatever follows it reads as a new, keyless (invalid) entry
+    # instead of a continuation of this scalar's value. Multi-line
+    # content is entirely realistic here, not just a theoretical edge
+    # case: a notebook parameter default like
+    # `def f(text: str = "line1\nline2")` flows straight into this same
+    # scalar's example value in the exported schema.
+    if any(c in text for c in ("\n", "\r", "\t")):
+        return True
     try:
         float(text)
         return True
