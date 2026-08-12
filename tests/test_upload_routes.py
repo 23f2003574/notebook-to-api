@@ -726,6 +726,42 @@ def test_inspect_reports_no_reserved_name_conflicts_for_a_clean_notebook():
     assert inspect_resp.json()["reserved_name_conflicts"] == []
 
 
+def test_inspect_reports_endpoints_and_flags_background_ones_before_compiling():
+    """Mirrors test_compile_endpoints_flag_background_functions_as_async
+    above, but for /api/inspect: before this fix, that classification was
+    only visible in /api/compile's response, after compiling.
+    """
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "inspect_async_endpoints_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    inspect_resp = client.post(
+        "/api/inspect", json={"notebook_path": "inspect_async_endpoints_test.ipynb"}
+    )
+    assert inspect_resp.status_code == 200
+
+    endpoints = {e["path"]: e for e in inspect_resp.json()["endpoints"]}
+
+    assert endpoints["/add"] == {"path": "/add", "method": "POST", "is_async": False}
+    assert endpoints["/train_model"] == {
+        "path": "/train_model", "method": "POST", "is_async": True
+    }
+
+
 def test_inspect_generated_files_is_empty_before_any_compile(monkeypatch):
 
     from backend.routes import upload as upload_module

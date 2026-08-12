@@ -133,6 +133,73 @@ def test_inspect_notebook_omits_the_warning_section_for_a_clean_notebook(
     assert "Reserved Name Conflicts" not in output
 
 
+def test_inspect_notebook_data_reports_endpoints_and_flags_background_ones(tmp_path):
+    """Before this fix, inspect_notebook_data -- the data behind both
+    `inspect --json` and POST /api/inspect -- had no way to tell a caller
+    which functions would compile into background/task_id-based endpoints
+    vs synchronous ones. That distinction was only ever visible *after*
+    compiling, via print_compile_summary or POST /api/compile's
+    "endpoints" field.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def train_model(epochs: int) -> str:\n    return 'done'\n",
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    endpoints = {e["path"]: e for e in data["endpoints"]}
+
+    assert endpoints["/add"] == {"path": "/add", "method": "POST", "is_async": False}
+    assert endpoints["/train_model"] == {
+        "path": "/train_model", "method": "POST", "is_async": True
+    }
+
+
+def test_inspect_notebook_data_endpoints_is_empty_for_a_notebook_with_no_functions(
+    tmp_path
+):
+
+    notebook_path = tmp_path / "empty.ipynb"
+    _write_notebook(notebook_path, "x = 1\n")
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    assert data["endpoints"] == []
+
+
+def test_inspect_notebook_prints_the_background_marker_next_to_its_route(
+    tmp_path, capsys
+):
+    """Matches the same "[background]" marking print_compile_summary
+    already prints after compiling (see
+    test_print_compile_summary_lists_endpoints_and_flags_background_ones
+    below) -- `inspect` is the tool's preview step and should show the
+    same classification before compiling, not just after.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def train_model(epochs: int) -> str:\n    return 'done'\n",
+    )
+
+    inspect_notebook(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "Route: POST /train_model  [background]" in output
+
+    add_route_line = next(
+        line for line in output.splitlines()
+        if line.strip() == "Route: POST /add"
+    )
+    assert "[background]" not in add_route_line
+
+
 def test_print_compile_summary_lists_endpoints_and_flags_background_ones(
     tmp_path, capsys
 ):

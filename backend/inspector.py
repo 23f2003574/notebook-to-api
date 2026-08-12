@@ -18,6 +18,43 @@ from backend.generator.api_generator import (
 )
 
 
+def _is_background_function(name):
+    """Whether generate_fastapi_code (generator/api_generator.py) will
+    compile `name` into a background/task_id-based endpoint rather than a
+    synchronous one, per LONG_RUNNING_KEYWORDS.
+
+    Shared by every surface that classifies a function this way --
+    inspect_notebook, _endpoint_metadata below, and print_compile_summary
+    -- so they can't drift from each other or from POST /api/compile's own
+    identical check in routes/upload.py.
+    """
+    return any(kw in name.lower() for kw in LONG_RUNNING_KEYWORDS)
+
+
+def _endpoint_metadata(functions):
+    """The {"path", "method", "is_async"} shape POST /api/compile's
+    "endpoints" field already returns (see routes/upload.py), computed
+    here from a notebook that hasn't been compiled yet.
+
+    Before this, whether a function would become a background/task_id
+    endpoint or a synchronous one -- a real difference in what the
+    generated app does, not just a formatting detail -- was only ever
+    visible *after* compiling. inspect_notebook_data already exists
+    specifically to preview compile-time outcomes (see
+    reserved_name_conflicts above, added for the same reason), so it had
+    the same gap for this classification that reserved_name_conflicts
+    closed for name collisions.
+    """
+    return [
+        {
+            "path": f"/{func['name']}",
+            "method": "POST",
+            "is_async": _is_background_function(func["name"]),
+        }
+        for func in functions
+    ]
+
+
 def _reserved_name_conflicts(functions):
     """Names in `functions` that generate_fastapi_code will refuse to
     compile (see ReservedFunctionNameError in generator/api_generator.py),
@@ -99,8 +136,12 @@ def inspect_notebook(notebook_path, output_dir="generated"):
             f"\n{idx}. {func['name']}({args_formatted}){ret}"
         )
 
+        route_suffix = (
+            "  [background]" if _is_background_function(func["name"]) else ""
+        )
+
         print(
-            f"   Route: POST /{func['name']}"
+            f"   Route: POST /{func['name']}{route_suffix}"
         )
 
         print(
@@ -195,6 +236,7 @@ def inspect_notebook_data(
             generated_files
         ),
         "reserved_name_conflicts": _reserved_name_conflicts(all_functions),
+        "endpoints": _endpoint_metadata(all_functions),
     }
 
 
@@ -222,10 +264,7 @@ def print_compile_summary(notebook_path, output_dir="generated"):
 
     for func in functions:
         name = func["name"]
-        is_background = any(
-            kw in name.lower() for kw in LONG_RUNNING_KEYWORDS
-        )
-        suffix = "  [background]" if is_background else ""
+        suffix = "  [background]" if _is_background_function(name) else ""
         print(f"  POST /{name}{suffix}")
 
     if data["dependencies"]:
