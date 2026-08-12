@@ -6,6 +6,7 @@ import keyword
 import os
 import sys
 import pathlib
+import threading
 
 from pathlib import Path
 
@@ -173,6 +174,21 @@ def write_requirements(imports, output_dir):
 
 COMPILE_METADATA_FILENAME = ".compile_metadata.json"
 
+# Serializes compile_notebook_to_api's multi-file writes to a given
+# output_dir (see its own docstring below), and is also held by any
+# dashboard route that reads that same directory's compiled output --
+# POST /api/deploy's Docker build, POST /api/export-openapi's import of
+# the compiled app, and GET /api/download's zip of it (see
+# routes/upload.py) -- so none of them can observe a directory
+# mid-write, torn between an old and a new compile. A plain
+# threading.Lock, not a per-output_dir one: every dashboard process
+# already funnels all of these through a single GENERATED_DIR, and the
+# CLI's own compile/inspect/serve/deploy commands each run in their own
+# process with nothing else to contend with, so one process-wide lock is
+# exactly the right granularity without adding a locking scheme keyed by
+# path.
+COMPILE_LOCK = threading.Lock()
+
 
 def hash_notebook_file(notebook_path):
     """SHA-256 of `notebook_path`'s raw bytes, as a hex digest.
@@ -239,92 +255,111 @@ def compile_notebook_to_api(
     output_path
 ):
 
-    print(f"Starting compilation for: {notebook_path}")
+    # compile_notebook_to_api writes several files to output_dir
+    # (runtime module, requirements.txt, app.py, Dockerfile,
+    # .dockerignore, .compile_metadata.json) one after another with no
+    # atomicity across the set. Every dashboard route that can trigger
+    # this -- POST /api/compile chief among them -- is declared a plain
+    # `def`, not `async def` (see routes/upload.py), specifically so a
+    # slow compile runs in FastAPI's worker threadpool instead of
+    # blocking the single event loop -- but that means two overlapping
+    # POST /api/compile calls (two browser tabs, a retry racing the
+    # original request, ...) can now genuinely execute this function in
+    # two different threads at once, both writing into the *same*
+    # GENERATED_DIR. Without serializing them, their writes interleave:
+    # output_dir can end up with, say, one notebook's runtime module
+    # alongside a different notebook's app.py, expecting functions the
+    # runtime module doesn't define -- a corrupted, mismatched compile
+    # output neither request actually produced on its own, with nothing
+    # to indicate it happened.
+    with COMPILE_LOCK:
 
-    output_dir = os.path.dirname(output_path)
+        print(f"Starting compilation for: {notebook_path}")
 
-    os.makedirs(output_dir, exist_ok=True)
+        output_dir = os.path.dirname(output_path)
 
-    package_name = package_name_for_output_dir(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
 
-    notebook = load_notebook(notebook_path)
+        package_name = package_name_for_output_dir(output_dir)
 
-    code_cells = [
-        cell for cell in extract_code_cells(notebook)
-        if is_parseable_python(cell)
-    ]
+        notebook = load_notebook(notebook_path)
 
-    functions = []
+        code_cells = [
+            cell for cell in extract_code_cells(notebook)
+            if is_parseable_python(cell)
+        ]
 
-    for cell in code_cells:
+        functions = []
 
-        funcs = extract_functions_from_code(cell)
+        for cell in code_cells:
 
-        functions.extend(funcs)
+            funcs = extract_functions_from_code(cell)
 
-    functions = deduplicate_functions_by_name(functions)
+            functions.extend(funcs)
 
-    # Generate the API code -- and let it raise (e.g.
-    # ReservedFunctionNameError, generator/api_generator.py, for a
-    # function name that collides with an identifier the generated app
-    # itself defines) -- before writing anything to output_dir at all.
-    # This used to run after write_runtime_module/write_requirements
-    # below, so a notebook that failed this check still overwrote the
-    # runtime module and requirements.txt from a previous successful
-    # compile with content generated from the *failing* notebook, while
-    # app.py, the Dockerfile, and .compile_metadata.json were left
-    # untouched from that previous compile -- leaving output_dir in an
-    # inconsistent state that matched neither the old nor the new
-    # notebook (confirmed: recompiling a working app with a notebook that
-    # has one reserved-name collision left its runtime module rewritten
-    # to the broken notebook's code while app.py and
-    # .compile_metadata.json still described the last working one).
-    api_code = generate_fastapi_code(functions, package_name)
+        functions = deduplicate_functions_by_name(functions)
 
-    write_runtime_module(code_cells, output_dir)
+        # Generate the API code -- and let it raise (e.g.
+        # ReservedFunctionNameError, generator/api_generator.py, for a
+        # function name that collides with an identifier the generated app
+        # itself defines) -- before writing anything to output_dir at all.
+        # This used to run after write_runtime_module/write_requirements
+        # below, so a notebook that failed this check still overwrote the
+        # runtime module and requirements.txt from a previous successful
+        # compile with content generated from the *failing* notebook, while
+        # app.py, the Dockerfile, and .compile_metadata.json were left
+        # untouched from that previous compile -- leaving output_dir in an
+        # inconsistent state that matched neither the old nor the new
+        # notebook (confirmed: recompiling a working app with a notebook that
+        # has one reserved-name collision left its runtime module rewritten
+        # to the broken notebook's code while app.py and
+        # .compile_metadata.json still described the last working one).
+        api_code = generate_fastapi_code(functions, package_name)
 
-    imports = set()
+        write_runtime_module(code_cells, output_dir)
 
-    for cell in code_cells:
+        imports = set()
 
-        imports.update(extract_imports_from_code(cell))
+        for cell in code_cells:
 
-    filtered_imports = [
-        imp for imp in imports
-        if imp not in STANDARD_LIBS
-    ]
+            imports.update(extract_imports_from_code(cell))
 
-    write_requirements(
-        filtered_imports,
-        output_dir
-    )
+        filtered_imports = [
+            imp for imp in imports
+            if imp not in STANDARD_LIBS
+        ]
 
-    write_generated_api(
-        api_code,
-        output_path
-    )
+        write_requirements(
+            filtered_imports,
+            output_dir
+        )
 
-    dockerfile_path = os.path.join(
-        output_dir,
-        "Dockerfile"
-    )
+        write_generated_api(
+            api_code,
+            output_path
+        )
 
-    generate_dockerfile(
-        dockerfile_path, package_name, compiling_python_version()
-    )
+        dockerfile_path = os.path.join(
+            output_dir,
+            "Dockerfile"
+        )
 
-    dockerignore_path = os.path.join(
-        output_dir,
-        ".dockerignore"
-    )
+        generate_dockerfile(
+            dockerfile_path, package_name, compiling_python_version()
+        )
 
-    generate_dockerignore(dockerignore_path)
+        dockerignore_path = os.path.join(
+            output_dir,
+            ".dockerignore"
+        )
 
-    write_compile_metadata(notebook_path, output_dir)
+        generate_dockerignore(dockerignore_path)
 
-    print(
-        f"Successfully generated FastAPI app at: {output_path}"
-    )
+        write_compile_metadata(notebook_path, output_dir)
+
+        print(
+            f"Successfully generated FastAPI app at: {output_path}"
+        )
 
 
 def compile_notebook(

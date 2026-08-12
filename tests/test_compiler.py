@@ -2,13 +2,16 @@ import ast
 import json
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import nbformat
 import pytest
 
 from backend.compiler import (
+    COMPILE_LOCK,
     compile_notebook,
+    compile_notebook_to_api,
     compiling_python_version,
     package_name_for_output_dir,
     STANDARD_LIBS
@@ -180,6 +183,134 @@ def test_compiler_pipeline_generates_a_dockerignore_excluding_git_and_caches(tmp
     assert ".git/" in dockerignore
     assert "__pycache__/" in dockerignore
     assert ".venv/" in dockerignore
+
+
+def test_compile_notebook_to_api_holds_compile_lock_for_its_whole_write_phase(
+    tmp_path, monkeypatch
+):
+    """POST /api/compile runs as a plain `def` route, scheduled onto
+    FastAPI's worker threadpool (see routes/upload.py) specifically so a
+    slow compile doesn't block other requests -- which also means two
+    overlapping compiles can now genuinely run in two different threads
+    at once. Without COMPILE_LOCK serializing compile_notebook_to_api's
+    multi-file write sequence, their writes could interleave into a
+    corrupted, mismatched output directory.
+
+    Verified directly: a second thread's non-blocking attempt to acquire
+    COMPILE_LOCK must fail while the first compile is mid-write, and must
+    succeed again once it finishes.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    entered_write = threading.Event()
+    release_write = threading.Event()
+
+    import backend.compiler as compiler_module
+
+    original_write_runtime_module = compiler_module.write_runtime_module
+
+    def blocking_write_runtime_module(code_cells, out_dir):
+        entered_write.set()
+        assert release_write.wait(timeout=5)
+        return original_write_runtime_module(code_cells, out_dir)
+
+    monkeypatch.setattr(
+        compiler_module, "write_runtime_module", blocking_write_runtime_module
+    )
+
+    compile_thread = threading.Thread(
+        target=compile_notebook_to_api,
+        args=(str(notebook_path), str(output_dir / "app.py")),
+    )
+    compile_thread.start()
+
+    assert entered_write.wait(timeout=5), "compile never reached its write phase"
+
+    # COMPILE_LOCK must still be held by the compile in progress.
+    assert COMPILE_LOCK.acquire(blocking=False) is False
+
+    release_write.set()
+    compile_thread.join(timeout=5)
+    assert not compile_thread.is_alive()
+
+    # Free again once the compile has finished.
+    assert COMPILE_LOCK.acquire(blocking=False) is True
+    COMPILE_LOCK.release()
+
+
+def test_concurrent_compiles_to_the_same_output_dir_never_produce_a_mixed_result(
+    tmp_path,
+):
+    """Confirmed exploitable before COMPILE_LOCK existed: compiling two
+    different notebooks into the same output_dir from two threads at once
+    (now possible -- see the test above) could leave app.py describing one
+    notebook's function(s) while the runtime module actually holds a
+    different notebook's code, since compile_notebook_to_api writes them
+    as separate, non-atomic steps. With the lock in place, one compile
+    always fully finishes before the other starts, so the final output
+    must always match exactly one notebook end to end -- never a mix.
+    """
+
+    def _notebook(source):
+        notebook = nbformat.v4.new_notebook()
+        notebook.cells.append(nbformat.v4.new_code_cell(source))
+        return notebook
+
+    notebook_a_path = tmp_path / "a.ipynb"
+    with open(notebook_a_path, "w", encoding="utf-8") as f:
+        nbformat.write(
+            _notebook("def add(a: int, b: int) -> int:\n    return a + b\n"), f
+        )
+
+    notebook_b_path = tmp_path / "b.ipynb"
+    with open(notebook_b_path, "w", encoding="utf-8") as f:
+        nbformat.write(
+            _notebook("def multiply(a: int, b: int) -> int:\n    return a * b\n"), f
+        )
+
+    output_dir = tmp_path / "generated"
+    output_path = str(output_dir / "app.py")
+
+    threads = [
+        threading.Thread(
+            target=compile_notebook_to_api, args=(str(notebook_a_path), output_path)
+        ),
+        threading.Thread(
+            target=compile_notebook_to_api, args=(str(notebook_b_path), output_path)
+        ),
+    ]
+
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+        assert not t.is_alive()
+
+    app_source = (output_dir / "app.py").read_text(encoding="utf-8")
+    runtime_source = (
+        output_dir / "runtime" / "notebook_module.py"
+    ).read_text(encoding="utf-8")
+
+    if "/add" in app_source:
+        assert "def add(" in runtime_source
+        assert "def multiply(" not in runtime_source
+        assert "/multiply" not in app_source
+    else:
+        assert "/multiply" in app_source
+        assert "def multiply(" in runtime_source
+        assert "def add(" not in runtime_source
+        assert "/add" not in app_source
 
 
 def test_compiler_pipeline_handles_magics_and_broken_cells(tmp_path):

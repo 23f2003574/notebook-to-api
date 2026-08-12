@@ -4,6 +4,7 @@ import os
 import shutil
 import stat
 import subprocess
+import threading
 import zipfile
 from pathlib import Path
 
@@ -11,7 +12,7 @@ import nbformat
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.compiler import COMPILE_METADATA_FILENAME
+from backend.compiler import COMPILE_LOCK, COMPILE_METADATA_FILENAME
 from backend.dashboard import app
 from backend.routes.upload import UPLOAD_DIR, resolve_upload_path
 
@@ -1752,3 +1753,92 @@ def test_download_excludes_pycache_from_the_zip():
     finally:
         shutil.rmtree(pycache_dir, ignore_errors=True)
         shutil.rmtree(nested_pycache_dir, ignore_errors=True)
+
+
+def test_download_waits_for_an_in_flight_compile_to_release_compile_lock():
+    """GET /api/download walks GENERATED_DIR to build its zip -- without
+    holding COMPILE_LOCK (see backend/compiler.py) for that walk, a
+    concurrent POST /api/compile racing it on another thread (both run in
+    FastAPI's worker threadpool -- see the plain `def` routes in this
+    module) could rewrite files out from under it mid-zip, downloading a
+    torn mix of the old and new compile. Verified by holding the lock
+    from a background thread and confirming this request doesn't return
+    until it's released.
+    """
+
+    _compile_a_notebook("download_lock_test.ipynb")
+
+    lock_acquired = threading.Event()
+    release_lock = threading.Event()
+
+    def hold_lock():
+        with COMPILE_LOCK:
+            lock_acquired.set()
+            assert release_lock.wait(timeout=5)
+
+    holder = threading.Thread(target=hold_lock)
+    holder.start()
+    assert lock_acquired.wait(timeout=5)
+
+    result = {}
+
+    def do_download():
+        result["resp"] = client.get("/api/download")
+
+    request_thread = threading.Thread(target=do_download)
+    request_thread.start()
+    request_thread.join(timeout=0.3)
+
+    assert request_thread.is_alive(), (
+        "GET /api/download should still be blocked on COMPILE_LOCK"
+    )
+
+    release_lock.set()
+    request_thread.join(timeout=5)
+    holder.join(timeout=5)
+
+    assert not request_thread.is_alive()
+    assert result["resp"].status_code == 200
+
+
+def test_export_openapi_waits_for_an_in_flight_compile_to_release_compile_lock():
+    """POST /api/export-openapi dynamically imports "<package_name>.app"
+    -- without holding COMPILE_LOCK for that import, a concurrent POST
+    /api/compile racing it on another thread could rewrite app.py (and
+    the runtime module it imports) mid-import, importing a torn mix of
+    the old and new compile instead of a consistent one.
+    """
+
+    _compile_a_notebook("export_openapi_lock_test.ipynb")
+
+    lock_acquired = threading.Event()
+    release_lock = threading.Event()
+
+    def hold_lock():
+        with COMPILE_LOCK:
+            lock_acquired.set()
+            assert release_lock.wait(timeout=5)
+
+    holder = threading.Thread(target=hold_lock)
+    holder.start()
+    assert lock_acquired.wait(timeout=5)
+
+    result = {}
+
+    def do_export():
+        result["resp"] = client.post("/api/export-openapi", json={})
+
+    request_thread = threading.Thread(target=do_export)
+    request_thread.start()
+    request_thread.join(timeout=0.3)
+
+    assert request_thread.is_alive(), (
+        "POST /api/export-openapi should still be blocked on COMPILE_LOCK"
+    )
+
+    release_lock.set()
+    request_thread.join(timeout=5)
+    holder.join(timeout=5)
+
+    assert not request_thread.is_alive()
+    assert result["resp"].status_code == 200

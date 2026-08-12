@@ -11,6 +11,7 @@ import uuid
 import zipfile
 
 from backend.compiler import (
+    COMPILE_LOCK,
     COMPILE_METADATA_FILENAME,
     compile_notebook,
     hash_notebook_file,
@@ -727,15 +728,22 @@ def export_openapi_endpoint(
 
     try:
 
-        package_name = package_name_for_output_dir(GENERATED_DIR)
+        # Held for the same reason POST /api/compile's writes hold it
+        # (see COMPILE_LOCK in backend/compiler.py): without it, this
+        # could import "<package_name>.app" mid-write from a concurrent
+        # compile racing it on another thread, reading a torn mix of the
+        # old and new compiled output instead of a consistent one.
+        with COMPILE_LOCK:
 
-        _evict_compiled_app_from_module_cache(package_name)
+            package_name = package_name_for_output_dir(GENERATED_DIR)
 
-        export_openapi_schema(
-            output_path,
-            package_name,
-            format=export_format
-        )
+            _evict_compiled_app_from_module_cache(package_name)
+
+            export_openapi_schema(
+                output_path,
+                package_name,
+                format=export_format
+            )
 
     except ModuleNotFoundError:
 
@@ -904,42 +912,53 @@ def deploy_generated_app(data: dict = None):
 
     generated_path = Path(GENERATED_DIR)
 
-    if not (generated_path / "Dockerfile").is_file():
-
-        raise HTTPException(
-            status_code=404,
-            detail="No compiled app found. Run /api/compile first."
-        )
-
     data = data or {}
 
     force = bool(data.get("force", False))
 
-    if not force and _currently_compiled_notebook_is_stale():
-
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "The currently-compiled app no longer matches its source "
-                "notebook's current content -- it was edited since the "
-                "last compile. Run /api/compile again first, or pass "
-                '"force": true to deploy the stale build anyway.'
-            )
-        )
-
     tag = data.get("tag") or f"{generated_path.name.lower()}:latest"
     push = bool(data.get("push", False))
 
-    build_result = _run_docker_command(
-        ["docker", "build", "-t", tag, "."], generated_path
-    )
+    # Held from the staleness check through the build itself (see
+    # COMPILE_LOCK in backend/compiler.py): `docker build`'s context is
+    # every file `generated_path` contains at the moment it reads them,
+    # so a concurrent POST /api/compile rewriting that same directory
+    # mid-build could ship an image built from a torn mix of the old and
+    # new compile. Released before `docker push`, which only pushes the
+    # already-built local image by tag and no longer reads the
+    # directory, so it doesn't need to block a compile that arrives
+    # while the push itself is still in flight.
+    with COMPILE_LOCK:
 
-    if build_result.returncode != 0:
+        if not (generated_path / "Dockerfile").is_file():
 
-        raise HTTPException(
-            status_code=500,
-            detail=f"Docker build failed: {build_result.stderr}"
+            raise HTTPException(
+                status_code=404,
+                detail="No compiled app found. Run /api/compile first."
+            )
+
+        if not force and _currently_compiled_notebook_is_stale():
+
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The currently-compiled app no longer matches its source "
+                    "notebook's current content -- it was edited since the "
+                    "last compile. Run /api/compile again first, or pass "
+                    '"force": true to deploy the stale build anyway.'
+                )
+            )
+
+        build_result = _run_docker_command(
+            ["docker", "build", "-t", tag, "."], generated_path
         )
+
+        if build_result.returncode != 0:
+
+            raise HTTPException(
+                status_code=500,
+                detail=f"Docker build failed: {build_result.stderr}"
+            )
 
     response = {
         "status": "success",
@@ -990,27 +1009,33 @@ def download_generated_app():
 
     generated_path = Path(GENERATED_DIR)
 
-    if not (generated_path / "app.py").is_file():
+    # Held while reading generated_path (see COMPILE_LOCK in
+    # backend/compiler.py) so a concurrent POST /api/compile can't
+    # rewrite it mid-walk, which could zip up a torn mix of files from
+    # the old and new compile instead of one consistent output.
+    with COMPILE_LOCK:
 
-        raise HTTPException(
-            status_code=404,
-            detail="No compiled app found. Run /api/compile first."
-        )
+        if not (generated_path / "app.py").is_file():
 
-    buffer = io.BytesIO()
+            raise HTTPException(
+                status_code=404,
+                detail="No compiled app found. Run /api/compile first."
+            )
 
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        buffer = io.BytesIO()
 
-        for file_path in sorted(generated_path.rglob("*")):
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
 
-            if file_path.is_file() and not (
-                EXCLUDED_GENERATED_DIR_NAMES & set(file_path.relative_to(generated_path).parts)
-            ):
+            for file_path in sorted(generated_path.rglob("*")):
 
-                archive.write(
-                    file_path,
-                    file_path.relative_to(generated_path)
-                )
+                if file_path.is_file() and not (
+                    EXCLUDED_GENERATED_DIR_NAMES & set(file_path.relative_to(generated_path).parts)
+                ):
+
+                    archive.write(
+                        file_path,
+                        file_path.relative_to(generated_path)
+                    )
 
     buffer.seek(0)
 
