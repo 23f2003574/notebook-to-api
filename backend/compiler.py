@@ -119,6 +119,24 @@ def _pinned_requirement(package_name):
     return f"{package_name}=={version}"
 
 
+def compiling_python_version():
+    """The "<major>.<minor>" Python version of the interpreter running this
+    compile, e.g. "3.11".
+
+    _pinned_requirement (above) resolves every dependency's pinned version
+    from *this* interpreter's installed packages. A Docker base image
+    running a different Python than the one that produced those pins can
+    silently break `docker build`'s `pip install -r requirements.txt` the
+    moment a pinned package's wheels don't cover that Python version, or
+    fall back to a source build that behaves differently from what was
+    actually resolved and tested locally. Passed straight through to
+    generate_dockerfile (see compile_notebook_to_api below) so the base
+    image always matches the interpreter that produced requirements.txt,
+    instead of the Dockerfile hardcoding a fixed version unrelated to it.
+    """
+    return f"{sys.version_info.major}.{sys.version_info.minor}"
+
+
 def write_requirements(imports, output_dir):
 
     requirements_path = os.path.join(
@@ -291,7 +309,9 @@ def compile_notebook_to_api(
         "Dockerfile"
     )
 
-    generate_dockerfile(dockerfile_path, package_name)
+    generate_dockerfile(
+        dockerfile_path, package_name, compiling_python_version()
+    )
 
     dockerignore_path = os.path.join(
         output_dir,

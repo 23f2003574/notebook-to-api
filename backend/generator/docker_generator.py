@@ -1,6 +1,25 @@
-def generate_dockerfile(output_path="generated/Dockerfile", package_name="generated"):
+def generate_dockerfile(
+    output_path="generated/Dockerfile",
+    package_name="generated",
+    python_version="3.11",
+):
+    """Write a Dockerfile for the compiled app at `output_path`.
+
+    python_version selects the base image's Python ("<major>.<minor>",
+    e.g. "3.12") and should be the interpreter that actually ran the
+    compile -- see compiler.compiling_python_version(), the caller
+    compile_notebook_to_api always passes. requirements.txt's versions are
+    pinned by _pinned_requirement against whatever's installed in *that*
+    interpreter's environment; a fixed base image Python unrelated to it
+    (this previously always hardcoded "3.11" regardless of what compiled
+    the notebook) can silently break `docker build`'s
+    `pip install -r requirements.txt` the moment a pinned package's wheels
+    don't cover that Python version, or fall back to a source build that
+    behaves differently from what was actually resolved and tested
+    locally.
+    """
     docker_content = f"""\
-FROM python:3.11-slim
+FROM python:{python_version}-slim
 
 WORKDIR /app
 

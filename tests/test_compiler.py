@@ -9,9 +9,11 @@ import pytest
 
 from backend.compiler import (
     compile_notebook,
+    compiling_python_version,
     package_name_for_output_dir,
     STANDARD_LIBS
 )
+from backend.generator.docker_generator import generate_dockerfile
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -73,6 +75,76 @@ def test_compiler_pipeline_dockerfile_runs_as_non_root_with_a_healthcheck(tmp_pa
     # USER must come after the app's files are owned by that user, and
     # before the CMD that actually runs the app as it.
     assert dockerfile.index("chown") < dockerfile.index("USER appuser") < dockerfile.index("CMD [")
+
+
+def test_compiling_python_version_matches_the_running_interpreter():
+
+    version = compiling_python_version()
+
+    assert version == f"{sys.version_info.major}.{sys.version_info.minor}"
+
+
+def test_generate_dockerfile_defaults_to_python_3_11_when_not_specified(tmp_path):
+    """Preserves generate_dockerfile's previous behavior for a direct
+    caller that doesn't pass python_version -- only compile_notebook_to_api
+    (via compiling_python_version()) is expected to override it.
+    """
+
+    output_path = tmp_path / "Dockerfile"
+
+    generate_dockerfile(str(output_path), "generated")
+
+    assert "FROM python:3.11-slim" in output_path.read_text(encoding="utf-8")
+
+
+def test_generate_dockerfile_uses_the_given_python_version(tmp_path):
+
+    output_path = tmp_path / "Dockerfile"
+
+    generate_dockerfile(str(output_path), "generated", python_version="3.12")
+
+    assert "FROM python:3.12-slim" in output_path.read_text(encoding="utf-8")
+
+
+def test_compiler_pipeline_dockerfile_base_image_matches_the_compiling_interpreter(
+    tmp_path, monkeypatch
+):
+    """Confirmed broken before this fix: the Dockerfile always hardcoded
+    "FROM python:3.11-slim" regardless of what interpreter actually ran
+    the compile -- while requirements.txt's versions (_pinned_requirement)
+    are pinned against exactly that interpreter's installed packages. A
+    pinned package whose wheels don't cover 3.11 (or that needs a newer
+    Python) would silently break `docker build`'s
+    `pip install -r requirements.txt` for anyone compiling on a different
+    Python version, which this repository's own environment already is.
+    """
+
+    monkeypatch.setattr(
+        "backend.compiler.compiling_python_version", lambda: "3.99"
+    )
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n"
+            "    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    dockerfile = (output_dir / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "FROM python:3.99-slim" in dockerfile
+    assert "FROM python:3.11-slim" not in dockerfile
 
 
 def test_compiler_pipeline_generates_a_dockerignore_excluding_git_and_caches(tmp_path):
