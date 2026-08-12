@@ -148,6 +148,72 @@ def test_deploy_compiles_and_builds_with_default_tag(tmp_path):
     assert "Docker image 'built_api:latest' built successfully." in proc.stdout
 
 
+def test_deploy_prints_a_compile_summary_before_building(tmp_path):
+    """`compile` and `serve` both print a summary of what actually got
+    generated (endpoint list, background/task_id markers, dependencies)
+    right after compiling -- see print_compile_summary in
+    backend/inspector.py. `deploy` also compiles the notebook as its
+    first step, but never called it, so a `deploy` run gave no visibility
+    at all into what had been compiled before jumping straight to the
+    Docker build -- only "Building Docker image ... built successfully."
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "import pandas as pd\n\n"
+                            "def add(a: int, b: int) -> int:\n"
+                            "    return a + b\n\n"
+                            "def train_model(epochs: int) -> str:\n"
+                            "    return 'done'\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+
+    proc = _run_cli(
+        ["deploy", str(notebook_path), "--output", "built_api"],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    assert "Generated 2 endpoint(s):" in proc.stdout
+    assert "POST /add" in proc.stdout
+    assert "POST /train_model  [background]" in proc.stdout
+    add_line = next(
+        line for line in proc.stdout.splitlines() if line.strip() == "POST /add"
+    )
+    assert "[background]" not in add_line
+    assert "Dependencies: pandas" in proc.stdout
+
+    # The summary must appear before the build starts, not after.
+    summary_index = proc.stdout.index("Generated 2 endpoint(s):")
+    build_index = proc.stdout.index("Docker image 'built_api:latest' built successfully.")
+    assert summary_index < build_index
+
+
 def test_deploy_respects_custom_tag(tmp_path):
 
     workdir = tmp_path / "workdir"

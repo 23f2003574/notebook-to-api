@@ -436,6 +436,7 @@ def _dispatch_core_command(args):
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
         compile_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
+        print_compile_summary(args.notebook, output_dir)
         # Build Docker image
         dockerfile_path = output_dir / "Dockerfile"
         if not dockerfile_path.is_file():
