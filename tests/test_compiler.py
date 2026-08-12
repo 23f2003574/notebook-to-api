@@ -80,6 +80,46 @@ def test_compiler_pipeline_dockerfile_runs_as_non_root_with_a_healthcheck(tmp_pa
     assert dockerfile.index("chown") < dockerfile.index("USER appuser") < dockerfile.index("CMD [")
 
 
+def test_compiler_pipeline_example_payload_is_a_list_for_an_optional_list_parameter(
+    tmp_path,
+):
+    """Confirmed exploitable before this fix: normalize_type_annotation
+    (backend/parser/ast_parser.py) peeled "Optional[" off
+    "Optional[List[float]]" with a blind ".replace(']', '')" that
+    stripped *every* closing bracket in the string, corrupting the
+    surviving "List[float]]" into the mismatched "List[float" instead of
+    "List[float]" -- which matched none of the type_defaults lookups, so
+    an extremely common real-world signature like
+    `scores: Optional[List[float]] = None` baked a `None` example into
+    the generated app's own OpenAPI schema for a field that's actually a
+    list.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "from typing import List, Optional\n\n"
+            "def summarize(scores: Optional[List[float]] = None) -> int:\n"
+            "    return len(scores) if scores else 0\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    app_source = (output_dir / "app.py").read_text(encoding="utf-8")
+
+    assert "'example': {'scores': []}" in app_source
+    assert "'example': {'scores': None}" not in app_source
+
+
 def test_compiling_python_version_matches_the_running_interpreter():
 
     version = compiling_python_version()

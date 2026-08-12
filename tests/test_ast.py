@@ -2,7 +2,10 @@ from backend.parser.ast_parser import (
     extract_functions_from_code,
     extract_imports_from_code,
     extract_skipped_functions_from_code,
-    deduplicate_functions_by_name
+    deduplicate_functions_by_name,
+    generate_example_payload,
+    generate_example_response,
+    normalize_type_annotation,
 )
 
 
@@ -529,3 +532,142 @@ def test_extract_skipped_functions_skips_unparseable_code_instead_of_raising():
     code = "def f(:\n"
 
     assert extract_skipped_functions_from_code(code) == []
+
+
+def test_normalize_type_annotation_strips_optional_wrapping_a_plain_type():
+
+    assert normalize_type_annotation("Optional[str]") == "str"
+
+
+def test_normalize_type_annotation_strips_union_keeping_the_first_type():
+
+    assert normalize_type_annotation("Union[int, float]") == "int"
+
+
+def test_normalize_type_annotation_strips_pep604_union_keeping_the_first_type():
+
+    assert normalize_type_annotation("int | str") == "int"
+
+
+def test_normalize_type_annotation_reduces_list_and_lowercase_list_to_list():
+
+    assert normalize_type_annotation("List[int]") == "list"
+    assert normalize_type_annotation("list[int]") == "list"
+
+
+def test_normalize_type_annotation_reduces_dict_tuple_set_to_their_bare_names():
+
+    assert normalize_type_annotation("Dict[str, int]") == "dict"
+    assert normalize_type_annotation("Tuple[int, str]") == "tuple"
+    assert normalize_type_annotation("Set[int]") == "set"
+
+
+def test_normalize_type_annotation_strips_annotated_keeping_the_first_type():
+
+    assert normalize_type_annotation('Annotated[int, "meta"]') == "int"
+
+
+def test_normalize_type_annotation_passes_through_a_plain_type_unchanged():
+
+    assert normalize_type_annotation("int") == "int"
+
+
+def test_normalize_type_annotation_passes_through_none_and_empty_string():
+
+    assert normalize_type_annotation(None) is None
+    assert normalize_type_annotation("") == ""
+
+
+def test_normalize_type_annotation_resolves_a_nested_generic_inside_optional():
+    """Confirmed exploitable before this fix: peeling "Optional[" off
+    "Optional[List[int]]" via ".replace('Optional[', '').replace(']', '')"
+    strips *every* closing bracket in the string, not just the one
+    belonging to Optional's own wrapper -- corrupting "List[int]]" into
+    the mismatched "List[int" instead of "List[int]". That matched none
+    of the List[/Dict[/Tuple[/Set[ checks, so a field typed
+    `Optional[List[float]]` silently got a `None` example instead of a
+    list.
+    """
+
+    assert normalize_type_annotation("Optional[List[int]]") == "list"
+    assert normalize_type_annotation("Optional[Dict[str, int]]") == "dict"
+
+
+def test_normalize_type_annotation_resolves_a_nested_generic_inside_union():
+
+    assert normalize_type_annotation("Union[List[float], str]") == "list"
+
+
+def test_normalize_type_annotation_resolves_a_nested_generic_before_pep604_none():
+    """The same corruption class as Optional[List[...]], for the PEP 604
+    spelling: peeling the union without re-normalizing the surviving
+    branch left "List[int]" un-reduced to "list".
+    """
+
+    assert normalize_type_annotation("List[int] | None") == "list"
+
+
+def test_normalize_type_annotation_resolves_a_nested_generic_inside_annotated():
+
+    assert normalize_type_annotation('Annotated[List[int], "meta"]') == "list"
+
+
+def test_normalize_type_annotation_does_not_split_a_pipe_nested_inside_a_generic():
+    """A "|" inside a generic's own arguments (e.g. a PEP 604 union used
+    as a Dict value type) is not a top-level union of the whole
+    annotation and must not be split there -- the annotation is still a
+    Dict overall.
+    """
+
+    assert normalize_type_annotation("Dict[str, int | float]") == "dict"
+
+
+def test_generate_example_response_defaults_to_a_list_for_optional_list_return_type():
+
+    assert generate_example_response("Optional[List[int]]") == {"result": []}
+
+
+def test_generate_example_response_defaults_to_none_result_for_no_return_type():
+
+    assert generate_example_response(None) == {"result": None}
+
+
+def test_generate_example_response_uses_the_literals_first_value():
+
+    assert generate_example_response('Literal["xgboost", "rf"]') == {
+        "result": "xgboost"
+    }
+
+
+def test_generate_example_payload_defaults_to_a_list_for_an_optional_list_param():
+    """Before this fix, a parameter typed `Optional[List[float]]` (an
+    extremely common real-world signature, e.g. `scores: Optional[List[float]]
+    = None`) produced an example_payload of `None` for that field instead
+    of a representative empty list -- misleading in both `inspect`'s
+    output and the example baked into the generated app's own OpenAPI
+    schema.
+    """
+
+    payload = generate_example_payload(
+        [{"name": "scores", "type": "Optional[List[float]]"}]
+    )
+
+    assert payload == {"scores": []}
+
+
+def test_generate_example_payload_uses_an_explicit_default_over_the_type_default():
+
+    payload = generate_example_payload(
+        [{"name": "count", "type": "int", "default": 5}]
+    )
+
+    assert payload == {"count": 5}
+
+
+def test_generate_example_payload_uses_the_literals_first_value():
+
+    payload = generate_example_payload(
+        [{"name": "model", "type": 'Literal["xgboost", "rf"]'}]
+    )
+
+    assert payload == {"model": "xgboost"}

@@ -265,37 +265,93 @@ def extract_skipped_functions_from_code(code):
     return skipped
 
 
+def _matching_bracket_content(text):
+    """`text` is everything after a generic wrapper's opening "[" (e.g.
+    the "List[int]]" left over from stripping "Optional[" off the front
+    of "Optional[List[int]]"). Returns the content up to (not including)
+    the "]" that actually matches that opening bracket, tracking bracket
+    depth so a nested generic inside it (the "List[int]" here) isn't
+    corrupted by also consuming *its own* closing bracket.
+
+    Without this, a blind ".replace(']', '')" -- what this used to do --
+    strips every closing bracket in the whole string, not just the one
+    belonging to the wrapper being peeled: "Optional[List[int]]" fell
+    apart into the mismatched "List[int" instead of "List[int]", which
+    then matched none of the List[/Dict[/Tuple[/Set[ checks below (nor
+    anything in the type_defaults maps in generate_example_payload/
+    generate_example_response), silently producing a `None` example for
+    a field that's actually a list.
+    """
+    depth = 1
+
+    for i, ch in enumerate(text):
+
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+
+            if depth == 0:
+                return text[:i]
+
+    # Unbalanced input shouldn't happen for a real ast.unparse'd
+    # annotation -- fall back to the whole remainder rather than raising.
+    return text
+
+
+def _first_top_level_segment(text, separator):
+    """The portion of `text` up to (not including) the first occurrence
+    of `separator` that isn't nested inside a "[...]" pair, e.g. for
+    "List[int], str" with separator "," this returns "List[int]" rather
+    than splitting inside List's own brackets. Returns all of `text`
+    unchanged if `separator` never occurs at bracket depth 0.
+    """
+    depth = 0
+
+    for i, ch in enumerate(text):
+
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+        elif ch == separator and depth == 0:
+            return text[:i]
+
+    return text
+
+
 def normalize_type_annotation(arg_type):
     if not arg_type:
         return arg_type
 
+    arg_type = arg_type.strip()
+
     if arg_type.startswith("Annotated["):
-        return (
-            arg_type
-            .replace("Annotated[", "")
-            .rstrip("]")
-            .split(",")[0]
-            .strip()
-        )
+        inner = _matching_bracket_content(arg_type[len("Annotated["):])
+        first_arg = _first_top_level_segment(inner, ",").strip()
+        return normalize_type_annotation(first_arg)
 
     if arg_type.startswith("Optional["):
-        return (
-            arg_type
-            .replace("Optional[", "")
-            .replace("]", "")
-        )
+        inner = _matching_bracket_content(arg_type[len("Optional["):])
+        return normalize_type_annotation(inner.strip())
 
     if arg_type.startswith("Union["):
-        return (
-            arg_type
-            .replace("Union[", "")
-            .replace("]", "")
-            .split(",")[0]
-            .strip()
-        )
+        inner = _matching_bracket_content(arg_type[len("Union["):])
+        first_arg = _first_top_level_segment(inner, ",").strip()
+        return normalize_type_annotation(first_arg)
 
     if "|" in arg_type:
-        return arg_type.split("|")[0].strip()
+        # A top-level PEP 604 union (e.g. "int | str" or "List[int] |
+        # None") must be split before recursing -- but a "|" nested
+        # inside a generic's own arguments (e.g. "Dict[str, int | float]")
+        # is not a top-level union at all and must be left alone here, or
+        # this would incorrectly try to normalize the truncated
+        # "Dict[str, int " instead of falling through to the Dict[ check
+        # below.
+        first_arg = _first_top_level_segment(arg_type, "|").strip()
+
+        if first_arg != arg_type:
+            return normalize_type_annotation(first_arg)
 
     if (
         arg_type.startswith("List[")
