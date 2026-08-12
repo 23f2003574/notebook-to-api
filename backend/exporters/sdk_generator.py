@@ -25,6 +25,59 @@ def _method_name_from_path(path: str) -> str:
     return name
 
 
+def _is_background_path(methods):
+    """Whether `methods` (a path's {"post": {...}, ...} operations dict
+    from an OpenAPI schema this tool generated) is a background/task_id
+    endpoint, per the "x-notebook-to-api-async" marker
+    generate_fastapi_code already stamps onto its POST operation (see
+    api_generator.py) -- the same flag POST /api/compile's own
+    "endpoints" field and inspect_notebook_data's "endpoints" field
+    already key off of, reused here instead of re-deriving it from
+    LONG_RUNNING_KEYWORDS a third time.
+    """
+    return bool((methods.get("post") or {}).get("x-notebook-to-api-async"))
+
+
+def _build_wait_method_names(method_names, paths):
+    """A collision-free companion method name for each background path in
+    `method_names`, submitting the task and blocking until it finishes.
+
+    Before this, a background endpoint's generated method (e.g.
+    train_model) looked identical to a synchronous one: it returned
+    {"task_id": ..., "status": "processing"} immediately, with nothing in
+    the generated client actually connecting that to get_task/
+    wait_for_task -- a caller had to already know, from reading the
+    OpenAPI docs separately, which methods needed polling at all.
+
+    Derived from each path's own already-assigned method name with an
+    "_and_wait" suffix, disambiguated against every name already in use
+    (not just other "_and_wait" names) the same way _build_method_names
+    disambiguates the base names themselves: a real notebook function
+    could easily be named e.g. "train_model_and_wait" and collide with
+    the synthesized companion name for "/train_model".
+    """
+    used_names = set(method_names.values())
+    wait_method_names = {}
+
+    for path, methods in paths.items():
+
+        if not _is_background_path(methods):
+            continue
+
+        base_name = f"{method_names[path]}_and_wait"
+        candidate = base_name
+        suffix = 2
+
+        while candidate in used_names:
+            candidate = f"{base_name}_{suffix}"
+            suffix += 1
+
+        used_names.add(candidate)
+        wait_method_names[path] = candidate
+
+    return wait_method_names
+
+
 def _build_method_names(paths):
     """Map each POST path to a collision-free client method name.
 
@@ -84,6 +137,7 @@ def generate_python_sdk(
 
     paths = schema.get("paths", {})
     method_names = _build_method_names(paths)
+    wait_method_names = _build_wait_method_names(method_names, paths)
     # Prepare client code lines
     lines = []
     lines.append("import os")
@@ -133,9 +187,28 @@ def generate_python_sdk(
     lines.append("            time.sleep(poll_interval)")
     lines.append("")
     for path, method_name in method_names.items():
+        is_background = _is_background_path(paths[path])
         # Determine parameter schema (simple request body expecting JSON)
         lines.append(f"    def {method_name}(self, payload: dict):")
-        lines.append(f'        """Call the `{path}` endpoint with JSON payload."""')
+        if is_background:
+            wait_name = wait_method_names[path]
+            lines.append(f'        """Enqueue the `{path}` background task with JSON payload.')
+            lines.append("")
+            lines.append(
+                '        Returns {"task_id": ..., "status": "processing"} '
+                "immediately --"
+            )
+            lines.append(
+                "        not the real result. Call get_task(task_id)/"
+                "wait_for_task(task_id)"
+            )
+            lines.append(
+                f"        yourself, or use {wait_name}(...) to submit and "
+                'block until'
+            )
+            lines.append('        the real result is ready in one call."""')
+        else:
+            lines.append(f'        """Call the `{path}` endpoint with JSON payload."""')
         lines.append(f'        response = requests.post(')
         lines.append(f'            f"{{self.base_url}}{path}",')
         lines.append(f'            json=payload,')
@@ -144,6 +217,24 @@ def generate_python_sdk(
         lines.append("        response.raise_for_status()")
         lines.append("        return response.json()")
         lines.append("")
+
+        if is_background:
+            wait_name = wait_method_names[path]
+            lines.append(
+                f"    def {wait_name}(self, payload: dict, "
+                "poll_interval: float = 1.0, timeout: float = 60.0) -> dict:"
+            )
+            lines.append(
+                f'        """Submit `{path}` and block until the '
+                "background task finishes, returning its finished task "
+                'record (see wait_for_task)."""'
+            )
+            lines.append(f"        submitted = self.{method_name}(payload)")
+            lines.append(
+                "        return self.wait_for_task("
+                "submitted['task_id'], poll_interval, timeout)"
+            )
+            lines.append("")
     # Write to file
     output_file = Path(output_path)
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -169,6 +260,7 @@ def generate_typescript_sdk(
 
     paths = schema.get("paths", {})
     method_names = _build_method_names(paths)
+    wait_method_names = _build_wait_method_names(method_names, paths)
     # Prepare client code lines
     lines = []
     lines.append("export interface NotebookAPIClientOptions {")
@@ -252,13 +344,45 @@ def generate_typescript_sdk(
     lines.append("    }")
     lines.append("  }")
     for path, method_name in method_names.items():
+        is_background = _is_background_path(paths[path])
         lines.append("")
+        if is_background:
+            wait_name = wait_method_names[path]
+            lines.append(f"  /** Enqueues `{path}` with JSON payload and returns")
+            lines.append(
+                '   * { task_id, status: "processing" } immediately -- not the '
+                "real result."
+            )
+            lines.append(
+                f"   * Call getTask(taskId)/waitForTask(taskId) yourself, or "
+                f"use {wait_name}(...)"
+            )
+            lines.append("   * to submit and wait for the real result in one call. */")
         lines.append(
             f"  async {method_name}(payload: Record<string, unknown>): "
             "Promise<any> {"
         )
         lines.append(f'    return this.request("{path}", payload);')
         lines.append("  }")
+
+        if is_background:
+            wait_name = wait_method_names[path]
+            lines.append("")
+            lines.append(
+                f"  /** Submits `{path}` and blocks until the background "
+                "task finishes, returning its finished task record (see "
+                "waitForTask). */"
+            )
+            lines.append(
+                f"  async {wait_name}(payload: Record<string, unknown>, "
+                "options: { pollIntervalMs?: number; timeoutMs?: number } = "
+                "{}): Promise<any> {"
+            )
+            lines.append(f"    const submitted = await this.{method_name}(payload);")
+            lines.append(
+                "    return this.waitForTask(submitted.task_id, options);"
+            )
+            lines.append("  }")
     lines.append("}")
     lines.append("")
     # Write to file

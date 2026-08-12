@@ -317,6 +317,180 @@ def test_generate_python_sdk_wait_for_task_raises_timeout_error(tmp_path, monkey
         client.wait_for_task("abc123", poll_interval=0, timeout=0)
 
 
+def test_generate_python_sdk_background_endpoint_gets_an_and_wait_companion(tmp_path):
+    """Before this fix, a background endpoint's generated method looked
+    identical to a synchronous one: it returned {"task_id": ...,
+    "status": "processing"} immediately, with nothing in the generated
+    client actually connecting that to get_task/wait_for_task -- a caller
+    had no way to tell, from the client alone, that train_model(...)
+    doesn't return the real result.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "x-notebook-to-api-async": True,
+                }
+            },
+        },
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    ast.parse(source)
+    assert (
+        "def train_model_and_wait(self, payload: dict, "
+        "poll_interval: float = 1.0, timeout: float = 60.0) -> dict:"
+        in source
+    )
+    assert "processing" in source.split("def train_model(")[1].split("def ")[0]
+
+
+def test_generate_python_sdk_synchronous_endpoint_gets_no_and_wait_companion(
+    tmp_path,
+):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/add": {"post": {"operationId": "add"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert "add_and_wait" not in source
+
+
+def test_generate_python_sdk_and_wait_disambiguates_against_a_colliding_real_endpoint(
+    tmp_path,
+):
+    """A real notebook function could easily be named
+    "train_model_and_wait" -- the synthesized companion for the
+    background "/train_model" endpoint must not silently collide with
+    (and shadow) that real, separate endpoint's own method.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "x-notebook-to-api-async": True,
+                }
+            },
+            "/train_model_and_wait": {
+                "post": {
+                    "operationId": "train_model_and_wait",
+                    "x-notebook-to-api-async": True,
+                }
+            },
+        },
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    ast.parse(source)
+    # The real "/train_model_and_wait" endpoint's own method.
+    assert source.count("def train_model_and_wait(self, payload: dict):") == 1
+    # The synthesized companion for "/train_model" was pushed to a
+    # disambiguated name instead of colliding with it.
+    assert (
+        "def train_model_and_wait_2(self, payload: dict, "
+        "poll_interval: float = 1.0, timeout: float = 60.0) -> dict:"
+        in source
+    )
+    assert "def train_model_and_wait(self, payload: dict, " not in source
+
+
+def test_generate_python_sdk_and_wait_submits_then_polls_to_completion(
+    tmp_path, monkeypatch
+):
+    """Behavioral, not just structural: calling the companion method must
+    actually submit the task and then poll it through to its finished
+    result, in one call.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "x-notebook-to-api-async": True,
+                }
+            },
+        },
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    post_calls = []
+    get_calls = []
+
+    class FakePostResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"task_id": "abc123", "status": "processing"}
+
+    class FakeGetResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._payload
+
+    def fake_post(url, json=None, headers=None):
+        post_calls.append({"url": url, "json": json})
+        return FakePostResponse()
+
+    get_responses = [
+        {"status": "processing"},
+        {"status": "completed", "result": 42},
+    ]
+
+    def fake_get(url, headers=None):
+        get_calls.append(url)
+        return FakeGetResponse(get_responses[len(get_calls) - 1])
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.post = fake_post
+    fake_requests.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    result = client.train_model_and_wait({"epochs": 5}, poll_interval=0, timeout=5)
+
+    assert result == {"status": "completed", "result": 42}
+    assert post_calls == [
+        {"url": "http://localhost:8000/train_model", "json": {"epochs": 5}}
+    ]
+    assert get_calls == [
+        "http://localhost:8000/tasks/abc123",
+        "http://localhost:8000/tasks/abc123",
+    ]
+
+
 def test_generate_typescript_sdk_produces_expected_structure(tmp_path):
 
     schema_path = _write_schema(
@@ -577,6 +751,120 @@ def test_generate_typescript_sdk_wait_for_task_throws_on_timeout(tmp_path):
     assert "did not complete" in output["message"]
 
 
+def test_generate_typescript_sdk_background_endpoint_gets_an_and_wait_companion(
+    tmp_path,
+):
+    """Mirrors test_generate_python_sdk_background_endpoint_gets_an_and_wait_companion
+    for the TypeScript client.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "x-notebook-to-api-async": True,
+                }
+            },
+        },
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    source = client_path.read_text(encoding="utf-8")
+
+    assert (
+        "async train_model_and_wait(payload: Record<string, unknown>, "
+        "options: { pollIntervalMs?: number; timeoutMs?: number } = {}): "
+        "Promise<any> {" in source
+    )
+
+
+def test_generate_typescript_sdk_synchronous_endpoint_gets_no_and_wait_companion(
+    tmp_path,
+):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/add": {"post": {"operationId": "add"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    assert "add_and_wait" not in client_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_and_wait_submits_then_polls_to_completion(tmp_path):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "x-notebook-to-api-async": True,
+                }
+            },
+        },
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const calls = [];
+        let getCount = 0;
+        globalThis.fetch = async (url, opts) => {{
+          calls.push({{ url, method: opts && opts.method }});
+          if (opts && opts.method === "POST") {{
+            return {{ ok: true, json: async () => ({{ task_id: "abc123", status: "processing" }}) }};
+          }}
+          getCount += 1;
+          const status = getCount < 2 ? "processing" : "completed";
+          return {{ ok: true, json: async () => ({{ status, result: 42 }}) }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+        const result = await client.train_model_and_wait(
+          {{ epochs: 5 }}, {{ pollIntervalMs: 0, timeoutMs: 5000 }}
+        );
+
+        console.log(JSON.stringify({{ result, calls }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["result"] == {"status": "completed", "result": 42}
+    assert output["calls"][0] == {
+        "url": "http://localhost:8000/train_model",
+        "method": "POST",
+    }
+    assert all(
+        call["url"] == "http://localhost:8000/tasks/abc123"
+        for call in output["calls"][1:]
+    )
+
+
 def test_sdk_pipeline_end_to_end_against_real_compiled_app(tmp_path):
     """Full real pipeline in a fresh subprocess (compile -> export-openapi
     -> export-sdk -> call the compiled app with the generated client),
@@ -674,6 +962,117 @@ print("SDK_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "SDK_E2E_OK" in proc.stdout
+
+
+def test_sdk_pipeline_and_wait_end_to_end_against_a_real_background_endpoint(tmp_path):
+    """The same full real pipeline as
+    test_sdk_pipeline_end_to_end_against_real_compiled_app, but for a
+    background/task_id-based endpoint (see LONG_RUNNING_KEYWORDS in
+    api_generator.py): confirms the generated *_and_wait companion
+    method actually submits the task to the real compiled app and polls
+    it through to its real, finished result in one call -- not just that
+    the generated source text looks right.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def train_model(epochs: int) -> str:\n"
+                            "    return f'trained for {epochs} epochs'\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+from backend.exporters.sdk_generator import generate_python_sdk
+from fastapi.testclient import TestClient
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from backend.exporters.openapi_exporter import export_openapi_schema
+export_openapi_schema("generated/openapi.json")
+generate_python_sdk("generated/openapi.json", "generated/sdk/python_client.py")
+
+from generated.app import app
+
+test_client = TestClient(app)
+
+import types
+
+def fake_post(url, json=None, headers=None):
+    path = url.split("://", 1)[1].split("/", 1)[1]
+    resp = test_client.post("/" + path, json=json, headers=headers)
+    resp.raise_for_status = lambda: None
+    return resp
+
+def fake_get(url, headers=None):
+    path = url.split("://", 1)[1].split("/", 1)[1]
+    resp = test_client.get("/" + path, headers=headers)
+    resp.raise_for_status = lambda: None
+    return resp
+
+fake_requests = types.ModuleType("requests")
+fake_requests.post = fake_post
+fake_requests.get = fake_get
+sys.modules["requests"] = fake_requests
+
+namespace = {{}}
+exec(
+    compile(open("generated/sdk/python_client.py").read(), "client.py", "exec"),
+    namespace,
+)
+
+client = namespace["NotebookAPIClient"]("http://testserver")
+
+# The base method alone must still return the raw task descriptor, not
+# the real result.
+submitted = client.train_model({{"epochs": 3}})
+assert submitted["status"] == "processing", submitted
+assert "task_id" in submitted, submitted
+
+# The companion method submits and polls through to the real result.
+finished = client.train_model_and_wait(
+    {{"epochs": 3}}, poll_interval=0.01, timeout=5
+)
+assert finished["status"] == "completed", finished
+assert finished["result"] == "trained for 3 epochs", finished
+
+print("SDK_AND_WAIT_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SDK_AND_WAIT_E2E_OK" in proc.stdout
 
 
 def test_export_openapi_schema_uses_the_freshly_compiled_app_for_custom_output_dir(
