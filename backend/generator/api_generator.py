@@ -181,6 +181,14 @@ def generate_fastapi_code(functions, package_name="generated"):
             _, typing_names = _resolve_annotation_source(arg.get("type"))
             needed_typing_names |= typing_names
 
+            if arg.get("has_default") and not arg.get(
+                "default_is_literal", True
+            ):
+                _, default_typing_names = _resolve_annotation_source(
+                    arg.get("default")
+                )
+                needed_typing_names |= default_typing_names
+
     model_names = _build_model_names(functions)
 
     lines = []
@@ -719,9 +727,30 @@ def generate_fastapi_code(functions, package_name="generated"):
             default_value = arg.get("default")
 
             if arg.get("has_default"):
+                if arg.get("default_is_literal", True):
+                    default_expr = repr(default_value)
+                else:
+                    # A non-literal default (e.g. a notebook-defined Enum
+                    # member like `Priority.HIGH` -- see
+                    # extract_functions_from_code's default_is_literal in
+                    # ast_parser.py). `default_value` here is raw notebook
+                    # source, not a Python value, so repr()-ing it like a
+                    # literal default would embed it as the *string*
+                    # "Priority.HIGH" instead of the actual enum member --
+                    # confirmed broken before this fix: a caller omitting
+                    # this field to take its default raised an
+                    # AttributeError inside the notebook's own function the
+                    # moment it tried to use the (wrongly stringified)
+                    # value. Reusing _resolve_annotation_source qualifies
+                    # any bare notebook-defined name it references (e.g.
+                    # "Priority") to notebook_module.Priority, exactly as
+                    # it already does for type annotations, then the
+                    # qualified source is embedded directly as a code
+                    # expression rather than a string literal.
+                    default_expr, _ = _resolve_annotation_source(default_value)
                 lines.append(
                     f'    {arg_name}: {arg_type} = Field('
-                    f'default={repr(default_value)}, '
+                    f'default={default_expr}, '
                     f'description="{field_description}"'
                     f')'
                 )

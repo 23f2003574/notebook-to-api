@@ -446,6 +446,74 @@ def test_notebook_defined_type_is_qualified_with_notebook_module():
     assert "of type Status" in code
 
 
+def test_non_literal_default_is_embedded_as_a_qualified_expression_not_a_string():
+    """Confirmed exploitable before this fix: a default that isn't a
+    literal_eval-able literal (e.g. a notebook-defined Enum member like
+    `Priority.HIGH`) was repr()'d exactly like a real literal default,
+    which silently turned it into the *string* "Priority.HIGH" in the
+    generated Pydantic model instead of the actual enum member -- a
+    caller omitting that field to take its default then passed the raw
+    string straight into the notebook's own function, breaking whatever
+    it did with the real enum member (e.g. `.value`).
+    """
+
+    functions = [
+        {
+            "name": "set_priority",
+            "args": [
+                {
+                    "name": "priority",
+                    "type": "Priority",
+                    "has_default": True,
+                    "default_is_literal": False,
+                    "default": "Priority.HIGH",
+                    "kind": "positional",
+                },
+            ],
+            "return_type": "str",
+        }
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    assert (
+        "priority: notebook_module.Priority = Field("
+        "default=notebook_module.Priority.HIGH, "
+        in code
+    )
+    assert "default='Priority.HIGH'" not in code
+    assert 'default="Priority.HIGH"' not in code
+
+
+def test_literal_default_is_still_repr_embedded():
+    """A real literal default (the common case) must keep going through
+    repr(), not the qualification path above -- e.g. a plain string
+    default must stay a quoted string literal, not be treated as a bare
+    expression referencing a notebook name.
+    """
+
+    functions = [
+        {
+            "name": "greet",
+            "args": [
+                {
+                    "name": "name",
+                    "type": "str",
+                    "has_default": True,
+                    "default_is_literal": True,
+                    "default": "world",
+                    "kind": "positional",
+                },
+            ],
+            "return_type": "str",
+        }
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    assert "default='world'" in code
+
+
 def test_pydantic_model_generation():
 
     functions = [

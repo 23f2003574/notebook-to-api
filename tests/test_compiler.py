@@ -1560,6 +1560,90 @@ print("TYPING_GENERIC_ENUM_E2E_OK")
     assert "TYPING_GENERIC_ENUM_E2E_OK" in proc.stdout
 
 
+def test_compiler_pipeline_enum_default_param_is_usable_end_to_end(tmp_path):
+    """Confirmed exploitable before this fix: a parameter defaulting to a
+    notebook-defined Enum member (e.g. `priority: Priority = Priority.HIGH`)
+    got repr()'d into the generated Pydantic model exactly like a literal
+    default, silently turning it into the *string* "Priority.HIGH" instead
+    of the actual enum member. A caller omitting that field to take its
+    default then passed the raw string straight into the notebook's own
+    function, which crashed with an AttributeError the moment it tried to
+    use it as an actual Priority (e.g. `.value`).
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "from enum import Enum\n\n"
+                            "class Priority(Enum):\n"
+                            "    LOW = 'low'\n"
+                            "    HIGH = 'high'\n\n"
+                            "def set_priority(priority: Priority = Priority.HIGH) -> str:\n"
+                            "    return priority.value\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+# Omitting "priority" entirely must fall back to the real Priority.HIGH
+# enum member, not the string "Priority.HIGH".
+default_resp = client.post("/set_priority", json={{}}, headers=headers)
+assert default_resp.status_code == 200, default_resp.text
+assert default_resp.json() == {{"result": "high"}}, default_resp.json()
+
+explicit_resp = client.post(
+    "/set_priority", json={{"priority": "low"}}, headers=headers
+)
+assert explicit_resp.status_code == 200, explicit_resp.text
+assert explicit_resp.json() == {{"result": "low"}}, explicit_resp.json()
+
+print("ENUM_DEFAULT_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ENUM_DEFAULT_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_background_tasks_are_evicted_after_ttl_expires(tmp_path):
     """Confirmed exploitable before this fix: the generated TASKS registry
     never evicted anything on its own -- a long-running deployment

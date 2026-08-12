@@ -116,6 +116,7 @@ def extract_functions_from_code(code):
                     "name": arg.arg,
                     "type": None,
                     "default": None,
+                    "default_is_literal": True,
                     "has_default": False,
                     "kind": "positional"
                 }
@@ -133,6 +134,17 @@ def extract_functions_from_code(code):
                             defaults[default_index]
                         )
                     except Exception:
+                        # Not a literal (e.g. a notebook-defined Enum
+                        # member like `Priority.HIGH`, or any other
+                        # expression) -- "default" holds its raw source
+                        # instead, and default_is_literal=False tells the
+                        # generator (see api_generator.py) to embed it as
+                        # a qualified code expression rather than
+                        # repr()-ing it into a Pydantic Field default,
+                        # which would silently turn it into the *string*
+                        # "Priority.HIGH" instead of the actual enum
+                        # member.
+                        arg_info["default_is_literal"] = False
                         arg_info["default"] = ast.unparse(
                             defaults[default_index]
                         )
@@ -149,6 +161,7 @@ def extract_functions_from_code(code):
                     "name": arg.arg,
                     "type": None,
                     "default": None,
+                    "default_is_literal": True,
                     "has_default": False,
                     "kind": "keyword_only"
                 }
@@ -166,6 +179,8 @@ def extract_functions_from_code(code):
                             default_node
                         )
                     except Exception:
+                        # See the identical positional-arg branch above.
+                        arg_info["default_is_literal"] = False
                         arg_info["default"] = ast.unparse(
                             default_node
                         )

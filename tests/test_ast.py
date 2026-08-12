@@ -337,6 +337,52 @@ def f(a, b=2, /, c=3):
     assert args["c"]["default"] == 3
 
 
+def test_function_extraction_marks_a_literal_default_as_literal():
+
+    code = """
+def f(a=2):
+    return a
+"""
+
+    args = extract_functions_from_code(code)[0]["args"]
+
+    assert args[0]["default_is_literal"] is True
+    assert args[0]["default"] == 2
+
+
+def test_function_extraction_marks_a_non_literal_default_as_not_literal():
+    """A default that isn't a literal_eval-able literal (e.g. a
+    notebook-defined Enum member) previously stored the same "default" key
+    with no way to tell it apart from a real literal default -- the
+    generator then repr()'d it as if it were one, turning
+    `Priority.HIGH` into the *string* "Priority.HIGH" in the generated
+    Pydantic model instead of the actual enum member.
+    """
+
+    code = """
+def f(priority=Priority.HIGH):
+    return priority
+"""
+
+    args = extract_functions_from_code(code)[0]["args"]
+
+    assert args[0]["default_is_literal"] is False
+    assert args[0]["default"] == "Priority.HIGH"
+
+
+def test_function_extraction_keyword_only_marks_a_non_literal_default_as_not_literal():
+
+    code = """
+def f(*, priority=Priority.HIGH):
+    return priority
+"""
+
+    args = extract_functions_from_code(code)[0]["args"]
+
+    assert args[0]["default_is_literal"] is False
+    assert args[0]["default"] == "Priority.HIGH"
+
+
 def test_function_extraction_excludes_function_with_var_args():
     """*args can't be represented as a fixed set of Pydantic request
     fields -- the generated endpoint would silently ignore whatever
