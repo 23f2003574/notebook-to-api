@@ -11,6 +11,7 @@ import nbformat
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.compiler import COMPILE_METADATA_FILENAME
 from backend.dashboard import app
 from backend.routes.upload import UPLOAD_DIR, resolve_upload_path
 
@@ -829,6 +830,91 @@ def test_compile_returns_400_for_a_reserved_function_name():
 
     assert compile_resp.status_code == 400
     assert "health_check" in compile_resp.json()["detail"]
+
+
+def test_compile_respects_a_configured_generated_dir(tmp_path, monkeypatch):
+    """POST /api/compile previously always wrote to a hardcoded "generated"
+    string, ignoring GENERATED_DIR entirely -- every other endpoint that
+    reads compiled output (list_notebooks' currently_compiled check,
+    /api/export-openapi, /api/export-sdk, /api/deploy, /api/download)
+    already honored GENERATED_DIR (now configurable via
+    NOTEBOOK_API_GENERATED_DIR), so pointing it elsewhere would have
+    silently only taken effect for those, while /api/compile kept writing
+    to "generated/" regardless -- the two would disagree about where the
+    compiled app actually lives.
+    """
+
+    from backend.routes import upload as upload_module
+
+    custom_dir = tmp_path / "custom_generated"
+    monkeypatch.setattr(upload_module, "GENERATED_DIR", str(custom_dir))
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "custom_generated_dir_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "custom_generated_dir_test.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    assert (custom_dir / "app.py").is_file()
+    assert (custom_dir / "requirements.txt").is_file()
+    assert (custom_dir / COMPILE_METADATA_FILENAME).is_file()
+
+
+def test_compile_into_a_custom_generated_dir_is_visible_to_other_endpoints(
+    tmp_path, monkeypatch
+):
+    """End-to-end proof that /api/compile and the rest of the dashboard API
+    agree on where the compiled app lives once GENERATED_DIR is
+    configured: list_notebooks' currently_compiled check and /api/download
+    both read from GENERATED_DIR, so if /api/compile had still written to
+    the hardcoded "generated/" instead, neither would ever find it.
+    """
+
+    from backend.routes import upload as upload_module
+
+    custom_dir = tmp_path / "custom_generated_2"
+    monkeypatch.setattr(upload_module, "GENERATED_DIR", str(custom_dir))
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    filename = "custom_generated_dir_consistency_test.ipynb"
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post("/api/compile", json={"notebook_path": filename})
+    assert compile_resp.status_code == 200
+
+    notebooks_resp = client.get("/api/notebooks")
+    assert notebooks_resp.status_code == 200
+    entry = next(
+        n for n in notebooks_resp.json()["notebooks"] if n["filename"] == filename
+    )
+    assert entry["currently_compiled"] is True
+
+    download_resp = client.get("/api/download")
+    assert download_resp.status_code == 200
+    archive = zipfile.ZipFile(io.BytesIO(download_resp.content))
+    assert "app.py" in archive.namelist()
 
 
 def test_export_openapi_and_export_sdk_full_flow():

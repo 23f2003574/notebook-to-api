@@ -36,7 +36,14 @@ from backend.parser.ast_parser import (
 # so letting a network caller pick an arbitrary package/directory to import
 # would be a far bigger trust boundary than the CLI's --app-dir (a local,
 # already-trusted operator flag).
-GENERATED_DIR = "generated"
+#
+# Configurable via NOTEBOOK_API_GENERATED_DIR, matching the app's existing
+# NOTEBOOK_API_* env-var convention (see MAX_UPLOAD_BYTES and
+# DEPLOY_SUBPROCESS_TIMEOUT_SECONDS below), rather than being permanently
+# fixed to "generated" with no way for an operator to point the dashboard
+# API at a different output directory (e.g. to avoid colliding with a
+# `compile --output` a developer already runs by hand alongside it).
+GENERATED_DIR = os.getenv("NOTEBOOK_API_GENERATED_DIR", "generated")
 
 router = APIRouter(
     prefix="/api",
@@ -509,7 +516,7 @@ async def compile_notebook_endpoint(
 
         compile_notebook(
             str(full_path),
-            "generated"
+            GENERATED_DIR
         )
 
         endpoints = []
