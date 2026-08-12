@@ -414,21 +414,34 @@ def _dispatch_core_command(args):
     elif args.command == "export-openapi":
         from backend.exporters.openapi_exporter import export_openapi_schema
         from backend.compiler import package_name_for_output_dir
+        # Defaults next to the app --app-dir actually points at, not a
+        # literal "generated/..." regardless of --app-dir. Before this, an
+        # `export-openapi --app-dir built` (no explicit --output) with the
+        # app compiled anywhere other than the default "generated" wrote
+        # the schema to "generated/openapi.json" -- a directory unrelated
+        # to, and possibly not even containing, the app it was just
+        # exported from.
         default_output = (
-            "generated/openapi.yaml" if args.format == "yaml" else "generated/openapi.json"
+            os.path.join(args.app_dir, "openapi.yaml") if args.format == "yaml"
+            else os.path.join(args.app_dir, "openapi.json")
         )
         output = args.output or default_output
         export_openapi_schema(
             output, package_name_for_output_dir(args.app_dir), format=args.format
         )
     elif args.command == "export-sdk":
+        # Same fix as export-openapi just above, for the same reason:
+        # defaults next to --openapi's own directory, not a literal
+        # "generated/sdk/..." regardless of where --openapi actually
+        # points.
+        openapi_dir = os.path.dirname(args.openapi)
         if args.language == "typescript":
             from backend.exporters.sdk_generator import generate_typescript_sdk
-            output = args.output or "generated/sdk/typescript_client.ts"
+            output = args.output or os.path.join(openapi_dir, "sdk", "typescript_client.ts")
             generate_typescript_sdk(args.openapi, output)
         else:
             from backend.exporters.sdk_generator import generate_python_sdk
-            output = args.output or "generated/sdk/python_client.py"
+            output = args.output or os.path.join(openapi_dir, "sdk", "python_client.py")
             generate_python_sdk(args.openapi, output)
     elif args.command == "serve":
         serve_notebook(args.notebook, args.output, args.port, args.host)
@@ -507,8 +520,8 @@ def main():
         default=None,
         help=(
             "Path to write the OpenAPI schema. Defaults to "
-            "generated/openapi.json for --format json, or "
-            "generated/openapi.yaml for --format yaml."
+            "<app-dir>/openapi.json for --format json, or "
+            "<app-dir>/openapi.yaml for --format yaml."
         )
     )
 
@@ -532,8 +545,9 @@ def main():
         default=None,
         help=(
             "Path to write the generated SDK client. Defaults to "
-            "generated/sdk/python_client.py for --language python, or "
-            "generated/sdk/typescript_client.ts for --language typescript."
+            "<openapi-dir>/sdk/python_client.py for --language python, or "
+            "<openapi-dir>/sdk/typescript_client.ts for --language "
+            "typescript, where <openapi-dir> is --openapi's own directory."
         )
     )
 

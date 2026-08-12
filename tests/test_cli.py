@@ -319,6 +319,58 @@ def test_export_openapi_command_writes_yaml_when_requested(tmp_path):
     assert "/add:" in yaml_path.read_text(encoding="utf-8")
 
 
+def test_export_openapi_command_defaults_output_next_to_the_app_dir(tmp_path):
+    """Confirmed broken before this fix: without an explicit --output,
+    export-openapi wrote to a literal "generated/openapi.json" regardless
+    of --app-dir -- so compiling into any directory other than the
+    default "generated" and then exporting from it (a completely normal
+    workflow) silently wrote the schema somewhere unrelated to, and
+    possibly not even containing, the app it was exported from.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    compile_proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+    assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
+
+    proc = _run_cli(["export-openapi", "--app-dir", "built"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    schema_path = workdir / "built" / "openapi.json"
+    assert schema_path.exists()
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    assert "/add" in schema["paths"]
+    # Must not have fallen back to the old hardcoded default.
+    assert not (workdir / "generated").exists()
+
+
+def test_export_openapi_command_defaults_yaml_output_next_to_the_app_dir(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    compile_proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+    assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
+
+    proc = _run_cli(
+        ["export-openapi", "--app-dir", "built", "--format", "yaml"], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    yaml_path = workdir / "built" / "openapi.yaml"
+    assert yaml_path.exists()
+    assert not (workdir / "generated").exists()
+
+
 def test_export_openapi_command_rejects_invalid_format_choice(tmp_path):
 
     workdir = tmp_path / "workdir"
@@ -394,6 +446,74 @@ def test_export_sdk_command_writes_typescript_client_when_requested(tmp_path):
     client_path = workdir / "built" / "sdk" / "typescript_client.ts"
     assert client_path.exists()
     assert "class NotebookAPIClient" in client_path.read_text(encoding="utf-8")
+
+
+def test_export_sdk_command_defaults_output_next_to_the_openapi_file(tmp_path):
+    """Confirmed broken before this fix: without an explicit --output,
+    export-sdk wrote to a literal "generated/sdk/python_client.py"
+    regardless of where --openapi actually pointed -- so exporting an SDK
+    from a schema compiled/exported anywhere other than the default
+    "generated" (a completely normal workflow) silently wrote the client
+    somewhere unrelated to the schema it was generated from.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    compile_proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+    assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
+
+    openapi_proc = _run_cli(
+        ["export-openapi", "--app-dir", "built", "--output", "built/openapi.json"],
+        cwd=workdir,
+    )
+    assert openapi_proc.returncode == 0, openapi_proc.stdout + openapi_proc.stderr
+
+    proc = _run_cli(
+        ["export-sdk", "--openapi", "built/openapi.json"], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    client_path = workdir / "built" / "sdk" / "python_client.py"
+    assert client_path.exists()
+    assert "def add(" in client_path.read_text(encoding="utf-8")
+    # Must not have fallen back to the old hardcoded default.
+    assert not (workdir / "generated").exists()
+
+
+def test_export_sdk_command_defaults_typescript_output_next_to_the_openapi_file(
+    tmp_path
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    compile_proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+    assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
+
+    openapi_proc = _run_cli(
+        ["export-openapi", "--app-dir", "built", "--output", "built/openapi.json"],
+        cwd=workdir,
+    )
+    assert openapi_proc.returncode == 0, openapi_proc.stdout + openapi_proc.stderr
+
+    proc = _run_cli(
+        ["export-sdk", "--openapi", "built/openapi.json", "--language", "typescript"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    client_path = workdir / "built" / "sdk" / "typescript_client.ts"
+    assert client_path.exists()
+    assert not (workdir / "generated").exists()
 
 
 def test_export_sdk_command_rejects_invalid_language_choice(tmp_path):
