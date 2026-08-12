@@ -809,6 +809,84 @@ def test_compile_endpoints_flag_background_functions_as_async():
     }
 
 
+def test_compile_reports_skipped_functions():
+    """Before this, a function that couldn't be turned into an endpoint
+    (e.g. one taking **kwargs) just silently had no corresponding route in
+    /api/compile's response, with nothing to explain why -- the same gap
+    /api/inspect's "skipped_functions" field closes for the pre-compile
+    preview.
+    """
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def unsupported(a, **kwargs):\n    return a\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "compile_skipped_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "compile_skipped_test.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    body = compile_resp.json()
+
+    assert body["skipped_functions"] == [
+        {
+            "name": "unsupported",
+            "reason": (
+                "uses *args/**kwargs, which can't be represented as a "
+                "fixed set of request fields"
+            ),
+        }
+    ]
+    assert {f["name"] for f in body["functions"]} == {"add"}
+
+
+def test_inspect_reports_skipped_functions_before_compiling():
+
+    content = _notebook_bytes(
+        "class Model:\n    def predict(self, x):\n        return x\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "inspect_skipped_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    inspect_resp = client.post(
+        "/api/inspect", json={"notebook_path": "inspect_skipped_test.ipynb"}
+    )
+    assert inspect_resp.status_code == 200
+
+    assert inspect_resp.json()["skipped_functions"] == [
+        {
+            "name": "predict",
+            "reason": (
+                "defined inside a class or nested function, so it isn't "
+                "callable as a standalone endpoint"
+            ),
+        }
+    ]
+
+
 def test_inspect_missing_notebook_still_returns_404_not_400():
     """A well-formed, in-bounds filename that simply doesn't exist should
     still 404 (existing behaviour), not be confused with a rejected path.

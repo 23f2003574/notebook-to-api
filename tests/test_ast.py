@@ -1,6 +1,7 @@
 from backend.parser.ast_parser import (
     extract_functions_from_code,
     extract_imports_from_code,
+    extract_skipped_functions_from_code,
     deduplicate_functions_by_name
 )
 
@@ -381,3 +382,104 @@ def add(a: int, b: int) -> int:
     funcs = extract_functions_from_code(code)
 
     assert [f["name"] for f in funcs] == ["add"]
+
+
+def test_extract_skipped_functions_reports_var_args_with_a_reason():
+
+    code = """
+def f(a, *args):
+    return a
+"""
+
+    skipped = extract_skipped_functions_from_code(code)
+
+    assert skipped == [
+        {
+            "name": "f",
+            "reason": (
+                "uses *args/**kwargs, which can't be represented as a "
+                "fixed set of request fields"
+            ),
+        }
+    ]
+
+
+def test_extract_skipped_functions_reports_kwargs_with_a_reason():
+
+    code = """
+def f(a, **kwargs):
+    return a
+"""
+
+    skipped = extract_skipped_functions_from_code(code)
+
+    assert skipped[0]["name"] == "f"
+    assert "**kwargs" in skipped[0]["reason"]
+
+
+def test_extract_skipped_functions_reports_class_methods():
+
+    code = """
+class Model:
+    def predict(self, x):
+        return x
+"""
+
+    skipped = extract_skipped_functions_from_code(code)
+
+    assert skipped == [
+        {
+            "name": "predict",
+            "reason": (
+                "defined inside a class or nested function, so it isn't "
+                "callable as a standalone endpoint"
+            ),
+        }
+    ]
+
+
+def test_extract_skipped_functions_reports_nested_functions():
+
+    code = """
+def outer():
+    def inner(x):
+        return x
+    return inner
+"""
+
+    skipped = extract_skipped_functions_from_code(code)
+
+    assert [s["name"] for s in skipped] == ["inner"]
+
+
+def test_extract_skipped_functions_is_empty_for_a_clean_notebook():
+
+    code = """
+def add(a: int, b: int) -> int:
+    return a + b
+"""
+
+    assert extract_skipped_functions_from_code(code) == []
+
+
+def test_extract_skipped_functions_does_not_flag_functions_reachable_via_if_block():
+    """A def inside a module-level if/try/for/while/with is still callable
+    as a plain module-level function once the notebook actually runs (see
+    _TRANSPARENT_BODY_FIELDS in ast_parser.py) -- it must not be reported
+    as skipped just because it isn't a direct child of the module body.
+    """
+
+    code = """
+if True:
+    def add(a: int, b: int) -> int:
+        return a + b
+"""
+
+    assert extract_skipped_functions_from_code(code) == []
+
+
+def test_extract_skipped_functions_skips_unparseable_code_instead_of_raising():
+
+    code = "def f(:\n"
+
+    assert extract_skipped_functions_from_code(code) == []

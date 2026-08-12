@@ -192,6 +192,64 @@ def extract_functions_from_code(code):
     return functions
 
 
+def extract_skipped_functions_from_code(code):
+    """Function definitions in `code` that extract_functions_from_code
+    silently drops, paired with why: either a `*args`/`**kwargs` catch-all
+    (module-level, but not representable as a fixed set of Pydantic
+    request fields -- see extract_functions_from_code above), or a def
+    nested inside a class or another function (not reachable as a
+    standalone, callable module-level function at all).
+
+    Before this, a notebook author whose function didn't turn into an
+    endpoint had no way to find out why short of reading this parser's own
+    source: `inspect`/POST /api/inspect reported every module-level
+    function that *did* survive extraction, but never mentioned the ones
+    that didn't -- a `**kwargs`-taking function or a class method just
+    silently had no corresponding route, with nothing in the compiled
+    output or its preview to explain the gap.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+
+    module_level_ids = {
+        id(node)
+        for node in _iter_module_level_statements(tree.body)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    skipped = []
+
+    for node in ast.walk(tree):
+
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+
+        if id(node) in module_level_ids:
+
+            if node.args.vararg or node.args.kwarg:
+                skipped.append({
+                    "name": node.name,
+                    "reason": (
+                        "uses *args/**kwargs, which can't be represented "
+                        "as a fixed set of request fields"
+                    ),
+                })
+
+            continue
+
+        skipped.append({
+            "name": node.name,
+            "reason": (
+                "defined inside a class or nested function, so it isn't "
+                "callable as a standalone endpoint"
+            ),
+        })
+
+    return skipped
+
+
 def normalize_type_annotation(arg_type):
     if not arg_type:
         return arg_type

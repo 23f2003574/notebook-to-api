@@ -9,6 +9,7 @@ from backend.parser.notebook_parser import (
 from backend.parser.ast_parser import (
     extract_functions_from_code,
     extract_imports_from_code,
+    extract_skipped_functions_from_code,
     deduplicate_functions_by_name,
 )
 
@@ -122,6 +123,33 @@ def _reserved_name_conflicts(functions):
     )
 
 
+def _aggregate_skipped_functions(code_cells, exposed_function_names):
+    """Skipped-function reports (see extract_skipped_functions_from_code)
+    across every cell in `code_cells`, deduplicated by name and with any
+    name that ultimately made it into `exposed_function_names` filtered
+    back out.
+
+    That last part matters because deduplicate_functions_by_name lets a
+    later cell's clean redefinition of a name override an earlier cell's
+    unsupported one (e.g. a `**kwargs` version fixed up and re-run under
+    the same name) -- exactly what running the whole notebook top to
+    bottom in a single kernel would do. Without this filter, a name that
+    ended up perfectly fine would still be reported as skipped because of
+    what an earlier, superseded cell once looked like.
+    """
+    skipped_by_name = {}
+
+    for cell in code_cells:
+        for skipped in extract_skipped_functions_from_code(cell):
+            skipped_by_name[skipped["name"]] = skipped
+
+    return [
+        skipped
+        for name, skipped in sorted(skipped_by_name.items())
+        if name not in exposed_function_names
+    ]
+
+
 def inspect_notebook(notebook_path, output_dir="generated"):
     """
     Print a detailed analysis report for a notebook.
@@ -146,6 +174,10 @@ def inspect_notebook(notebook_path, output_dir="generated"):
 
     reserved_name_conflicts = _reserved_name_conflicts(all_functions)
 
+    skipped_functions = _aggregate_skipped_functions(
+        code_cells, {func["name"] for func in all_functions}
+    )
+
     print("\nNotebook Analysis Report")
     print("=" * 30)
 
@@ -154,6 +186,12 @@ def inspect_notebook(notebook_path, output_dir="generated"):
         print("-" * 20)
         for name in reserved_name_conflicts:
             print(f"- {name}")
+
+    if skipped_functions:
+        print("\n⚠ Skipped Functions (no endpoint will be generated):")
+        print("-" * 20)
+        for skipped in skipped_functions:
+            print(f"- {skipped['name']}: {skipped['reason']}")
 
     print("\nFunctions Found:")
     print("-" * 20)
@@ -250,6 +288,9 @@ def inspect_notebook_data(
         ),
         "reserved_name_conflicts": _reserved_name_conflicts(all_functions),
         "endpoints": _endpoint_metadata(all_functions),
+        "skipped_functions": _aggregate_skipped_functions(
+            code_cells, {func["name"] for func in all_functions}
+        ),
     }
 
 
@@ -282,3 +323,11 @@ def print_compile_summary(notebook_path, output_dir="generated"):
 
     if data["dependencies"]:
         print(f"\nDependencies: {', '.join(data['dependencies'])}")
+
+    if data["skipped_functions"]:
+        print(
+            f"\nSkipped {len(data['skipped_functions'])} function(s) "
+            "(no endpoint generated):"
+        )
+        for skipped in data["skipped_functions"]:
+            print(f"  {skipped['name']}: {skipped['reason']}")

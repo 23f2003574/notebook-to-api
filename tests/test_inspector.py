@@ -5,6 +5,7 @@ from backend.inspector import (
     inspect_notebook,
     inspect_notebook_data,
     print_compile_summary,
+    _aggregate_skipped_functions,
     _list_generated_files,
     _reserved_name_conflicts,
 )
@@ -318,6 +319,151 @@ def test_print_compile_summary_lists_third_party_dependencies(tmp_path, capsys):
 
     output = capsys.readouterr().out
     assert "Dependencies: pandas" in output
+
+
+def test_aggregate_skipped_functions_reports_unsupported_signatures():
+
+    code_cells = [
+        "def unsupported(a, **kwargs):\n    return a\n",
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    ]
+
+    skipped = _aggregate_skipped_functions(code_cells, {"add"})
+
+    assert [s["name"] for s in skipped] == ["unsupported"]
+
+
+def test_aggregate_skipped_functions_omits_names_that_ended_up_exposed():
+    """A later cell can redefine a name that an earlier cell's unsupported
+    version would otherwise be reported as skipped for -- exactly what
+    running the whole notebook top to bottom in one kernel would do (see
+    deduplicate_functions_by_name). Once that redefinition made it into
+    the final, exposed function list, the earlier skip must not still be
+    reported.
+    """
+
+    code_cells = [
+        "def add(a, **kwargs):\n    return a\n",
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    ]
+
+    skipped = _aggregate_skipped_functions(code_cells, {"add"})
+
+    assert skipped == []
+
+
+def test_aggregate_skipped_functions_is_sorted_and_deduplicated():
+
+    code_cells = [
+        "class Model:\n    def predict(self, x):\n        return x\n",
+        "def outer():\n    def predict(y):\n        return y\n    return predict\n",
+    ]
+
+    skipped = _aggregate_skipped_functions(code_cells, set())
+
+    assert [s["name"] for s in skipped] == ["predict"]
+
+
+def test_inspect_notebook_data_reports_skipped_functions(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def unsupported(a, **kwargs):\n    return a\n",
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    assert data["skipped_functions"] == [
+        {
+            "name": "unsupported",
+            "reason": (
+                "uses *args/**kwargs, which can't be represented as a "
+                "fixed set of request fields"
+            ),
+        }
+    ]
+    assert {f["name"] for f in data["functions"]} == {"add"}
+
+
+def test_inspect_notebook_data_skipped_functions_is_empty_for_a_clean_notebook(
+    tmp_path,
+):
+
+    notebook_path = tmp_path / "clean.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    assert data["skipped_functions"] == []
+
+
+def test_inspect_notebook_prints_a_skipped_function_warning(tmp_path, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "class Model:\n    def predict(self, x):\n        return x\n",
+    )
+
+    inspect_notebook(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "Skipped Functions" in output
+    assert "predict" in output
+    assert "callable as a standalone endpoint" in output
+
+
+def test_inspect_notebook_omits_the_skipped_section_for_a_clean_notebook(
+    tmp_path, capsys
+):
+
+    notebook_path = tmp_path / "clean.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    inspect_notebook(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "Skipped Functions" not in output
+
+
+def test_print_compile_summary_lists_skipped_functions(tmp_path, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def unsupported(a, **kwargs):\n    return a\n",
+    )
+
+    print_compile_summary(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "Skipped 1 function(s)" in output
+    assert "unsupported:" in output
+
+
+def test_print_compile_summary_omits_skipped_line_when_there_are_none(
+    tmp_path, capsys
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    print_compile_summary(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "Skipped" not in output
 
 
 def test_print_compile_summary_omits_dependencies_line_when_there_are_none(

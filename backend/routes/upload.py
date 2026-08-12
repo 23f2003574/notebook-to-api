@@ -20,7 +20,11 @@ from backend.generator.api_generator import (
     LONG_RUNNING_KEYWORDS,
     ReservedFunctionNameError,
 )
-from backend.inspector import EXCLUDED_GENERATED_DIR_NAMES, inspect_notebook_data
+from backend.inspector import (
+    EXCLUDED_GENERATED_DIR_NAMES,
+    _aggregate_skipped_functions,
+    inspect_notebook_data,
+)
 from backend.parser.notebook_parser import (
     load_notebook,
     extract_code_cells,
@@ -632,11 +636,16 @@ def compile_notebook_endpoint(
                         "is_async": is_async,
                     })
 
+        skipped_functions = _aggregate_skipped_functions(
+            code_cells, {func["name"] for func in functions}
+        )
+
         return {
             "status": "success",
             "notebook": notebook_path,
             "functions": functions,
             "endpoints": endpoints,
+            "skipped_functions": skipped_functions,
             "message": "Notebook compiled successfully"
         }
 
