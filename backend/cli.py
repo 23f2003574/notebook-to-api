@@ -431,7 +431,7 @@ def _dispatch_core_command(args):
             output = args.output or "generated/sdk/python_client.py"
             generate_python_sdk(args.openapi, output)
     elif args.command == "serve":
-        serve_notebook(args.notebook, args.output, args.port)
+        serve_notebook(args.notebook, args.output, args.port, args.host)
     elif args.command == "deploy":
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -550,6 +550,15 @@ def main():
         type=int,
         default=8000,
         help="Port to run the live API server on (default: 8000). Lets more than one notebook be served at once."
+    )
+    serve_parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help=(
+            "Interface the live API server binds to (default: 0.0.0.0, "
+            "every interface). Set to 127.0.0.1 to only accept "
+            "connections from this machine."
+        )
     )
 
     # deploy command (compile + build a Docker image)

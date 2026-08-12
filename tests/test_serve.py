@@ -74,7 +74,7 @@ def _reset_fakes():
 
 
 def _run_serve(
-    monkeypatch, notebook_path, output_dir, port=None,
+    monkeypatch, notebook_path, output_dir, port=None, host=None,
     compiled_calls=None, summary_calls=None,
 ):
     """serve_notebook only returns because time.sleep is patched to raise
@@ -107,10 +107,13 @@ def _run_serve(
     monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
     monkeypatch.setattr(serve_module.time, "sleep", _raise_keyboard_interrupt)
 
-    if port is None:
-        serve_module.serve_notebook(str(notebook_path), str(output_dir))
-    else:
-        serve_module.serve_notebook(str(notebook_path), str(output_dir), port)
+    kwargs = {}
+    if port is not None:
+        kwargs["port"] = port
+    if host is not None:
+        kwargs["host"] = host
+
+    serve_module.serve_notebook(str(notebook_path), str(output_dir), **kwargs)
 
 
 def test_serve_notebook_defaults_to_port_8000(tmp_path, monkeypatch):
@@ -139,6 +142,65 @@ def test_serve_notebook_passes_custom_port_to_uvicorn_command(tmp_path, monkeypa
 
     assert len(_FakePopen.instances) == 1
     assert _FakePopen.instances[0].cmd[-2:] == ["--port", "9500"]
+
+
+def test_serve_notebook_defaults_to_host_0_0_0_0(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    assert len(_FakePopen.instances) == 1
+    assert _FakePopen.instances[0].cmd[-4:-2] == ["--host", "0.0.0.0"]
+
+
+def test_serve_notebook_passes_custom_host_to_uvicorn_command(tmp_path, monkeypatch):
+    """Confirmed missing before this: the host was hardcoded to "0.0.0.0"
+    in the uvicorn subprocess command with no way to override it -- unlike
+    the dashboard API server's bind host, which is already configurable
+    via NOTEBOOK_API_DASHBOARD_HOST for the same reason (see
+    dashboard_host() in backend/dashboard.py).
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir, host="127.0.0.1")
+
+    assert len(_FakePopen.instances) == 1
+    assert _FakePopen.instances[0].cmd[-4:-2] == ["--host", "127.0.0.1"]
+
+
+def test_serve_notebook_prints_localhost_for_the_default_host(tmp_path, monkeypatch, capsys):
+    """"0.0.0.0" isn't itself a browsable address -- the printed API/Docs
+    URLs must still say "localhost" for the common default, exactly as
+    they did before `host` became configurable.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    output = capsys.readouterr().out
+    assert "http://localhost:8000" in output
+    assert "http://0.0.0.0:8000" not in output
+
+
+def test_serve_notebook_prints_the_actual_host_when_customized(tmp_path, monkeypatch, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir, host="127.0.0.1")
+
+    output = capsys.readouterr().out
+    assert "http://127.0.0.1:8000" in output
 
 
 def test_serve_notebook_compiles_before_starting_the_server(tmp_path, monkeypatch):

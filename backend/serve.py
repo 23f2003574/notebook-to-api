@@ -67,7 +67,7 @@ class NotebookChangeHandler(FileSystemEventHandler):
                 print(f"❌ Compilation error: {e}\n")
 
 
-def serve_notebook(notebook_path, output_dir="generated", port=8000):
+def serve_notebook(notebook_path, output_dir="generated", port=8000, host="0.0.0.0"):
     """
     Serve a notebook as a live API with hot recompilation.
 
@@ -81,6 +81,16 @@ def serve_notebook(notebook_path, output_dir="generated", port=8000):
             so more than one notebook can be served at once -- the port
             was previously hardcoded, making that impossible without
             editing this file.
+        host: Interface the API server binds to (default: "0.0.0.0").
+            Previously hardcoded to "0.0.0.0" with no way to override it
+            -- unlike the dashboard API server, whose bind host is
+            configurable via NOTEBOOK_API_DASHBOARD_HOST for the exact
+            same reason (see dashboard_host() in backend/dashboard.py):
+            binding every interface is the right default for most local
+            dev use, but not for a developer who wants this dev server
+            reachable only from localhost (e.g. 127.0.0.1), not the whole
+            LAN, without editing this file to find out that was even
+            possible.
     """
 
     # Initial compilation
@@ -98,9 +108,15 @@ def serve_notebook(notebook_path, output_dir="generated", port=8000):
     observer.schedule(handler, path=str(notebook_dir), recursive=False)
     observer.start()
 
+    # "0.0.0.0" isn't itself a browsable address -- show "localhost" for
+    # the common default (every interface, reachable via localhost too)
+    # and the actual configured host otherwise, so a caller who bound to
+    # a specific interface sees the address that will actually work.
+    display_host = "localhost" if host == "0.0.0.0" else host
+
     print("🚀 Starting API server with hot reload...\n")
-    print(f"📍 API: http://localhost:{port}")
-    print(f"📍 Docs: http://localhost:{port}/docs")
+    print(f"📍 API: http://{display_host}:{port}")
+    print(f"📍 Docs: http://{display_host}:{port}/docs")
     print(f"📍 Watch: {Path(notebook_path).resolve()}\n")
     print("Press Ctrl+C to stop.\n")
 
@@ -114,7 +130,7 @@ def serve_notebook(notebook_path, output_dir="generated", port=8000):
             f"{package_name}.app:app",
             "--reload",
             "--host",
-            "0.0.0.0",
+            str(host),
             "--port",
             str(port),
         ]
