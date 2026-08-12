@@ -248,11 +248,11 @@ async def upload_notebook(
 
 
 def _currently_compiled_notebook_metadata():
-    """(resolved path, content sha256) of the notebook that produced the
-    app currently in GENERATED_DIR, if any -- read from the
+    """(resolved path, content sha256, compiled_at) of the notebook that
+    produced the app currently in GENERATED_DIR, if any -- read from the
     .compile_metadata.json every successful compile writes (see
-    write_compile_metadata in backend/compiler.py). Returns (None, None)
-    if nothing has been compiled yet, or if the metadata file is
+    write_compile_metadata in backend/compiler.py). Returns (None, None,
+    None) if nothing has been compiled yet, or if the metadata file is
     missing/unreadable/corrupt -- list_notebooks should degrade to
     reporting no notebook as currently compiled rather than 500 over this
     being informational, best-effort metadata.
@@ -261,7 +261,7 @@ def _currently_compiled_notebook_metadata():
     metadata_path = Path(GENERATED_DIR) / COMPILE_METADATA_FILENAME
 
     if not metadata_path.is_file():
-        return None, None
+        return None, None, None
 
     try:
 
@@ -269,14 +269,18 @@ def _currently_compiled_notebook_metadata():
             metadata = json.load(f)
 
     except (OSError, ValueError):
-        return None, None
+        return None, None, None
 
     source_notebook = metadata.get("source_notebook")
 
     if not source_notebook:
-        return None, None
+        return None, None, None
 
-    return Path(source_notebook).resolve(), metadata.get("source_notebook_sha256")
+    return (
+        Path(source_notebook).resolve(),
+        metadata.get("source_notebook_sha256"),
+        metadata.get("compiled_at"),
+    )
 
 
 @router.get("/notebooks")
@@ -304,11 +308,20 @@ async def list_notebooks():
     /api/upload?overwrite=true) *after* the compile that produced the
     current generated/ output -- silently leaving the served app stale
     relative to a notebook a caller might think it still matches exactly.
+
+    It also gets "compiled_at", the timestamp write_compile_metadata
+    recorded when that compile happened -- already written to
+    .compile_metadata.json for every compile and already read by this
+    endpoint to resolve the fields above, but previously discarded rather
+    than returned. Without it, a caller could tell *that* the currently
+    running app might be stale (via notebook_changed_since_compile) but
+    had no way to tell *how* stale -- e.g. to show "last compiled 3
+    minutes ago" -- without a separate, redundant read of the same file.
     """
 
     upload_root = Path(UPLOAD_DIR)
 
-    compiled_path, compiled_sha256 = _currently_compiled_notebook_metadata()
+    compiled_path, compiled_sha256, compiled_at = _currently_compiled_notebook_metadata()
 
     notebooks = []
 
@@ -336,6 +349,7 @@ async def list_notebooks():
                     compiled_sha256 is not None
                     and hash_notebook_file(entry) != compiled_sha256
                 )
+                notebook_entry["compiled_at"] = compiled_at
 
             notebooks.append(notebook_entry)
 

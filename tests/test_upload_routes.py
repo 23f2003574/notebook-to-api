@@ -441,6 +441,78 @@ def test_list_notebooks_flags_a_notebook_changed_since_its_last_compile():
     assert entry["notebook_changed_since_compile"] is True
 
 
+def test_list_notebooks_reports_the_compiled_at_timestamp():
+    """.compile_metadata.json already records when the compile that
+    produced the current generated/ output happened (see
+    write_compile_metadata in backend/compiler.py), and this endpoint
+    already reads that same file to resolve currently_compiled and
+    notebook_changed_since_compile -- but previously discarded
+    "compiled_at" rather than returning it. Without it, a caller could
+    tell *that* the currently running app might be stale (via
+    notebook_changed_since_compile) but not *how* stale -- e.g. to show
+    "last compiled 3 minutes ago" -- without a separate, redundant read
+    of the same file.
+    """
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": ("compiled_at_test.ipynb", io.BytesIO(content), "application/json")
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "compiled_at_test.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    with open(
+        Path("generated") / COMPILE_METADATA_FILENAME, "r", encoding="utf-8"
+    ) as f:
+        metadata = json.load(f)
+
+    notebooks = client.get("/api/notebooks").json()["notebooks"]
+    entry = next(nb for nb in notebooks if nb["filename"] == "compiled_at_test.ipynb")
+
+    assert entry["compiled_at"] == metadata["compiled_at"]
+
+
+def test_list_notebooks_omits_compiled_at_for_a_notebook_that_is_not_currently_compiled():
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    content_b = _notebook_bytes(
+        "def sub(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    for filename, content in (
+        ("compiled_at_a.ipynb", content_a),
+        ("compiled_at_b.ipynb", content_b),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "compiled_at_a.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    notebooks = client.get("/api/notebooks").json()["notebooks"]
+    entry_b = next(nb for nb in notebooks if nb["filename"] == "compiled_at_b.ipynb")
+
+    assert entry_b["currently_compiled"] is False
+    assert "compiled_at" not in entry_b
+
+
 def test_delete_notebook_removes_an_uploaded_file():
 
     content = _notebook_bytes(
