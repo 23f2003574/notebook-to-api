@@ -51,6 +51,29 @@ router = APIRouter(
     tags=["dashboard"]
 )
 
+# Every route below except upload_notebook (which genuinely awaits
+# UploadFile.read) is declared as a plain `def`, not `async def`. FastAPI
+# only runs `async def` path operations directly on the single asyncio
+# event loop; every one of these does purely synchronous, blocking work
+# (file I/O, subprocess.run for `docker build`/`docker push` -- up to
+# DEPLOY_SUBPROCESS_TIMEOUT_SECONDS, 600s by default -- and
+# compile_notebook's own file writes and per-dependency
+# importlib.metadata.version() lookups) with no `await` anywhere in it.
+# Declared `async def` with no `await`, a handler never yields control
+# back to the loop for its entire duration, so it doesn't just block the
+# one client that made that request -- it blocks *every* concurrent
+# request this server is handling, including an unrelated GET
+# /api/health from a completely different caller, for as long as it
+# runs. Confirmed against a real (non-TestClient) uvicorn server: an
+# async def endpoint blocking for 1.5s with no await delayed a
+# concurrent request to a trivial endpoint by the same 1.5s; the
+# identical blocking call in a plain def endpoint (which FastAPI runs in
+# its worker threadpool instead) added under 2ms. Plain `def` path
+# operations behave identically to `async def` ones in every other way
+# (dependency injection, HTTPException, returning a FileResponse/
+# StreamingResponse, ...), so this changes nothing about how any of these
+# already-synchronous handlers work -- only how FastAPI schedules them.
+
 UPLOAD_DIR = "uploads"
 os.makedirs(
     UPLOAD_DIR,
@@ -312,7 +335,7 @@ def _currently_compiled_notebook_is_stale():
 
 
 @router.get("/notebooks")
-async def list_notebooks():
+def list_notebooks():
     """List previously uploaded notebooks.
 
     /api/upload was previously a one-way door: notebooks could be
@@ -388,7 +411,7 @@ async def list_notebooks():
 
 
 @router.delete("/notebooks/{filename}")
-async def delete_notebook(filename: str):
+def delete_notebook(filename: str):
     """Delete a previously uploaded notebook.
 
     Reuses resolve_upload_path for the same traversal protection already
@@ -442,7 +465,7 @@ async def delete_notebook(filename: str):
 
 
 @router.get("/notebooks/{filename}")
-async def get_notebook(filename: str):
+def get_notebook(filename: str):
     """Download a previously uploaded notebook's raw content.
 
     GET /api/notebooks lists what's been uploaded and DELETE removes it,
@@ -469,7 +492,7 @@ async def get_notebook(filename: str):
 
 
 @router.post("/inspect")
-async def inspect_notebook_endpoint(
+def inspect_notebook_endpoint(
     data: dict
 ):
     """Inspect notebook and return extracted functions, dependencies, and
@@ -526,7 +549,7 @@ async def inspect_notebook_endpoint(
 
 
 @router.post("/compile")
-async def compile_notebook_endpoint(
+def compile_notebook_endpoint(
     data: dict
 ):
     """Compile notebook to API."""
@@ -668,7 +691,7 @@ def _evict_compiled_app_from_module_cache(package_name):
 
 
 @router.post("/export-openapi")
-async def export_openapi_endpoint(
+def export_openapi_endpoint(
     data: dict = None
 ):
     """Export the OpenAPI schema for the most recently compiled app and
@@ -737,7 +760,7 @@ async def export_openapi_endpoint(
 
 
 @router.post("/export-sdk")
-async def export_sdk_endpoint(
+def export_sdk_endpoint(
     data: dict = None
 ):
     """Generate an SDK client from the exported OpenAPI schema and return
@@ -842,7 +865,7 @@ def _run_docker_command(args, cwd):
 
 
 @router.post("/deploy")
-async def deploy_generated_app(data: dict = None):
+def deploy_generated_app(data: dict = None):
     """Build (and optionally push) a Docker image from the compiled app.
 
     The CLI's `deploy` command already does this (compile + `docker
@@ -934,7 +957,7 @@ async def deploy_generated_app(data: dict = None):
 
 
 @router.get("/download")
-async def download_generated_app():
+def download_generated_app():
     """Download the compiled app as a zip archive.
 
     /api/compile only ever returned metadata (the function list and
@@ -994,7 +1017,7 @@ async def download_generated_app():
 
 
 @router.get("/health")
-async def health_check():
+def health_check():
 
     return {
         "status": "healthy",

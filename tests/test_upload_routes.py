@@ -32,6 +32,57 @@ def _cleanup_uploaded_files():
         os.remove(os.path.join(UPLOAD_DIR, name))
 
 
+def test_blocking_endpoints_are_declared_as_plain_def_not_async_def():
+    """FastAPI only runs `async def` path operations directly on the
+    single asyncio event loop; a handler that does purely synchronous,
+    blocking work (file I/O, subprocess.run for `docker build`/`docker
+    push` -- up to DEPLOY_SUBPROCESS_TIMEOUT_SECONDS, 600s by default --
+    and compile_notebook's own file writes and per-dependency
+    importlib.metadata.version() lookups) with no `await` inside it
+    blocks *every* concurrent request this server is handling for as
+    long as it runs -- not just the one caller who made it, including an
+    unrelated GET /api/health from a completely different client.
+
+    Confirmed against a real (non-TestClient) uvicorn server: an async
+    def endpoint blocking for 1.5s with no await delayed a concurrent
+    request to a trivial endpoint by the same 1.5s; the identical
+    blocking call in a plain def endpoint (which FastAPI runs in its
+    worker threadpool instead) added under 2ms. Every one of these
+    handlers is purely synchronous internally already, so declaring them
+    `def` instead of `async def` changes nothing about how they work --
+    only how FastAPI schedules them -- which is also why this can be
+    verified directly (is this a coroutine function or not) rather than
+    through a timing-based test: TestClient's own threading model doesn't
+    reproduce single-event-loop contention the way a real server does.
+    """
+    import inspect
+
+    from backend.routes import upload as upload_module
+
+    blocking_endpoints = [
+        upload_module.list_notebooks,
+        upload_module.delete_notebook,
+        upload_module.get_notebook,
+        upload_module.inspect_notebook_endpoint,
+        upload_module.compile_notebook_endpoint,
+        upload_module.export_openapi_endpoint,
+        upload_module.export_sdk_endpoint,
+        upload_module.deploy_generated_app,
+        upload_module.download_generated_app,
+        upload_module.health_check,
+    ]
+
+    for endpoint in blocking_endpoints:
+        assert not inspect.iscoroutinefunction(endpoint), (
+            f"{endpoint.__name__} is declared async def but does no "
+            "awaiting -- it blocks the whole event loop, not just its "
+            "own caller, for as long as it runs."
+        )
+
+    # upload_notebook genuinely awaits UploadFile.read and must stay async.
+    assert inspect.iscoroutinefunction(upload_module.upload_notebook)
+
+
 def test_resolve_upload_path_rejects_absolute_path():
 
     with pytest.raises(Exception):
