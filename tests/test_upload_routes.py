@@ -1112,6 +1112,58 @@ def test_export_openapi_and_export_sdk_full_flow():
     assert "class NotebookAPIClient" in ts_body["code"]
 
 
+def test_export_openapi_reflects_a_recompile_within_the_same_process():
+    """Confirmed exploitable before this fix: export_openapi_schema
+    (backend/exporters/openapi_exporter.py) imports "<package_name>.app"
+    with plain importlib.import_module, which Python resolves from
+    sys.modules -- not from disk -- once that name has already been
+    imported in this process. The dashboard is exactly that kind of
+    long-running process, so the second /api/compile -> /api/export-openapi
+    round trip silently returned the *first* compile's schema: compiling a
+    notebook exposing `add`, exporting it, then recompiling the same
+    upload to expose `multiply` instead and exporting again still returned
+    `add` in the schema's paths, with the freshly-written app.py on disk
+    never actually read.
+    """
+
+    filename = "reimport_staleness_test.ipynb"
+
+    first_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    upload_resp = client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(first_content), "application/json")},
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post("/api/compile", json={"notebook_path": filename})
+    assert compile_resp.status_code == 200
+
+    first_export = client.post("/api/export-openapi", json={"format": "json"})
+    assert first_export.status_code == 200
+    assert "/add" in first_export.json()["schema"]["paths"]
+
+    second_content = _notebook_bytes(
+        "def multiply(a: int, b: int) -> int:\n    return a * b\n"
+    )
+    overwrite_resp = client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(second_content), "application/json")},
+    )
+    assert overwrite_resp.status_code == 200
+
+    recompile_resp = client.post("/api/compile", json={"notebook_path": filename})
+    assert recompile_resp.status_code == 200
+
+    second_export = client.post("/api/export-openapi", json={"format": "json"})
+    assert second_export.status_code == 200
+    second_paths = second_export.json()["schema"]["paths"]
+
+    assert "/multiply" in second_paths
+    assert "/add" not in second_paths
+
+
 def test_export_openapi_rejects_invalid_format():
 
     resp = client.post("/api/export-openapi", json={"format": "xml"})

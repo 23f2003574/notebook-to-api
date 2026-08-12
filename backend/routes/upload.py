@@ -6,6 +6,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import uuid
 import zipfile
 
@@ -637,6 +638,35 @@ async def compile_notebook_endpoint(
             detail=f"Compilation error: {str(e)}"
         )
 
+
+def _evict_compiled_app_from_module_cache(package_name):
+    """Remove `package_name` and every submodule already imported from it
+    (e.g. "<package_name>.app", "<package_name>.runtime.notebook_module")
+    from sys.modules, so the next import re-reads whatever is currently on
+    disk instead of returning what got cached from an earlier import in
+    this same long-running dashboard process.
+
+    export_openapi_schema (backend/exporters/openapi_exporter.py) imports
+    "<package_name>.app" with plain importlib.import_module, which Python
+    resolves from sys.modules -- not from disk -- the moment that name has
+    already been imported once. Without this, the second /api/compile ->
+    /api/export-openapi round trip in the same process silently exported
+    the *previous* compile's schema: confirmed by compiling a notebook
+    exposing `add`, exporting it, then recompiling to expose `multiply`
+    instead and exporting again -- the second export still returned `add`
+    in its paths, with the freshly-written app.py on disk never actually
+    read. Not applicable to the CLI's own export-openapi/export-sdk
+    commands -- each CLI invocation is a fresh Python process with an
+    empty sys.modules, so this staleness can only happen here.
+    """
+    prefix = f"{package_name}."
+
+    for name in list(sys.modules):
+
+        if name == package_name or name.startswith(prefix):
+            del sys.modules[name]
+
+
 @router.post("/export-openapi")
 async def export_openapi_endpoint(
     data: dict = None
@@ -666,6 +696,8 @@ async def export_openapi_endpoint(
     try:
 
         package_name = package_name_for_output_dir(GENERATED_DIR)
+
+        _evict_compiled_app_from_module_cache(package_name)
 
         export_openapi_schema(
             output_path,
