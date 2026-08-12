@@ -900,6 +900,63 @@ def test_inspect_missing_notebook_still_returns_404_not_400():
     assert resp.status_code == 404
 
 
+def test_inspect_returns_400_not_500_for_a_malformed_notebook_file():
+    """Confirmed exploitable before this fix: a notebook file that fails
+    nbformat's own load/validation (invalid JSON, or valid JSON missing
+    required notebook keys) is a problem with the file's content, not
+    this server -- but /api/inspect reported it as a bare 500, the same
+    misdiagnosis ReservedFunctionNameError's dedicated 400 already fixed
+    for a different failure mode in /api/compile. /api/upload itself
+    would never accept content like this, so this writes straight into
+    UPLOAD_DIR to reach the endpoint with it, e.g. a file placed there
+    outside the API.
+    """
+
+    filename = "malformed_inspect_test.ipynb"
+    file_path = os.path.join(UPLOAD_DIR, filename)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("not valid json at all")
+
+    resp = client.post("/api/inspect", json={"notebook_path": filename})
+
+    assert resp.status_code == 400
+    assert "not a valid Jupyter notebook" in resp.json()["detail"]
+
+
+def test_compile_returns_400_not_500_for_a_malformed_notebook_file():
+
+    filename = "malformed_compile_test.ipynb"
+    file_path = os.path.join(UPLOAD_DIR, filename)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("not valid json at all")
+
+    resp = client.post("/api/compile", json={"notebook_path": filename})
+
+    assert resp.status_code == 400
+    assert "not a valid Jupyter notebook" in resp.json()["detail"]
+
+
+def test_inspect_returns_400_not_500_for_valid_json_missing_required_notebook_keys():
+    """Distinct failure mode from the invalid-JSON case above: valid JSON
+    that isn't a valid notebook (e.g. no "cells" key) raises nbformat's
+    ValidationError, not NotJSONError -- both must be treated the same
+    way.
+    """
+
+    filename = "missing_keys_inspect_test.ipynb"
+    file_path = os.path.join(UPLOAD_DIR, filename)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"not_a_notebook": True}))
+
+    resp = client.post("/api/inspect", json={"notebook_path": filename})
+
+    assert resp.status_code == 400
+    assert "not a valid Jupyter notebook" in resp.json()["detail"]
+
+
 def test_inspect_reports_dependencies_and_generated_files_after_a_compile():
     """/api/inspect previously only ever returned "functions", even though
     inspect_notebook_data (backend/inspector.py) already computed

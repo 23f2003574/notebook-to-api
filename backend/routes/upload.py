@@ -10,6 +10,15 @@ import sys
 import uuid
 import zipfile
 
+# ValidationError is the exception nbformat raises for a syntactically
+# valid JSON file that is nonetheless missing required notebook keys
+# (e.g. no "cells"). It's distinct from nbformat.reader.NotJSONError
+# (already a ValueError subclass) and needs to be named explicitly to be
+# treated as a 400 (the notebook itself is malformed, not a server bug),
+# same as the CLI already does for the identical failure mode (see
+# CLI_USER_FACING_ERRORS in cli.py).
+from nbformat import ValidationError as NotebookValidationError
+
 from backend.compiler import (
     COMPILE_LOCK,
     COMPILE_METADATA_FILENAME,
@@ -50,6 +59,21 @@ from backend.parser.ast_parser import (
 # API at a different output directory (e.g. to avoid colliding with a
 # `compile --output` a developer already runs by hand alongside it).
 GENERATED_DIR = os.getenv("NOTEBOOK_API_GENERATED_DIR", "generated")
+
+# A malformed notebook file (invalid JSON, or valid JSON missing required
+# notebook keys) is a problem with the client-supplied content, not this
+# server. POST /api/inspect and POST /api/compile each validate with a
+# dedicated load_notebook() call before doing anything else -- mirroring
+# the same pattern upload_notebook already uses below to validate an
+# upload -- so this can be caught precisely at that one call and reported
+# as a 400 the caller can act on (re-upload a valid notebook), not a 500,
+# which previously made a bad file look like a server-side bug. The same
+# distinction ReservedFunctionNameError already gets in POST /api/compile
+# for a different failure mode; this closes the identical gap for the
+# earlier, more fundamental one. NotJSONError (invalid JSON) is already a
+# ValueError subclass; NotebookValidationError (valid JSON, missing
+# required notebook keys) is named explicitly since it isn't.
+MALFORMED_NOTEBOOK_ERRORS = (NotebookValidationError, ValueError)
 
 router = APIRouter(
     prefix="/api",
@@ -535,6 +559,17 @@ def inspect_notebook_endpoint(
 
     try:
 
+        load_notebook(str(full_path))
+
+    except MALFORMED_NOTEBOOK_ERRORS as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+        )
+
+    try:
+
         inspection = inspect_notebook_data(
             str(full_path),
             GENERATED_DIR
@@ -662,6 +697,19 @@ def compile_notebook_endpoint(
         raise HTTPException(
             status_code=400,
             detail=str(e)
+        )
+
+    except MALFORMED_NOTEBOOK_ERRORS as e:
+
+        # load_notebook (the first thing this try block does) is the
+        # only thing above that can raise these -- the notebook itself is
+        # malformed (invalid JSON, or valid JSON missing required
+        # notebook keys), not this server, so this is a 400 the caller
+        # can act on the same way ReservedFunctionNameError's 400 already
+        # is, not a 500.
+        raise HTTPException(
+            status_code=400,
+            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
         )
 
     except Exception as e:
