@@ -80,6 +80,67 @@ def test_compiler_pipeline_dockerfile_runs_as_non_root_with_a_healthcheck(tmp_pa
     assert dockerfile.index("chown") < dockerfile.index("USER appuser") < dockerfile.index("CMD [")
 
 
+def test_compiler_pipeline_dockerfile_sets_unbuffered_and_no_bytecode_env_vars(
+    tmp_path,
+):
+    """Confirmed missing before this fix: without PYTHONUNBUFFERED=1, a
+    container's stdout is block-buffered (never a real terminal), so
+    uvicorn's own request logs and any print() the notebook's own code
+    does can sit unflushed for a long time or be lost entirely if the
+    container is killed -- exactly the real-time output `docker logs` and
+    any log-aggregation pipeline are expected to see. Without
+    PYTHONDONTWRITEBYTECODE=1, the container writes a .pyc cache into its
+    writable layer on every cold start -- the exact kind of artifact this
+    project already treats as noise to exclude everywhere else it can
+    appear (see EXCLUDED_GENERATED_DIR_NAMES in backend/inspector.py) --
+    and would outright fail on a container run with a read-only root
+    filesystem.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n"
+            "    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    dockerfile = (output_dir / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "ENV PYTHONUNBUFFERED=1" in dockerfile
+    assert "ENV PYTHONDONTWRITEBYTECODE=1" in dockerfile
+    # Set immediately after FROM, before anything that runs Python (pip,
+    # then the app itself), so both apply universally rather than only
+    # to some later step.
+    assert (
+        dockerfile.index("FROM python")
+        < dockerfile.index("ENV PYTHONUNBUFFERED=1")
+        < dockerfile.index("RUN pip install")
+    )
+
+
+def test_generate_dockerfile_sets_unbuffered_and_no_bytecode_env_vars(tmp_path):
+
+    output_path = tmp_path / "Dockerfile"
+
+    generate_dockerfile(str(output_path), "generated")
+
+    dockerfile = output_path.read_text(encoding="utf-8")
+
+    assert "ENV PYTHONUNBUFFERED=1" in dockerfile
+    assert "ENV PYTHONDONTWRITEBYTECODE=1" in dockerfile
+
+
 def test_compiler_pipeline_example_payload_is_a_list_for_an_optional_list_parameter(
     tmp_path,
 ):

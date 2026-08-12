@@ -21,6 +21,28 @@ def generate_dockerfile(
     docker_content = f"""\
 FROM python:{python_version}-slim
 
+# Python buffers stdout/stderr in blocks (not line-by-line) whenever it
+# isn't attached to a real terminal -- which a container's stdout never
+# is. Left unset, uvicorn's own request logs and any print() the
+# notebook's own code does (it runs for real inside every request this
+# app handles) can sit in that buffer for a long time, or be lost
+# entirely if the container is killed before it fills -- exactly the
+# output `docker logs` and any log-aggregation pipeline watching it are
+# expected to see in real time.
+#
+# PYTHONDONTWRITEBYTECODE avoids writing a .pyc bytecode cache into the
+# container's writable layer on every cold start: this project already
+# treats __pycache__ as noise to actively exclude, not ship, everywhere
+# else it could appear (see EXCLUDED_GENERATED_DIR_NAMES in
+# backend/inspector.py, which keeps it out of `inspect`'s generated-files
+# listing and the downloadable app bundle for the same reason) -- letting
+# the deployed container itself accumulate one anyway, silently, was the
+# one place that exclusion never reached. Also matters for a container
+# run with a read-only root filesystem (a common hardening practice),
+# where writing it at all would fail.
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
 WORKDIR /app
 
 # Copy requirements first for Docker layer caching
