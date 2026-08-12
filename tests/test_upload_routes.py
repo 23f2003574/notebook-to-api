@@ -529,12 +529,82 @@ def test_delete_notebook_removes_an_uploaded_file():
     delete_resp = client.delete("/api/notebooks/delete_test.ipynb")
     assert delete_resp.status_code == 200
     assert delete_resp.json()["filename"] == "delete_test.ipynb"
+    # Never compiled -- deleting it can't have orphaned anything.
+    assert delete_resp.json()["was_currently_compiled"] is False
 
     assert not os.path.exists(os.path.join(UPLOAD_DIR, "delete_test.ipynb"))
 
     list_resp = client.get("/api/notebooks")
     filenames = {nb["filename"] for nb in list_resp.json()["notebooks"]}
     assert "delete_test.ipynb" not in filenames
+
+
+def test_delete_notebook_flags_was_currently_compiled_true_for_the_compiled_notebook():
+    """Deleting the notebook that produced whatever's currently running in
+    GENERATED_DIR doesn't touch the compiled app itself -- it keeps
+    running exactly as before -- but silently orphans it: there's no
+    longer an uploaded notebook a caller could re-inspect, diff, or
+    recompile from to confirm what's currently being served. Before this,
+    a caller had no way to know that had just happened short of a
+    separate GET /api/notebooks call beforehand to check.
+    """
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "delete_currently_compiled_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile",
+        json={"notebook_path": "delete_currently_compiled_test.ipynb"},
+    )
+    assert compile_resp.status_code == 200
+
+    delete_resp = client.delete(
+        "/api/notebooks/delete_currently_compiled_test.ipynb"
+    )
+    assert delete_resp.status_code == 200
+    assert delete_resp.json()["was_currently_compiled"] is True
+
+
+def test_delete_notebook_flags_was_currently_compiled_false_for_an_unrelated_notebook():
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    content_b = _notebook_bytes(
+        "def sub(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    for filename, content in (
+        ("delete_unrelated_a.ipynb", content_a),
+        ("delete_unrelated_b.ipynb", content_b),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "delete_unrelated_a.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    delete_resp = client.delete("/api/notebooks/delete_unrelated_b.ipynb")
+    assert delete_resp.status_code == 200
+    assert delete_resp.json()["was_currently_compiled"] is False
 
 
 def test_delete_notebook_returns_404_for_missing_file():

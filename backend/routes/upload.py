@@ -368,6 +368,16 @@ async def delete_notebook(filename: str):
     comes from the URL path, but is exactly as much client input as a
     JSON body field, and must be rejected the same way if it tries to
     escape UPLOAD_DIR.
+
+    The response's "was_currently_compiled" flag says whether the file
+    just deleted was the notebook that produced whatever's still running
+    in GENERATED_DIR (see the identical currently_compiled check in
+    list_notebooks above). Deleting it doesn't touch the already-compiled
+    app -- it keeps running exactly as before -- but silently orphans it:
+    there's no longer an uploaded notebook a caller could re-inspect,
+    diff, or recompile from to confirm what's currently being served.
+    Without this, a caller had no way to know that had just happened
+    short of a separate GET /api/notebooks call beforehand to check.
     """
 
     file_path = resolve_upload_path(filename)
@@ -378,6 +388,12 @@ async def delete_notebook(filename: str):
             status_code=404,
             detail="Notebook file not found"
         )
+
+    compiled_path, _, _ = _currently_compiled_notebook_metadata()
+
+    was_currently_compiled = (
+        compiled_path is not None and file_path.resolve() == compiled_path
+    )
 
     try:
 
@@ -393,6 +409,7 @@ async def delete_notebook(filename: str):
     return {
         "status": "success",
         "filename": filename,
+        "was_currently_compiled": was_currently_compiled,
     }
 
 
