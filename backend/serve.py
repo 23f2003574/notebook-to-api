@@ -10,7 +10,25 @@ from backend.inspector import print_compile_summary
 
 
 class NotebookChangeHandler(FileSystemEventHandler):
-    """Watches for changes to the notebook and recompiles when modified."""
+    """Watches for changes to the notebook and recompiles when modified.
+
+    Reacts to on_modified (the file's own content is rewritten in place),
+    and also on_created and on_moved. Many real-world notebook saves never
+    touch the target path with an in-place write at all: they write a new
+    temp file and then atomically rename it into place -- the exact same
+    write-temp-then-os.replace pattern this project's own POST /api/upload
+    endpoint uses (see resolve_upload_path/temp_path in
+    backend/routes/upload.py), and one Jupyter's own save mechanism uses
+    too, specifically to avoid ever leaving a half-written notebook on
+    disk. That rename is delivered by watchdog as a FileMovedEvent (whose
+    dest_path is the final notebook path, not src_path) or, on a polling
+    fallback observer that can't correlate the two sides of a rename, as a
+    separate FileCreatedEvent for the destination. Before this, neither
+    was handled at all, so `serve`'s hot recompilation -- the entire
+    point of running a live server instead of a plain `compile` -- simply
+    never fired for those saves, silently, with no error to indicate
+    anything had gone wrong.
+    """
 
     def __init__(self, notebook_path, output_dir):
         self.notebook_path = notebook_path
@@ -18,8 +36,20 @@ class NotebookChangeHandler(FileSystemEventHandler):
         self.last_compile_time = time.time()
 
     def on_modified(self, event):
-        # Only react to modifications of the notebook file itself
-        if event.src_path.endswith(".ipynb") and Path(event.src_path).resolve() == Path(self.notebook_path).resolve():
+        self._handle_possible_notebook_change(event.src_path)
+
+    def on_created(self, event):
+        self._handle_possible_notebook_change(event.src_path)
+
+    def on_moved(self, event):
+        # dest_path is where the file ends up after the rename -- the path
+        # that now matches notebook_path, if anything does. src_path (the
+        # temp file's name) is irrelevant here.
+        self._handle_possible_notebook_change(event.dest_path)
+
+    def _handle_possible_notebook_change(self, event_path):
+        # Only react to changes to the notebook file itself
+        if event_path.endswith(".ipynb") and Path(event_path).resolve() == Path(self.notebook_path).resolve():
             # Debounce: avoid multiple rapid recompiles
             current_time = time.time()
             if current_time - self.last_compile_time < 1:

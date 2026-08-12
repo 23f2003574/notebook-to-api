@@ -299,6 +299,99 @@ def test_notebook_change_handler_recompiles_on_matching_notebook_modification(tm
     assert compiled_calls == [(str(notebook_path), str(output_dir))]
 
 
+def test_notebook_change_handler_recompiles_on_notebook_created_at_the_watched_path(
+    tmp_path, monkeypatch
+):
+    """Some editors write a brand-new notebook to the watched path outright
+    (rather than modifying an existing inode), which watchdog reports as a
+    FileCreatedEvent -- distinct from the FileModifiedEvent an in-place
+    write produces.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out: compiled_calls.append((nb, out))
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out: None)
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_created(event)
+
+    assert compiled_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_notebook_change_handler_recompiles_on_notebook_moved_into_place(
+    tmp_path, monkeypatch
+):
+    """Jupyter's own save mechanism -- and this project's own POST
+    /api/upload endpoint (see resolve_upload_path in
+    backend/routes/upload.py) -- writes to a temp file first and then
+    atomically renames it into place, to avoid ever leaving a half-written
+    notebook on disk. watchdog reports that rename as a FileMovedEvent
+    whose dest_path is the final notebook path; src_path is the
+    now-irrelevant temp file name. Before this, on_moved wasn't handled at
+    all, so this exact save pattern silently never triggered a
+    recompile.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out: compiled_calls.append((nb, out))
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out: None)
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    temp_path = tmp_path / ".nb.ipynb.tmp"
+    event = type(
+        "Event", (), {"src_path": str(temp_path), "dest_path": str(notebook_path)}
+    )()
+    handler.on_moved(event)
+
+    assert compiled_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_notebook_change_handler_ignores_an_unrelated_file_moved_into_the_directory(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out: compiled_calls.append((nb, out))
+    )
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    temp_path = tmp_path / ".other.ipynb.tmp"
+    other_path = tmp_path / "other.ipynb"
+    event = type(
+        "Event", (), {"src_path": str(temp_path), "dest_path": str(other_path)}
+    )()
+    handler.on_moved(event)
+
+    assert compiled_calls == []
+
+
 def test_notebook_change_handler_prints_a_compile_summary_after_recompiling(tmp_path, monkeypatch):
     """A live `serve` session's entire point is a fast, informative
     feedback loop after every save -- before this, a hot-recompile gave
