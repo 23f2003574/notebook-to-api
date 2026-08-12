@@ -246,6 +246,23 @@ def compile_notebook_to_api(
 
     functions = deduplicate_functions_by_name(functions)
 
+    # Generate the API code -- and let it raise (e.g.
+    # ReservedFunctionNameError, generator/api_generator.py, for a
+    # function name that collides with an identifier the generated app
+    # itself defines) -- before writing anything to output_dir at all.
+    # This used to run after write_runtime_module/write_requirements
+    # below, so a notebook that failed this check still overwrote the
+    # runtime module and requirements.txt from a previous successful
+    # compile with content generated from the *failing* notebook, while
+    # app.py, the Dockerfile, and .compile_metadata.json were left
+    # untouched from that previous compile -- leaving output_dir in an
+    # inconsistent state that matched neither the old nor the new
+    # notebook (confirmed: recompiling a working app with a notebook that
+    # has one reserved-name collision left its runtime module rewritten
+    # to the broken notebook's code while app.py and
+    # .compile_metadata.json still described the last working one).
+    api_code = generate_fastapi_code(functions, package_name)
+
     write_runtime_module(code_cells, output_dir)
 
     imports = set()
@@ -263,8 +280,6 @@ def compile_notebook_to_api(
         filtered_imports,
         output_dir
     )
-
-    api_code = generate_fastapi_code(functions, package_name)
 
     write_generated_api(
         api_code,

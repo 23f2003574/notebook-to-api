@@ -397,6 +397,68 @@ def test_compiler_pipeline_rejects_notebook_function_named_verify_api_key(tmp_pa
         compile_notebook(str(notebook_path), str(output_dir))
 
 
+def test_compiler_pipeline_leaves_a_previous_successful_compile_untouched_on_failure(
+    tmp_path
+):
+    """Confirmed exploitable before this fix: generate_fastapi_code (and
+    the ReservedFunctionNameError it can raise) previously ran *after*
+    write_runtime_module and write_requirements had already overwritten
+    the runtime module and requirements.txt from a working previous
+    compile with content generated from the *failing* notebook -- while
+    app.py, the Dockerfile, and .compile_metadata.json were left
+    untouched from that previous compile. A failed recompile (e.g. a typo
+    that introduces a reserved-name collision) left output_dir in an
+    inconsistent state matching neither the old nor the new notebook,
+    with app.py expecting functions the runtime module no longer defined.
+    """
+    from backend.generator.api_generator import ReservedFunctionNameError
+
+    good_notebook = nbformat.v4.new_notebook()
+    good_notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(good_notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    runtime_path = output_dir / "runtime" / "notebook_module.py"
+    requirements_path = output_dir / "requirements.txt"
+    metadata_path = output_dir / ".compile_metadata.json"
+    app_path = output_dir / "app.py"
+
+    runtime_before = runtime_path.read_text(encoding="utf-8")
+    requirements_before = requirements_path.read_text(encoding="utf-8")
+    metadata_before = metadata_path.read_text(encoding="utf-8")
+    app_before = app_path.read_text(encoding="utf-8")
+
+    bad_notebook = nbformat.v4.new_notebook()
+    bad_notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import json\n\n"
+            "def health_check() -> dict:\n    return {}\n"
+        )
+    )
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(bad_notebook, f)
+
+    with pytest.raises(ReservedFunctionNameError):
+        compile_notebook(str(notebook_path), str(output_dir))
+
+    # Every artifact from the previous successful compile must be
+    # completely untouched -- not just individually valid, but an exact
+    # match for the working app that was there before the failed attempt.
+    assert runtime_path.read_text(encoding="utf-8") == runtime_before
+    assert requirements_path.read_text(encoding="utf-8") == requirements_before
+    assert metadata_path.read_text(encoding="utf-8") == metadata_before
+    assert app_path.read_text(encoding="utf-8") == app_before
+
+
 def test_compiler_pipeline_case_colliding_function_names_get_distinct_models(tmp_path):
     """Confirmed exploitable before this fix: two notebook functions
     differing only by the case of their first letter (e.g. "get_data" and
