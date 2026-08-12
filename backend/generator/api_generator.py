@@ -14,7 +14,7 @@ from pathlib import Path
 # ordering trap.
 RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "START_TIME",
-    "GENERATED_AT", "PYTHON_VERSION",
+    "GENERATED_AT", "PYTHON_VERSION", "ALLOWED_ORIGINS",
     "verify_api_key", "custom_openapi",
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
     "validate_auth", "service_info", "metrics", "uptime",
@@ -188,6 +188,7 @@ def generate_fastapi_code(functions, package_name="generated"):
     lines.append(
         "from fastapi import FastAPI, BackgroundTasks, Header, HTTPException, Depends"
     )
+    lines.append("from fastapi.middleware.cors import CORSMiddleware")
     lines.append("import uuid")
     lines.append("import os")
     lines.append("import sys")
@@ -213,6 +214,37 @@ def generate_fastapi_code(functions, package_name="generated"):
     )
     lines.append("")
     lines.append("app.openapi_schema = None")
+    lines.append("")
+    # Every request this app accepts is authenticated via the X-API-Key
+    # header (see verify_api_key below), never a cookie, so -- unlike the
+    # dashboard API's own CORS setup in backend/dashboard.py, which has to
+    # restrict allow_origins to an explicit list precisely because it
+    # accepts credentialed (cookie-based) cross-origin requests --
+    # reflecting an arbitrary Origin here carries no cross-site credential
+    # risk. allow_credentials is explicitly False, which is also what
+    # makes a "*" default safe (browsers refuse "*" together with
+    # allow_credentials=True). Without this, the single most common way to
+    # actually consume a deployed generated API -- a browser-based
+    # frontend calling it directly -- was blocked by CORS with no way to
+    # fix it short of hand-editing this generated file. Configurable via
+    # NOTEBOOK_API_ALLOWED_ORIGINS (comma-separated) to lock this down for
+    # a real deployment instead.
+    lines.append(
+        'ALLOWED_ORIGINS = ['
+        'o.strip() for o in os.getenv('
+        '"NOTEBOOK_API_ALLOWED_ORIGINS", "*"'
+        ').split(",") if o.strip()'
+        '] or ["*"]'
+    )
+    lines.append(
+        "app.add_middleware("
+        "CORSMiddleware, "
+        "allow_origins=ALLOWED_ORIGINS, "
+        "allow_credentials=False, "
+        "allow_methods=['*'], "
+        "allow_headers=['*']"
+        ")"
+    )
     lines.append("")
     # Simple in‑memory task registry used by background endpoints
     lines.append("TASKS = {}")

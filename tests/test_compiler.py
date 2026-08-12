@@ -1140,6 +1140,184 @@ print("API_KEY_AUTH_E2E_OK")
     assert "API_KEY_AUTH_E2E_OK" in proc.stdout
 
 
+def test_compiler_pipeline_generated_app_allows_cross_origin_requests_by_default(
+    tmp_path,
+):
+    """Before this, the generated app had no CORS configuration at all --
+    a browser-based frontend calling a deployed generated API (the whole
+    point of generating one) was blocked by CORS with no way to fix it
+    short of hand-editing the generated file.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n"
+                            "    return a + b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+
+preflight = client.options(
+    "/add",
+    headers={{
+        "Origin": "https://example.com",
+        "Access-Control-Request-Method": "POST",
+    }},
+)
+assert preflight.status_code == 200, preflight.text
+# CORSMiddleware emits a literal "*" (not a reflected Origin) when "*" is
+# in allow_origins and allow_credentials is False.
+assert preflight.headers["access-control-allow-origin"] == "*"
+
+resp = client.post(
+    "/add",
+    json={{"a": 1, "b": 2}},
+    headers={{
+        "X-API-Key": "notebook-to-api-dev-key",
+        "Origin": "https://example.com",
+    }},
+)
+assert resp.status_code == 200, resp.text
+assert resp.headers["access-control-allow-origin"] == "*"
+assert "access-control-allow-credentials" not in resp.headers
+
+print("CORS_DEFAULT_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "CORS_DEFAULT_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_generated_app_respects_configured_allowed_origins(
+    tmp_path,
+):
+    """NOTEBOOK_API_ALLOWED_ORIGINS lets a real deployment lock the
+    permissive "*" default down to a known frontend origin, matching the
+    dashboard API's own NOTEBOOK_API_ALLOWED_ORIGINS convention (see
+    allowed_origins() in backend/dashboard.py).
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n"
+                            "    return a + b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import os
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+os.environ["NOTEBOOK_API_ALLOWED_ORIGINS"] = "https://allowed.example.com"
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+
+allowed = client.post(
+    "/add",
+    json={{"a": 1, "b": 2}},
+    headers={{
+        "X-API-Key": "notebook-to-api-dev-key",
+        "Origin": "https://allowed.example.com",
+    }},
+)
+assert allowed.status_code == 200, allowed.text
+assert allowed.headers["access-control-allow-origin"] == "https://allowed.example.com"
+
+disallowed = client.post(
+    "/add",
+    json={{"a": 1, "b": 2}},
+    headers={{
+        "X-API-Key": "notebook-to-api-dev-key",
+        "Origin": "https://not-allowed.example.com",
+    }},
+)
+assert "access-control-allow-origin" not in disallowed.headers
+
+print("CORS_CONFIGURED_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "CORS_CONFIGURED_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_supports_zero_downtime_api_key_rotation(tmp_path):
     """Confirmed exploitable before this fix: /auth/info advertised
     'key_rotation': True, but the generated app only ever read a single

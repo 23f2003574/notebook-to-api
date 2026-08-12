@@ -89,6 +89,38 @@ def test_api_key_check_still_rejects_missing_header():
     assert "if x_api_key is None or not any(" in code
 
 
+def test_generated_app_configures_cors_middleware_with_a_permissive_default():
+    """Before this, the generated app had no CORS configuration at all --
+    a browser-based frontend, the single most common way to actually
+    consume a deployed generated API, was blocked by CORS with no way to
+    fix it short of hand-editing the generated file. Default is
+    permissive ("*") because every endpoint is authenticated via the
+    X-API-Key header, not a cookie, so allow_credentials stays False and a
+    wildcard origin carries no cross-site credential risk.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "from fastapi.middleware.cors import CORSMiddleware" in code
+    assert 'os.getenv("NOTEBOOK_API_ALLOWED_ORIGINS", "*")' in code
+    assert "allow_credentials=False" in code
+    assert "app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS" in code
+
+
+def test_notebook_function_named_allowed_origins_is_rejected():
+    """ALLOWED_ORIGINS is a module-level name the generated app itself
+    defines (see RESERVED_INFRASTRUCTURE_NAMES) -- same collision hazard
+    class as API_KEYS or TASKS.
+    """
+
+    functions = [{"name": "ALLOWED_ORIGINS", "args": [], "return_type": "dict"}]
+
+    with pytest.raises(ReservedFunctionNameError, match="ALLOWED_ORIGINS"):
+        generate_fastapi_code(functions)
+
+
 def test_route_generation():
 
     functions = [
