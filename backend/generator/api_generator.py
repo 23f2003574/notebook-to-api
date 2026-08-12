@@ -15,6 +15,7 @@ from pathlib import Path
 RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "START_TIME",
     "GENERATED_AT", "PYTHON_VERSION", "ALLOWED_ORIGINS",
+    "MAX_REQUEST_BODY_BYTES", "MaxRequestBodySizeMiddleware",
     "verify_api_key", "custom_openapi",
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
     "validate_auth", "service_info", "metrics", "uptime",
@@ -197,6 +198,7 @@ def generate_fastapi_code(functions, package_name="generated"):
         "from fastapi import FastAPI, BackgroundTasks, Header, HTTPException, Depends"
     )
     lines.append("from fastapi.middleware.cors import CORSMiddleware")
+    lines.append("from fastapi.responses import JSONResponse")
     lines.append("import uuid")
     lines.append("import os")
     lines.append("import sys")
@@ -253,6 +255,56 @@ def generate_fastapi_code(functions, package_name="generated"):
         "allow_headers=['*']"
         ")"
     )
+    lines.append("")
+    # Every endpoint below accepts an arbitrary JSON request body with no
+    # limit on its size -- unlike this very tool's own dashboard
+    # /api/upload, which has always capped uploads at MAX_UPLOAD_BYTES
+    # (see routes/upload.py) for exactly this reason. A deployed generated
+    # app has no equivalent: one oversized request can consume unbounded
+    # memory building the body before FastAPI/Pydantic ever gets a chance
+    # to validate or reject it. Rejecting outright on a declared
+    # Content-Length over the limit, before the body is read at all, is
+    # the same "reject before reading" approach MAX_UPLOAD_BYTES already
+    # uses. Matches the NOTEBOOK_API_* env-var convention this generated
+    # app's other limits (API_KEYS, TASK_TTL_SECONDS, ALLOWED_ORIGINS)
+    # already follow, defaulting to the same 10MB MAX_UPLOAD_BYTES already
+    # defaults to.
+    lines.append(
+        'MAX_REQUEST_BODY_BYTES = int(os.getenv('
+        '"NOTEBOOK_API_MAX_REQUEST_BYTES", '
+        f'"{10 * 1024 * 1024}"'
+        '))'
+    )
+    lines.append("")
+    lines.append("class MaxRequestBodySizeMiddleware:")
+    lines.append("    def __init__(self, app):")
+    lines.append("        self.app = app")
+    lines.append("")
+    lines.append("    async def __call__(self, scope, receive, send):")
+    lines.append("        if scope['type'] == 'http':")
+    lines.append("            for name, value in scope.get('headers') or []:")
+    lines.append("                if name != b'content-length':")
+    lines.append("                    continue")
+    lines.append("                try:")
+    lines.append("                    too_large = int(value) > MAX_REQUEST_BODY_BYTES")
+    lines.append("                except ValueError:")
+    lines.append("                    break")
+    lines.append("                if too_large:")
+    lines.append("                    response = JSONResponse(")
+    lines.append("                        {")
+    lines.append("                            'detail': (")
+    lines.append("                                'Request body exceeds the maximum allowed '")
+    lines.append("                                f'size of {MAX_REQUEST_BODY_BYTES} bytes'")
+    lines.append("                            )")
+    lines.append("                        },")
+    lines.append("                        status_code=413,")
+    lines.append("                    )")
+    lines.append("                    await response(scope, receive, send)")
+    lines.append("                    return")
+    lines.append("                break")
+    lines.append("        await self.app(scope, receive, send)")
+    lines.append("")
+    lines.append("app.add_middleware(MaxRequestBodySizeMiddleware)")
     lines.append("")
     # Simple in‑memory task registry used by background endpoints
     lines.append("TASKS = {}")

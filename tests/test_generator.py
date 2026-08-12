@@ -121,6 +121,38 @@ def test_notebook_function_named_allowed_origins_is_rejected():
         generate_fastapi_code(functions)
 
 
+def test_generated_app_configures_a_max_request_body_size_middleware():
+    """Before this, every endpoint accepted a JSON request body of any
+    size -- unlike this tool's own dashboard /api/upload, which has
+    always capped uploads at MAX_UPLOAD_BYTES (see routes/upload.py) for
+    exactly this reason. A deployed generated app had no equivalent: one
+    oversized request could consume unbounded memory building the body
+    before Pydantic ever got a chance to validate or reject it.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "class MaxRequestBodySizeMiddleware:" in code
+    assert 'os.getenv("NOTEBOOK_API_MAX_REQUEST_BYTES", "10485760")' in code
+    assert "app.add_middleware(MaxRequestBodySizeMiddleware)" in code
+
+
+def test_notebook_function_named_max_request_body_bytes_is_rejected():
+    """MAX_REQUEST_BODY_BYTES is a module-level name the generated app
+    itself defines (see RESERVED_INFRASTRUCTURE_NAMES) -- same collision
+    hazard class as API_KEYS, TASKS, or ALLOWED_ORIGINS.
+    """
+
+    functions = [
+        {"name": "MAX_REQUEST_BODY_BYTES", "args": [], "return_type": "dict"}
+    ]
+
+    with pytest.raises(ReservedFunctionNameError, match="MAX_REQUEST_BODY_BYTES"):
+        generate_fastapi_code(functions)
+
+
 def test_route_generation():
 
     functions = [

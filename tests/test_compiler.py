@@ -1561,6 +1561,159 @@ print("CORS_CONFIGURED_E2E_OK")
     assert "CORS_CONFIGURED_E2E_OK" in proc.stdout
 
 
+def test_compiler_pipeline_generated_app_rejects_an_oversized_request_body(tmp_path):
+    """Before this, every endpoint on the generated app accepted a JSON
+    request body of any size -- unlike this tool's own dashboard
+    /api/upload, which has always capped uploads at MAX_UPLOAD_BYTES (see
+    routes/upload.py) for exactly this reason. Configurable via
+    NOTEBOOK_API_MAX_REQUEST_BYTES, matching the NOTEBOOK_API_* env-var
+    convention this generated app's other limits already follow.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n"
+                            "    return a + b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import os
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+os.environ["NOTEBOOK_API_MAX_REQUEST_BYTES"] = "50"
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+small = client.post("/add", json={{"a": 1, "b": 2}}, headers=headers)
+assert small.status_code == 200, small.text
+assert small.json() == {{"result": 3}}, small.json()
+
+oversized = client.post(
+    "/add",
+    json={{"a": 1, "b": 2, "padding": "x" * 200}},
+    headers=headers,
+)
+assert oversized.status_code == 413, oversized.text
+assert "50 bytes" in oversized.text, oversized.text
+
+print("MAX_REQUEST_BODY_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "MAX_REQUEST_BODY_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_generated_app_default_request_body_limit_allows_normal_requests(
+    tmp_path,
+):
+    """The default (10MB, matching MAX_UPLOAD_BYTES's own default) must
+    not reject an ordinary, unconfigured request -- this middleware is
+    meant to catch genuinely oversized bodies, not interfere with normal
+    usage when NOTEBOOK_API_MAX_REQUEST_BYTES is left unset.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n"
+                            "    return a + b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+resp = client.post(
+    "/add",
+    json={{"a": 1, "b": 2}},
+    headers={{"X-API-Key": "notebook-to-api-dev-key"}},
+)
+assert resp.status_code == 200, resp.text
+assert resp.json() == {{"result": 3}}, resp.json()
+
+print("MAX_REQUEST_BODY_DEFAULT_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "MAX_REQUEST_BODY_DEFAULT_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_supports_zero_downtime_api_key_rotation(tmp_path):
     """Confirmed exploitable before this fix: /auth/info advertised
     'key_rotation': True, but the generated app only ever read a single
