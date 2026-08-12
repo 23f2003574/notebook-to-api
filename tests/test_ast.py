@@ -671,3 +671,71 @@ def test_generate_example_payload_uses_the_literals_first_value():
     )
 
     assert payload == {"model": "xgboost"}
+
+
+def test_extract_imports_maps_import_names_to_their_real_pypi_package_names():
+    """None of the entries in extract_imports_from_code's pypi_mapping
+    had any test coverage before this -- verified here for every mapped
+    name, not just the ones this fix adds, so a future change to the
+    table is automatically covered too.
+    """
+
+    code = (
+        "import sklearn\n"
+        "import cv2\n"
+        "from PIL import Image\n"
+        "import yaml\n"
+    )
+
+    assert extract_imports_from_code(code) == {
+        "scikit-learn",
+        "opencv-python",
+        "Pillow",
+        "PyYAML",
+    }
+
+
+def test_extract_imports_maps_dangerously_ambiguous_import_names():
+    """Confirmed missing before this fix: PyPI hosts a real, unrelated,
+    unofficial package under each of these bare import names -- the same
+    hazard class STANDARD_LIBS already exists to close for stdlib names
+    like "asyncio" (see test_standard_libs_covers_common_stdlib_modules_beyond_the_old_hardcoded_list
+    in test_compiler.py). Left unmapped, `pip install <import name>`
+    silently installs the *wrong* package into requirements.txt instead
+    of the one the notebook actually needs.
+    """
+
+    code = (
+        "from dotenv import load_dotenv\n"
+        "import jwt\n"
+        "import serial\n"
+        "import docx\n"
+    )
+
+    assert extract_imports_from_code(code) == {
+        "python-dotenv",
+        "PyJWT",
+        "pyserial",
+        "python-docx",
+    }
+
+
+def test_extract_imports_maps_a_submodule_import_by_its_top_level_package():
+    """`import cv2.aruco` or `from PIL.Image import open` must still
+    resolve through pypi_mapping via the *top-level* module name, the
+    same as a plain `import cv2`/`from PIL import Image` would.
+    """
+
+    code = (
+        "import cv2.aruco\n"
+        "from PIL.Image import open\n"
+    )
+
+    assert extract_imports_from_code(code) == {"opencv-python", "Pillow"}
+
+
+def test_extract_imports_leaves_an_unmapped_third_party_name_unchanged():
+
+    code = "import pandas\n"
+
+    assert extract_imports_from_code(code) == {"pandas"}

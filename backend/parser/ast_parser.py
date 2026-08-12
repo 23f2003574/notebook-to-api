@@ -528,12 +528,28 @@ def extract_imports_from_code(code):
 
     imports = set()
 
-    # Map common Python import modules to their PyPI package names
+    # Map common Python import modules to their PyPI package names.
+    # Beyond sklearn/cv2/PIL/yaml simply being non-obvious (their import
+    # name doesn't match the installable package name at all), several of
+    # these are actively dangerous to leave unmapped, the same way an
+    # unmapped stdlib name like "asyncio" was before STANDARD_LIBS grew
+    # to cover it: PyPI hosts a real, unrelated, unofficial package under
+    # the bare import name itself, so `pip install <import name>`
+    # silently installs the *wrong* package instead of failing loudly --
+    # confirmed real, well-documented traps for "dotenv" (python-dotenv's
+    # import name), "jwt" (PyJWT's), "serial" (pyserial's), and "docx"
+    # (python-docx's), each with its own long history of developers
+    # reporting `ModuleNotFoundError`/broken behavior after installing
+    # the wrong same-named package by mistake.
     pypi_mapping = {
         "sklearn": "scikit-learn",
         "cv2": "opencv-python",
         "PIL": "Pillow",
         "yaml": "PyYAML",
+        "dotenv": "python-dotenv",
+        "jwt": "PyJWT",
+        "serial": "pyserial",
+        "docx": "python-docx",
     }
 
     for node in ast.walk(tree):

@@ -999,6 +999,45 @@ def test_compiler_pipeline_excludes_stdlib_modules_from_requirements(tmp_path):
     assert "pandas" in dep_names
 
 
+def test_compiler_pipeline_maps_a_dangerously_ambiguous_import_to_its_real_pypi_name(
+    tmp_path,
+):
+    """Confirmed missing before this fix: PyPI hosts a real, unrelated,
+    unofficial package under the bare import name "dotenv" -- unmapped,
+    requirements.txt listed "dotenv" itself, and `pip install -r
+    requirements.txt` in the generated Dockerfile's build would silently
+    install the *wrong* package instead of python-dotenv, the one the
+    notebook actually needs.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "from dotenv import load_dotenv\n\n"
+            "def get_config() -> dict:\n"
+            "    return {}\n"
+        )
+    )
+
+    notebook_path = tmp_path / "dotenv_import.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    requirements = (output_dir / "requirements.txt").read_text(
+        encoding="utf-8"
+    )
+    dep_names = {line.split("==")[0] for line in requirements.split()}
+
+    assert "python-dotenv" in dep_names
+    assert "dotenv" not in dep_names
+
+
 def test_requirements_omits_watchdog(tmp_path):
     """watchdog is a dependency of this tool's own `serve` command (hot
     recompilation while developing locally) -- the generated app itself
