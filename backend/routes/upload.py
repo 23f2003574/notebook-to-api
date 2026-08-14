@@ -129,38 +129,60 @@ DEPLOY_SUBPROCESS_TIMEOUT_SECONDS = int(
 )
 
 
-def resolve_upload_path(name: str) -> Path:
-    """Resolve `name` against UPLOAD_DIR, rejecting anything that would
+def _resolve_path_within(root_dir: str, name: str, dir_label: str) -> Path:
+    """Resolve `name` against `root_dir`, rejecting anything that would
     escape it.
 
-    `name` comes straight from client input (an uploaded file's filename,
-    or a notebook_path field in a JSON body). Both os.path.join and
-    pathlib's `/` operator discard the left-hand side entirely when the
-    right-hand side is absolute (`Path("uploads") / "/etc/passwd" ==
-    Path("/etc/passwd")`), and plain `../` segments escape just as
-    easily. Without this check, /upload allows writing arbitrary files
-    outside UPLOAD_DIR, and /inspect and /compile allow reading them
-    (confirmed: both were exploitable before this check existed).
+    `name` comes straight from client input (an uploaded/generated file's
+    name, from a URL path segment or a JSON body field). Both
+    os.path.join and pathlib's `/` operator discard the left-hand side
+    entirely when the right-hand side is absolute (`Path("uploads") /
+    "/etc/passwd" == Path("/etc/passwd")`), and plain `../` segments
+    escape just as easily. Without this check, a client-controlled name
+    can read or write arbitrary files outside `root_dir`. Shared by
+    resolve_upload_path (UPLOAD_DIR) and resolve_generated_path
+    (GENERATED_DIR) below, so both stay protected identically instead of
+    the check drifting between the two call sites.
     """
 
     if not name or Path(name).is_absolute():
         raise HTTPException(
             status_code=400,
-            detail="Invalid path: must be a relative filename within the uploads directory"
+            detail=f"Invalid path: must be a relative filename within the {dir_label} directory"
         )
 
-    upload_root = Path(UPLOAD_DIR).resolve()
-    candidate = (upload_root / name).resolve()
+    resolved_root = Path(root_dir).resolve()
+    candidate = (resolved_root / name).resolve()
 
     try:
-        candidate.relative_to(upload_root)
+        candidate.relative_to(resolved_root)
     except ValueError:
         raise HTTPException(
             status_code=400,
-            detail="Invalid path: must stay within the uploads directory"
+            detail=f"Invalid path: must stay within the {dir_label} directory"
         )
 
     return candidate
+
+
+def resolve_upload_path(name: str) -> Path:
+    """Resolve `name` against UPLOAD_DIR, rejecting anything that would
+    escape it.
+
+    Without this check, /upload allows writing arbitrary files outside
+    UPLOAD_DIR, and /inspect and /compile allow reading them (confirmed:
+    both were exploitable before this check existed).
+    """
+    return _resolve_path_within(UPLOAD_DIR, name, "uploads")
+
+
+def resolve_generated_path(name: str) -> Path:
+    """Resolve `name` against GENERATED_DIR, rejecting anything that
+    would escape it -- same protection as resolve_upload_path, applied to
+    GET /api/generated/{filename}'s filename, which is exactly as much
+    client input as an uploaded file's own name.
+    """
+    return _resolve_path_within(GENERATED_DIR, name, "generated output")
 
 
 @router.post("/upload")
@@ -1096,6 +1118,78 @@ def download_generated_app():
             )
         }
     )
+
+
+@router.get("/generated/{filename:path}")
+def get_generated_file(filename: str):
+    """Preview a single compiled output file's raw text content by name
+    (e.g. "app.py", "requirements.txt", "Dockerfile", or
+    "runtime/notebook_module.py").
+
+    GET /api/download already lets a caller retrieve the whole compiled
+    output as a zip, and inspect_notebook_data's "generated_files" field
+    already lists what's in it by name -- but there was previously no way
+    to actually read any *one* of those files' content through the API: a
+    dashboard frontend wanting to show "here's the app.py you're about to
+    deploy" (or requirements.txt, or the Dockerfile) had no choice but to
+    download and unzip the entire bundle client-side just to display a
+    single file, or shell out to the server's filesystem directly.
+
+    Reuses resolve_generated_path for the same traversal protection
+    resolve_upload_path already applies to UPLOAD_DIR -- `filename` here
+    comes straight from the URL path, exactly as much client input as an
+    uploaded file's own name. `{filename:path}` (not the plain
+    `{filename}` GET /api/notebooks/{filename} uses) so a nested path like
+    "runtime/notebook_module.py" is accepted as a single path parameter
+    instead of only ever matching a single path segment.
+    """
+
+    file_path = resolve_generated_path(filename)
+
+    generated_root = Path(GENERATED_DIR).resolve()
+
+    # Same __pycache__ exclusion inspect_notebook_data's "generated_files"
+    # field and GET /api/download already apply (see
+    # EXCLUDED_GENERATED_DIR_NAMES) -- it's a Python-created, non-portable
+    # implementation artifact never actually written by the compiler, not
+    # a real deliverable this endpoint should ever serve back.
+    if EXCLUDED_GENERATED_DIR_NAMES & set(
+        file_path.relative_to(generated_root).parts
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail="Generated file not found"
+        )
+
+    # Held while reading (see COMPILE_LOCK in backend/compiler.py) so a
+    # concurrent POST /api/compile can't rewrite this exact file out from
+    # under a read in progress, which could otherwise return a torn mix
+    # of the old and new compile's bytes instead of one consistent file.
+    with COMPILE_LOCK:
+
+        if not file_path.is_file():
+
+            raise HTTPException(
+                status_code=404,
+                detail="Generated file not found. Run /api/compile first."
+            )
+
+        try:
+
+            content = file_path.read_text(encoding="utf-8")
+
+        except UnicodeDecodeError:
+
+            raise HTTPException(
+                status_code=415,
+                detail=f"'{filename}' is not a text file"
+            )
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "content": content,
+    }
 
 
 @router.get("/health")

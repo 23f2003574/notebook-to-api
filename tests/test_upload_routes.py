@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from backend.compiler import COMPILE_LOCK, COMPILE_METADATA_FILENAME
 from backend.dashboard import app
-from backend.routes.upload import UPLOAD_DIR, resolve_upload_path
+from backend.routes.upload import UPLOAD_DIR, resolve_generated_path, resolve_upload_path
 
 client = TestClient(app)
 
@@ -102,6 +102,26 @@ def test_resolve_upload_path_accepts_plain_filename():
 
     assert resolved.name == "my_notebook.ipynb"
     assert str(resolved).startswith(os.path.abspath(UPLOAD_DIR))
+
+
+def test_resolve_generated_path_rejects_absolute_path():
+
+    with pytest.raises(Exception):
+        resolve_generated_path("/etc/passwd")
+
+
+def test_resolve_generated_path_rejects_relative_traversal():
+
+    with pytest.raises(Exception):
+        resolve_generated_path("../../../../etc/passwd")
+
+
+def test_resolve_generated_path_accepts_a_nested_path():
+
+    resolved = resolve_generated_path("runtime/notebook_module.py")
+
+    assert resolved.name == "notebook_module.py"
+    assert str(resolved).startswith(os.path.abspath("generated"))
 
 
 def test_upload_rejects_filename_that_escapes_upload_dir():
@@ -1848,6 +1868,168 @@ def test_download_waits_for_an_in_flight_compile_to_release_compile_lock():
 
     assert request_thread.is_alive(), (
         "GET /api/download should still be blocked on COMPILE_LOCK"
+    )
+
+    release_lock.set()
+    request_thread.join(timeout=5)
+    holder.join(timeout=5)
+
+    assert not request_thread.is_alive()
+    assert result["resp"].status_code == 200
+
+
+def test_get_generated_file_returns_404_when_nothing_compiled_yet(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(
+        upload_module, "GENERATED_DIR", "generated_get_file_test_missing_dir"
+    )
+
+    resp = client.get("/api/generated/app.py")
+
+    assert resp.status_code == 404
+
+
+def test_get_generated_file_returns_app_py_content():
+    """GET /api/download already lets a caller retrieve the whole compiled
+    output as a zip, and inspect_notebook_data's "generated_files" field
+    already lists what's in it by name -- but before this, there was no
+    way to read any *one* of those files' actual content back through the
+    API: a dashboard wanting to preview "here's the app.py you're about
+    to deploy" had no choice but to download and unzip the entire bundle
+    client-side just to show a single file.
+    """
+
+    _compile_a_notebook("get_file_app_py_test.ipynb")
+
+    resp = client.get("/api/generated/app.py")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["filename"] == "app.py"
+    assert "def add(" in body["content"]
+
+
+def test_get_generated_file_returns_requirements_txt_content():
+
+    _compile_a_notebook("get_file_requirements_test.ipynb")
+
+    resp = client.get("/api/generated/requirements.txt")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "fastapi" in body["content"]
+
+
+def test_get_generated_file_supports_nested_paths():
+    """The runtime module lives under a subdirectory ("runtime/
+    notebook_module.py"), not directly in GENERATED_DIR -- the route must
+    accept a nested path as a single parameter, not just a bare filename,
+    the way GET /api/notebooks/{filename} does.
+    """
+
+    _compile_a_notebook("get_file_nested_test.ipynb")
+
+    resp = client.get("/api/generated/runtime/notebook_module.py")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["filename"] == "runtime/notebook_module.py"
+    assert "def add(" in body["content"]
+
+
+def test_get_generated_file_returns_404_for_a_file_that_does_not_exist():
+
+    _compile_a_notebook("get_file_missing_test.ipynb")
+
+    resp = client.get("/api/generated/does_not_exist.txt")
+
+    assert resp.status_code == 404
+
+
+def test_get_generated_file_rejects_absolute_path():
+
+    _compile_a_notebook("get_file_absolute_test.ipynb")
+
+    resp = client.get("/api/generated//etc/passwd")
+
+    assert resp.status_code in (400, 404)
+
+
+def test_get_generated_file_rejects_relative_traversal():
+    """Confirmed exploitable before resolve_generated_path existed: a
+    filename like "../../etc/passwd" would resolve outside GENERATED_DIR
+    entirely, the same traversal hazard resolve_upload_path already
+    guards against for UPLOAD_DIR.
+    """
+
+    _compile_a_notebook("get_file_traversal_test.ipynb")
+
+    resp = client.get("/api/generated/../../../../etc/passwd")
+
+    assert resp.status_code in (400, 404)
+    assert "root:" not in resp.text
+
+
+def test_get_generated_file_excludes_pycache():
+    """Same __pycache__ exclusion GET /api/download and
+    inspect_notebook_data's "generated_files" field already apply (see
+    EXCLUDED_GENERATED_DIR_NAMES) -- it's a Python-created implementation
+    artifact never actually written by the compiler, not a real
+    deliverable this endpoint should serve back.
+    """
+
+    _compile_a_notebook("get_file_pycache_test.ipynb")
+
+    generated_dir = Path("generated")
+    pycache_dir = generated_dir / "__pycache__"
+
+    try:
+        pycache_dir.mkdir(exist_ok=True)
+        (pycache_dir / "app.cpython-314.pyc").write_bytes(b"\x00")
+
+        resp = client.get("/api/generated/__pycache__/app.cpython-314.pyc")
+
+        assert resp.status_code == 404
+    finally:
+        shutil.rmtree(pycache_dir, ignore_errors=True)
+
+
+def test_get_generated_file_waits_for_an_in_flight_compile_to_release_compile_lock():
+    """GET /api/generated/{filename} reads a file out of GENERATED_DIR --
+    without holding COMPILE_LOCK (see backend/compiler.py) for that read,
+    a concurrent POST /api/compile racing it on another thread could
+    rewrite that exact file out from under it mid-read, the same hazard
+    already guarded against for GET /api/download's zip walk.
+    """
+
+    _compile_a_notebook("get_file_lock_test.ipynb")
+
+    lock_acquired = threading.Event()
+    release_lock = threading.Event()
+
+    def hold_lock():
+        with COMPILE_LOCK:
+            lock_acquired.set()
+            assert release_lock.wait(timeout=5)
+
+    holder = threading.Thread(target=hold_lock)
+    holder.start()
+    assert lock_acquired.wait(timeout=5)
+
+    result = {}
+
+    def do_get():
+        result["resp"] = client.get("/api/generated/app.py")
+
+    request_thread = threading.Thread(target=do_get)
+    request_thread.start()
+    request_thread.join(timeout=0.3)
+
+    assert request_thread.is_alive(), (
+        "GET /api/generated/{filename} should still be blocked on COMPILE_LOCK"
     )
 
     release_lock.set()
