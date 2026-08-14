@@ -955,6 +955,26 @@ def generate_fastapi_code(functions, package_name="generated"):
             call_prefix = "await " if is_async else ""
             lines.append(f"{def_keyword} {func_name}(req: {model_name}, _: None = Depends(verify_api_key)):")
             lines.append(f"    result = {call_prefix}notebook_module.{func_name}({call_args})")
+            # Same reasoning as _run_background_task's own jsonable_encoder
+            # call: without pre-encoding here, a result FastAPI's response
+            # serialization can't handle on its own (a raw numpy array, a
+            # pandas DataFrame, ...) doesn't fail with anything resembling
+            # this app's other error responses -- it crashes deep inside
+            # FastAPI's routing internals as an unhandled ValueError, which
+            # a real (non-test-client) deployment surfaces to the caller as
+            # a bare "Internal Server Error" with no detail at all, unlike
+            # every other failure mode this generated app already reports
+            # clearly (auth, reserved names, oversized bodies, ...).
+            lines.append("    try:")
+            lines.append("        result = jsonable_encoder(result)")
+            lines.append("    except Exception as e:")
+            lines.append("        raise HTTPException(")
+            lines.append("            status_code=500,")
+            lines.append(
+                f"            detail=f\"'{func_name}' returned a value that "
+                "is not JSON-serializable: {e}\","
+            )
+            lines.append("        )")
             lines.append("    return {\"result\": result}")
         lines.append("")
     return "\n".join(lines)

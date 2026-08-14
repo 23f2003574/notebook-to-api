@@ -908,6 +908,165 @@ def test_compiler_pipeline_zero_argument_function_compiles_end_to_end(tmp_path):
     compile(generated_app, "app.py", "exec")
 
 
+def test_compiler_pipeline_sync_endpoint_with_unserializable_result_returns_a_clean_500(
+    tmp_path,
+):
+    """Mirrors
+    test_compiler_pipeline_background_task_with_unserializable_result_is_reported_as_failed
+    for a synchronous (non-background) endpoint. Confirmed exploitable
+    before this fix: a synchronous function returning something FastAPI's
+    response serialization can't encode (e.g. a raw numpy array) crashed
+    with an unhandled ValueError deep inside FastAPI's routing internals
+    -- which a real (non-test-client) deployment surfaces to the caller
+    as a bare "Internal Server Error" with no detail at all, unlike every
+    other failure mode this generated app already reports clearly (auth,
+    reserved names, oversized bodies, ...).
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "import numpy as np\n\n"
+                            "def compute_stats(x: int) -> list:\n"
+                            "    return np.array([x, x * 2])\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+# raise_server_exceptions=False so this behaves like a real deployment
+# (Starlette's ServerErrorMiddleware catching an unhandled exception and
+# turning it into a plain 500) instead of TestClient re-raising it into
+# this test process.
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+resp = client.post("/compute_stats", json={{"x": 5}}, headers=headers)
+assert resp.status_code == 500, resp.text
+assert "compute_stats" in resp.text
+assert "not JSON-serializable" in resp.text
+
+print("SYNC_UNSERIALIZABLE_RESULT_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SYNC_UNSERIALIZABLE_RESULT_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_sync_endpoint_result_is_run_through_jsonable_encoder(
+    tmp_path,
+):
+    """Mirrors
+    test_compiler_pipeline_background_task_result_is_run_through_jsonable_encoder
+    for a synchronous endpoint: a type json.dumps alone can't handle (a
+    datetime) must still be delivered correctly, converted into JSON-safe
+    data rather than merely happening not to break on it.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "import datetime\n\n"
+                            "def report(year: int) -> dict:\n"
+                            "    return {\n"
+                            "        'year': year,\n"
+                            "        'generated_on': datetime.date(2024, 1, 1),\n"
+                            "    }\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+resp = client.post("/report", json={{"year": 2024}}, headers=headers)
+assert resp.status_code == 200, resp.text
+assert resp.json() == {{"result": {{"year": 2024, "generated_on": "2024-01-01"}}}}, resp.json()
+
+print("SYNC_JSONABLE_ENCODER_RESULT_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SYNC_JSONABLE_ENCODER_RESULT_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_rejects_notebook_function_named_verify_api_key(tmp_path):
     """Confirmed exploitable before this fix: a notebook function named
     verify_api_key rebinds the generated app's own auth-check function at
