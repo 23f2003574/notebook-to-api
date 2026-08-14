@@ -832,6 +832,18 @@ def generate_fastapi_code(functions, package_name="generated"):
             raw_arg_type = arg.get("type")
             arg_type, _ = _resolve_annotation_source(raw_arg_type)
 
+            # repr()'d below (see description=repr(field_description)),
+            # not embedded as a raw f-string inside a hand-written
+            # description="..." literal -- raw_arg_type is arbitrary,
+            # notebook-author-controlled text (ast.unparse of the
+            # parameter's own annotation), and can itself legitimately
+            # contain a double quote (e.g. a real, valid Python
+            # `Literal["a\"b"]` parameter unparses to `Literal['a"b']`).
+            # Confirmed exploitable before this fix: that embedded `"`
+            # closed the description="..." string literal early,
+            # corrupting the rest of the line into a SyntaxError that
+            # failed to compile the *entire* generated app.py, not just
+            # this one field.
             field_description = (
                 f"Parameter '{arg_name}' "
                 f"of type {raw_arg_type or 'str'}"
@@ -864,13 +876,13 @@ def generate_fastapi_code(functions, package_name="generated"):
                 lines.append(
                     f'    {arg_name}: {arg_type} = Field('
                     f'default={default_expr}, '
-                    f'description="{field_description}"'
+                    f'description={repr(field_description)}'
                     f')'
                 )
             else:
                 lines.append(
                     f'    {arg_name}: {arg_type} = Field('
-                    f'description="{field_description}"'
+                    f'description={repr(field_description)}'
                     f')'
                 )
         if example_payload:
@@ -936,6 +948,15 @@ def generate_fastapi_code(functions, package_name="generated"):
             # shape here instead was actively misleading: /docs, and any
             # third-party tool generating a client from openapi.json,
             # would expect a response this endpoint never actually sends.
+            # repr()'d below for the same reason field_description is:
+            # return_type is arbitrary, notebook-author-controlled text
+            # (ast.unparse of the function's own return annotation) that
+            # can itself legitimately contain a double quote -- embedding
+            # it as a raw f-string inside a hand-written
+            # "description": "..." literal let that quote close the
+            # string early, corrupting the whole responses={...} dict
+            # literal into a SyntaxError that failed to compile the
+            # entire generated app.py.
             task_response_description = (
                 f"Task enqueued. Poll GET /tasks/{{task_id}} for the "
                 f"completed {return_type} result."
@@ -948,7 +969,7 @@ def generate_fastapi_code(functions, package_name="generated"):
                 f'tags=["{tag}"], '
                 f'operation_id="{operation_id}", '
                 f'openapi_extra={{"x-notebook-to-api-category": "{category}", "x-notebook-to-api-async": True, "security": [{{"ApiKeyAuth": []}}]}}, '
-                f'responses={{200: {{"description": "{task_response_description}", "content": {{"application/json": {{"example": {repr(task_example_response)}}}}}}}}})'
+                f'responses={{200: {{"description": {repr(task_response_description)}, "content": {{"application/json": {{"example": {repr(task_example_response)}}}}}}}}})'
             )
             lines.append(f"def {func_name}(req: {model_name}, background_tasks: BackgroundTasks, _: None = Depends(verify_api_key)):")
             lines.append("    _evict_expired_tasks()")
@@ -975,7 +996,7 @@ def generate_fastapi_code(functions, package_name="generated"):
                 f'tags=["{tag}"], '
                 f'operation_id="{operation_id}", '
                 f'openapi_extra={{"x-notebook-to-api-category": "{category}", "security": [{{"ApiKeyAuth": []}}]}}, '
-                f'responses={{200: {{"description": "{response_description}", "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
+                f'responses={{200: {{"description": {repr(response_description)}, "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
             )
             is_async = func.get("is_async", False)
             def_keyword = "async def" if is_async else "def"

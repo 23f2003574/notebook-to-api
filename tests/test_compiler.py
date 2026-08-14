@@ -912,6 +912,129 @@ def test_compiler_pipeline_zero_argument_function_compiles_end_to_end(tmp_path):
     compile(generated_app, "app.py", "exec")
 
 
+def test_compiler_pipeline_parameter_type_containing_a_quote_compiles_end_to_end(
+    tmp_path,
+):
+    """Confirmed exploitable before this fix: a parameter's type
+    annotation (ast.unparse'd from the notebook's own source -- e.g.
+    Literal["a\\"quoted\\"value"] unparses to Literal['a"quoted"value'])
+    is arbitrary, notebook-author-controlled text that can itself
+    legitimately contain a double quote. That quote was embedded as a
+    raw f-string inside a hand-written description="..." literal for the
+    generated Pydantic Field, closing the string early and corrupting
+    the rest of the line into a SyntaxError that failed to compile the
+    *entire* generated app.py, not just this one parameter.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "from typing import Literal\n\n"
+                            'def classify(label: Literal["a\\"quoted\\"value"]) -> str:\n'
+                            "    return label\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+resp = client.post("/classify", json={{"label": 'a"quoted"value'}}, headers=headers)
+assert resp.status_code == 200, resp.text
+assert resp.json() == {{"result": 'a"quoted"value'}}, resp.json()
+
+schema = app.openapi()
+field_description = schema["components"]["schemas"]["ClassifyRequest"]["properties"]["label"]["description"]
+assert field_description == "Parameter 'label' of type Literal['a\\"quoted\\"value']", field_description
+
+print("QUOTED_PARAMETER_TYPE_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "QUOTED_PARAMETER_TYPE_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_return_type_containing_a_quote_compiles_end_to_end(
+    tmp_path,
+):
+    """Mirrors
+    test_compiler_pipeline_parameter_type_containing_a_quote_compiles_end_to_end
+    for a *return* type annotation, which flows into an endpoint's own
+    responses={{200: {{"description": ...}}}} entry (response_description
+    for a synchronous endpoint, task_response_description for a
+    background one) through the exact same unescaped-embedding hazard.
+    Covers both code paths in one notebook, since each builds this
+    description differently.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "from typing import Literal\n\n"
+            "def classify_sync(x: int) -> "
+            'Literal["a\\"quoted\\"value"]:\n'
+            '    return "a\\"quoted\\"value"\n\n'
+            "def process_classify(x: int) -> "
+            'Literal["a\\"quoted\\"value"]:\n'
+            '    return "a\\"quoted\\"value"\n'
+        )
+    )
+
+    notebook_path = tmp_path / "quoted_return_type.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    generated_app = (output_dir / "app.py").read_text(encoding="utf-8")
+
+    ast.parse(generated_app)
+    compile(generated_app, "app.py", "exec")
+
+
 def test_compiler_pipeline_sync_endpoint_reports_a_raised_exception_as_a_clean_500(
     tmp_path,
 ):
