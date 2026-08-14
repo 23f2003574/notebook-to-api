@@ -2528,6 +2528,194 @@ print("TASK_TTL_EVICTION_E2E_OK")
     assert "TASK_TTL_EVICTION_E2E_OK" in proc.stdout
 
 
+def test_compiler_pipeline_background_task_with_unserializable_result_is_reported_as_failed(
+    tmp_path,
+):
+    """Confirmed exploitable before this fix: a background function
+    returning something FastAPI's own response serialization can't
+    encode (e.g. a raw numpy array -- an entirely ordinary thing for the
+    'process'/'train'/'generate'/'embed' keywords that route a function
+    to a background task in the first place) marked the task "completed"
+    with that unserializable result stored as-is. GET /tasks/{task_id}
+    then crashed with an unhandled 500 the moment FastAPI tried to
+    serialize the response -- and so did GET /tasks entirely, for *every*
+    task in the registry, not just the offending one, since it returns
+    them all in a single response.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "import numpy as np\n\n"
+                            "def process_data(x: int) -> list:\n"
+                            "    return np.array([x, x * 2])\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+import time
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+submitted = client.post("/process_data", json={{"x": 5}}, headers=headers)
+assert submitted.status_code == 200, submitted.text
+task_id = submitted.json()["task_id"]
+
+deadline = time.time() + 5
+while True:
+    lookup = client.get(f"/tasks/{{task_id}}", headers=headers)
+    assert lookup.status_code == 200, lookup.text
+    if lookup.json().get("status") != "processing":
+        break
+    assert time.time() < deadline, "task never left processing"
+    time.sleep(0.01)
+
+task = lookup.json()
+assert task["status"] == "failed", task
+assert "error" in task, task
+assert "result" not in task, task
+
+# GET /tasks must still succeed too -- not crash for *every* task in the
+# registry just because one of them has an unserializable result.
+listing = client.get("/tasks", headers=headers)
+assert listing.status_code == 200, listing.text
+assert listing.json()["tasks"][task_id]["status"] == "failed"
+
+print("UNSERIALIZABLE_RESULT_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "UNSERIALIZABLE_RESULT_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_background_task_result_is_run_through_jsonable_encoder(
+    tmp_path,
+):
+    """A JSON-safe result (unlike the numpy case above) must still be
+    delivered correctly -- and jsonable_encoder should actually convert a
+    type json.dumps alone can't handle natively (a datetime) into a
+    JSON-safe value, rather than merely happening not to break on it.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "import datetime\n\n"
+                            "def generate_report(year: int) -> dict:\n"
+                            "    return {\n"
+                            "        'year': year,\n"
+                            "        'generated_on': datetime.date(2024, 1, 1),\n"
+                            "    }\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+import time
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+submitted = client.post("/generate_report", json={{"year": 2024}}, headers=headers)
+assert submitted.status_code == 200, submitted.text
+task_id = submitted.json()["task_id"]
+
+deadline = time.time() + 5
+while True:
+    lookup = client.get(f"/tasks/{{task_id}}", headers=headers)
+    assert lookup.status_code == 200, lookup.text
+    if lookup.json().get("status") != "processing":
+        break
+    assert time.time() < deadline, "task never left processing"
+    time.sleep(0.01)
+
+task = lookup.json()
+assert task["status"] == "completed", task
+assert task["result"] == {{"year": 2024, "generated_on": "2024-01-01"}}, task
+
+print("JSONABLE_ENCODER_RESULT_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "JSONABLE_ENCODER_RESULT_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_background_endpoint_rejects_tasks_past_the_configured_limit(
     tmp_path,
 ):
