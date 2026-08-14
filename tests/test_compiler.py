@@ -1195,12 +1195,16 @@ def test_compiler_pipeline_sync_endpoint_with_unserializable_result_returns_a_cl
     test_compiler_pipeline_background_task_with_unserializable_result_is_reported_as_failed
     for a synchronous (non-background) endpoint. Confirmed exploitable
     before this fix: a synchronous function returning something FastAPI's
-    response serialization can't encode (e.g. a raw numpy array) crashed
-    with an unhandled ValueError deep inside FastAPI's routing internals
-    -- which a real (non-test-client) deployment surfaces to the caller
-    as a bare "Internal Server Error" with no detail at all, unlike every
-    other failure mode this generated app already reports clearly (auth,
-    reserved names, oversized bodies, ...).
+    response serialization can't encode (e.g. a complex number -- Python
+    builtin, no extra dependency needed to demonstrate this; a raw numpy
+    array or pandas DataFrame is the more common real-world case for
+    "compute_stats" but requires numpy as a test dependency this project
+    doesn't otherwise have) crashed with an unhandled ValueError deep
+    inside FastAPI's routing internals -- which a real (non-test-client)
+    deployment surfaces to the caller as a bare "Internal Server Error"
+    with no detail at all, unlike every other failure mode this
+    generated app already reports clearly (auth, reserved names,
+    oversized bodies, ...).
     """
 
     workdir = tmp_path / "workdir"
@@ -1220,9 +1224,8 @@ def test_compiler_pipeline_sync_endpoint_with_unserializable_result_returns_a_cl
                         "metadata": {},
                         "outputs": [],
                         "source": (
-                            "import numpy as np\n\n"
-                            "def compute_stats(x: int) -> list:\n"
-                            "    return np.array([x, x * 2])\n"
+                            "def compute_stats(x: int) -> complex:\n"
+                            "    return complex(x, x * 2)\n"
                         ),
                     }
                 ],
@@ -2972,14 +2975,17 @@ def test_compiler_pipeline_background_task_with_unserializable_result_is_reporte
 ):
     """Confirmed exploitable before this fix: a background function
     returning something FastAPI's own response serialization can't
-    encode (e.g. a raw numpy array -- an entirely ordinary thing for the
-    'process'/'train'/'generate'/'embed' keywords that route a function
-    to a background task in the first place) marked the task "completed"
-    with that unserializable result stored as-is. GET /tasks/{task_id}
-    then crashed with an unhandled 500 the moment FastAPI tried to
-    serialize the response -- and so did GET /tasks entirely, for *every*
-    task in the registry, not just the offending one, since it returns
-    them all in a single response.
+    encode (e.g. a complex number -- Python builtin, no extra dependency
+    needed to demonstrate this; a raw numpy array or pandas DataFrame is
+    the more common real-world case for "process_data", an entirely
+    ordinary thing for the 'process'/'train'/'generate'/'embed' keywords
+    that route a function to a background task in the first place, but
+    requires numpy as a test dependency this project doesn't otherwise
+    have) marked the task "completed" with that unserializable result
+    stored as-is. GET /tasks/{task_id} then crashed with an unhandled
+    500 the moment FastAPI tried to serialize the response -- and so did
+    GET /tasks entirely, for *every* task in the registry, not just the
+    offending one, since it returns them all in a single response.
     """
 
     workdir = tmp_path / "workdir"
@@ -2999,9 +3005,8 @@ def test_compiler_pipeline_background_task_with_unserializable_result_is_reporte
                         "metadata": {},
                         "outputs": [],
                         "source": (
-                            "import numpy as np\n\n"
-                            "def process_data(x: int) -> list:\n"
-                            "    return np.array([x, x * 2])\n"
+                            "def process_data(x: int) -> complex:\n"
+                            "    return complex(x, x * 2)\n"
                         ),
                     }
                 ],
