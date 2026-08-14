@@ -11,6 +11,7 @@ import nbformat
 import pytest
 
 from backend.compiler import (
+    clear_stale_export_artifacts,
     COMPILE_LOCK,
     compile_notebook,
     compile_notebook_to_api,
@@ -905,6 +906,143 @@ def test_compiler_pipeline_leaves_a_previous_successful_compile_untouched_on_fai
     assert requirements_path.read_text(encoding="utf-8") == requirements_before
     assert metadata_path.read_text(encoding="utf-8") == metadata_before
     assert app_path.read_text(encoding="utf-8") == app_before
+
+
+def test_clear_stale_export_artifacts_removes_openapi_and_sdk_files(tmp_path):
+
+    (tmp_path / "openapi.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "openapi.yaml").write_text("{}", encoding="utf-8")
+    sdk_dir = tmp_path / "sdk"
+    sdk_dir.mkdir()
+    (sdk_dir / "python_client.py").write_text("# client", encoding="utf-8")
+
+    clear_stale_export_artifacts(str(tmp_path))
+
+    assert not (tmp_path / "openapi.json").exists()
+    assert not (tmp_path / "openapi.yaml").exists()
+    assert not sdk_dir.exists()
+
+
+def test_clear_stale_export_artifacts_is_a_no_op_when_nothing_was_ever_exported(
+    tmp_path,
+):
+    # Must not raise just because there was never a prior export to clear.
+    clear_stale_export_artifacts(str(tmp_path))
+
+
+def test_compiler_pipeline_recompile_clears_a_stale_exported_openapi_and_sdk(
+    tmp_path,
+):
+    """Confirmed exploitable before this fix: POST /api/export-openapi and
+    POST /api/export-sdk (and the CLI's export-openapi/export-sdk
+    commands) write openapi.json/openapi.yaml/sdk/ straight into
+    output_dir, alongside the compiled app -- but recompiling the
+    notebook only ever overwrote app.py, the runtime module,
+    requirements.txt, and the Dockerfile, leaving any previously exported
+    openapi.json/openapi.yaml/sdk/ completely untouched. A caller
+    downloading the "compiled app" afterwards (GET /api/download, or GET
+    /api/generated/openapi.json) got a schema/SDK describing the
+    *previous* compile's endpoints, silently mismatched against the
+    app.py sitting right next to it in the same directory.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    # Simulate a prior POST /api/export-openapi + POST /api/export-sdk
+    # against this compile, without actually dynamically importing the
+    # compiled app module (which export_openapi_schema does, and which
+    # this project's own SDK tests deliberately run out-of-process to
+    # avoid caching across tests in the same pytest process -- irrelevant
+    # to what's being tested here, which is only whether a recompile
+    # clears these files out, not what they contain).
+    (output_dir / "openapi.json").write_text(
+        json.dumps({"paths": {"/add": {}}}), encoding="utf-8"
+    )
+    (output_dir / "openapi.yaml").write_text("paths:\n  /add: {}\n", encoding="utf-8")
+    sdk_dir = output_dir / "sdk"
+    sdk_dir.mkdir()
+    (sdk_dir / "python_client.py").write_text(
+        "def add(self, payload): ...\n", encoding="utf-8"
+    )
+
+    other_notebook = nbformat.v4.new_notebook()
+    other_notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def multiply(a: int, b: int) -> int:\n    return a * b\n"
+        )
+    )
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(other_notebook, f)
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    app_source = (output_dir / "app.py").read_text(encoding="utf-8")
+    assert "def multiply(" in app_source
+    assert "def add(" not in app_source
+
+    assert not (output_dir / "openapi.json").exists()
+    assert not (output_dir / "openapi.yaml").exists()
+    assert not sdk_dir.exists()
+
+
+def test_compiler_pipeline_failed_recompile_leaves_stale_exports_untouched(tmp_path):
+    """Mirrors
+    test_compiler_pipeline_leaves_a_previous_successful_compile_untouched_on_failure
+    for export artifacts specifically: a compile that fails (e.g. a
+    reserved-name collision) must leave a previous compile's exported
+    openapi.json/sdk/ untouched too, the same as it already leaves
+    app.py/requirements.txt/the runtime module untouched -- clearing
+    stale exports only makes sense once a new, actually-successful
+    compile exists to replace what they described.
+    """
+    from backend.generator.api_generator import ReservedFunctionNameError
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    openapi_path = output_dir / "openapi.json"
+    openapi_path.write_text(json.dumps({"paths": {"/add": {}}}), encoding="utf-8")
+    sdk_dir = output_dir / "sdk"
+    sdk_dir.mkdir()
+    (sdk_dir / "python_client.py").write_text("# client", encoding="utf-8")
+
+    bad_notebook = nbformat.v4.new_notebook()
+    bad_notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def health_check() -> dict:\n    return {}\n"
+        )
+    )
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(bad_notebook, f)
+
+    with pytest.raises(ReservedFunctionNameError):
+        compile_notebook(str(notebook_path), str(output_dir))
+
+    assert openapi_path.exists()
+    assert sdk_dir.exists()
 
 
 def test_compiler_pipeline_case_colliding_function_names_get_distinct_models(tmp_path):

@@ -4,6 +4,7 @@ import importlib.metadata
 import json
 import keyword
 import os
+import shutil
 import sys
 import pathlib
 import threading
@@ -250,6 +251,43 @@ def write_compile_metadata(notebook_path, output_dir):
         json.dump(metadata, f, indent=2)
 
 
+def clear_stale_export_artifacts(output_dir):
+    """Remove a previous compile's exported openapi.json/openapi.yaml and
+    sdk/ directory from `output_dir`, if present.
+
+    POST /api/export-openapi and POST /api/export-sdk (and the CLI's
+    export-openapi/export-sdk commands, by default -- see 354bb6c) always
+    write into output_dir alongside the compiled app itself. Recompiling
+    a notebook overwrites app.py, the runtime module, requirements.txt,
+    and the Dockerfile -- but previously left any openapi.json/
+    openapi.yaml/sdk/ already sitting in output_dir completely untouched,
+    silently describing the *previous* compile's endpoints instead.
+    Confirmed: compiling a notebook exposing `add`, exporting its schema,
+    then recompiling to expose `multiply` instead (without re-exporting)
+    left openapi.json still listing "/add" and omitting "/multiply"
+    entirely -- exactly the mismatch GET /api/download's zip and GET
+    /api/generated/openapi.json would then hand a caller alongside the
+    freshly compiled app.py that no longer matches either of them.
+
+    Only ever called from the successful-compile path in
+    compile_notebook_to_api below (after generate_fastapi_code has
+    already succeeded), never on a failed compile -- a notebook that
+    fails to compile must leave a previous good compile's exports
+    untouched too, for the same reason it already leaves app.py,
+    requirements.txt, and everything else untouched (see the
+    generate_fastapi_code comment below).
+    """
+    output_path = Path(output_dir)
+
+    for stale_export_file in ("openapi.json", "openapi.yaml"):
+        (output_path / stale_export_file).unlink(missing_ok=True)
+
+    stale_sdk_dir = output_path / "sdk"
+
+    if stale_sdk_dir.is_dir():
+        shutil.rmtree(stale_sdk_dir)
+
+
 def compile_notebook_to_api(
     notebook_path,
     output_path
@@ -315,6 +353,14 @@ def compile_notebook_to_api(
         # to the broken notebook's code while app.py and
         # .compile_metadata.json still described the last working one).
         api_code = generate_fastapi_code(functions, package_name)
+
+        # generate_fastapi_code succeeding means this compile is now
+        # guaranteed to go through -- from here on the only failures left
+        # are I/O errors, not this notebook's own content -- so it's now
+        # safe to clear out any openapi.json/openapi.yaml/sdk/ left over
+        # from a previous compile's export (see its own docstring for why
+        # this can't just be left alone).
+        clear_stale_export_artifacts(output_dir)
 
         write_runtime_module(code_cells, output_dir)
 
