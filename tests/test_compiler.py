@@ -1,5 +1,7 @@
 import ast
+import http.server
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -139,6 +141,108 @@ def test_generate_dockerfile_sets_unbuffered_and_no_bytecode_env_vars(tmp_path):
 
     assert "ENV PYTHONUNBUFFERED=1" in dockerfile
     assert "ENV PYTHONDONTWRITEBYTECODE=1" in dockerfile
+
+
+def test_generate_dockerfile_cmd_actually_honors_port_env_var_at_runtime(tmp_path):
+    """Most real PaaS deploy targets (Cloud Run, Render, Heroku, ...)
+    assign the container's listening port via a $PORT environment variable
+    at start time and require the process to actually bind to it -- there
+    is no fixed port they'll forward to instead. Before this, CMD was a
+    plain exec-form array with "--port", "8000" hardcoded, which -- with
+    no shell involved in exec form -- couldn't read $PORT at all no matter
+    what a deploy target set it to.
+
+    Runs the Dockerfile's actual CMD shell command (with `uvicorn` swapped
+    for `echo` so no real server needs to start) to prove $PORT is
+    genuinely substituted by the shell at container start, not just
+    present as literal text somewhere in the Dockerfile.
+    """
+
+    output_path = tmp_path / "Dockerfile"
+
+    generate_dockerfile(str(output_path), "generated")
+
+    dockerfile = output_path.read_text(encoding="utf-8")
+
+    cmd_line = next(
+        line for line in dockerfile.splitlines()
+        if line.startswith('CMD ["sh", "-c",')
+    )
+    shell_command = json.loads(cmd_line[len("CMD "):])[2]
+    shell_command = shell_command.replace("uvicorn", "echo", 1)
+
+    default_result = subprocess.run(
+        ["sh", "-c", shell_command], capture_output=True, text=True
+    )
+    assert "--port 8000" in default_result.stdout
+
+    custom_env = dict(os.environ)
+    custom_env["PORT"] = "8080"
+
+    custom_result = subprocess.run(
+        ["sh", "-c", shell_command],
+        capture_output=True,
+        text=True,
+        env=custom_env,
+    )
+    assert "--port 8080" in custom_result.stdout
+
+
+def test_generate_dockerfile_healthcheck_actually_honors_port_env_var_at_runtime(
+    tmp_path,
+):
+    """The HEALTHCHECK must probe whatever port uvicorn actually bound to
+    (see the CMD test above), not a stale hardcoded 8000 -- otherwise a
+    deploy target assigning a non-default $PORT would leave Docker
+    reporting the container "unhealthy" forever, regardless of how healthy
+    the app inside it actually is.
+
+    Runs the Dockerfile's actual HEALTHCHECK python snippet against a real
+    local HTTP server bound to a non-default port, with $PORT set to match
+    -- confirming it resolves and reaches that exact port rather than only
+    checking the Dockerfile's text for the right substring.
+    """
+
+    output_path = tmp_path / "Dockerfile"
+
+    generate_dockerfile(str(output_path), "generated")
+
+    dockerfile = output_path.read_text(encoding="utf-8")
+
+    healthcheck_line = next(
+        line for line in dockerfile.splitlines()
+        if line.strip().startswith("CMD python -c")
+    )
+    snippet = healthcheck_line.split('CMD python -c "', 1)[1].rsplit('"', 1)[0]
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    port = server.server_address[1]
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    try:
+        custom_env = dict(os.environ)
+        custom_env["PORT"] = str(port)
+
+        result = subprocess.run(
+            [sys.executable, "-c", snippet],
+            capture_output=True,
+            text=True,
+            env=custom_env,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+    finally:
+        server.shutdown()
+        server_thread.join(timeout=5)
 
 
 def test_compiler_pipeline_example_payload_is_a_list_for_an_optional_list_parameter(
@@ -901,7 +1005,7 @@ def test_compiler_pipeline_respects_custom_output_dir(tmp_path):
 
     dockerfile = (output_dir / "Dockerfile").read_text(encoding="utf-8")
     assert "COPY . my_custom_output/" in dockerfile
-    assert '"my_custom_output.app:app"' in dockerfile
+    assert "uvicorn my_custom_output.app:app" in dockerfile
 
 
 def test_compiler_pipeline_custom_output_dir_actually_runs(tmp_path):

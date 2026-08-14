@@ -59,16 +59,33 @@ RUN useradd --create-home --uid 1000 appuser \\
     && chown -R appuser:appuser /app
 USER appuser
 
+# 8000 is this image's default listening port for a plain `docker run`
+# with no further configuration, but most real PaaS deploy targets
+# (Cloud Run, Render, Heroku, ...) assign the container a port at
+# deploy/start time via a $PORT environment variable and require the
+# process to actually bind to it -- there's no fixed port they'll agree to
+# forward to instead. EXPOSE is just image metadata (it can't reference an
+# env var and doesn't affect what the process actually binds to), so it
+# stays a literal 8000 documenting the default; the CMD and HEALTHCHECK
+# below are what must actually track $PORT at container start.
 EXPOSE 8000
 
 # The generated app already exposes GET /health for exactly this purpose
 # (see api_generator.py); without a HEALTHCHECK, Docker/orchestrators
 # (Compose, Swarm, a bare `docker run`) have no way to distinguish a
-# hung/crashed process from a healthy one.
+# hung/crashed process from a healthy one. Reads $PORT the same way the
+# CMD below does, so the healthcheck still hits the port uvicorn actually
+# bound to instead of a stale hardcoded 8000.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \\
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)" || exit 1
+    CMD python -c "import os, urllib.request; urllib.request.urlopen('http://localhost:' + os.environ.get('PORT', '8000') + '/health', timeout=2)" || exit 1
 
-CMD ["uvicorn", "{package_name}.app:app", "--host", "0.0.0.0", "--port", "8000"]
+# A plain exec-form `CMD ["uvicorn", ..., "--port", "8000"]` can't read an
+# environment variable at all -- there's no shell involved to expand one --
+# so the port would stay hardcoded to 8000 no matter what $PORT a deploy
+# target set. Routing through `sh -c` lets `${{PORT:-8000}}` actually
+# expand at container start, falling back to 8000 when $PORT isn't set
+# (e.g. a local `docker run` with no other configuration).
+CMD ["sh", "-c", "uvicorn {package_name}.app:app --host 0.0.0.0 --port ${{PORT:-8000}}"]
 """
 
     with open(output_path, "w", encoding="utf-8") as f:
