@@ -3,6 +3,38 @@ import re
 from pathlib import Path
 
 
+# Client methods generate_python_sdk/generate_typescript_sdk always emit
+# themselves -- get_task/wait_for_task (task polling) and
+# list_tasks/delete_task/delete_completed_tasks/delete_failed_tasks (task
+# management) -- independent of _build_method_names' per-path loop below.
+# Unlike the built-in server-side routes these call (RESERVED_INFRASTRUCTURE_
+# NAMES in api_generator.py), the *client* method names below have no
+# equivalent guard stopping a notebook function from being named exactly
+# one of them: "wait_for_task" or "list_tasks" compiles into the server
+# fine (it isn't a reserved identifier there), but would silently shadow
+# this exact hardcoded client method at class-body evaluation time --
+# confirmed: a notebook exposing a `wait_for_task` endpoint produced two
+# `def wait_for_task(...)` methods, with the second (the notebook's own,
+# taking a `payload: dict`) overwriting the real polling helper, breaking
+# every *other* background endpoint's *_and_wait companion, which calls
+# self.wait_for_task(...) internally.
+PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
+    "get_task", "wait_for_task", "list_tasks", "delete_task",
+    "delete_completed_tasks", "delete_failed_tasks",
+})
+
+# Same hazard as PYTHON_RESERVED_CLIENT_METHOD_NAMES above, for the
+# TypeScript client's own hardcoded method names -- method names aren't
+# case-converted from the notebook function/path they came from (see
+# _method_name_from_path below), so a notebook function named e.g.
+# "waitForTask" would collide with this client's own waitForTask exactly
+# the same way "wait_for_task" collides with the Python client's.
+TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES = frozenset({
+    "getTask", "waitForTask", "listTasks", "deleteTask",
+    "deleteCompletedTasks", "deleteFailedTasks",
+})
+
+
 def _method_name_from_path(path: str) -> str:
     """Convert an API path into a valid Python identifier.
 
@@ -78,7 +110,7 @@ def _build_wait_method_names(method_names, paths):
     return wait_method_names
 
 
-def _build_method_names(paths):
+def _build_method_names(paths, reserved_names=frozenset()):
     """Map each POST path to a collision-free client method name.
 
     Two different paths can sanitize to the same identifier -- e.g. a
@@ -90,8 +122,18 @@ def _build_method_names(paths):
     evaluation time (Python) or produced a duplicate-method TypeScript
     compile error, either way permanently hiding one endpoint from the
     generated SDK with no error surfaced anywhere.
+
+    `reserved_names` (PYTHON_RESERVED_CLIENT_METHOD_NAMES or
+    TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES, passed in by
+    generate_python_sdk/generate_typescript_sdk) seeds the same
+    disambiguation for the client's own hardcoded methods (get_task,
+    wait_for_task, list_tasks, ...), which live outside this per-path
+    loop entirely and so can't be discovered by scanning `paths` alone --
+    without seeding, a path colliding with one of *those* names shadowed
+    them instead of being renamed the same way two colliding paths
+    already are.
     """
-    used_names = set()
+    used_names = set(reserved_names)
     method_names = {}
 
     for path, methods in paths.items():
@@ -136,7 +178,7 @@ def generate_python_sdk(
         schema = json.load(f)
 
     paths = schema.get("paths", {})
-    method_names = _build_method_names(paths)
+    method_names = _build_method_names(paths, PYTHON_RESERVED_CLIENT_METHOD_NAMES)
     wait_method_names = _build_wait_method_names(method_names, paths)
     # Prepare client code lines
     lines = []
@@ -309,7 +351,9 @@ def generate_typescript_sdk(
         schema = json.load(f)
 
     paths = schema.get("paths", {})
-    method_names = _build_method_names(paths)
+    method_names = _build_method_names(
+        paths, TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES
+    )
     wait_method_names = _build_wait_method_names(method_names, paths)
     # Prepare client code lines
     lines = []

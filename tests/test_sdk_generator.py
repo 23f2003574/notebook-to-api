@@ -126,6 +126,95 @@ def test_generate_python_sdk_disambiguates_paths_that_collide_on_method_name(tmp
     assert source.count("def tasks_cleanup_2(self, payload: dict):") == 1
 
 
+@pytest.mark.parametrize(
+    "colliding_name",
+    [
+        "get_task",
+        "wait_for_task",
+        "list_tasks",
+        "delete_task",
+        "delete_completed_tasks",
+        "delete_failed_tasks",
+    ],
+)
+def test_generate_python_sdk_disambiguates_a_path_colliding_with_a_hardcoded_client_method(
+    tmp_path, colliding_name
+):
+    """Confirmed exploitable before this fix: get_task/wait_for_task/
+    list_tasks/delete_task/delete_completed_tasks/delete_failed_tasks are
+    emitted unconditionally, outside _build_method_names' per-path loop
+    entirely -- so a notebook function landing on one of those exact
+    names (none of them are reserved server-side; only the compiled app's
+    own route names are, via RESERVED_INFRASTRUCTURE_NAMES in
+    api_generator.py) produced a second, identically-named `def` that
+    silently shadowed the real hardcoded method at class-body evaluation
+    time, breaking task polling/management for every *other* endpoint
+    that relies on it too (e.g. every *_and_wait companion calls
+    self.wait_for_task(...) internally).
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {f"/{colliding_name}": {"post": {"operationId": colliding_name}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    ast.parse(source)
+    assert source.count(f"def {colliding_name}(") == 1
+    assert f"def {colliding_name}_2(self, payload: dict):" in source
+
+
+def test_generate_python_sdk_wait_for_task_still_works_when_a_notebook_function_is_named_wait_for_task(
+    tmp_path, monkeypatch
+):
+    """Behavioral, not just structural: the real hardcoded wait_for_task
+    helper must still poll correctly -- not have been silently replaced
+    by the notebook's own colliding /wait_for_task endpoint's method --
+    even when such a collision exists in the same schema.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/wait_for_task": {"post": {"operationId": "wait_for_task"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    responses = [{"status": "processing"}, {"status": "completed", "result": 42}]
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, headers=None):
+        calls.append(1)
+        return FakeResponse(responses[len(calls) - 1])
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    task = client.wait_for_task("abc123", poll_interval=0, timeout=5)
+
+    assert task == {"status": "completed", "result": 42}
+
+
 def test_generate_python_sdk_client_sends_correct_request(tmp_path, monkeypatch):
     """Load the generated client in isolation (mocking requests.post) to
     confirm the method actually builds the right URL/payload/header,
@@ -742,6 +831,43 @@ def test_generate_typescript_sdk_disambiguates_paths_that_collide_on_method_name
 
     assert source.count("async tasks_cleanup(payload: Record<string, unknown>): Promise<any> {") == 1
     assert source.count("async tasks_cleanup_2(payload: Record<string, unknown>): Promise<any> {") == 1
+
+
+@pytest.mark.parametrize(
+    "colliding_name",
+    [
+        "getTask",
+        "waitForTask",
+        "listTasks",
+        "deleteTask",
+        "deleteCompletedTasks",
+        "deleteFailedTasks",
+    ],
+)
+def test_generate_typescript_sdk_disambiguates_a_path_colliding_with_a_hardcoded_client_method(
+    tmp_path, colliding_name
+):
+    """Mirrors
+    test_generate_python_sdk_disambiguates_a_path_colliding_with_a_hardcoded_client_method
+    for the TypeScript client's own hardcoded getTask/waitForTask/
+    listTasks/deleteTask/deleteCompletedTasks/deleteFailedTasks methods.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {f"/{colliding_name}": {"post": {"operationId": colliding_name}}},
+    )
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert source.count(f"async {colliding_name}(") == 1
+    assert (
+        f"async {colliding_name}_2(payload: Record<string, unknown>): Promise<any> {{"
+        in source
+    )
 
 
 @pytest.mark.skipif(
