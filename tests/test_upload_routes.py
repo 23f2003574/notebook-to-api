@@ -761,6 +761,37 @@ def test_compile_rejects_relative_traversal_notebook_path():
     assert resp.status_code == 400
 
 
+@pytest.mark.parametrize(
+    "bad_notebook_path", [123, 1.5, True, ["a.ipynb"], {"path": "a.ipynb"}]
+)
+def test_inspect_rejects_a_non_string_notebook_path(bad_notebook_path):
+    """Confirmed exploitable before this fix: "notebook_path" arrives as a
+    raw JSON body field, not a Pydantic-validated string, so a caller can
+    send any JSON type there. Path(123) raises a bare TypeError nothing
+    here caught, crashing the request with an unhandled 500 instead of
+    the same clean 400 a malformed *string* path already got (see
+    test_inspect_rejects_absolute_notebook_path above).
+    """
+
+    resp = client.post(
+        "/api/inspect", json={"notebook_path": bad_notebook_path}
+    )
+
+    assert resp.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "bad_notebook_path", [123, 1.5, True, ["a.ipynb"], {"path": "a.ipynb"}]
+)
+def test_compile_rejects_a_non_string_notebook_path(bad_notebook_path):
+
+    resp = client.post(
+        "/api/compile", json={"notebook_path": bad_notebook_path}
+    )
+
+    assert resp.status_code == 400
+
+
 def test_upload_inspect_compile_still_works_for_a_legitimate_notebook():
 
     content = _notebook_bytes(
@@ -1587,6 +1618,23 @@ def test_deploy_endpoint_respects_custom_tag(tmp_path, monkeypatch):
     calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
     build_call = calls[0].splitlines()
     assert build_call[:-1] == ["build", "-t", "myregistry.example.com/myapp:v2", "."]
+
+
+@pytest.mark.parametrize("bad_tag", [123, 1.5, ["myapp:v1"], {"tag": "myapp:v1"}])
+def test_deploy_endpoint_rejects_a_non_string_tag(bad_tag):
+    """Confirmed exploitable before this fix: "tag" flows straight into a
+    `docker build`/`docker push` subprocess argument list -- subprocess.run
+    requires every element to be str/bytes/PathLike, so a non-string tag
+    crashed with an unhandled TypeError from deep inside subprocess
+    internals instead of the same clean 400 a legitimate string tag
+    already validates fine with.
+    """
+
+    _compile_a_notebook("deploy_bad_tag_test.ipynb")
+
+    resp = client.post("/api/deploy", json={"tag": bad_tag})
+
+    assert resp.status_code == 400
 
 
 def test_deploy_endpoint_pushes_when_requested(tmp_path, monkeypatch):

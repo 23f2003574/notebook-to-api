@@ -143,9 +143,20 @@ def _resolve_path_within(root_dir: str, name: str, dir_label: str) -> Path:
     resolve_upload_path (UPLOAD_DIR) and resolve_generated_path
     (GENERATED_DIR) below, so both stay protected identically instead of
     the check drifting between the two call sites.
+
+    The `isinstance` check below matters on its own, separately from the
+    traversal check: `name` reaches resolve_upload_path as a raw JSON
+    body field (POST /api/inspect and /api/compile's "notebook_path"),
+    not a Pydantic-validated string, so a caller can send *any* JSON
+    type there -- a number, a list, a bool. Confirmed exploitable before
+    this check existed: `Path(123)` raises a bare TypeError, not
+    something any of this project's callers ever caught, so
+    `{"notebook_path": 123}` crashed the request with an unhandled 500
+    instead of the same clean, actionable 400 a malformed *string* path
+    already got.
     """
 
-    if not name or Path(name).is_absolute():
+    if not isinstance(name, str) or not name or Path(name).is_absolute():
         raise HTTPException(
             status_code=400,
             detail=f"Invalid path: must be a relative filename within the {dir_label} directory"
@@ -986,7 +997,21 @@ def deploy_generated_app(data: dict = None):
 
     force = bool(data.get("force", False))
 
-    tag = data.get("tag") or f"{generated_path.name.lower()}:latest"
+    tag = data.get("tag")
+
+    # tag flows straight into a `docker build`/`docker push` subprocess
+    # argument list below -- subprocess.run requires every element to be
+    # str/bytes/PathLike, so a non-string "tag" (a number, a list, ...)
+    # crashed with an unhandled TypeError from deep inside subprocess
+    # internals before this check existed, instead of the same clean 400
+    # a bad "force"/"push" already can't produce (bool() never raises).
+    if tag is not None and not isinstance(tag, str):
+        raise HTTPException(
+            status_code=400,
+            detail="tag must be a string"
+        )
+
+    tag = tag or f"{generated_path.name.lower()}:latest"
     push = bool(data.get("push", False))
 
     # Held from the staleness check through the build itself (see
