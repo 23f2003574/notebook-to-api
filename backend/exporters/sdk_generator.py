@@ -186,6 +186,56 @@ def generate_python_sdk(
     lines.append("                )")
     lines.append("            time.sleep(poll_interval)")
     lines.append("")
+    # list_tasks/delete_task/delete_completed_tasks/delete_failed_tasks are,
+    # like get_task/wait_for_task above, hardcoded rather than derived from
+    # the per-path loop below: every compiled app guarantees these exact
+    # routes (see RESERVED_INFRASTRUCTURE_NAMES in api_generator.py, which
+    # blocks a notebook function from ever redefining one of them), but
+    # that loop only emits a method for POST paths, so a caller who wanted
+    # to see what's still running, or clear out finished tasks, had no way
+    # to do it through the generated client at all -- only get_task, for a
+    # single already-known task_id. This is the same gap wait_for_task
+    # closed for polling a single task, now closed for the rest of a
+    # background task's lifecycle.
+    lines.append("    def list_tasks(self) -> dict:")
+    lines.append(
+        '        """List every background task, with a status-count '
+        'summary."""'
+    )
+    lines.append("        response = requests.get(")
+    lines.append('            f"{self.base_url}/tasks",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("        )")
+    lines.append("        response.raise_for_status()")
+    lines.append("        return response.json()")
+    lines.append("")
+    lines.append("    def delete_task(self, task_id: str) -> dict:")
+    lines.append('        """Delete a single background task by id."""')
+    lines.append("        response = requests.delete(")
+    lines.append('            f"{self.base_url}/tasks/{task_id}",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("        )")
+    lines.append("        response.raise_for_status()")
+    lines.append("        return response.json()")
+    lines.append("")
+    lines.append("    def delete_completed_tasks(self) -> dict:")
+    lines.append('        """Delete every task with status \'completed\'."""')
+    lines.append("        response = requests.delete(")
+    lines.append('            f"{self.base_url}/tasks/completed",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("        )")
+    lines.append("        response.raise_for_status()")
+    lines.append("        return response.json()")
+    lines.append("")
+    lines.append("    def delete_failed_tasks(self) -> dict:")
+    lines.append('        """Delete every task with status \'failed\'."""')
+    lines.append("        response = requests.delete(")
+    lines.append('            f"{self.base_url}/tasks/failed",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("        )")
+    lines.append("        response.raise_for_status()")
+    lines.append("        return response.json()")
+    lines.append("")
     for path, method_name in method_names.items():
         is_background = _is_background_path(paths[path])
         # Determine parameter schema (simple request body expecting JSON)
@@ -342,6 +392,82 @@ def generate_typescript_sdk(
         "      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));"
     )
     lines.append("    }")
+    lines.append("  }")
+    lines.append("")
+    # Mirrors generate_python_sdk's list_tasks/delete_task/
+    # delete_completed_tasks/delete_failed_tasks: hardcoded rather than
+    # derived from the per-path loop below (which only emits a method for
+    # POST paths), since every compiled app guarantees these exact routes
+    # (see RESERVED_INFRASTRUCTURE_NAMES in api_generator.py). Closes the
+    # same gap for the rest of a background task's lifecycle that
+    # waitForTask already closed for polling a single known task.
+    lines.append("  async listTasks(): Promise<any> {")
+    lines.append("    const response = await fetch(`${this.baseUrl}/tasks`, {")
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("    });")
+    lines.append("    if (!response.ok) {")
+    lines.append(
+        "      throw new Error(`Request to /tasks failed with status "
+        "${response.status}`);"
+    )
+    lines.append("    }")
+    lines.append("    return response.json();")
+    lines.append("  }")
+    lines.append("")
+    lines.append("  async deleteTask(taskId: string): Promise<any> {")
+    lines.append(
+        "    const response = await fetch(`${this.baseUrl}/tasks/${taskId}`, {"
+    )
+    lines.append('      method: "DELETE",')
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("    });")
+    lines.append("    if (!response.ok) {")
+    lines.append(
+        "      throw new Error(`Request to /tasks/${taskId} failed with "
+        "status ${response.status}`);"
+    )
+    lines.append("    }")
+    lines.append("    return response.json();")
+    lines.append("  }")
+    lines.append("")
+    lines.append("  async deleteCompletedTasks(): Promise<any> {")
+    lines.append(
+        "    const response = await fetch(`${this.baseUrl}/tasks/completed`, {"
+    )
+    lines.append('      method: "DELETE",')
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("    });")
+    lines.append("    if (!response.ok) {")
+    lines.append(
+        "      throw new Error(`Request to /tasks/completed failed with "
+        "status ${response.status}`);"
+    )
+    lines.append("    }")
+    lines.append("    return response.json();")
+    lines.append("  }")
+    lines.append("")
+    lines.append("  async deleteFailedTasks(): Promise<any> {")
+    lines.append(
+        "    const response = await fetch(`${this.baseUrl}/tasks/failed`, {"
+    )
+    lines.append('      method: "DELETE",')
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("    });")
+    lines.append("    if (!response.ok) {")
+    lines.append(
+        "      throw new Error(`Request to /tasks/failed failed with "
+        "status ${response.status}`);"
+    )
+    lines.append("    }")
+    lines.append("    return response.json();")
     lines.append("  }")
     for path, method_name in method_names.items():
         is_background = _is_background_path(paths[path])

@@ -491,6 +491,159 @@ def test_generate_python_sdk_and_wait_submits_then_polls_to_completion(
     ]
 
 
+def test_generate_python_sdk_includes_task_management_helpers(tmp_path):
+    """Every compiled app guarantees GET /tasks, DELETE /tasks/{task_id},
+    DELETE /tasks/completed, and DELETE /tasks/failed (see
+    RESERVED_INFRASTRUCTURE_NAMES in api_generator.py), but the per-path
+    loop only emits a method for POST paths -- before this, the generated
+    client had get_task/wait_for_task for polling a single already-known
+    task, but no way to see what else is running or clear out finished
+    tasks.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    ast.parse(source)
+    assert "def list_tasks(self) -> dict:" in source
+    assert "def delete_task(self, task_id: str) -> dict:" in source
+    assert "def delete_completed_tasks(self) -> dict:" in source
+    assert "def delete_failed_tasks(self) -> dict:" in source
+
+
+def test_generate_python_sdk_list_tasks_sends_correct_request(tmp_path, monkeypatch):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"active_tasks": 0, "tasks": {}}
+
+    def fake_get(url, headers=None):
+        calls.append({"url": url, "headers": headers})
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    result = client.list_tasks()
+
+    assert result == {"active_tasks": 0, "tasks": {}}
+    assert calls == [
+        {
+            "url": "http://localhost:8000/tasks",
+            "headers": {"X-API-Key": "notebook-to-api-dev-key"},
+        }
+    ]
+
+
+def test_generate_python_sdk_delete_task_sends_correct_request(tmp_path, monkeypatch):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": "Task deleted", "task_id": "abc123"}
+
+    def fake_delete(url, headers=None):
+        calls.append({"url": url, "headers": headers})
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.delete = fake_delete
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    result = client.delete_task("abc123")
+
+    assert result == {"message": "Task deleted", "task_id": "abc123"}
+    assert calls == [
+        {
+            "url": "http://localhost:8000/tasks/abc123",
+            "headers": {"X-API-Key": "notebook-to-api-dev-key"},
+        }
+    ]
+
+
+def test_generate_python_sdk_delete_completed_and_failed_tasks_send_correct_requests(
+    tmp_path, monkeypatch
+):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"deleted": 0}
+
+    def fake_delete(url, headers=None):
+        calls.append(url)
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.delete = fake_delete
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    client.delete_completed_tasks()
+    client.delete_failed_tasks()
+
+    assert calls == [
+        "http://localhost:8000/tasks/completed",
+        "http://localhost:8000/tasks/failed",
+    ]
+
+
 def test_generate_typescript_sdk_produces_expected_structure(tmp_path):
 
     schema_path = _write_schema(
@@ -865,6 +1018,80 @@ def test_generate_typescript_sdk_and_wait_submits_then_polls_to_completion(tmp_p
     )
 
 
+def test_generate_typescript_sdk_includes_task_management_helpers(tmp_path):
+    """Mirrors test_generate_python_sdk_includes_task_management_helpers
+    for the TypeScript client."""
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    source = client_path.read_text(encoding="utf-8")
+
+    assert "async listTasks(): Promise<any> {" in source
+    assert "async deleteTask(taskId: string): Promise<any> {" in source
+    assert "async deleteCompletedTasks(): Promise<any> {" in source
+    assert "async deleteFailedTasks(): Promise<any> {" in source
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_task_management_methods_send_correct_requests(tmp_path):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const calls = [];
+        globalThis.fetch = async (url, opts) => {{
+          calls.push({{ url, method: (opts && opts.method) || "GET" }});
+          return {{ ok: true, json: async () => ({{}}) }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        await client.listTasks();
+        await client.deleteTask("abc123");
+        await client.deleteCompletedTasks();
+        await client.deleteFailedTasks();
+
+        console.log(JSON.stringify({{ calls }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["calls"] == [
+        {"url": "http://localhost:8000/tasks", "method": "GET"},
+        {"url": "http://localhost:8000/tasks/abc123", "method": "DELETE"},
+        {"url": "http://localhost:8000/tasks/completed", "method": "DELETE"},
+        {"url": "http://localhost:8000/tasks/failed", "method": "DELETE"},
+    ]
+
+
 def test_sdk_pipeline_end_to_end_against_real_compiled_app(tmp_path):
     """Full real pipeline in a fresh subprocess (compile -> export-openapi
     -> export-sdk -> call the compiled app with the generated client),
@@ -1073,6 +1300,136 @@ print("SDK_AND_WAIT_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "SDK_AND_WAIT_E2E_OK" in proc.stdout
+
+
+def test_sdk_pipeline_task_management_end_to_end_against_a_real_compiled_app(tmp_path):
+    """Same full real pipeline as
+    test_sdk_pipeline_end_to_end_against_real_compiled_app, but exercising
+    list_tasks/delete_task/delete_completed_tasks/delete_failed_tasks
+    against the real compiled app's task registry -- confirms they
+    actually see and remove tasks created by a real background endpoint,
+    not just that the generated source text looks right.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def train_model(epochs: int) -> str:\n"
+                            "    return f'trained for {epochs} epochs'\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+from backend.exporters.sdk_generator import generate_python_sdk
+from fastapi.testclient import TestClient
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from backend.exporters.openapi_exporter import export_openapi_schema
+export_openapi_schema("generated/openapi.json")
+generate_python_sdk("generated/openapi.json", "generated/sdk/python_client.py")
+
+from generated.app import app
+
+test_client = TestClient(app)
+
+import types
+
+def fake_post(url, json=None, headers=None):
+    path = url.split("://", 1)[1].split("/", 1)[1]
+    resp = test_client.post("/" + path, json=json, headers=headers)
+    resp.raise_for_status = lambda: None
+    return resp
+
+def fake_get(url, headers=None):
+    path = url.split("://", 1)[1].split("/", 1)[1]
+    resp = test_client.get("/" + path, headers=headers)
+    resp.raise_for_status = lambda: None
+    return resp
+
+def fake_delete(url, headers=None):
+    path = url.split("://", 1)[1].split("/", 1)[1]
+    resp = test_client.delete("/" + path, headers=headers)
+    resp.raise_for_status = lambda: None
+    return resp
+
+fake_requests = types.ModuleType("requests")
+fake_requests.post = fake_post
+fake_requests.get = fake_get
+fake_requests.delete = fake_delete
+sys.modules["requests"] = fake_requests
+
+namespace = {{}}
+exec(
+    compile(open("generated/sdk/python_client.py").read(), "client.py", "exec"),
+    namespace,
+)
+
+client = namespace["NotebookAPIClient"]("http://testserver")
+
+submitted = client.train_model({{"epochs": 3}})
+task_id = submitted["task_id"]
+
+# list_tasks sees the just-submitted task.
+listing = client.list_tasks()
+assert task_id in listing["tasks"], listing
+
+finished = client.wait_for_task(task_id, poll_interval=0.01, timeout=5)
+assert finished["status"] == "completed", finished
+
+# delete_completed_tasks clears it out.
+deleted = client.delete_completed_tasks()
+assert deleted["deleted"] == 1, deleted
+assert task_id not in client.list_tasks()["tasks"]
+
+# delete_task removes a specific task by id; delete_failed_tasks is a
+# no-op with nothing failed.
+second = client.train_model({{"epochs": 1}})
+second_id = second["task_id"]
+client.wait_for_task(second_id, poll_interval=0.01, timeout=5)
+client.delete_task(second_id)
+assert second_id not in client.list_tasks()["tasks"]
+
+no_op = client.delete_failed_tasks()
+assert no_op["deleted"] == 0, no_op
+
+print("SDK_TASK_MANAGEMENT_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SDK_TASK_MANAGEMENT_E2E_OK" in proc.stdout
 
 
 def test_export_openapi_schema_uses_the_freshly_compiled_app_for_custom_output_dir(
