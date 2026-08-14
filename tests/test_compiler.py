@@ -908,6 +908,159 @@ def test_compiler_pipeline_zero_argument_function_compiles_end_to_end(tmp_path):
     compile(generated_app, "app.py", "exec")
 
 
+def test_compiler_pipeline_sync_endpoint_reports_a_raised_exception_as_a_clean_500(
+    tmp_path,
+):
+    """Confirmed exploitable before this fix: a synchronous notebook
+    function raising an exception (a ZeroDivisionError here, but any bug
+    or a legitimately bad input Pydantic's own type validation can't
+    catch -- a KeyError, a bad file path, ...) propagated straight out of
+    the endpoint unhandled, crashing with a bare, detail-free "Internal
+    Server Error" -- exactly the gap _run_background_task already closed
+    for the background/task_id path (it reports the task "failed" with
+    str(e) instead of leaving it stuck forever), but with no equivalent
+    on the synchronous path at all.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def divide(a: int, b: int) -> float:\n"
+                            "    return a / b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+# raise_server_exceptions=False so this behaves like a real deployment
+# (Starlette's ServerErrorMiddleware catching the unhandled exception)
+# instead of TestClient re-raising it into this test process.
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+resp = client.post("/divide", json={{"a": 5, "b": 0}}, headers=headers)
+assert resp.status_code == 500, resp.text
+assert "divide" in resp.text
+assert "ZeroDivisionError" in resp.text
+
+print("SYNC_RAISED_EXCEPTION_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SYNC_RAISED_EXCEPTION_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_sync_endpoint_lets_a_deliberate_httpexception_through_unwrapped(
+    tmp_path,
+):
+    """A notebook function that imports fastapi itself and deliberately
+    raises an HTTPException (e.g. to signal its own 404/403/409) is
+    choosing that status code and message on purpose -- it must reach the
+    caller as-is, not get swallowed into a generic 500 by the same
+    except-Exception block that now catches everything else.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "from fastapi import HTTPException\n\n"
+                            "def lookup(item_id: int) -> int:\n"
+                            "    raise HTTPException(status_code=404, detail='item not found')\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+resp = client.post("/lookup", json={{"item_id": 1}}, headers=headers)
+assert resp.status_code == 404, resp.text
+assert resp.json() == {{"detail": "item not found"}}, resp.json()
+
+print("SYNC_DELIBERATE_HTTPEXCEPTION_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SYNC_DELIBERATE_HTTPEXCEPTION_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_sync_endpoint_with_unserializable_result_returns_a_clean_500(
     tmp_path,
 ):

@@ -954,7 +954,30 @@ def generate_fastapi_code(functions, package_name="generated"):
             def_keyword = "async def" if is_async else "def"
             call_prefix = "await " if is_async else ""
             lines.append(f"{def_keyword} {func_name}(req: {model_name}, _: None = Depends(verify_api_key)):")
-            lines.append(f"    result = {call_prefix}notebook_module.{func_name}({call_args})")
+            # _run_background_task already wraps a background function's own
+            # call the same way (reporting the task "failed" with str(e)
+            # instead of leaving it stuck "processing" forever), but a
+            # synchronous endpoint had no equivalent at all: the notebook
+            # function's own exception -- a ZeroDivisionError, a KeyError, a
+            # bad file path, anything -- propagated straight out unhandled,
+            # crashing with the exact same bare, detail-free "Internal
+            # Server Error" the jsonable_encoder gap below already had.
+            # HTTPException is re-raised as-is (not wrapped into a generic
+            # 500) since a notebook function that imports fastapi itself and
+            # deliberately raises one (e.g. HTTPException(404, ...)) is
+            # already choosing its own status code and message on purpose.
+            lines.append("    try:")
+            lines.append(f"        result = {call_prefix}notebook_module.{func_name}({call_args})")
+            lines.append("    except HTTPException:")
+            lines.append("        raise")
+            lines.append("    except Exception as e:")
+            lines.append("        raise HTTPException(")
+            lines.append("            status_code=500,")
+            lines.append(
+                f"            detail=f\"'{func_name}' raised "
+                "{type(e).__name__}: {e}\","
+            )
+            lines.append("        )")
             # Same reasoning as _run_background_task's own jsonable_encoder
             # call: without pre-encoding here, a result FastAPI's response
             # serialization can't handle on its own (a raw numpy array, a
