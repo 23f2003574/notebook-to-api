@@ -461,6 +461,46 @@ def test_compiler_pipeline_handles_magics_and_broken_cells(tmp_path):
     assert "pandas" in requirements
 
 
+def test_compiler_pipeline_handles_a_leftover_introspection_query(tmp_path):
+    """A cell left over from interactive exploration with a trailing
+    ``func?``/``?func`` IPython introspection query (inline docstring/
+    source lookup) must not lose the function(s) defined in that same
+    cell -- before strip_magic_commands covered this syntax, `ast.parse`
+    failed on the whole cell (it parses a cell as a single unit), so
+    is_parseable_python dropped the entire cell, silently taking a
+    perfectly good `train_model` down with it.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def train_model(epochs: int) -> str:\n"
+            "    return f'trained for {epochs} epochs'\n\n"
+            "train_model?\n"
+        )
+    )
+
+    notebook_path = tmp_path / "introspection.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    runtime_module = (
+        output_dir / "runtime" / "notebook_module.py"
+    ).read_text(encoding="utf-8")
+
+    ast.parse(runtime_module)
+    assert "def train_model(epochs: int) -> str:" in runtime_module
+
+    app_source = (output_dir / "app.py").read_text(encoding="utf-8")
+    assert '@app.post("/train_model"' in app_source
+
+
 def test_compiler_pipeline_does_not_expose_class_methods_or_nested_functions(
     tmp_path
 ):

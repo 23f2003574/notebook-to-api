@@ -17,22 +17,48 @@ except ImportError:
 # commented out.
 _MAGIC_LINE_RE = re.compile(r"^(\s*)(%{1,2}|!)(?!=)")
 
+# IPython's "dynamic object introspection" syntax -- ``obj?``/``obj??`` for
+# an object's docstring/source, or the equivalent prefix form ``?obj``/
+# ``??obj`` -- is just as common in real notebooks (typed while exploring,
+# then left in a cell) and just as invalid as Python syntax, but wasn't
+# covered by _MAGIC_LINE_RE above. `?` never appears in valid Python syntax
+# outside of a string literal, so a line that consists of *only* an
+# attribute-chain expression (optionally called) plus a leading/trailing
+# "?"/"??" is unambiguously an introspection query, not code -- as opposed
+# to matching any line merely containing a "?" (which would wrongly also
+# match, and corrupt, plain code like `msg = "wait?"`).
+_INTROSPECTION_PREFIX_RE = re.compile(
+    r"^(\s*)\?{1,2}\s*[A-Za-z_][A-Za-z0-9_.]*(\(\))?\s*$"
+)
+_INTROSPECTION_SUFFIX_RE = re.compile(
+    r"^(\s*)[A-Za-z_][A-Za-z0-9_.]*(\(\))?\s*\?{1,2}\s*$"
+)
+
 
 def strip_magic_commands(source):
-    """Comment out IPython magics and shell escapes in notebook source.
+    """Comment out IPython magics, shell escapes, and object-introspection
+    queries in notebook source.
 
     Real-world notebooks routinely contain lines like ``%matplotlib inline``,
-    ``%%time`` or ``!pip install pandas``. None of these are valid Python, so
-    feeding a cell's raw source straight into ``ast.parse`` (or writing it
-    verbatim into the generated runtime module) blows up on almost any
-    notebook exported from Jupyter. Commenting the offending lines out keeps
-    line numbers stable and preserves the rest of the cell as executable
-    Python.
+    ``%%time``, ``!pip install pandas``, or ``train_model?`` (inline help/
+    source lookup, via IPython's ``?``/``??`` operator). None of these are
+    valid Python, so feeding a cell's raw source straight into ``ast.parse``
+    (or writing it verbatim into the generated runtime module) blows up on
+    almost any notebook exported from Jupyter -- and since ``ast.parse``
+    parses a cell as a single unit, *any one* such line anywhere in the cell
+    fails the whole cell, silently dropping every function it defines along
+    with it (see is_parseable_python in ast_parser.py). Commenting the
+    offending lines out instead keeps line numbers stable and preserves the
+    rest of the cell as executable Python.
     """
     cleaned_lines = []
 
     for line in source.split("\n"):
-        match = _MAGIC_LINE_RE.match(line)
+        match = (
+            _MAGIC_LINE_RE.match(line)
+            or _INTROSPECTION_PREFIX_RE.match(line)
+            or _INTROSPECTION_SUFFIX_RE.match(line)
+        )
 
         if match:
             indent = match.group(1)
