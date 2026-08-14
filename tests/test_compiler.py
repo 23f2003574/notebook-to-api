@@ -2,9 +2,13 @@ import ast
 import http.server
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import nbformat
@@ -3026,6 +3030,142 @@ print("JSONABLE_ENCODER_RESULT_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "JSONABLE_ENCODER_RESULT_E2E_OK" in proc.stdout
+
+
+def _free_tcp_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _wait_until_serving(base_url, deadline):
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f"{base_url}/health", timeout=1):
+                return
+        except (urllib.error.URLError, ConnectionError):
+            time.sleep(0.05)
+    raise TimeoutError(f"Server at {base_url} never became ready")
+
+
+def test_compiler_pipeline_background_task_does_not_block_the_event_loop(tmp_path):
+    """Confirmed exploitable before this fix: _run_background_task called
+    a synchronous notebook function directly, which ran its entire body
+    inline on this app's single asyncio event loop -- the exact same loop
+    every other request, including a completely unrelated GET /health,
+    is served from. Confirmed against a real (non-TestClient) uvicorn
+    server: a background task doing nothing but time.sleep(1) froze a
+    concurrent GET /health for the full second, the opposite of what
+    "background" is supposed to mean -- and especially damaging since the
+    "train"/"process"/"generate"/"embed"/"scrape" keywords that route a
+    function to a background task in the first place are routinely slow,
+    CPU-bound work, not quick one-liners.
+
+    Runs a real uvicorn subprocess (TestClient's in-process request
+    handling doesn't reliably reproduce this class of event-loop-blocking
+    bug) and measures how long a concurrent GET /health actually takes
+    while a slow background task is in flight.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "import time\n\n"
+                            "def train_slow(x: int) -> int:\n"
+                            "    time.sleep(1)\n"
+                            "    return x\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    from backend.compiler import compile_notebook
+
+    compile_notebook(str(notebook_path), str(workdir / "generated"))
+
+    port = _free_tcp_port()
+    base_url = f"http://127.0.0.1:{port}"
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = f"{PROJECT_ROOT}{os.pathsep}{workdir}{os.pathsep}{env.get('PYTHONPATH', '')}"
+
+    server = subprocess.Popen(
+        [
+            sys.executable, "-m", "uvicorn", "generated.app:app",
+            "--host", "127.0.0.1", "--port", str(port),
+        ],
+        cwd=str(workdir),
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    try:
+        _wait_until_serving(base_url, time.time() + 20)
+
+        headers = {"X-API-Key": "notebook-to-api-dev-key", "Content-Type": "application/json"}
+        submit_req = urllib.request.Request(
+            f"{base_url}/train_slow", data=b'{"x": 5}', headers=headers, method="POST"
+        )
+        with urllib.request.urlopen(submit_req, timeout=5) as resp:
+            task_id = json.loads(resp.read())["task_id"]
+
+        # The background task is now "processing" (it sleeps for a full
+        # second). A concurrent, completely unrelated request must not be
+        # stuck waiting behind it -- generously bounded well under the
+        # task's own 1s sleep to leave room for scheduling jitter, while
+        # still being a strong signal against the ~1s this took before
+        # this fix.
+        start = time.monotonic()
+        with urllib.request.urlopen(f"{base_url}/health", timeout=5):
+            pass
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 0.5, (
+            f"GET /health took {elapsed:.3f}s while a background task was "
+            "running -- the event loop is still being blocked"
+        )
+
+        # The task itself must still actually complete with the right
+        # result, not just "not block anything else".
+        deadline = time.time() + 10
+        while True:
+            with urllib.request.urlopen(
+                urllib.request.Request(f"{base_url}/tasks/{task_id}", headers=headers),
+                timeout=5,
+            ) as resp:
+                task = json.loads(resp.read())
+            if task["status"] != "processing":
+                break
+            assert time.time() < deadline, "task never left processing"
+            time.sleep(0.05)
+
+        assert task == {"status": "completed", "result": 5, "created_at": task["created_at"]}
+
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait(timeout=5)
 
 
 def test_compiler_pipeline_background_endpoint_rejects_tasks_past_the_configured_limit(
