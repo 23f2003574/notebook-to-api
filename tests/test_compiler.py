@@ -19,7 +19,7 @@ from backend.compiler import (
     package_name_for_output_dir,
     STANDARD_LIBS
 )
-from backend.generator.docker_generator import generate_dockerfile
+from backend.generator.docker_generator import generate_dockerfile, generate_dockerignore
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -389,6 +389,97 @@ def test_compiler_pipeline_generates_a_dockerignore_excluding_git_and_caches(tmp
     assert ".git/" in dockerignore
     assert "__pycache__/" in dockerignore
     assert ".venv/" in dockerignore
+
+
+def test_generate_dockerignore_excludes_openapi_and_sdk_export_artifacts(tmp_path):
+    """Confirmed exploitable before this fix: POST /api/export-openapi,
+    POST /api/export-sdk, and the CLI's export-openapi/export-sdk
+    commands all write openapi.json/openapi.yaml/sdk/ straight into the
+    same output directory as the compiled app -- but the running app
+    never reads any of them (it builds its OpenAPI schema live via
+    custom_openapi(), not from a file on disk). Building/deploying any
+    time after such an export baked these purely client-facing artifacts
+    into the served image with no runtime benefit, the exact kind of
+    build-context noise this .dockerignore already exists to keep out for
+    .git/__pycache__/venvs/notebooks.
+    """
+
+    output_path = tmp_path / ".dockerignore"
+
+    generate_dockerignore(str(output_path))
+
+    dockerignore = output_path.read_text(encoding="utf-8")
+    assert "openapi.json" in dockerignore
+    assert "openapi.yaml" in dockerignore
+    assert "sdk/" in dockerignore
+
+
+def test_compiler_pipeline_dockerignore_excludes_a_real_exported_openapi_and_sdk(
+    tmp_path,
+):
+    """End-to-end: compile a notebook, actually export its OpenAPI schema
+    and SDK into the same output_dir (mirroring what POST
+    /api/export-openapi + POST /api/export-sdk, or a real `deploy` run
+    after them, would do), and confirm the generated .dockerignore's
+    patterns actually match the real files that landed on disk -- not
+    just that the right literal substrings appear somewhere in its text.
+    """
+    import fnmatch
+
+    from backend.exporters.openapi_exporter import export_openapi_schema
+    from backend.exporters.sdk_generator import generate_python_sdk
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(tmp_path)!r})
+
+from backend.exporters.openapi_exporter import export_openapi_schema
+from backend.exporters.sdk_generator import generate_python_sdk
+
+export_openapi_schema({str(output_dir / "openapi.json")!r}, "generated")
+generate_python_sdk(
+    {str(output_dir / "openapi.json")!r},
+    {str(output_dir / "sdk" / "python_client.py")!r},
+)
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=30
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    dockerignore_patterns = (
+        (output_dir / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    )
+
+    def is_ignored(relative_path):
+        return any(
+            fnmatch.fnmatch(relative_path, pattern)
+            or relative_path.startswith(pattern)
+            for pattern in dockerignore_patterns
+        )
+
+    assert is_ignored("openapi.json")
+    assert is_ignored("sdk/python_client.py")
+    # The actually-deployable artifacts must NOT be swept up by the same
+    # patterns.
+    assert not is_ignored("app.py")
+    assert not is_ignored("requirements.txt")
+    assert not is_ignored("runtime/notebook_module.py")
 
 
 def test_compile_notebook_to_api_holds_compile_lock_for_its_whole_write_phase(

@@ -100,6 +100,18 @@ def generate_dockerignore(output_path="generated/.dockerignore"):
     unrelated files from the build context into the image -- bloating it
     and, for .git in particular, potentially leaking history that was
     never meant to ship.
+
+    openapi.json/openapi.yaml/sdk/ are also excluded: POST
+    /api/export-openapi, POST /api/export-sdk, and the CLI's
+    export-openapi/export-sdk commands (by default) all write these
+    straight into this same output directory, alongside the compiled app
+    -- but the running app never reads any of them at runtime (it builds
+    its own OpenAPI schema live via custom_openapi() in api_generator.py,
+    not from a file on disk). Left unexcluded, a `deploy`/`docker build`
+    run any time after an export had happened baked these purely
+    client-facing artifacts into the served image for no runtime benefit,
+    the exact kind of build-context noise this .dockerignore already
+    exists to keep out.
     """
     dockerignore_content = """\
 .git/
@@ -114,6 +126,9 @@ env/
 .ipynb_checkpoints/
 Dockerfile
 .dockerignore
+openapi.json
+openapi.yaml
+sdk/
 """
 
     with open(output_path, "w", encoding="utf-8") as f:
