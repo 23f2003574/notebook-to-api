@@ -1448,6 +1448,31 @@ def test_export_sdk_returns_404_without_prior_openapi_export(monkeypatch):
     assert resp.status_code == 404
 
 
+def test_export_sdk_reports_a_clean_400_for_a_corrupt_openapi_schema(monkeypatch, tmp_path):
+    """Confirmed exploitable before this fix: _load_openapi_schema
+    (exporters/sdk_generator.py) raises ValueError for content that isn't
+    valid JSON, but this endpoint's except clause only ever caught bare
+    Exception and wrapped it in a 500 -- indistinguishable from an actual
+    server-side bug, unlike every other malformed-client-input case in
+    this codebase (a bad language, a missing export, ...). "openapi.json"
+    existing but being corrupt (e.g. a truncated write) is squarely the
+    client-visible state's own problem, not this server's.
+    """
+
+    from backend.routes import upload as upload_module
+
+    isolated_dir = tmp_path / "generated_export_sdk_corrupt_test"
+    isolated_dir.mkdir()
+    (isolated_dir / "openapi.json").write_text("not json at all", encoding="utf-8")
+
+    monkeypatch.setattr(upload_module, "GENERATED_DIR", str(isolated_dir))
+
+    resp = client.post("/api/export-sdk", json={"language": "python"})
+
+    assert resp.status_code == 400
+    assert "not a valid OpenAPI JSON schema" in resp.json()["detail"]
+
+
 def _install_fake_docker(bin_dir, log_path):
     """A fake `docker` executable that records how it was invoked instead
     of actually building/pushing an image (mirrors the technique used in

@@ -181,6 +181,48 @@ def test_generate_python_sdk_and_wait_docstring_includes_the_operations_descript
     )
 
 
+def test_generate_python_sdk_reports_a_clean_error_for_invalid_json(tmp_path):
+    """Before _load_openapi_schema existed, a bare json.load(f) crashed
+    with json.JSONDecodeError's raw, low-level message ("Expecting
+    value: line 1 column 1 (char 0)") for any --openapi file that isn't
+    valid JSON, with no indication of why.
+    """
+
+    schema_path = tmp_path / "openapi.json"
+    schema_path.write_text("not json at all", encoding="utf-8")
+    output_path = tmp_path / "client.py"
+
+    with pytest.raises(ValueError, match="not a valid OpenAPI JSON schema"):
+        generate_python_sdk(str(schema_path), str(output_path))
+
+
+def test_generate_python_sdk_hints_at_a_yaml_export_for_a_yaml_extension(tmp_path):
+    """The most likely real-world cause of a JSON decode failure here is
+    one this tool itself creates: POST /api/export-openapi and `export-
+    openapi --format yaml` write a YAML file this function was never
+    able to read -- a caller pointing export-sdk at that exact file (both
+    commands read/write the same output directory by default) deserves a
+    hint about what actually went wrong, not just a bare parse error.
+    """
+
+    schema_path = tmp_path / "openapi.yaml"
+    schema_path.write_text("paths:\n  /add:\n    post: {}\n", encoding="utf-8")
+    output_path = tmp_path / "client.py"
+
+    with pytest.raises(ValueError, match="export-openapi --format yaml"):
+        generate_python_sdk(str(schema_path), str(output_path))
+
+
+def test_generate_typescript_sdk_reports_a_clean_error_for_invalid_json(tmp_path):
+
+    schema_path = tmp_path / "openapi.json"
+    schema_path.write_text("not json at all", encoding="utf-8")
+    output_path = tmp_path / "client.ts"
+
+    with pytest.raises(ValueError, match="not a valid OpenAPI JSON schema"):
+        generate_typescript_sdk(str(schema_path), str(output_path))
+
+
 def test_generate_python_sdk_skips_non_post_endpoints(tmp_path):
 
     schema_path = _write_schema(

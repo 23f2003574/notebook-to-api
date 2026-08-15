@@ -903,6 +903,22 @@ def export_sdk_endpoint(
         else:
             generate_python_sdk(openapi_path, output_path)
 
+    except ValueError as e:
+
+        # _load_openapi_schema (exporters/sdk_generator.py) raises this
+        # specifically when openapi_path's content isn't valid JSON --
+        # the schema itself is the problem (most commonly: corrupted or
+        # truncated by a concurrent write, since this always reads the
+        # fixed "openapi.json" this endpoint's own prior export wrote),
+        # not this server, so this is a 400 the caller can act on (re-run
+        # /api/export-openapi), the same distinction ReservedFunctionNameError
+        # and MALFORMED_NOTEBOOK_ERRORS already get elsewhere in this file
+        # instead of a 500 that looks like a server-side bug.
+        raise HTTPException(
+            status_code=400,
+            detail=f"SDK generation error: {str(e)}"
+        )
+
     except Exception as e:
 
         raise HTTPException(

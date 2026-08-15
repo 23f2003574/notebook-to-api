@@ -110,6 +110,41 @@ def _build_wait_method_names(method_names, paths):
     return wait_method_names
 
 
+def _load_openapi_schema(openapi_path):
+    """Read and JSON-decode the OpenAPI schema at `openapi_path`.
+
+    Both generate_python_sdk and generate_typescript_sdk read their input
+    this same way, but previously did it inline as a bare `json.load(f)`
+    with no handling of its own: a caller pointing --openapi (or POST
+    /api/export-sdk) at a file that isn't valid JSON crashed with
+    json.JSONDecodeError's raw, low-level message ("Expecting value: line
+    1 column 1 (char 0)") -- no indication of *why*, even though the most
+    likely real-world cause is one this tool itself creates: POST
+    /api/export-openapi and the CLI's own `export-openapi --format yaml`
+    write a YAML file this function was never able to read, so a caller
+    who exported YAML and then pointed export-sdk at that exact file (a
+    completely reasonable thing to try, since both commands read/write
+    the same GENERATED_DIR by default) got a confusing crash instead of
+    being told export-sdk only reads JSON schemas.
+    """
+    with open(openapi_path, "r", encoding="utf-8") as f:
+        raw = f.read()
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        hint = (
+            " This looks like a YAML export (export-openapi --format "
+            "yaml) -- export-sdk only reads JSON schemas; re-export with "
+            "--format json (the default) first."
+            if Path(openapi_path).suffix.lower() in (".yaml", ".yml")
+            else ""
+        )
+        raise ValueError(
+            f"'{openapi_path}' is not a valid OpenAPI JSON schema: {exc}.{hint}"
+        ) from exc
+
+
 def _operation_description(methods):
     """The description text FastAPI's OpenAPI schema already carries for
     this path's POST operation -- generate_fastapi_code always sets one
@@ -248,8 +283,7 @@ def generate_python_sdk(
     knows the base_url and api_key needed to do it.
     """
     # Load OpenAPI schema
-    with open(openapi_path, "r", encoding="utf-8") as f:
-        schema = json.load(f)
+    schema = _load_openapi_schema(openapi_path)
 
     paths = schema.get("paths", {})
     method_names = _build_method_names(paths, PYTHON_RESERVED_CLIENT_METHOD_NAMES)
@@ -421,8 +455,7 @@ def generate_typescript_sdk(
     corresponding endpoint and returns the parsed JSON response.
     """
     # Load OpenAPI schema
-    with open(openapi_path, "r", encoding="utf-8") as f:
-        schema = json.load(f)
+    schema = _load_openapi_schema(openapi_path)
 
     paths = schema.get("paths", {})
     method_names = _build_method_names(
