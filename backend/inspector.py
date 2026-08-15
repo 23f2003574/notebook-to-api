@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 
+from backend.compiler import COMPILE_METADATA_FILENAME
+
 from backend.parser.notebook_parser import (
     load_notebook,
     extract_code_cells,
@@ -34,12 +36,36 @@ from backend.generator.api_generator import (
 # already had a __pycache__ picked up by both).
 EXCLUDED_GENERATED_DIR_NAMES = frozenset({"__pycache__"})
 
+# File names to exclude when walking an output directory for generated_files
+# (below) and, via the same set, GET /api/download's zip archive and GET
+# /api/generated/{filename}'s preview (see backend/routes/upload.py), and
+# the generated Dockerfile's .dockerignore (see
+# generator/docker_generator.py, which excludes this same filename by its
+# own literal copy of it -- it can't import COMPILE_METADATA_FILENAME
+# without introducing a circular import, since compiler.py already imports
+# docker_generator.py).
+#
+# .compile_metadata.json (write_compile_metadata, backend/compiler.py) is
+# pure dashboard-internal bookkeeping -- read only by
+# list_notebooks/_currently_compiled_notebook_metadata in routes/upload.py
+# to answer "which uploaded notebook produced what's currently compiled" --
+# never by the compiled app itself at runtime, exactly like the
+# openapi.json/openapi.yaml/sdk/ exports .dockerignore already excludes for
+# that same reason (see generate_dockerignore's own docstring). Left
+# unfiltered here, it was previously baked into every `deploy`/`docker
+# build`, downloadable via GET /api/download, and readable via GET
+# /api/generated/.compile_metadata.json -- leaking the source notebook's
+# *absolute filesystem path on the compiling server* (its "source_notebook"
+# field) into a deployable image and a client-facing API response, neither
+# of which has any business exposing server-side filesystem layout.
+EXCLUDED_GENERATED_FILE_NAMES = frozenset({COMPILE_METADATA_FILENAME})
+
 
 def _list_generated_files(output_dir):
     """Files under `output_dir`, relative to it, excluding
-    EXCLUDED_GENERATED_DIR_NAMES subtrees. Shared by inspect_notebook and
-    inspect_notebook_data so their "Generated Files" listings can't drift
-    from each other.
+    EXCLUDED_GENERATED_DIR_NAMES subtrees and EXCLUDED_GENERATED_FILE_NAMES
+    files. Shared by inspect_notebook and inspect_notebook_data so their
+    "Generated Files" listings can't drift from each other.
     """
     generated_path = Path(output_dir)
 
@@ -54,6 +80,9 @@ def _list_generated_files(output_dir):
             ]
 
             for f in files:
+
+                if f in EXCLUDED_GENERATED_FILE_NAMES:
+                    continue
 
                 rel = (
                     Path(root)

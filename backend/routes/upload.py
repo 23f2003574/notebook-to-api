@@ -32,6 +32,7 @@ from backend.generator.api_generator import (
 )
 from backend.inspector import (
     EXCLUDED_GENERATED_DIR_NAMES,
+    EXCLUDED_GENERATED_FILE_NAMES,
     _aggregate_skipped_functions,
     inspect_notebook_data,
 )
@@ -1100,6 +1101,13 @@ def download_generated_app():
     happened to import it. Left unfiltered, a downloaded "compiled app"
     bundle could ship a stale, non-portable bytecode cache alongside the
     actual deliverable (app.py, requirements.txt, Dockerfile, ...).
+
+    Also excludes EXCLUDED_GENERATED_FILE_NAMES (currently just
+    .compile_metadata.json) for the same reason: it's dashboard-internal
+    bookkeeping, not a compiled deliverable, and its "source_notebook"
+    field is the source notebook's absolute filesystem path on the
+    compiling server -- not something a "download the compiled app" caller
+    has any business receiving.
     """
 
     generated_path = Path(GENERATED_DIR)
@@ -1123,8 +1131,12 @@ def download_generated_app():
 
             for file_path in sorted(generated_path.rglob("*")):
 
-                if file_path.is_file() and not (
-                    EXCLUDED_GENERATED_DIR_NAMES & set(file_path.relative_to(generated_path).parts)
+                if (
+                    file_path.is_file()
+                    and file_path.name not in EXCLUDED_GENERATED_FILE_NAMES
+                    and not (
+                        EXCLUDED_GENERATED_DIR_NAMES & set(file_path.relative_to(generated_path).parts)
+                    )
                 ):
 
                     archive.write(
@@ -1178,8 +1190,17 @@ def get_generated_file(filename: str):
     # EXCLUDED_GENERATED_DIR_NAMES) -- it's a Python-created, non-portable
     # implementation artifact never actually written by the compiler, not
     # a real deliverable this endpoint should ever serve back.
-    if EXCLUDED_GENERATED_DIR_NAMES & set(
-        file_path.relative_to(generated_root).parts
+    #
+    # .compile_metadata.json (EXCLUDED_GENERATED_FILE_NAMES) is excluded
+    # for a sharper reason: it's dashboard-internal bookkeeping whose
+    # "source_notebook" field is the source notebook's absolute filesystem
+    # path on the compiling server -- this endpoint has no business handing
+    # server-side filesystem layout back to a caller who just asked to
+    # preview a compiled output file.
+    if (
+        file_path.name in EXCLUDED_GENERATED_FILE_NAMES
+        or EXCLUDED_GENERATED_DIR_NAMES
+        & set(file_path.relative_to(generated_root).parts)
     ):
         raise HTTPException(
             status_code=404,

@@ -112,6 +112,17 @@ def generate_dockerignore(output_path="generated/.dockerignore"):
     client-facing artifacts into the served image for no runtime benefit,
     the exact kind of build-context noise this .dockerignore already
     exists to keep out.
+
+    .compile_metadata.json (the literal filename write_compile_metadata
+    uses -- see COMPILE_METADATA_FILENAME in backend/compiler.py, which
+    this can't import without a circular import, since compiler.py already
+    imports this module) is excluded for a sharper reason than build-context
+    noise: it's dashboard-internal bookkeeping (read only by
+    list_notebooks/_currently_compiled_notebook_metadata in
+    routes/upload.py), never by the running app, and its "source_notebook"
+    field is the source notebook's *absolute filesystem path on the
+    compiling server*. Left unexcluded, every `deploy`/`docker build`
+    baked that server-side path straight into the shipped image.
     """
     dockerignore_content = """\
 .git/
@@ -129,6 +140,7 @@ Dockerfile
 openapi.json
 openapi.yaml
 sdk/
+.compile_metadata.json
 """
 
     with open(output_path, "w", encoding="utf-8") as f:

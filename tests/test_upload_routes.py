@@ -1880,6 +1880,31 @@ def test_download_excludes_pycache_from_the_zip():
         shutil.rmtree(nested_pycache_dir, ignore_errors=True)
 
 
+def test_download_excludes_compile_metadata_from_the_zip():
+    """.compile_metadata.json (write_compile_metadata, backend/compiler.py)
+    is dashboard-internal bookkeeping, not a compiled deliverable -- and
+    its "source_notebook" field is the source notebook's absolute
+    filesystem path on the compiling server. Before this fix, it was
+    written into GENERATED_DIR by every compile like any other file, so it
+    was zipped up and handed back by this endpoint too, alongside the
+    actual deliverable.
+    """
+
+    _compile_a_notebook("download_compile_metadata_test.ipynb")
+
+    assert (Path("generated") / ".compile_metadata.json").is_file()
+
+    download_resp = client.get("/api/download")
+
+    assert download_resp.status_code == 200
+
+    archive = zipfile.ZipFile(io.BytesIO(download_resp.content))
+    names = archive.namelist()
+
+    assert "app.py" in names
+    assert ".compile_metadata.json" not in names
+
+
 def test_download_waits_for_an_in_flight_compile_to_release_compile_lock():
     """GET /api/download walks GENERATED_DIR to build its zip -- without
     holding COMPILE_LOCK (see backend/compiler.py) for that walk, a
@@ -2043,6 +2068,24 @@ def test_get_generated_file_excludes_pycache():
         assert resp.status_code == 404
     finally:
         shutil.rmtree(pycache_dir, ignore_errors=True)
+
+
+def test_get_generated_file_excludes_compile_metadata():
+    """.compile_metadata.json (write_compile_metadata, backend/compiler.py)
+    is dashboard-internal bookkeeping, never a compiled deliverable this
+    endpoint should serve back -- and its "source_notebook" field is the
+    source notebook's absolute filesystem path on the compiling server, so
+    serving it back would leak server-side filesystem layout to any caller
+    who guesses the filename.
+    """
+
+    _compile_a_notebook("get_file_compile_metadata_test.ipynb")
+
+    assert (Path("generated") / ".compile_metadata.json").is_file()
+
+    resp = client.get("/api/generated/.compile_metadata.json")
+
+    assert resp.status_code == 404
 
 
 def test_get_generated_file_waits_for_an_in_flight_compile_to_release_compile_lock():

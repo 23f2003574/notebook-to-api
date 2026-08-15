@@ -418,6 +418,26 @@ def test_generate_dockerignore_excludes_openapi_and_sdk_export_artifacts(tmp_pat
     assert "sdk/" in dockerignore
 
 
+def test_generate_dockerignore_excludes_compile_metadata(tmp_path):
+    """.compile_metadata.json (write_compile_metadata, backend/compiler.py)
+    is dashboard-internal bookkeeping written into the same output
+    directory as the compiled app on every compile -- never read by the
+    running app itself -- and its "source_notebook" field is the source
+    notebook's absolute filesystem path on the compiling server. Before
+    this fix, every `deploy`/`docker build` baked that server-side path
+    straight into the shipped image, the exact class of build-context leak
+    this .dockerignore already exists to prevent for openapi.json/
+    openapi.yaml/sdk/.
+    """
+
+    output_path = tmp_path / ".dockerignore"
+
+    generate_dockerignore(str(output_path))
+
+    dockerignore = output_path.read_text(encoding="utf-8")
+    assert ".compile_metadata.json" in dockerignore
+
+
 def test_compiler_pipeline_dockerignore_excludes_a_real_exported_openapi_and_sdk(
     tmp_path,
 ):
@@ -479,6 +499,12 @@ generate_python_sdk(
 
     assert is_ignored("openapi.json")
     assert is_ignored("sdk/python_client.py")
+    # write_compile_metadata (backend/compiler.py) already wrote this
+    # alongside app.py as part of compile_notebook above -- it must be
+    # ignored too, since it's never read by the running app and its
+    # "source_notebook" field is the compiling server's own filesystem
+    # path.
+    assert is_ignored(".compile_metadata.json")
     # The actually-deployable artifacts must NOT be swept up by the same
     # patterns.
     assert not is_ignored("app.py")

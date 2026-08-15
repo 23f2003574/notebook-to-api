@@ -190,6 +190,28 @@ def test_list_generated_files_returns_an_empty_list_when_the_directory_does_not_
     assert _list_generated_files(tmp_path / "does_not_exist") == []
 
 
+def test_list_generated_files_excludes_compile_metadata(tmp_path):
+    """.compile_metadata.json (write_compile_metadata, backend/compiler.py)
+    is dashboard-internal bookkeeping -- read only by
+    list_notebooks/_currently_compiled_notebook_metadata in
+    routes/upload.py -- never a real compiled deliverable, and its
+    "source_notebook" field is the source notebook's absolute filesystem
+    path on the compiling server. Before this fix, it showed up in
+    generated_files exactly like a real output file, from where it also
+    flowed into GET /api/download's zip, GET /api/generated/{filename}'s
+    preview, and -- worst of all -- the deployed Docker image itself.
+    """
+
+    output_dir = tmp_path / "generated"
+    output_dir.mkdir()
+    (output_dir / "app.py").write_text("# app\n")
+    (output_dir / ".compile_metadata.json").write_text(
+        '{"source_notebook": "/home/someuser/private/nb.ipynb"}\n'
+    )
+
+    assert sorted(_list_generated_files(output_dir)) == ["app.py"]
+
+
 def test_inspect_notebook_prints_generated_files_but_excludes_pycache(
     tmp_path, capsys
 ):
