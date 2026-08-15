@@ -2953,7 +2953,8 @@ second = client.post("/process_data", json={{"x": 2}}, headers=headers)
 assert second.status_code == 200, second.text
 
 lookup = client.get(f"/tasks/{{first_task_id}}", headers=headers)
-assert lookup.json() == {{"error": "Task not found"}}, lookup.json()
+assert lookup.status_code == 404, lookup.text
+assert first_task_id in lookup.json()["detail"], lookup.json()
 
 print("TASK_TTL_EVICTION_E2E_OK")
 """
@@ -2968,6 +2969,90 @@ print("TASK_TTL_EVICTION_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "TASK_TTL_EVICTION_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_unknown_task_id_returns_404(tmp_path):
+    """Confirmed exploitable before this fix: GET/DELETE /tasks/{task_id}
+    for a task_id that was never created (or has since been evicted --
+    see test_compiler_pipeline_background_tasks_are_evicted_after_ttl_expires
+    above, or simply deleted by another caller) returned HTTP 200 with a
+    body of {"error": "Task not found"}, instead of a 404. That's not
+    just a wrong status code for its own sake: this is the exact endpoint
+    the generated Python/TypeScript SDK's get_task/wait_for_task poll
+    (backend/exporters/sdk_generator.py), and both rely on
+    response.raise_for_status() to signal failure -- which never fires
+    for a 200. wait_for_task additionally only checks whether
+    task.get('status') != 'processing' to decide a task is "finished",
+    so a task_id that no longer exists reads as status=None, which is
+    trivially != 'processing' -- meaning wait_for_task returned
+    {"error": "Task not found"} straight to the caller as if it were the
+    task's actual, successful result, with no exception raised at all.
+    Now a real 404 lets raise_for_status() do its job.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def process_data(x: int) -> int:\n"
+                            "    return x\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+lookup = client.get("/tasks/does-not-exist", headers=headers)
+assert lookup.status_code == 404, lookup.text
+assert "does-not-exist" in lookup.json()["detail"], lookup.json()
+
+deletion = client.delete("/tasks/does-not-exist", headers=headers)
+assert deletion.status_code == 404, deletion.text
+assert "does-not-exist" in deletion.json()["detail"], deletion.json()
+
+print("UNKNOWN_TASK_ID_404_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "UNKNOWN_TASK_ID_404_E2E_OK" in proc.stdout
 
 
 def test_compiler_pipeline_background_task_with_unserializable_result_is_reported_as_failed(

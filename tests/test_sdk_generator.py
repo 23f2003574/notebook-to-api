@@ -406,6 +406,59 @@ def test_generate_python_sdk_wait_for_task_raises_timeout_error(tmp_path, monkey
         client.wait_for_task("abc123", poll_interval=0, timeout=0)
 
 
+def test_generate_python_sdk_wait_for_task_raises_for_a_not_found_task(tmp_path, monkeypatch):
+    """Before the generated app's GET /tasks/{task_id} was fixed to return
+    a real 404 for an unknown/evicted task_id (generator/api_generator.py)
+    instead of a 200 with {"error": "Task not found"}, this exact
+    get_task/wait_for_task contract -- relying on
+    requests.Response.raise_for_status() to signal failure -- silently
+    did nothing: raise_for_status() only raises for a non-2xx status, and
+    wait_for_task's own `task.get('status') != 'processing'` check saw a
+    missing 'status' key on the error body and treated it as a finished
+    task, handing the error dict back to the caller as if it were the
+    real result. Simulating the now-fixed 404 here confirms get_task and
+    wait_for_task actually propagate that failure instead of masking it.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    class FakeHTTPError(Exception):
+        pass
+
+    class FakeResponse:
+        status_code = 404
+
+        def raise_for_status(self):
+            raise FakeHTTPError("404 Client Error: Not Found")
+
+        def json(self):
+            return {"detail": "Task abc123 not found"}
+
+    def fake_get(url, headers=None):
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+
+    with pytest.raises(FakeHTTPError):
+        client.get_task("abc123")
+
+    with pytest.raises(FakeHTTPError):
+        client.wait_for_task("abc123", poll_interval=0, timeout=5)
+
+
 def test_generate_python_sdk_background_endpoint_gets_an_and_wait_companion(tmp_path):
     """Before this fix, a background endpoint's generated method looked
     identical to a synchronous one: it returned {"task_id": ...,

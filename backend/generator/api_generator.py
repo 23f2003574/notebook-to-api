@@ -625,9 +625,10 @@ def generate_fastapi_code(functions, package_name="generated"):
     lines.append("    task = TASKS.get(task_id)")
     lines.append("")
     lines.append("    if not task:")
-    lines.append("        return {")
-    lines.append("            'error': 'Task not found'")
-    lines.append("        }")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=404,")
+    lines.append("            detail=f'Task {task_id} not found'")
+    lines.append("        )")
     lines.append("")
     lines.append("    return task")
     lines.append("")
@@ -746,9 +747,10 @@ def generate_fastapi_code(functions, package_name="generated"):
     lines.append("def delete_task(task_id: str, _: None = Depends(verify_api_key)):")
 
     lines.append("    if task_id not in TASKS:")
-    lines.append("        return {")
-    lines.append("            'error': 'Task not found'")
-    lines.append("        }")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=404,")
+    lines.append("            detail=f'Task {task_id} not found'")
+    lines.append("        )")
 
     lines.append("    deleted_task = TASKS.pop(task_id)")
 
