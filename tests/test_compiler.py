@@ -1851,6 +1851,39 @@ def test_package_name_for_output_dir_rejects_python_keyword():
         package_name_for_output_dir("import")
 
 
+@pytest.mark.parametrize("stdlib_name", ["json", "os", "sys", "time", "re"])
+def test_package_name_for_output_dir_rejects_a_standard_library_module_name(
+    stdlib_name,
+):
+    """Confirmed exploitable before this fix: `--output json` (or any
+    real standard-library module name) passed this function's own
+    isidentifier()/keyword checks fine and compiled without error, but
+    the generated app.py's `import json.runtime.notebook_module as
+    notebook_module` statement then resolved to the real, already-
+    imported stdlib `json` module instead of the locally compiled
+    package -- Python's import system finds a standard-library module
+    ahead of a same-named package under the working directory. The
+    generated app was entirely unusable (`python -m uvicorn json.app:app`
+    -- what `serve`, the generated Dockerfile's CMD, and any real
+    deployment all run -- failed with "No module named 'json.app'"),
+    with the failure only ever surfacing later, disconnected from the
+    --output choice that actually caused it.
+    """
+
+    with pytest.raises(ValueError, match="standard library module"):
+        package_name_for_output_dir(stdlib_name)
+
+
+def test_package_name_for_output_dir_allows_a_name_that_merely_looks_like_a_builtin():
+    """Only real *importable modules* collide this way -- "list"/"dict"/
+    "str" are builtin *types*, not modules, so there's no standard-
+    library module for `import list.runtime.notebook_module` to
+    incorrectly resolve to instead.
+    """
+
+    assert package_name_for_output_dir("list") == "list"
+
+
 def test_compiler_pipeline_respects_custom_output_dir(tmp_path):
     """The --output flag is documented as configurable (it has a CLI flag
     with a default), but write_runtime_module used to hardcode

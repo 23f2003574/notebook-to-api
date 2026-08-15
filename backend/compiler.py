@@ -75,6 +75,33 @@ def package_name_for_output_dir(output_dir):
             "digit; not a reserved keyword like 'import')."
         )
 
+    # Confirmed exploitable: `--output json` (or os/sys/time/re/... --
+    # any real standard-library module name, already collected in
+    # STANDARD_LIBS above for the identical name-collision hazard in
+    # write_requirements) compiled without error, but the generated
+    # app.py's `import json.runtime.notebook_module as notebook_module`
+    # statement then resolved to the real, already-imported stdlib `json`
+    # module instead of the locally compiled package -- Python's import
+    # system finds and caches a standard-library module ahead of same-
+    # named packages under the working directory. This isn't just a
+    # cosmetic naming clash: `python -m uvicorn json.app:app` (what
+    # `serve`, the generated Dockerfile's CMD, and any real deployment
+    # all run) fails outright with "No module named 'json.app'" -- the
+    # generated app is entirely unusable, with the failure only ever
+    # surfacing later, disconnected from the --output choice that
+    # actually caused it, and looking like a packaging bug rather than a
+    # bad directory name.
+    if name in STANDARD_LIBS:
+        raise ValueError(
+            f"Output directory {output_dir!r} (basename {name!r}) collides "
+            f"with the Python standard library module {name!r} -- the "
+            f"generated app's `import {name}.runtime.notebook_module` "
+            "statement would resolve to that standard-library module "
+            "instead of the locally compiled package. Choose a different "
+            "--output directory whose final path segment isn't a standard "
+            "library module name."
+        )
+
     return name
 
 
