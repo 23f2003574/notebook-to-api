@@ -236,6 +236,61 @@ def test_deploy_respects_custom_tag(tmp_path):
     assert log_lines[:-1] == ["build", "-t", "myapp:v2", "."]
 
 
+def test_deploy_respects_custom_platform(tmp_path):
+    """`docker build`'s own default target platform is the local Docker
+    daemon's host architecture -- not necessarily the deploy target's
+    (almost every cloud PaaS runs linux/amd64). Before --platform
+    existed, there was no way to override it short of bypassing this
+    tool's own `deploy` command and running `docker build` by hand.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+
+    proc = _run_cli(
+        [
+            "deploy", str(notebook_path), "--output", "generated",
+            "--tag", "myapp:v2", "--platform", "linux/amd64",
+        ],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    log_lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert log_lines[:-1] == [
+        "build", "-t", "myapp:v2", "--platform", "linux/amd64", ".",
+    ]
+
+
+def test_deploy_omits_platform_flag_by_default(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+
+    proc = _run_cli(
+        ["deploy", str(notebook_path), "--output", "generated"],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    log_lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert "--platform" not in log_lines
+
+
 def test_deploy_reports_a_clear_error_when_docker_is_missing(tmp_path):
 
     workdir = tmp_path / "workdir"

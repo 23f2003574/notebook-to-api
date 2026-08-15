@@ -1645,6 +1645,62 @@ def test_deploy_endpoint_respects_custom_tag(tmp_path, monkeypatch):
     assert build_call[:-1] == ["build", "-t", "myregistry.example.com/myapp:v2", "."]
 
 
+def test_deploy_endpoint_respects_custom_platform(tmp_path, monkeypatch):
+    """`docker build`'s own default target platform is the local Docker
+    daemon's host architecture -- not necessarily the deploy target's
+    (almost every cloud PaaS runs linux/amd64). Before "platform" existed
+    here, the dashboard's /api/deploy had no way to override it at all.
+    """
+
+    _compile_a_notebook("deploy_platform_test.ipynb")
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post("/api/deploy", json={"platform": "linux/amd64"})
+
+    assert resp.status_code == 200
+
+    calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
+    build_call = calls[0].splitlines()
+    assert build_call[:-1] == [
+        "build", "-t", "generated:latest", "--platform", "linux/amd64", ".",
+    ]
+
+
+def test_deploy_endpoint_omits_platform_flag_by_default(tmp_path, monkeypatch):
+
+    _compile_a_notebook("deploy_no_platform_test.ipynb")
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post("/api/deploy", json={})
+
+    assert resp.status_code == 200
+
+    calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
+    build_call = calls[0].splitlines()
+    assert "--platform" not in build_call
+
+
+@pytest.mark.parametrize("bad_platform", [123, 1.5, ["linux/amd64"], {"platform": "linux/amd64"}])
+def test_deploy_endpoint_rejects_a_non_string_platform(bad_platform):
+    """Mirrors test_deploy_endpoint_rejects_a_non_string_tag: "platform"
+    flows into the same subprocess argument list "tag" does.
+    """
+
+    _compile_a_notebook("deploy_bad_platform_test.ipynb")
+
+    resp = client.post("/api/deploy", json={"platform": bad_platform})
+
+    assert resp.status_code == 400
+
+
 @pytest.mark.parametrize("bad_tag", [123, 1.5, ["myapp:v1"], {"tag": "myapp:v1"}])
 def test_deploy_endpoint_rejects_a_non_string_tag(bad_tag):
     """Confirmed exploitable before this fix: "tag" flows straight into a

@@ -467,6 +467,20 @@ def _dispatch_core_command(args):
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
         tag = args.tag or f"{output_dir.name.lower()}:latest"
+        # `docker build`'s own default target platform is whatever the
+        # local Docker daemon's host architecture is -- correct for a
+        # plain `docker run` on that same machine, but not for the common
+        # case of building on one architecture (e.g. Apple Silicon) for a
+        # deploy target that runs another (almost every cloud PaaS is
+        # linux/amd64). Without a way to override it, that mismatch
+        # either silently produces an image that won't run on the target
+        # at all, or requires falling back to the CLI-less `docker build
+        # --platform ...` by hand, bypassing this tool's own compile step
+        # entirely.
+        build_args = ["docker", "build", "-t", tag]
+        if args.platform:
+            build_args += ["--platform", args.platform]
+        build_args.append(".")
         if args.json_output:
             # Suppresses every progress print along this path
             # (compile_notebook's own prints, print_compile_summary's, and
@@ -484,7 +498,7 @@ def _dispatch_core_command(args):
                 dockerfile_path = output_dir / "Dockerfile"
                 if not dockerfile_path.is_file():
                     raise FileNotFoundError(f"Dockerfile not found at {dockerfile_path}. Ensure the compiler generated it.")
-                _run_deploy_docker_command(["docker", "build", "-t", tag, "."], output_dir)
+                _run_deploy_docker_command(build_args, output_dir)
                 pushed = False
                 if args.push:
                     _run_deploy_docker_command(["docker", "push", tag], output_dir)
@@ -498,7 +512,7 @@ def _dispatch_core_command(args):
             if not dockerfile_path.is_file():
                 raise FileNotFoundError(f"Dockerfile not found at {dockerfile_path}. Ensure the compiler generated it.")
             print(f"Building Docker image '{tag}' from {output_dir} …")
-            _run_deploy_docker_command(["docker", "build", "-t", tag, "."], output_dir)
+            _run_deploy_docker_command(build_args, output_dir)
             print(f"Docker image '{tag}' built successfully.")
 
             if args.push:
@@ -653,6 +667,18 @@ def main():
             "--tag registry.example.com/myapp:v1); this does not modify or "
             "infer a registry, and assumes `docker login` has already been "
             "done for it."
+        )
+    )
+    deploy_parser.add_argument(
+        "--platform",
+        default=None,
+        help=(
+            "Target platform to pass to `docker build --platform` (e.g. "
+            "linux/amd64, linux/arm64). Defaults to the local Docker "
+            "daemon's own default (its host architecture) -- set this "
+            "when building on one architecture (e.g. Apple Silicon) for a "
+            "deploy target that runs another, which almost every cloud "
+            "PaaS does (linux/amd64)."
         )
     )
     deploy_parser.add_argument(

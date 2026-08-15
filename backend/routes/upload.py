@@ -1031,6 +1031,31 @@ def deploy_generated_app(data: dict = None):
     tag = tag or f"{generated_path.name.lower()}:latest"
     push = bool(data.get("push", False))
 
+    platform = data.get("platform")
+
+    # Same reasoning as the "tag" check above: platform flows straight
+    # into the `docker build` subprocess argument list below, so a
+    # non-string value would otherwise crash with an unhandled TypeError
+    # instead of a clean 400.
+    if platform is not None and not isinstance(platform, str):
+        raise HTTPException(
+            status_code=400,
+            detail="platform must be a string"
+        )
+
+    # `docker build`'s own default target platform is whatever the local
+    # Docker daemon's host architecture is -- correct for a plain `docker
+    # run` on that same machine, but not for the common case of building
+    # on one architecture (e.g. Apple Silicon) for a deploy target that
+    # runs another, which almost every cloud PaaS does (linux/amd64).
+    # Without this, the dashboard's /api/deploy had no way to override it
+    # at all, unlike the CLI's own `deploy --platform` (added alongside
+    # this same feature).
+    build_args = ["docker", "build", "-t", tag]
+    if platform:
+        build_args += ["--platform", platform]
+    build_args.append(".")
+
     # Held from the staleness check through the build itself (see
     # COMPILE_LOCK in backend/compiler.py): `docker build`'s context is
     # every file `generated_path` contains at the moment it reads them,
@@ -1062,7 +1087,7 @@ def deploy_generated_app(data: dict = None):
             )
 
         build_result = _run_docker_command(
-            ["docker", "build", "-t", tag, "."], generated_path
+            build_args, generated_path
         )
 
         if build_result.returncode != 0:
