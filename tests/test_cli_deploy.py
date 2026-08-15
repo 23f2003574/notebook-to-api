@@ -498,3 +498,76 @@ def test_deploy_push_help_documents_the_flag(tmp_path):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "--push" in proc.stdout
+
+
+def test_deploy_json_flag_emits_machine_readable_output(tmp_path):
+    """Before --json existed on `deploy`, a script driving it (CI, another
+    tool shelling out to it) had no way to get its outcome (the tag that
+    was actually built, whether it was pushed) as structured data -- only
+    free-form progress text -- even though POST /api/deploy's REST
+    response (routes/upload.py) already returns exactly this
+    {"status", "tag", "pushed"} shape for the same operation. Matches
+    that shape rather than inventing a different one, and none of
+    compile_notebook's/print_compile_summary's/this command's own
+    progress prints may leak onto stdout, or a script doing
+    json.loads(stdout) would choke on it -- the same guarantee
+    `compile --json` already makes.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+
+    proc = _run_cli(
+        ["deploy", str(notebook_path), "--output", "built_api", "--json"],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "built_api" / "app.py").exists()
+
+    data = json.loads(proc.stdout)
+    assert data == {
+        "status": "success",
+        "tag": "built_api:latest",
+        "pushed": False,
+    }
+
+
+def test_deploy_json_flag_reports_pushed_true_after_a_successful_push(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker_recording_all_calls(bin_dir, log_path)
+
+    proc = _run_cli(
+        [
+            "deploy", str(notebook_path), "--output", "generated",
+            "--tag", "registry.example.com/myapp:v1", "--push", "--json",
+        ],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    data = json.loads(proc.stdout)
+    assert data == {
+        "status": "success",
+        "tag": "registry.example.com/myapp:v1",
+        "pushed": True,
+    }
+
+    calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
+    assert len(calls) == 2

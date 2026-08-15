@@ -466,21 +466,45 @@ def _dispatch_core_command(args):
     elif args.command == "deploy":
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
-        compile_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
-        print_compile_summary(args.notebook, output_dir)
-        # Build Docker image
-        dockerfile_path = output_dir / "Dockerfile"
-        if not dockerfile_path.is_file():
-            raise FileNotFoundError(f"Dockerfile not found at {dockerfile_path}. Ensure the compiler generated it.")
         tag = args.tag or f"{output_dir.name.lower()}:latest"
-        print(f"Building Docker image '{tag}' from {output_dir} …")
-        _run_deploy_docker_command(["docker", "build", "-t", tag, "."], output_dir)
-        print(f"Docker image '{tag}' built successfully.")
+        if args.json_output:
+            # Suppresses every progress print along this path
+            # (compile_notebook's own prints, print_compile_summary's, and
+            # this command's own "Building Docker image..."/"built
+            # successfully"/"Pushing..." lines below) the same way
+            # `compile --json` already suppresses compile_notebook's --
+            # mixing any of that free text into --json's stdout would
+            # break a script trying to json.loads() it. POST /api/deploy
+            # (routes/upload.py) already returns exactly this
+            # {"status", "tag", "pushed"} shape for the same operation;
+            # matched here rather than inventing a different one so a
+            # script driving either surface can parse both the same way.
+            with contextlib.redirect_stdout(io.StringIO()):
+                compile_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
+                dockerfile_path = output_dir / "Dockerfile"
+                if not dockerfile_path.is_file():
+                    raise FileNotFoundError(f"Dockerfile not found at {dockerfile_path}. Ensure the compiler generated it.")
+                _run_deploy_docker_command(["docker", "build", "-t", tag, "."], output_dir)
+                pushed = False
+                if args.push:
+                    _run_deploy_docker_command(["docker", "push", tag], output_dir)
+                    pushed = True
+            print(json.dumps({"status": "success", "tag": tag, "pushed": pushed}, indent=2))
+        else:
+            compile_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
+            print_compile_summary(args.notebook, output_dir)
+            # Build Docker image
+            dockerfile_path = output_dir / "Dockerfile"
+            if not dockerfile_path.is_file():
+                raise FileNotFoundError(f"Dockerfile not found at {dockerfile_path}. Ensure the compiler generated it.")
+            print(f"Building Docker image '{tag}' from {output_dir} …")
+            _run_deploy_docker_command(["docker", "build", "-t", tag, "."], output_dir)
+            print(f"Docker image '{tag}' built successfully.")
 
-        if args.push:
-            print(f"Pushing Docker image '{tag}' …")
-            _run_deploy_docker_command(["docker", "push", tag], output_dir)
-            print(f"Docker image '{tag}' pushed successfully.")
+            if args.push:
+                print(f"Pushing Docker image '{tag}' …")
+                _run_deploy_docker_command(["docker", "push", tag], output_dir)
+                print(f"Docker image '{tag}' pushed successfully.")
 
 
 def main():
@@ -629,6 +653,17 @@ def main():
             "--tag registry.example.com/myapp:v1); this does not modify or "
             "infer a registry, and assumes `docker login` has already been "
             "done for it."
+        )
+    )
+    deploy_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit a machine-readable JSON result ({\"status\", \"tag\", "
+            "\"pushed\"}) instead of human-readable progress output, for "
+            "scripting/automation -- the same shape POST /api/deploy "
+            "already returns for the same operation."
         )
     )
 
