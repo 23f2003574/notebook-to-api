@@ -110,6 +110,80 @@ def _build_wait_method_names(method_names, paths):
     return wait_method_names
 
 
+def _operation_description(methods):
+    """The description text FastAPI's OpenAPI schema already carries for
+    this path's POST operation -- generate_fastapi_code always sets one
+    (api_generator.py): either a notebook function's own docstring, when
+    it wrote one, or this tool's own auto-generated fallback sentence.
+    Before this, that text was read by nothing at all -- every generated
+    client method's docstring/JSDoc comment was pure hardcoded boilerplate
+    ("Call the `/path` endpoint with JSON payload.") with zero connection
+    to what the endpoint actually does, even though the schema being read
+    right here already carries real documentation for it.
+
+    Returns "" (not None) when absent, so callers can build doc text with
+    a plain truthiness check rather than an extra None check -- absent
+    only for an OpenAPI schema this tool didn't generate itself
+    (export-sdk accepts any --openapi file, not just one this tool
+    produced).
+    """
+    return ((methods.get("post") or {}).get("description") or "").strip()
+
+
+def _python_method_docstring(description, static_text):
+    """Combine `description` (see _operation_description) with a client
+    method's own static explanatory text into one docstring statement,
+    repr()'d rather than embedded as a hand-written triple-quoted literal
+    like this client's other, fully static docstrings (get_task,
+    wait_for_task, ...): description is arbitrary, notebook-author-
+    controlled text (or this tool's own auto-generated fallback, which
+    already includes each parameter's bare name) that can legitimately
+    contain a double quote, a triple-quote sequence, or a backslash --
+    embedding it directly into a \"\"\"...\"\"\" literal would let that
+    content close the docstring early and corrupt the rest of the
+    generated client into a SyntaxError, the exact hazard already fixed
+    for the compiled app itself (see e91b1fa).
+    """
+    doc = f"{description}\n\n{static_text}" if description else static_text
+    return repr(doc)
+
+
+def _jsdoc_lines(description, static_text_lines, indent="  "):
+    """Build a `/** ... */` JSDoc comment block's lines, combining
+    `description` (see _operation_description) with a method's own static
+    explanatory text (`static_text_lines`: already-wrapped lines with no
+    leading ` * ` prefix or `*/` terminator of their own).
+
+    Unlike Python's repr() for _python_method_docstring above, JS/TS block
+    comments have no escape mechanism at all: a literal "*/" anywhere
+    inside `description` would close the comment early, corrupting
+    whatever source follows it -- potentially even swallowing the method
+    signature the comment was meant to document. Neutralized by inserting
+    a space into any such sequence before it's ever embedded, the same
+    defensive substitution doc-comment generators for user-controlled
+    text commonly use, since there's no syntactically "safe" encoding of
+    an arbitrary string inside a JSDoc block the way repr() provides for
+    a Python string literal.
+    """
+    text_lines = []
+
+    if description:
+        text_lines.extend(description.replace("*/", "* /").split("\n"))
+        text_lines.append("")
+
+    text_lines.extend(static_text_lines)
+
+    lines = [f"{indent}/**"]
+
+    for line in text_lines:
+        safe_line = line.replace("*/", "* /")
+        lines.append(f"{indent} * {safe_line}".rstrip())
+
+    lines.append(f"{indent} */")
+
+    return lines
+
+
 def _build_method_names(paths, reserved_names=frozenset()):
     """Map each POST path to a collision-free client method name.
 
@@ -280,27 +354,24 @@ def generate_python_sdk(
     lines.append("")
     for path, method_name in method_names.items():
         is_background = _is_background_path(paths[path])
+        description = _operation_description(paths[path])
         # Determine parameter schema (simple request body expecting JSON)
         lines.append(f"    def {method_name}(self, payload: dict):")
         if is_background:
             wait_name = wait_method_names[path]
-            lines.append(f'        """Enqueue the `{path}` background task with JSON payload.')
-            lines.append("")
-            lines.append(
-                '        Returns {"task_id": ..., "status": "processing"} '
-                "immediately --"
+            static_doc = (
+                f"Enqueue the `{path}` background task with JSON payload.\n\n"
+                'Returns {"task_id": ..., "status": "processing"} '
+                "immediately -- not the real result. Call get_task(task_id)/"
+                "wait_for_task(task_id) yourself, or use "
+                f"{wait_name}(...) to submit and block until the real "
+                "result is ready in one call."
             )
-            lines.append(
-                "        not the real result. Call get_task(task_id)/"
-                "wait_for_task(task_id)"
-            )
-            lines.append(
-                f"        yourself, or use {wait_name}(...) to submit and "
-                'block until'
-            )
-            lines.append('        the real result is ready in one call."""')
         else:
-            lines.append(f'        """Call the `{path}` endpoint with JSON payload."""')
+            static_doc = f"Call the `{path}` endpoint with JSON payload."
+        lines.append(
+            f"        {_python_method_docstring(description, static_doc)}"
+        )
         lines.append(f'        response = requests.post(')
         lines.append(f'            f"{{self.base_url}}{path}",')
         lines.append(f'            json=payload,')
@@ -316,10 +387,13 @@ def generate_python_sdk(
                 f"    def {wait_name}(self, payload: dict, "
                 "poll_interval: float = 1.0, timeout: float = 60.0) -> dict:"
             )
+            and_wait_static_doc = (
+                f"Submit `{path}` and block until the background task "
+                "finishes, returning its finished task record (see "
+                "wait_for_task)."
+            )
             lines.append(
-                f'        """Submit `{path}` and block until the '
-                "background task finishes, returning its finished task "
-                'record (see wait_for_task)."""'
+                f"        {_python_method_docstring(description, and_wait_static_doc)}"
             )
             lines.append(f"        submitted = self.{method_name}(payload)")
             lines.append(
@@ -515,19 +589,21 @@ def generate_typescript_sdk(
     lines.append("  }")
     for path, method_name in method_names.items():
         is_background = _is_background_path(paths[path])
+        description = _operation_description(paths[path])
         lines.append("")
         if is_background:
             wait_name = wait_method_names[path]
-            lines.append(f"  /** Enqueues `{path}` with JSON payload and returns")
-            lines.append(
-                '   * { task_id, status: "processing" } immediately -- not the '
-                "real result."
-            )
-            lines.append(
-                f"   * Call getTask(taskId)/waitForTask(taskId) yourself, or "
-                f"use {wait_name}(...)"
-            )
-            lines.append("   * to submit and wait for the real result in one call. */")
+            static_text_lines = [
+                f"Enqueues `{path}` with JSON payload and returns",
+                '{ task_id, status: "processing" } immediately -- not the '
+                "real result.",
+                f"Call getTask(taskId)/waitForTask(taskId) yourself, or "
+                f"use {wait_name}(...)",
+                "to submit and wait for the real result in one call.",
+            ]
+        else:
+            static_text_lines = [f"Calls the `{path}` endpoint with JSON payload."]
+        lines.extend(_jsdoc_lines(description, static_text_lines))
         lines.append(
             f"  async {method_name}(payload: Record<string, unknown>): "
             "Promise<any> {"
@@ -538,11 +614,12 @@ def generate_typescript_sdk(
         if is_background:
             wait_name = wait_method_names[path]
             lines.append("")
-            lines.append(
-                f"  /** Submits `{path}` and blocks until the background "
-                "task finishes, returning its finished task record (see "
-                "waitForTask). */"
-            )
+            and_wait_static_text_lines = [
+                f"Submits `{path}` and blocks until the background task "
+                "finishes, returning its finished task record (see "
+                "waitForTask).",
+            ]
+            lines.extend(_jsdoc_lines(description, and_wait_static_text_lines))
             lines.append(
                 f"  async {wait_name}(payload: Record<string, unknown>, "
                 "options: { pollIntervalMs?: number; timeoutMs?: number } = "

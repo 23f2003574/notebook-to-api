@@ -38,6 +38,149 @@ def test_generate_python_sdk_produces_syntactically_valid_python(tmp_path):
     assert "def train_model(self, payload: dict):" in source
 
 
+def _exec_generated_client(output_path, monkeypatch):
+    """Load a generated Python client module in isolation, stubbing
+    `requests` (a dependency of the *generated* client, not of this repo)
+    under sys.modules the same way test_generate_python_sdk_client_sends_
+    correct_request does, so importing the generated source itself (not
+    just parsing/compiling it) doesn't require requests to actually be
+    installed in this test environment.
+    """
+    fake_requests = types.ModuleType("requests")
+    fake_requests.get = lambda *a, **k: None
+    fake_requests.post = lambda *a, **k: None
+    fake_requests.delete = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(
+        compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"),
+        namespace,
+    )
+    return namespace["NotebookAPIClient"]
+
+
+def test_generate_python_sdk_method_docstring_includes_the_operations_description(
+    tmp_path, monkeypatch
+):
+    """Before this, a generated client method's docstring was pure
+    hardcoded boilerplate ("Call the `/path` endpoint with JSON
+    payload.") with zero connection to what the endpoint actually does --
+    even though the OpenAPI schema being read right here already carries
+    real documentation for it (a notebook function's own docstring, or
+    this tool's own auto-generated fallback -- see api_generator.py).
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "description": "Train the classifier and return its accuracy.",
+                }
+            }
+        },
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+    ast.parse(source)
+
+    assert "Train the classifier and return its accuracy." in source
+
+    client_cls = _exec_generated_client(output_path, monkeypatch)
+    assert "Train the classifier and return its accuracy." in client_cls.train_model.__doc__
+
+
+def test_generate_python_sdk_method_docstring_falls_back_without_a_description(
+    tmp_path, monkeypatch
+):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+    ast.parse(source)
+
+    client_cls = _exec_generated_client(output_path, monkeypatch)
+    assert client_cls.train_model.__doc__ == (
+        "Call the `/train_model` endpoint with JSON payload."
+    )
+
+
+def test_generate_python_sdk_method_docstring_survives_a_description_with_quotes_and_newlines(
+    tmp_path, monkeypatch
+):
+    """Confirmed exploitable before description was repr()'d into the
+    docstring statement rather than embedded in a hand-written triple-
+    quoted literal: a description containing a triple-quote sequence, a
+    lone double quote, or a backslash -- all legitimate content for a
+    notebook author's own docstring, or FastAPI's own escaping of an
+    unrelated field -- would close the docstring literal early and
+    corrupt the rest of the generated client into a SyntaxError, the
+    exact hazard e91b1fa already fixed for the compiled app itself.
+    """
+
+    tricky_description = 'Say "hi", use a \\backslash\\, and go\nmultiline. Even a triple quote: """ survives.'
+
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "description": tricky_description,
+                }
+            }
+        },
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+    ast.parse(source)
+    compile(source, str(output_path), "exec")
+
+    client_cls = _exec_generated_client(output_path, monkeypatch)
+    assert tricky_description in client_cls.train_model.__doc__
+
+
+def test_generate_python_sdk_and_wait_docstring_includes_the_operations_description(
+    tmp_path, monkeypatch
+):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "description": "Train the classifier and return its accuracy.",
+                    "x-notebook-to-api-async": True,
+                }
+            }
+        },
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    client_cls = _exec_generated_client(output_path, monkeypatch)
+    assert (
+        "Train the classifier and return its accuracy."
+        in client_cls.train_model_and_wait.__doc__
+    )
+
+
 def test_generate_python_sdk_skips_non_post_endpoints(tmp_path):
 
     schema_path = _write_schema(
@@ -805,6 +948,123 @@ def test_generate_typescript_sdk_produces_expected_structure(tmp_path):
     # Braces must balance -- a mismatch is the most common way hand-built
     # string-concatenated codegen produces invalid syntax.
     assert source.count("{") == source.count("}")
+
+
+def test_generate_typescript_sdk_method_jsdoc_includes_the_operations_description(
+    tmp_path,
+):
+    """Mirrors
+    test_generate_python_sdk_method_docstring_includes_the_operations_description
+    for the TypeScript client -- before this, a synchronous method got no
+    doc comment at all, and a background method's JSDoc was pure
+    hardcoded boilerplate, either way with zero connection to what the
+    endpoint actually does.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "description": "Train the classifier and return its accuracy.",
+                }
+            }
+        },
+    )
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert "/**" in source
+    assert " * Train the classifier and return its accuracy." in source
+    assert (
+        "async train_model(payload: Record<string, unknown>): Promise<any> {"
+        in source
+    )
+    assert source.count("{") == source.count("}")
+
+
+def test_generate_typescript_sdk_method_jsdoc_falls_back_without_a_description(
+    tmp_path,
+):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert " * Calls the `/train_model` endpoint with JSON payload." in source
+
+
+def test_generate_typescript_sdk_jsdoc_neutralizes_a_terminator_sequence_in_the_description(
+    tmp_path,
+):
+    """Confirmed exploitable before this: unlike Python's repr(), a JS/TS
+    block comment has no escape mechanism at all -- a literal "*/" inside
+    a description (a notebook author's own docstring can legitimately
+    contain one, e.g. documenting a regex or a comment) would close the
+    JSDoc comment early, corrupting whatever source follows it. The
+    async method declaration this comment documents must survive intact,
+    not get swallowed into the (now-terminated) comment body.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "description": "Ends with a terminator */ right here.",
+                }
+            }
+        },
+    )
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert "Ends with a terminator * / right here." in source
+    assert (
+        "async train_model(payload: Record<string, unknown>): Promise<any> {"
+        in source
+    )
+    assert source.count("{") == source.count("}")
+
+
+def test_generate_typescript_sdk_and_wait_jsdoc_includes_the_operations_description(
+    tmp_path,
+):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "description": "Train the classifier and return its accuracy.",
+                    "x-notebook-to-api-async": True,
+                }
+            }
+        },
+    )
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert source.count(" * Train the classifier and return its accuracy.") == 2
+    assert "async train_model_and_wait(" in source
 
 
 def test_generate_typescript_sdk_skips_non_post_endpoints(tmp_path):
