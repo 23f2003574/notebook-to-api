@@ -441,6 +441,62 @@ def test_generate_python_sdk_disambiguates_a_path_colliding_with_a_hardcoded_cli
     assert f"def {colliding_name}_2(self, payload: dict):" in source
 
 
+@pytest.mark.parametrize("colliding_name", ["base_url", "api_key", "timeout"])
+def test_generate_python_sdk_disambiguates_a_path_colliding_with_an_instance_attribute(
+    tmp_path, colliding_name
+):
+    """Confirmed exploitable before this fix: base_url/api_key/timeout
+    are the client's own __init__-set *instance attributes* (every other
+    method reads self.base_url/self.api_key/self.timeout for exactly
+    that reason) -- not just names an unrelated method happened to
+    share. A notebook path sanitizing to one of these compiled into a
+    same-named client *method* fine, but an instance attribute set in
+    __init__ shadows a class-level method of the same name on attribute
+    lookup: `self.base_url` from then on resolves to the string, not the
+    method, so calling client.base_url(...) fails with "'str' object is
+    not callable", with nothing about the method definition itself
+    signaling why.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {f"/{colliding_name}": {"post": {"operationId": colliding_name}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    ast.parse(source)
+    assert f"def {colliding_name}_2(self, payload: dict):" in source
+
+
+@pytest.mark.parametrize("colliding_name", ["baseUrl", "apiKey", "timeoutMs"])
+def test_generate_typescript_sdk_disambiguates_a_path_colliding_with_an_instance_field(
+    tmp_path, colliding_name
+):
+    """Mirrors
+    test_generate_python_sdk_disambiguates_a_path_colliding_with_an_instance_attribute
+    for the TypeScript client: baseUrl/apiKey/timeoutMs are its own
+    private instance fields, and a class can't declare a field and a
+    method under the same identifier at all -- "Duplicate identifier" at
+    TypeScript compile time.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {f"/{colliding_name}": {"post": {"operationId": colliding_name}}},
+    )
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert f"async {colliding_name}_2(" in source
+
+
 def test_generate_python_sdk_wait_for_task_still_works_when_a_notebook_function_is_named_wait_for_task(
     tmp_path, monkeypatch
 ):

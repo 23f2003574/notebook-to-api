@@ -21,6 +21,18 @@ from pathlib import Path
 PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "get_task", "wait_for_task", "list_tasks", "delete_task",
     "delete_completed_tasks", "delete_failed_tasks",
+    # Confirmed exploitable: base_url/api_key/timeout are the client's
+    # own __init__-set *instance attributes* (self.base_url, self.api_key,
+    # self.timeout -- every other method here reads them for exactly
+    # that reason), not just names an unrelated method happened to share.
+    # A notebook path sanitizing to one of these (e.g. "/base_url")
+    # compiled into a same-named client *method* fine -- but an instance
+    # attribute set in __init__ shadows a class-level method of the same
+    # name on attribute lookup, so `self.base_url` from then on resolves
+    # to the string, not the method: calling client.base_url(...) fails
+    # with "'str' object is not callable", and nothing about the method
+    # definition itself signals why.
+    "base_url", "api_key", "timeout",
 })
 
 # Same hazard as PYTHON_RESERVED_CLIENT_METHOD_NAMES above, for the
@@ -32,6 +44,13 @@ PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
 TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "getTask", "waitForTask", "listTasks", "deleteTask",
     "deleteCompletedTasks", "deleteFailedTasks",
+    # Same hazard as PYTHON_RESERVED_CLIENT_METHOD_NAMES's base_url/
+    # api_key/timeout above: baseUrl/apiKey/timeoutMs are this client's
+    # own private instance fields (this.baseUrl, this.apiKey,
+    # this.timeoutMs), and a class can't declare a field and a method
+    # under the same identifier -- "Duplicate identifier" at TypeScript
+    # compile time, not just a same-named method colliding.
+    "baseUrl", "apiKey", "timeoutMs",
 })
 
 
