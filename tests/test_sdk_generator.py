@@ -262,6 +262,94 @@ def test_generate_python_sdk_sends_api_key_header(tmp_path):
     assert "notebook-to-api-dev-key" in source
 
 
+def test_generate_python_sdk_constructor_accepts_a_configurable_timeout(tmp_path):
+    """`requests` has no default socket timeout of its own -- a call with
+    none set can hang indefinitely on a server that accepts the
+    connection but never responds. Before this, the generated client
+    never passed `timeout=` to any of its requests.* calls at all, and
+    its constructor had no way to configure one either.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert "timeout: float = 30.0" in source
+    assert "self.timeout = timeout" in source
+    # Every requests.* call this client makes must actually use it.
+    assert source.count("timeout=self.timeout") == 6
+
+
+def test_generate_python_sdk_uses_the_configured_timeout_for_a_request(
+    tmp_path, monkeypatch
+):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"result": 42}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append(timeout)
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.post = fake_post
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000", timeout=5.0)
+    client.train_model({"a": 1})
+
+    assert calls == [5.0]
+
+
+def test_generate_typescript_sdk_constructor_accepts_a_configurable_timeout(
+    tmp_path,
+):
+    """Mirrors
+    test_generate_python_sdk_constructor_accepts_a_configurable_timeout
+    for the TypeScript client -- fetch() has no default timeout of its
+    own either, and none of the generated methods passed an AbortSignal
+    at all before this.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert "timeoutMs?: number;" in source
+    assert "this.timeoutMs = options.timeoutMs ?? 30000;" in source
+    # Every fetch() call this client makes must actually use it.
+    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 6
+
+
 def test_generate_python_sdk_method_name_handles_multi_segment_paths(tmp_path):
     """Real compiled apps expose built-in multi-segment POST paths like
     /tasks/cleanup and /tasks/reset alongside notebook-derived endpoints.
@@ -383,7 +471,7 @@ def test_generate_python_sdk_wait_for_task_still_works_when_a_notebook_function_
         def json(self):
             return self._payload
 
-    def fake_get(url, headers=None):
+    def fake_get(url, headers=None, timeout=None):
         calls.append(1)
         return FakeResponse(responses[len(calls) - 1])
 
@@ -427,7 +515,7 @@ def test_generate_python_sdk_client_sends_correct_request(tmp_path, monkeypatch)
         def json(self):
             return {"result": 42}
 
-    def fake_post(url, json=None, headers=None):
+    def fake_post(url, json=None, headers=None, timeout=None):
         calls.append({"url": url, "json": json, "headers": headers})
         return FakeResponse()
 
@@ -494,7 +582,7 @@ def test_generate_python_sdk_get_task_sends_correct_request(tmp_path, monkeypatc
         def json(self):
             return self._payload
 
-    def fake_get(url, headers=None):
+    def fake_get(url, headers=None, timeout=None):
         calls.append({"url": url, "headers": headers})
         return FakeResponse({"status": "completed", "result": 42})
 
@@ -540,7 +628,7 @@ def test_generate_python_sdk_wait_for_task_polls_until_terminal_status(tmp_path,
         def json(self):
             return self._payload
 
-    def fake_get(url, headers=None):
+    def fake_get(url, headers=None, timeout=None):
         calls.append(1)
         return FakeResponse(responses[len(calls) - 1])
 
@@ -575,7 +663,7 @@ def test_generate_python_sdk_wait_for_task_raises_timeout_error(tmp_path, monkey
         def json(self):
             return {"status": "processing"}
 
-    def fake_get(url, headers=None):
+    def fake_get(url, headers=None, timeout=None):
         return FakeResponse()
 
     fake_requests = types.ModuleType("requests")
@@ -625,7 +713,7 @@ def test_generate_python_sdk_wait_for_task_raises_for_a_not_found_task(tmp_path,
         def json(self):
             return {"detail": "Task abc123 not found"}
 
-    def fake_get(url, headers=None):
+    def fake_get(url, headers=None, timeout=None):
         return FakeResponse()
 
     fake_requests = types.ModuleType("requests")
@@ -784,7 +872,7 @@ def test_generate_python_sdk_and_wait_submits_then_polls_to_completion(
         def json(self):
             return self._payload
 
-    def fake_post(url, json=None, headers=None):
+    def fake_post(url, json=None, headers=None, timeout=None):
         post_calls.append({"url": url, "json": json})
         return FakePostResponse()
 
@@ -793,7 +881,7 @@ def test_generate_python_sdk_and_wait_submits_then_polls_to_completion(
         {"status": "completed", "result": 42},
     ]
 
-    def fake_get(url, headers=None):
+    def fake_get(url, headers=None, timeout=None):
         get_calls.append(url)
         return FakeGetResponse(get_responses[len(get_calls) - 1])
 
@@ -864,7 +952,7 @@ def test_generate_python_sdk_list_tasks_sends_correct_request(tmp_path, monkeypa
         def json(self):
             return {"active_tasks": 0, "tasks": {}}
 
-    def fake_get(url, headers=None):
+    def fake_get(url, headers=None, timeout=None):
         calls.append({"url": url, "headers": headers})
         return FakeResponse()
 
@@ -906,7 +994,7 @@ def test_generate_python_sdk_delete_task_sends_correct_request(tmp_path, monkeyp
         def json(self):
             return {"message": "Task deleted", "task_id": "abc123"}
 
-    def fake_delete(url, headers=None):
+    def fake_delete(url, headers=None, timeout=None):
         calls.append({"url": url, "headers": headers})
         return FakeResponse()
 
@@ -950,7 +1038,7 @@ def test_generate_python_sdk_delete_completed_and_failed_tasks_send_correct_requ
         def json(self):
             return {"deleted": 0}
 
-    def fake_delete(url, headers=None):
+    def fake_delete(url, headers=None, timeout=None):
         calls.append(url)
         return FakeResponse()
 
@@ -1638,7 +1726,7 @@ test_client = TestClient(app)
 # requiring the real package to be installed here.
 import types
 
-def fake_post(url, json=None, headers=None):
+def fake_post(url, json=None, headers=None, timeout=None):
     path = url.split("://", 1)[1].split("/", 1)[1]
     resp = test_client.post("/" + path, json=json, headers=headers)
     resp.raise_for_status = lambda: None
@@ -1730,13 +1818,13 @@ test_client = TestClient(app)
 
 import types
 
-def fake_post(url, json=None, headers=None):
+def fake_post(url, json=None, headers=None, timeout=None):
     path = url.split("://", 1)[1].split("/", 1)[1]
     resp = test_client.post("/" + path, json=json, headers=headers)
     resp.raise_for_status = lambda: None
     return resp
 
-def fake_get(url, headers=None):
+def fake_get(url, headers=None, timeout=None):
     path = url.split("://", 1)[1].split("/", 1)[1]
     resp = test_client.get("/" + path, headers=headers)
     resp.raise_for_status = lambda: None
@@ -1840,19 +1928,19 @@ test_client = TestClient(app)
 
 import types
 
-def fake_post(url, json=None, headers=None):
+def fake_post(url, json=None, headers=None, timeout=None):
     path = url.split("://", 1)[1].split("/", 1)[1]
     resp = test_client.post("/" + path, json=json, headers=headers)
     resp.raise_for_status = lambda: None
     return resp
 
-def fake_get(url, headers=None):
+def fake_get(url, headers=None, timeout=None):
     path = url.split("://", 1)[1].split("/", 1)[1]
     resp = test_client.get("/" + path, headers=headers)
     resp.raise_for_status = lambda: None
     return resp
 
-def fake_delete(url, headers=None):
+def fake_delete(url, headers=None, timeout=None):
     path = url.split("://", 1)[1].split("/", 1)[1]
     resp = test_client.delete("/" + path, headers=headers)
     resp.raise_for_status = lambda: None

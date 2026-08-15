@@ -295,7 +295,10 @@ def generate_python_sdk(
     lines.append("import requests")
     lines.append("")
     lines.append("class NotebookAPIClient:")
-    lines.append("    def __init__(self, base_url: str, api_key: str = None):")
+    lines.append(
+        "    def __init__(self, base_url: str, api_key: str = None, "
+        "timeout: float = 30.0):"
+    )
     lines.append("        self.base_url = base_url.rstrip('/')")
     lines.append("        # Generated endpoints require the same X-API-Key header the")
     lines.append("        # generated app itself defaults to (see NOTEBOOK_API_KEY in")
@@ -303,12 +306,21 @@ def generate_python_sdk(
     lines.append("        self.api_key = api_key or os.getenv(")
     lines.append("            'NOTEBOOK_API_KEY', 'notebook-to-api-dev-key'")
     lines.append("        )")
+    lines.append("        # requests has no default socket timeout of its own -- a call")
+    lines.append("        # with none set can hang indefinitely on a server that accepts")
+    lines.append("        # the connection but never responds (a stalled deploy target, a")
+    lines.append("        # network partition, ...), with nothing on the client side to")
+    lines.append("        # ever give up. wait_for_task's own `timeout` bounds its polling")
+    lines.append("        # *loop*, but each individual request it (and every other method")
+    lines.append("        # here) makes had no bound of its own until now.")
+    lines.append("        self.timeout = timeout")
     lines.append("")
     lines.append("    def get_task(self, task_id: str) -> dict:")
     lines.append('        """Fetch the current status/result of a background task."""')
     lines.append("        response = requests.get(")
     lines.append(f'            f"{{self.base_url}}/tasks/{{task_id}}",')
     lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
     lines.append("        )")
     lines.append("        response.raise_for_status()")
     lines.append("        return response.json()")
@@ -355,6 +367,7 @@ def generate_python_sdk(
     lines.append("        response = requests.get(")
     lines.append('            f"{self.base_url}/tasks",')
     lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
     lines.append("        )")
     lines.append("        response.raise_for_status()")
     lines.append("        return response.json()")
@@ -364,6 +377,7 @@ def generate_python_sdk(
     lines.append("        response = requests.delete(")
     lines.append('            f"{self.base_url}/tasks/{task_id}",')
     lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
     lines.append("        )")
     lines.append("        response.raise_for_status()")
     lines.append("        return response.json()")
@@ -373,6 +387,7 @@ def generate_python_sdk(
     lines.append("        response = requests.delete(")
     lines.append('            f"{self.base_url}/tasks/completed",')
     lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
     lines.append("        )")
     lines.append("        response.raise_for_status()")
     lines.append("        return response.json()")
@@ -382,6 +397,7 @@ def generate_python_sdk(
     lines.append("        response = requests.delete(")
     lines.append('            f"{self.base_url}/tasks/failed",')
     lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
     lines.append("        )")
     lines.append("        response.raise_for_status()")
     lines.append("        return response.json()")
@@ -410,6 +426,7 @@ def generate_python_sdk(
         lines.append(f'            f"{{self.base_url}}{path}",')
         lines.append(f'            json=payload,')
         lines.append(f'            headers={{"X-API-Key": self.api_key}},')
+        lines.append(f'            timeout=self.timeout,')
         lines.append(f'        )')
         lines.append("        response.raise_for_status()")
         lines.append("        return response.json()")
@@ -466,11 +483,13 @@ def generate_typescript_sdk(
     lines = []
     lines.append("export interface NotebookAPIClientOptions {")
     lines.append("  apiKey?: string;")
+    lines.append("  timeoutMs?: number;")
     lines.append("}")
     lines.append("")
     lines.append("export class NotebookAPIClient {")
     lines.append("  private baseUrl: string;")
     lines.append("  private apiKey: string;")
+    lines.append("  private timeoutMs: number;")
     lines.append("")
     lines.append(
         "  constructor(baseUrl: string, options: NotebookAPIClientOptions = {}) {"
@@ -482,6 +501,14 @@ def generate_typescript_sdk(
     lines.append(
         '    this.apiKey = options.apiKey ?? "notebook-to-api-dev-key";'
     )
+    # fetch() has no default timeout of its own -- a call with no signal
+    # can hang indefinitely on a server that accepts the connection but
+    # never responds (a stalled deploy target, a network partition, ...),
+    # with nothing on the client side to ever give up. waitForTask's own
+    # timeoutMs bounds its polling *loop*, but each individual request it
+    # (and every other method here) makes had no bound of its own until
+    # now -- matches the Python client's identical `timeout` addition.
+    lines.append("    this.timeoutMs = options.timeoutMs ?? 30000;")
     lines.append("  }")
     lines.append("")
     lines.append(
@@ -494,6 +521,7 @@ def generate_typescript_sdk(
     lines.append('        "X-API-Key": this.apiKey,')
     lines.append("      },")
     lines.append("      body: JSON.stringify(payload),")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
     lines.append("    });")
     lines.append("    if (!response.ok) {")
     lines.append(
@@ -511,6 +539,7 @@ def generate_typescript_sdk(
     lines.append("      headers: {")
     lines.append('        "X-API-Key": this.apiKey,')
     lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
     lines.append("    });")
     lines.append("    if (!response.ok) {")
     lines.append(
@@ -557,6 +586,7 @@ def generate_typescript_sdk(
     lines.append("      headers: {")
     lines.append('        "X-API-Key": this.apiKey,')
     lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
     lines.append("    });")
     lines.append("    if (!response.ok) {")
     lines.append(
@@ -575,6 +605,7 @@ def generate_typescript_sdk(
     lines.append("      headers: {")
     lines.append('        "X-API-Key": this.apiKey,')
     lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
     lines.append("    });")
     lines.append("    if (!response.ok) {")
     lines.append(
@@ -593,6 +624,7 @@ def generate_typescript_sdk(
     lines.append("      headers: {")
     lines.append('        "X-API-Key": this.apiKey,')
     lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
     lines.append("    });")
     lines.append("    if (!response.ok) {")
     lines.append(
@@ -611,6 +643,7 @@ def generate_typescript_sdk(
     lines.append("      headers: {")
     lines.append('        "X-API-Key": this.apiKey,')
     lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
     lines.append("    });")
     lines.append("    if (!response.ok) {")
     lines.append(
