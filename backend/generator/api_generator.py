@@ -23,6 +23,23 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "get_task", "list_tasks", "delete_task", "cleanup_tasks",
     "delete_completed_tasks", "delete_failed_tasks", "reset_tasks",
     "notebook_module",
+    # Confirmed exploitable: these two private helpers (both defined at
+    # module scope, like every other name above) were missing here, so a
+    # notebook function literally named "_evict_expired_tasks" or
+    # "_run_background_task" compiled fine and silently overwrote the
+    # real one at module-execution time -- Python has no protection
+    # against redefining a name, the later `def` always wins. Every
+    # *other* background endpoint's own submission still calls the exact
+    # same shadowed name (`_evict_expired_tasks()` before enqueuing a new
+    # task, `background_tasks.add_task(_run_background_task, ...)` to run
+    # one), so this didn't just break the notebook's own colliding
+    # endpoint -- it broke background task submission or execution
+    # *entirely*, app-wide. Reproduced: a notebook exposing both
+    # `_evict_expired_tasks(x: int) -> int` and an unrelated `train_model`
+    # crashed `POST /train_model` itself with "TypeError:
+    # _evict_expired_tasks() missing 1 required positional argument:
+    # 'req'", nothing to do with train_model's own logic at all.
+    "_evict_expired_tasks", "_run_background_task",
 })
 
 

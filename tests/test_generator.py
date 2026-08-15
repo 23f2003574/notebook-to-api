@@ -153,6 +153,44 @@ def test_notebook_function_named_max_request_body_bytes_is_rejected():
         generate_fastapi_code(functions)
 
 
+def test_notebook_function_named_evict_expired_tasks_is_rejected():
+    """_evict_expired_tasks is a module-level helper the generated app
+    itself defines (see RESERVED_INFRASTRUCTURE_NAMES) -- same collision
+    hazard class as ALLOWED_ORIGINS or MAX_PENDING_TASKS, but for a
+    private function rather than a constant. Confirmed exploitable
+    before this was added: a notebook function of this exact name
+    compiled fine and silently overwrote the real helper at module-
+    execution time (Python has no protection against redefining a name),
+    breaking every *other* background endpoint's own submission too,
+    since each one calls this same now-shadowed name before enqueuing a
+    new task.
+    """
+
+    functions = [
+        {"name": "_evict_expired_tasks", "args": [], "return_type": "dict"}
+    ]
+
+    with pytest.raises(ReservedFunctionNameError, match="_evict_expired_tasks"):
+        generate_fastapi_code(functions)
+
+
+def test_notebook_function_named_run_background_task_is_rejected():
+    """_run_background_task is a module-level helper the generated app
+    itself defines -- every background endpoint's own submission passes
+    this exact name to background_tasks.add_task(...) to actually run
+    the task, so a notebook function shadowing it would silently break
+    execution of *every* background task in the app, not just the
+    notebook's own colliding endpoint.
+    """
+
+    functions = [
+        {"name": "_run_background_task", "args": [], "return_type": "dict"}
+    ]
+
+    with pytest.raises(ReservedFunctionNameError, match="_run_background_task"):
+        generate_fastapi_code(functions)
+
+
 def test_background_endpoint_rejects_new_tasks_past_max_pending_tasks():
     """_evict_expired_tasks bounds TASKS' long-term growth, but a burst of
     background requests arriving faster than TASK_TTL_SECONDS still grew

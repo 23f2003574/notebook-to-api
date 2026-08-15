@@ -1591,6 +1591,45 @@ def test_compiler_pipeline_rejects_notebook_function_named_verify_api_key(tmp_pa
         compile_notebook(str(notebook_path), str(output_dir))
 
 
+def test_compiler_pipeline_rejects_notebook_function_named_evict_expired_tasks(
+    tmp_path,
+):
+    """Confirmed exploitable before this fix: a notebook function named
+    _evict_expired_tasks silently overwrote the generated app's own
+    module-level helper of that name at import time -- and broke every
+    *other* background endpoint's own submission, not just this one's,
+    since each one calls this exact now-shadowed name before enqueuing a
+    new task. Reproduced directly against a real compiled+running app: a
+    completely unrelated `train_model` background endpoint crashed with
+    "TypeError: _evict_expired_tasks() missing 1 required positional
+    argument" the moment it tried to submit a task, nothing to do with
+    train_model's own logic at all. compile_notebook must fail loudly
+    instead of producing that app.
+    """
+    from backend.generator.api_generator import ReservedFunctionNameError
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def _evict_expired_tasks(x: int) -> int:\n"
+            "    return x\n\n"
+            "def train_model(epochs: int) -> str:\n"
+            "    return 'done'\n"
+        )
+    )
+
+    notebook_path = tmp_path / "reserved_helper.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    with pytest.raises(ReservedFunctionNameError):
+        compile_notebook(str(notebook_path), str(output_dir))
+
+
 def test_compiler_pipeline_leaves_a_previous_successful_compile_untouched_on_failure(
     tmp_path
 ):
