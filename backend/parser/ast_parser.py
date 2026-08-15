@@ -191,11 +191,23 @@ def extract_functions_from_code(code):
             if node.returns:
                 return_type = ast.unparse(node.returns)
 
+            # ast.get_docstring(clean=True) strips the docstring's own
+            # leading/trailing whitespace and dedents it (equivalent to
+            # inspect.cleandoc), the same normalization a caller would
+            # expect from reading it any other way. None when the function
+            # has no docstring at all, distinct from an empty string, so
+            # the generator (see api_generator.py) can tell "nothing to
+            # show" apart from "author wrote an empty docstring" and fall
+            # back to its own auto-generated description in both cases via
+            # a single falsy check.
+            docstring = ast.get_docstring(node, clean=True)
+
             function_info = {
                 "name": node.name,
                 "args": args,
                 "return_type": return_type,
                 "is_async": isinstance(node, ast.AsyncFunctionDef),
+                "docstring": docstring,
                 "example_payload": generate_example_payload(args),
                 "example_response": generate_example_response(
                     return_type

@@ -935,10 +935,25 @@ def generate_fastapi_code(functions, package_name="generated"):
             .replace("_", " ")
             .title()
         )
+        # A notebook function's own docstring is exactly the description
+        # its author already wrote, on purpose, for this exact function --
+        # strictly more useful than a generic templated sentence that
+        # doesn't even manage to say what the endpoint *does*. Before this,
+        # extract_functions_from_code (parser/ast_parser.py) didn't even
+        # extract it, so it was always discarded no matter what a notebook
+        # author wrote; only ever falls back to the auto-generated summary
+        # below for a function with no docstring at all (or one that's
+        # empty/all-whitespace, which ast.get_docstring(clean=True) already
+        # normalizes down to a falsy value).
+        docstring = func.get("docstring")
         description = (
-            f"Auto-generated endpoint for {func_name}. "
-            f"Operation ID: {operation_id}. "
-            f"Parameters: {', '.join(arg['name'] for arg in args) if args else 'None'}."
+            docstring
+            if docstring
+            else (
+                f"Auto-generated endpoint for {func_name}. "
+                f"Operation ID: {operation_id}. "
+                f"Parameters: {', '.join(arg['name'] for arg in args) if args else 'None'}."
+            )
         )
         if is_background:
             # A background endpoint doesn't return `example_response`/
@@ -967,7 +982,19 @@ def generate_fastapi_code(functions, package_name="generated"):
             lines.append(
                 f'@app.post("/{func_name}", '
                 f'summary="{summary}", '
-                f'description="{description}", '
+                # repr()'d, not embedded as a raw f-string like the fixed,
+                # server-generated boilerplate this replaces when there's
+                # no docstring: description can now be a notebook author's
+                # own docstring, arbitrary content that can legitimately
+                # contain a double quote, a newline, or a backslash --
+                # embedding it as a raw "description="..."" literal would
+                # let any of those close the string early, corrupting the
+                # whole @app.post(...) call into a SyntaxError and failing
+                # the entire compile, not just this one endpoint's docs
+                # (the exact bug class e91b1fa already fixed for the
+                # Pydantic Field description and the responses={} dict's
+                # own "description" entry).
+                f'description={repr(description)}, '
                 f'tags=["{tag}"], '
                 f'operation_id="{operation_id}", '
                 f'openapi_extra={{"x-notebook-to-api-category": "{category}", "x-notebook-to-api-async": True, "security": [{{"ApiKeyAuth": []}}]}}, '
@@ -994,7 +1021,19 @@ def generate_fastapi_code(functions, package_name="generated"):
             lines.append(
                 f'@app.post("/{func_name}", '
                 f'summary="{summary}", '
-                f'description="{description}", '
+                # repr()'d, not embedded as a raw f-string like the fixed,
+                # server-generated boilerplate this replaces when there's
+                # no docstring: description can now be a notebook author's
+                # own docstring, arbitrary content that can legitimately
+                # contain a double quote, a newline, or a backslash --
+                # embedding it as a raw "description="..."" literal would
+                # let any of those close the string early, corrupting the
+                # whole @app.post(...) call into a SyntaxError and failing
+                # the entire compile, not just this one endpoint's docs
+                # (the exact bug class e91b1fa already fixed for the
+                # Pydantic Field description and the responses={} dict's
+                # own "description" entry).
+                f'description={repr(description)}, '
                 f'tags=["{tag}"], '
                 f'operation_id="{operation_id}", '
                 f'openapi_extra={{"x-notebook-to-api-category": "{category}", "security": [{{"ApiKeyAuth": []}}]}}, '

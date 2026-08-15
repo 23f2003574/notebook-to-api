@@ -45,6 +45,58 @@ def square(x: int) -> int:
     assert funcs[0]["return_type"] == "int"
 
 
+def test_function_extraction_captures_the_docstring():
+
+    code = '''
+def train_model(epochs: int) -> str:
+    """Train the classifier for the given number of epochs.
+
+    Returns a short summary of the final accuracy.
+    """
+    return "done"
+'''
+
+    funcs = extract_functions_from_code(code)
+
+    assert funcs[0]["docstring"] == (
+        "Train the classifier for the given number of epochs.\n\n"
+        "Returns a short summary of the final accuracy."
+    )
+
+
+def test_function_extraction_docstring_is_none_when_absent():
+
+    code = """
+def add(a: int, b: int) -> int:
+    return a + b
+"""
+
+    funcs = extract_functions_from_code(code)
+
+    assert funcs[0]["docstring"] is None
+
+
+def test_function_extraction_docstring_is_none_when_blank():
+    """A docstring that's only whitespace carries no information a real
+    one wouldn't already have -- ast.get_docstring(clean=True) already
+    normalizes it down to an empty string, which must come through as the
+    same falsy "nothing to show" value as no docstring at all, so the
+    generator (api_generator.py) can fall back to its auto-generated
+    description with a single truthiness check rather than also handling
+    an empty-but-not-None case.
+    """
+
+    code = '''
+def add(a: int, b: int) -> int:
+    """   """
+    return a + b
+'''
+
+    funcs = extract_functions_from_code(code)
+
+    assert not funcs[0]["docstring"]
+
+
 def test_function_extraction_skips_unparseable_code_instead_of_raising():
 
     code = "%%bash\necho hi"

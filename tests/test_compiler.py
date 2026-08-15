@@ -1061,6 +1061,192 @@ def test_compiler_pipeline_return_type_containing_a_quote_compiles_end_to_end(
     compile(generated_app, "app.py", "exec")
 
 
+def test_compiler_pipeline_function_docstring_becomes_the_endpoint_description(
+    tmp_path,
+):
+    """Before this fix, extract_functions_from_code (parser/ast_parser.py)
+    never even extracted a function's own docstring, so it was always
+    discarded no matter what a notebook author wrote -- every endpoint's
+    OpenAPI description was the same generic templated sentence
+    ("Auto-generated endpoint for <name>. Operation ID: <name>.
+    Parameters: <names>."), regardless of how much real documentation the
+    author had already written directly on the function.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n"
+                            '    """Add two numbers and return their sum."""\n'
+                            "    return a + b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+
+schema = app.openapi()
+description = schema["paths"]["/add"]["post"]["description"]
+assert description == "Add two numbers and return their sum.", description
+
+print("DOCSTRING_DESCRIPTION_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "DOCSTRING_DESCRIPTION_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_function_without_docstring_keeps_the_auto_generated_description(
+    tmp_path,
+):
+    """A function with no docstring must keep getting the previous
+    behavior's auto-generated description -- this feature is additive,
+    not a replacement for every endpoint's docs.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n"
+                            "    return a + b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+
+schema = app.openapi()
+description = schema["paths"]["/add"]["post"]["description"]
+assert description == (
+    "Auto-generated endpoint for add. Operation ID: add. "
+    "Parameters: a, b."
+), description
+
+print("AUTO_DESCRIPTION_FALLBACK_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "AUTO_DESCRIPTION_FALLBACK_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_docstring_containing_quotes_and_newlines_compiles_end_to_end(
+    tmp_path,
+):
+    """Mirrors
+    test_compiler_pipeline_parameter_type_containing_a_quote_compiles_end_to_end
+    for the same unescaped-embedding hazard, now on a function's own
+    docstring: it's arbitrary, notebook-author-controlled text that can
+    legitimately contain a double quote, a backslash, or span multiple
+    lines. Before description was repr()'d rather than embedded as a raw
+    f-string, any of those would close the description="..." literal
+    early and corrupt the whole @app.post(...) call into a SyntaxError,
+    failing the entire compile over a single endpoint's docs. Covers both
+    the synchronous and background/task_id code paths, since each builds
+    this @app.post(...) call separately.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def classify_sync(x: int) -> str:\n"
+            '    """Classify x as "high" or "low".\n\n'
+            "    Uses a backslash \\\\ in this line too.\n"
+            '    """\n'
+            '    return "high"\n\n'
+            "def process_classify(x: int) -> str:\n"
+            '    """Classify x as "high" or "low" (background version)."""\n'
+            '    return "high"\n'
+        )
+    )
+
+    notebook_path = tmp_path / "quoted_docstring.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    generated_app = (output_dir / "app.py").read_text(encoding="utf-8")
+
+    ast.parse(generated_app)
+    compile(generated_app, "app.py", "exec")
+
+
 def test_compiler_pipeline_sync_endpoint_reports_a_raised_exception_as_a_clean_500(
     tmp_path,
 ):
