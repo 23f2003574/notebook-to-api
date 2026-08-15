@@ -178,6 +178,87 @@ def test_compile_command_summary_lists_third_party_dependencies(tmp_path):
     assert "Dependencies: pandas" in proc.stdout
 
 
+def test_compile_command_json_flag_emits_machine_readable_output(tmp_path):
+    """Before --json existed on `compile`, the only way to get a
+    compile's outcome (functions, dependencies, generated_files,
+    endpoints, skipped_functions) as structured data was a separate
+    `inspect --json` call afterwards -- `compile` itself only ever printed
+    the human-readable summary (print_compile_summary), even though
+    POST /api/compile's REST response already returns exactly this kind
+    of data for the same operation. Reuses inspect_notebook_data (the
+    same function `inspect --json` calls) so the two can't drift, now
+    reflecting the app this compile call just actually produced.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built", "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    # compile_notebook (backend/compiler.py) itself unconditionally prints
+    # progress lines ("Starting compilation for: ...", "Runtime module
+    # generated.", ...) on top of print_compile_summary's human-readable
+    # summary -- none of that may leak onto stdout in --json mode, or a
+    # script doing json.loads(stdout) would choke on it. The whole of
+    # stdout must be nothing but the JSON document itself.
+    data = json.loads(proc.stdout)
+    assert data["functions"][0]["name"] == "add"
+    assert "app.py" in data["generated_files"]
+    assert "requirements.txt" in data["generated_files"]
+    assert data["dependencies"] == []
+    assert data["reserved_name_conflicts"] == []
+    assert data["endpoints"] == [
+        {"path": "/add", "method": "POST", "is_async": False}
+    ]
+    assert data["skipped_functions"] == []
+
+
+def test_compile_command_json_flag_reports_a_background_endpoint(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def train_model(epochs: int) -> str:\n"
+                            "    return 'done'\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built", "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["endpoints"] == [
+        {"path": "/train_model", "method": "POST", "is_async": True}
+    ]
+
+
 def test_inspect_command_reports_the_notebooks_function(tmp_path):
 
     workdir = tmp_path / "workdir"

@@ -1,4 +1,6 @@
 import argparse
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -400,9 +402,25 @@ def _dispatch_core_command(args):
     if args.command == "compile":
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
-        compile_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
-        print("\nCompilation finished. FastAPI app is ready in", output_dir)
-        print_compile_summary(args.notebook, output_dir)
+        if args.json_output:
+            # compile_notebook (backend/compiler.py) unconditionally prints
+            # its own progress lines ("Starting compilation for: ...",
+            # "Runtime module generated.", ...) -- meant for the
+            # human-readable path below, but mixed into --json's stdout
+            # they'd break any script trying to json.loads() it. inspect
+            # --json has no equivalent problem since inspect_notebook_data
+            # prints nothing on its own; compile actually writes output,
+            # so its own writer functions' prints need suppressing here to
+            # give --json the same "stdout is valid JSON, full stop"
+            # guarantee.
+            with contextlib.redirect_stdout(io.StringIO()):
+                compile_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
+            data = inspect_notebook_data(notebook_path=args.notebook, output_dir=str(output_dir))
+            print(json.dumps(data, indent=2))
+        else:
+            compile_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
+            print("\nCompilation finished. FastAPI app is ready in", output_dir)
+            print_compile_summary(args.notebook, output_dir)
     elif args.command == "inspect":
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -479,6 +497,18 @@ def main():
         "--output",
         default="generated",
         help="Output directory where the FastAPI app and assets will be written."
+    )
+    compile_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit machine-readable JSON (functions, dependencies, "
+            "generated_files, endpoints, skipped_functions) instead of the "
+            "human-readable summary, for scripting/automation -- the same "
+            "shape `inspect --json` already returns, reflecting the app "
+            "this compile just produced."
+        )
     )
 
     # inspect command (show analysis report)
