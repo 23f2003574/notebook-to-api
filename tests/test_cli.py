@@ -275,6 +275,45 @@ def test_inspect_command_reports_the_notebooks_function(tmp_path):
     assert "Route: POST /add" in proc.stdout
 
 
+def test_inspect_command_reports_a_functions_own_docstring(tmp_path):
+    """`inspect --json` (see inspect_notebook_data) already carried a
+    function's own docstring, but the plain human-readable `inspect`
+    report never printed it at all.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n"
+                            '    """Add two numbers and return their sum."""\n'
+                            "    return a + b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    proc = _run_cli(["inspect", str(notebook_path)], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Add two numbers and return their sum." in proc.stdout
+
+
 def test_inspect_command_json_flag_emits_machine_readable_output(tmp_path):
     """Before --json existed, `inspect` only ever printed the
     human-readable report (inspect_notebook) -- inspect_notebook_data,

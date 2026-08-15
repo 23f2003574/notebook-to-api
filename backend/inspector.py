@@ -258,6 +258,20 @@ def inspect_notebook(notebook_path, output_dir="generated"):
             f"   Route: POST /{func['name']}{route_suffix}"
         )
 
+        # A notebook function's own docstring already becomes its
+        # compiled endpoint's OpenAPI description (see api_generator.py)
+        # -- but `inspect` is this tool's own "preview what compiling
+        # this notebook will do" report, and never showed it at all, even
+        # though inspect_notebook_data's "functions" field (and `inspect
+        # --json`) already carries it. A notebook author checking
+        # `inspect` to confirm their documentation looks right before
+        # compiling had no way to see it here.
+        docstring = func.get("docstring")
+
+        if docstring:
+            for line in docstring.split("\n"):
+                print(f"   {line}" if line else "")
+
         print(
             f"   Example Payload: {func.get('example_payload', {})}"
         )

@@ -135,6 +135,53 @@ def test_inspect_notebook_omits_the_warning_section_for_a_clean_notebook(
     assert "Reserved Name Conflicts" not in output
 
 
+def test_inspect_notebook_prints_a_functions_own_docstring(tmp_path, capsys):
+    """A notebook function's own docstring already becomes its compiled
+    endpoint's OpenAPI description (see api_generator.py) -- but
+    `inspect`, this tool's own "preview what compiling this notebook will
+    do" report, never showed it at all, even though inspect_notebook_data
+    (and `inspect --json`) already carried it.
+    """
+
+    notebook_path = tmp_path / "documented.ipynb"
+    _write_notebook(
+        notebook_path,
+        (
+            "def train_model(epochs: int) -> str:\n"
+            '    """Train the classifier for the given number of epochs.\n\n'
+            "    Returns a short accuracy summary.\n"
+            '    """\n'
+            "    return 'done'\n"
+        ),
+    )
+
+    inspect_notebook(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "Train the classifier for the given number of epochs." in output
+    assert "Returns a short accuracy summary." in output
+
+
+def test_inspect_notebook_omits_docstring_lines_for_an_undocumented_function(
+    tmp_path, capsys
+):
+
+    notebook_path = tmp_path / "undocumented.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    inspect_notebook(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "1. add(a: int, b: int) -> int" in output
+    # No stray docstring lines (blank or otherwise) inserted between the
+    # route line and the example payload for a function with no
+    # docstring at all.
+    assert "   Route: POST /add\n   Example Payload:" in output
+
+
 def test_inspect_notebook_data_reports_endpoints_and_flags_background_ones(tmp_path):
     """Before this fix, inspect_notebook_data -- the data behind both
     `inspect --json` and POST /api/inspect -- had no way to tell a caller
