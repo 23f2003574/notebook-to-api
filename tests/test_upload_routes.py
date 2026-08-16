@@ -2516,3 +2516,53 @@ def test_health_check_never_leaks_the_source_notebooks_server_side_filesystem_pa
     assert resp.status_code == 200
     assert "source_notebook" not in resp.json()
     assert "uploads" not in json.dumps(resp.json())
+
+
+def test_export_sdk_waits_for_an_in_flight_compile_to_release_compile_lock():
+    """Confirmed missing before this fix: unlike export-openapi, deploy,
+    download, and get_generated_file (see the identical tests above),
+    export-sdk held COMPILE_LOCK nowhere at all -- a concurrent POST
+    /api/compile racing it on another thread runs
+    clear_stale_export_artifacts (backend/compiler.py) as part of every
+    recompile, which unlinks openapi.json/.yaml and rmtree's the sdk/
+    directory. Without the lock, this could read a half-deleted openapi
+    export or write its generated client into a sdk/ directory a
+    concurrent recompile is simultaneously removing out from under it.
+    """
+
+    _compile_a_notebook("export_sdk_lock_test.ipynb")
+
+    export_resp = client.post("/api/export-openapi", json={"format": "json"})
+    assert export_resp.status_code == 200
+
+    lock_acquired = threading.Event()
+    release_lock = threading.Event()
+
+    def hold_lock():
+        with COMPILE_LOCK:
+            lock_acquired.set()
+            assert release_lock.wait(timeout=5)
+
+    holder = threading.Thread(target=hold_lock)
+    holder.start()
+    assert lock_acquired.wait(timeout=5)
+
+    result = {}
+
+    def do_export():
+        result["resp"] = client.post("/api/export-sdk", json={"language": "python"})
+
+    request_thread = threading.Thread(target=do_export)
+    request_thread.start()
+    request_thread.join(timeout=0.3)
+
+    assert request_thread.is_alive(), (
+        "POST /api/export-sdk should still be blocked on COMPILE_LOCK"
+    )
+
+    release_lock.set()
+    request_thread.join(timeout=5)
+    holder.join(timeout=5)
+
+    assert not request_thread.is_alive()
+    assert result["resp"].status_code == 200

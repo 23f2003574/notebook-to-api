@@ -905,54 +905,70 @@ def export_sdk_endpoint(
     # generation needs the JSON schema), but now via the same clear,
     # actionable 400 the CLI already gets, not a misleading 404 that says
     # the opposite of what actually happened.
-    if os.path.isfile(openapi_json_path):
-        openapi_path = openapi_json_path
-    elif os.path.isfile(openapi_yaml_path):
-        openapi_path = openapi_yaml_path
-    else:
-
-        raise HTTPException(
-            status_code=404,
-            detail="No exported OpenAPI schema found. Run /api/export-openapi first."
-        )
-
     if language == "typescript":
         output_path = os.path.join(GENERATED_DIR, "sdk", "typescript_client.ts")
     else:
         output_path = os.path.join(GENERATED_DIR, "sdk", "python_client.py")
 
-    try:
+    # Held across the existence check, the read, and the generated SDK's
+    # own write -- every other route that touches GENERATED_DIR's
+    # compiled output already holds this (POST /api/export-openapi's own
+    # write, POST /api/deploy's build, GET /api/download's zip, GET
+    # /api/generated/{filename}'s read -- see COMPILE_LOCK in
+    # backend/compiler.py), but this endpoint held it nowhere at all.
+    # Without it, a concurrent POST /api/compile racing this on another
+    # thread can run clear_stale_export_artifacts (backend/compiler.py)
+    # mid-read -- it unlinks openapi.json/.yaml and rmtree's the sdk/
+    # directory as part of every recompile -- so this could read a
+    # half-deleted openapi export (a bare FileNotFoundError where the
+    # existence check above just said the file was there) or write its
+    # generated client into a sdk/ directory a concurrent recompile is
+    # simultaneously removing out from under it.
+    with COMPILE_LOCK:
 
-        if language == "typescript":
-            generate_typescript_sdk(openapi_path, output_path)
+        if os.path.isfile(openapi_json_path):
+            openapi_path = openapi_json_path
+        elif os.path.isfile(openapi_yaml_path):
+            openapi_path = openapi_yaml_path
         else:
-            generate_python_sdk(openapi_path, output_path)
 
-    except ValueError as e:
+            raise HTTPException(
+                status_code=404,
+                detail="No exported OpenAPI schema found. Run /api/export-openapi first."
+            )
 
-        # _load_openapi_schema (exporters/sdk_generator.py) raises this
-        # specifically when openapi_path's content isn't valid JSON --
-        # the schema itself is the problem (most commonly: a yaml-only
-        # export, per the fallback above, or a JSON file corrupted/
-        # truncated by a concurrent write), not this server, so this is a
-        # 400 the caller can act on (re-run /api/export-openapi with
-        # format=json), the same distinction ReservedFunctionNameError
-        # and MALFORMED_NOTEBOOK_ERRORS already get elsewhere in this file
-        # instead of a 500 that looks like a server-side bug.
-        raise HTTPException(
-            status_code=400,
-            detail=f"SDK generation error: {str(e)}"
-        )
+        try:
 
-    except Exception as e:
+            if language == "typescript":
+                generate_typescript_sdk(openapi_path, output_path)
+            else:
+                generate_python_sdk(openapi_path, output_path)
 
-        raise HTTPException(
-            status_code=500,
-            detail=f"SDK generation error: {str(e)}"
-        )
+        except ValueError as e:
 
-    with open(output_path, "r", encoding="utf-8") as f:
-        code = f.read()
+            # _load_openapi_schema (exporters/sdk_generator.py) raises this
+            # specifically when openapi_path's content isn't valid JSON --
+            # the schema itself is the problem (most commonly: a yaml-only
+            # export, per the fallback above, or a JSON file corrupted/
+            # truncated by a concurrent write), not this server, so this is a
+            # 400 the caller can act on (re-run /api/export-openapi with
+            # format=json), the same distinction ReservedFunctionNameError
+            # and MALFORMED_NOTEBOOK_ERRORS already get elsewhere in this file
+            # instead of a 500 that looks like a server-side bug.
+            raise HTTPException(
+                status_code=400,
+                detail=f"SDK generation error: {str(e)}"
+            )
+
+        except Exception as e:
+
+            raise HTTPException(
+                status_code=500,
+                detail=f"SDK generation error: {str(e)}"
+            )
+
+        with open(output_path, "r", encoding="utf-8") as f:
+            code = f.read()
 
     return {
         "status": "success",
