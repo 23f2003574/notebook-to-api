@@ -3,6 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.dashboard import app, allowed_origins, DEFAULT_ALLOWED_ORIGINS
@@ -49,6 +50,56 @@ def test_known_dev_frontend_origin_still_granted_credentialed_cors_access():
     assert resp.status_code == 200
     assert resp.headers["access-control-allow-origin"] == "http://localhost:5173"
     assert resp.headers["access-control-allow-credentials"] == "true"
+
+
+def test_allowed_origins_rejects_a_wildcard_env_var(monkeypatch):
+    """Confirmed exploitable before this fix: setting
+    NOTEBOOK_API_ALLOWED_ORIGINS="*" reintroduced the exact vulnerability
+    this module's own hardcoded-"*" fix (see test_wildcard_origin_is_not_
+    in_the_default_allowlist above) was meant to prevent -- an arbitrary
+    Origin got reflected back with Access-Control-Allow-Credentials: true
+    since allow_credentials=True is unconditional regardless of where
+    allow_origins came from. "*" is the value an operator reaches for
+    first when trying to "just allow everything", so this env var was a
+    real, easy-to-hit way to silently reopen that hole.
+    """
+
+    monkeypatch.setenv("NOTEBOOK_API_ALLOWED_ORIGINS", "*")
+
+    with pytest.raises(ValueError, match="must not contain"):
+        allowed_origins()
+
+
+def test_allowed_origins_rejects_a_wildcard_mixed_into_a_list(monkeypatch):
+
+    monkeypatch.setenv(
+        "NOTEBOOK_API_ALLOWED_ORIGINS",
+        "https://a.example.com,*,https://b.example.com",
+    )
+
+    with pytest.raises(ValueError, match="must not contain"):
+        allowed_origins()
+
+
+def test_dashboard_fails_to_import_with_a_wildcard_allowed_origins_env_var():
+    """End-to-end confirmation that a misconfigured deployment fails fast
+    at startup instead of silently serving the vulnerable CORS config --
+    run in a fresh subprocess since the allowlist is baked into the
+    CORSMiddleware instance at app-import time (same technique as
+    test_allowed_origins_env_var_overrides_default_list below).
+    """
+
+    proc = subprocess.run(
+        [sys.executable, "-c", "import backend.dashboard"],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={**os.environ, "NOTEBOOK_API_ALLOWED_ORIGINS": "*"},
+    )
+
+    assert proc.returncode != 0
+    assert "must not contain" in proc.stderr
 
 
 def test_allowed_origins_env_var_overrides_default_list():

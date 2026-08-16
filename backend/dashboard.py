@@ -132,6 +132,20 @@ def allowed_origins():
     Defaults to the known local frontend dev-server ports; set
     NOTEBOOK_API_ALLOWED_ORIGINS (comma-separated) to configure this for
     a real deployment instead of hardcoding one fixed list.
+
+    NOTEBOOK_API_ALLOWED_ORIGINS is rejected outright if it contains "*":
+    confirmed exploitable -- setting it to that reintroduces the exact
+    vulnerability this function's own docstring above says was already
+    fixed, live: an arbitrary Origin got reflected back as
+    Access-Control-Allow-Origin with Access-Control-Allow-Credentials:
+    true, the same way the previous hardcoded "*" config did, since
+    allow_credentials=True (below) is unconditional regardless of where
+    allow_origins came from. "*" is exactly the value an operator reaches
+    for first when trying to "just allow everything" for a quick
+    deployment, so this was a real, easy-to-hit misconfiguration this
+    tool's own documented escape hatch offered no protection against.
+    Failing fast here, at startup, beats silently running with that hole
+    open.
     """
     raw = os.getenv("NOTEBOOK_API_ALLOWED_ORIGINS")
 
@@ -139,6 +153,18 @@ def allowed_origins():
         origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
 
         if origins:
+
+            if "*" in origins:
+                raise ValueError(
+                    "NOTEBOOK_API_ALLOWED_ORIGINS must not contain '*' -- "
+                    "combining a wildcard origin with this dashboard's "
+                    "credentialed CORS requests (allow_credentials=True) "
+                    "lets any website make authenticated cross-origin "
+                    "requests to it, including /api/upload, /api/inspect "
+                    "and /api/compile. List the specific origin(s) that "
+                    "should be allowed instead."
+                )
+
             return origins
 
     return DEFAULT_ALLOWED_ORIGINS
