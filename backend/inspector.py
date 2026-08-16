@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from backend.compiler import COMPILE_METADATA_FILENAME
+from backend.compiler import COMPILE_METADATA_FILENAME, STANDARD_LIBS
 
 from backend.parser.notebook_parser import (
     load_notebook,
@@ -93,6 +93,29 @@ def _list_generated_files(output_dir):
                 generated_files.append(str(rel))
 
     return generated_files
+
+
+def _third_party_dependencies(all_imports):
+    """`all_imports` (raw import names collected via
+    extract_imports_from_code) filtered down to the ones that will
+    actually end up pinned in requirements.txt by write_requirements
+    (backend/compiler.py), which applies this exact same STANDARD_LIBS
+    filter to what it writes.
+
+    Before this, inspect_notebook/inspect_notebook_data's "dependencies"
+    listed every import a notebook made, standard-library ones included
+    (e.g. "os", "json", "sys") -- confirmed misleading: a notebook doing
+    `import os` and `import pandas` had both `inspect` and, after an
+    actual compile, `compile`/`serve`/`deploy`'s own print_compile_summary
+    (below) report "Dependencies: json, os, pandas", even though
+    requirements.txt -- and from there the Docker image `deploy`/`docker
+    build` would actually ship -- only ever contained "pandas". A
+    notebook author reading either "preview what compiling will do" or
+    "here's what this compile just produced" had no way to tell which of
+    their imports would actually be installed without separately knowing
+    which of them happen to be standard-library.
+    """
+    return sorted(imp for imp in all_imports if imp not in STANDARD_LIBS)
 
 
 def _is_background_function(name):
@@ -283,7 +306,7 @@ def inspect_notebook(notebook_path, output_dir="generated"):
     print("\nDependencies:")
     print("-" * 20)
 
-    for dep in sorted(all_imports):
+    for dep in _third_party_dependencies(all_imports):
         print(f"- {dep}")
 
     generated_files = _list_generated_files(output_dir)
@@ -323,9 +346,7 @@ def inspect_notebook_data(
 
     return {
         "functions": all_functions,
-        "dependencies": sorted(
-            list(all_imports)
-        ),
+        "dependencies": _third_party_dependencies(all_imports),
         "generated_files": sorted(
             _list_generated_files(output_dir)
         ),

@@ -390,6 +390,69 @@ def test_print_compile_summary_lists_third_party_dependencies(tmp_path, capsys):
     assert "Dependencies: pandas" in output
 
 
+def test_print_compile_summary_excludes_standard_library_imports_from_dependencies(
+    tmp_path, capsys
+):
+    """Confirmed misleading before this fix: a notebook importing both a
+    standard-library module and a real third-party one had *both* listed
+    under "Dependencies" here -- even though write_requirements
+    (backend/compiler.py) already excludes standard-library imports from
+    requirements.txt via this exact same STANDARD_LIBS set. A notebook
+    author reading "here's what this compile just produced" had no way
+    to tell which of their imports would actually be installed without
+    separately knowing which happen to be standard-library.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "import os\n"
+        "import pandas as pd\n\n"
+        "def summarize(count: int) -> int:\n    return count * 2\n",
+    )
+
+    print_compile_summary(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "Dependencies: pandas" in output
+    assert "os" not in output.split("Dependencies:")[1].split("\n")[0]
+
+
+def test_inspect_notebook_data_dependencies_excludes_standard_library_imports(
+    tmp_path,
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "import json\n"
+        "import pandas as pd\n\n"
+        "def summarize(count: int) -> int:\n    return count * 2\n",
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    assert data["dependencies"] == ["pandas"]
+
+
+def test_inspect_notebook_report_excludes_standard_library_imports(tmp_path, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "import sys\n"
+        "import pandas as pd\n\n"
+        "def summarize(count: int) -> int:\n    return count * 2\n",
+    )
+
+    inspect_notebook(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    dependencies_section = output.split("Dependencies:")[1].split("Generated Files:")[0]
+    assert "- pandas" in dependencies_section
+    assert "- sys" not in dependencies_section
+
+
 def test_aggregate_skipped_functions_reports_unsupported_signatures():
 
     code_cells = [

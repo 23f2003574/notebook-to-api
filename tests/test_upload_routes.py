@@ -1147,10 +1147,17 @@ def test_inspect_reports_dependencies_and_generated_files_after_a_compile():
     inspect_notebook_data (backend/inspector.py) already computed
     dependencies and generated_files -- it just wasn't wired to this
     route.
+
+    Includes a standard-library import ("math") alongside the real
+    third-party one specifically to also confirm "dependencies" only ever
+    reports what actually gets pinned into requirements.txt -- "math"
+    never does (see _third_party_dependencies in backend/inspector.py),
+    so it must not appear here either.
     """
 
     content = _notebook_bytes(
-        "import math\n\n"
+        "import math\n"
+        "import pandas as pd\n\n"
         "def add(a: int, b: int) -> int:\n    return a + b\n"
     )
 
@@ -1178,7 +1185,7 @@ def test_inspect_reports_dependencies_and_generated_files_after_a_compile():
     body = inspect_resp.json()
 
     assert body["functions"][0]["name"] == "add"
-    assert body["dependencies"] == ["math"]
+    assert body["dependencies"] == ["pandas"]
     assert "app.py" in body["generated_files"]
     assert "requirements.txt" in body["generated_files"]
 
