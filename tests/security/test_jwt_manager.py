@@ -82,7 +82,23 @@ def test_validate_accepts_freshly_issued_token(manager: JWTTokenManager, user_id
 
 def test_validate_rejects_tampered_signature(manager: JWTTokenManager, user_id: str):
     access, _ = manager.issue(user_id, timestamp=BASE_TIME)
-    tampered = access.token[:-1] + ("A" if access.token[-1] != "A" else "B")
+    # Tamper the second-to-last character of the token, not the very
+    # last one. Confirmed flaky (~7.6% failure rate across 500 trials)
+    # tampering the last character instead: base64url's final character
+    # of an unpadded, non-multiple-of-4-length segment encodes a few real
+    # bits followed by discarded padding bits. Whenever the real
+    # signature's actual last character happened to be "A" (its padding
+    # bits already zero), replacing it with this test's own fallback "B"
+    # changed only those discarded padding bits -- the "tampered" token
+    # decoded to the exact same signature bytes as the original and
+    # validated successfully instead of raising. Every other character
+    # position in a base64 segment carries only real, non-discarded bits,
+    # so tampering one of those always changes the decoded bytes.
+    tampered = (
+        access.token[:-2]
+        + ("A" if access.token[-2] != "A" else "B")
+        + access.token[-1]
+    )
 
     with pytest.raises(InvalidJWTError):
         manager.validate(tampered, timestamp=BASE_TIME)
@@ -197,7 +213,22 @@ def test_api_refresh_token(client: TestClient, manager: JWTTokenManager, monkeyp
     monkeypatch.setattr(jwt_manager_module, "_jwt_token_manager", manager)
     manager._authentication_manager.register("api-refresh", "hunter2", timestamp=BASE_TIME)
     user = manager._authentication_manager.get_user_id("api-refresh")
-    _, refresh = manager.issue(user, timestamp=BASE_TIME)
+    # Unlike every other test in this file, this one exercises the real
+    # POST /security/tokens/refresh endpoint (refresh_token_endpoint,
+    # backend/security/jwt_manager.py), which calls manager.refresh()
+    # with no injected `timestamp` -- it always compares the refresh
+    # token's expiry against the real wall-clock datetime.now(timezone.
+    # utc). Issuing it against the fixed BASE_TIME (2026-08-07) meant the
+    # token's real 7-day expiry (2026-08-14) was a ticking time bomb: this
+    # test passed right up until the real calendar date passed that
+    # point, then started failing every run after with 401 != 200 --
+    # confirmed by the fixed CI history, not something any of these
+    # tests' notebook-to-API-side changes could have caused.
+    # test_api_validate_token below already issues its own token with no
+    # explicit timestamp (defaulting to real "now") for the identical
+    # reason; matched here rather than pinning to BASE_TIME like this
+    # test previously did.
+    _, refresh = manager.issue(user)
 
     response = client.post("/security/tokens/refresh", json={"refresh_token": refresh.token})
 
