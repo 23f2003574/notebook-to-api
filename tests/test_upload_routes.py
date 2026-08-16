@@ -1473,6 +1473,71 @@ def test_export_sdk_reports_a_clean_400_for_a_corrupt_openapi_schema(monkeypatch
     assert "not a valid OpenAPI JSON schema" in resp.json()["detail"]
 
 
+def test_export_sdk_gives_a_clean_400_not_a_misleading_404_for_a_yaml_only_export(
+    monkeypatch, tmp_path
+):
+    """Confirmed exploitable before this fix: POST /api/export-sdk only
+    ever checked for "openapi.json", hardcoded -- but POST
+    /api/export-openapi is just as capable of writing "openapi.yaml"
+    instead, via {"format": "yaml"}. A caller who did exactly that, then
+    called export-sdk, got a 404 saying "No exported OpenAPI schema
+    found. Run /api/export-openapi first" -- flatly wrong, since they
+    just had, in the only other format this same API offers -- instead of
+    the clean 400 with a specific "re-export with format=json" hint
+    _load_openapi_schema (exporters/sdk_generator.py) already writes for
+    exactly this situation, and which the CLI's own `export-sdk --openapi
+    generated/openapi.yaml` could already reach.
+    """
+
+    from backend.routes import upload as upload_module
+
+    isolated_dir = tmp_path / "generated_export_sdk_yaml_only_test"
+    isolated_dir.mkdir()
+    (isolated_dir / "openapi.yaml").write_text(
+        "openapi: 3.0.0\ninfo:\n  title: Test\n  version: '1.0'\npaths: {}\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(upload_module, "GENERATED_DIR", str(isolated_dir))
+
+    resp = client.post("/api/export-sdk", json={"language": "python"})
+
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "YAML export" in detail
+    assert "format json" in detail or "--format json" in detail
+
+
+def test_export_sdk_prefers_a_json_export_over_a_yaml_one_when_both_exist(
+    monkeypatch, tmp_path
+):
+    """If a caller exported both formats (e.g. json first, then yaml for
+    a human-readable copy), export-sdk must still read the json export --
+    the one it actually knows how to parse -- rather than picking
+    whichever file the directory listing happens to prefer.
+    """
+
+    from backend.routes import upload as upload_module
+
+    isolated_dir = tmp_path / "generated_export_sdk_prefers_json_test"
+    isolated_dir.mkdir()
+    (isolated_dir / "openapi.json").write_text("{}", encoding="utf-8")
+    # Deliberately not valid JSON -- if export-sdk picked this file
+    # instead, _load_openapi_schema would raise and this test would see a
+    # 400, not the 200 a real "both exports present" caller expects.
+    (isolated_dir / "openapi.yaml").write_text(
+        "openapi: 3.0.0\ninfo:\n  title: Test\n  version: '1.0'\npaths: {}\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(upload_module, "GENERATED_DIR", str(isolated_dir))
+
+    resp = client.post("/api/export-sdk", json={"language": "python"})
+
+    assert resp.status_code == 200
+    assert "class NotebookAPIClient" in resp.json()["code"]
+
+
 def _install_fake_docker(bin_dir, log_path):
     """A fake `docker` executable that records how it was invoked instead
     of actually building/pushing an image (mirrors the technique used in

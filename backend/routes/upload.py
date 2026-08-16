@@ -882,9 +882,34 @@ def export_sdk_endpoint(
             detail="language must be 'python' or 'typescript'"
         )
 
-    openapi_path = os.path.join(GENERATED_DIR, "openapi.json")
+    openapi_json_path = os.path.join(GENERATED_DIR, "openapi.json")
+    openapi_yaml_path = os.path.join(GENERATED_DIR, "openapi.yaml")
 
-    if not os.path.isfile(openapi_path):
+    # Confirmed exploitable before this fix: this only ever checked for
+    # "openapi.json", hardcoded, even though POST /api/export-openapi
+    # (just above) can just as validly write "openapi.yaml" instead, via
+    # {"format": "yaml"}. A caller who exported yaml and then called this
+    # endpoint got a 404 saying "Run /api/export-openapi first" -- wrong,
+    # they already had, in the only other format this same API offers --
+    # instead of ever reaching _load_openapi_schema
+    # (exporters/sdk_generator.py), whose ValueError message was written
+    # specifically to explain this exact situation ("This looks like a
+    # YAML export ... export-sdk only reads JSON schemas; re-export with
+    # --format json first") but could only ever fire for the CLI's
+    # `export-sdk --openapi <path>`, never for this endpoint, since this
+    # 404 short-circuited before that check ever ran.
+    #
+    # Falls back to the yaml file specifically so that hint actually
+    # reaches an API caller too -- generate_python_sdk/
+    # generate_typescript_sdk below will still refuse to read it (SDK
+    # generation needs the JSON schema), but now via the same clear,
+    # actionable 400 the CLI already gets, not a misleading 404 that says
+    # the opposite of what actually happened.
+    if os.path.isfile(openapi_json_path):
+        openapi_path = openapi_json_path
+    elif os.path.isfile(openapi_yaml_path):
+        openapi_path = openapi_yaml_path
+    else:
 
         raise HTTPException(
             status_code=404,
@@ -907,11 +932,11 @@ def export_sdk_endpoint(
 
         # _load_openapi_schema (exporters/sdk_generator.py) raises this
         # specifically when openapi_path's content isn't valid JSON --
-        # the schema itself is the problem (most commonly: corrupted or
-        # truncated by a concurrent write, since this always reads the
-        # fixed "openapi.json" this endpoint's own prior export wrote),
-        # not this server, so this is a 400 the caller can act on (re-run
-        # /api/export-openapi), the same distinction ReservedFunctionNameError
+        # the schema itself is the problem (most commonly: a yaml-only
+        # export, per the fallback above, or a JSON file corrupted/
+        # truncated by a concurrent write), not this server, so this is a
+        # 400 the caller can act on (re-run /api/export-openapi with
+        # format=json), the same distinction ReservedFunctionNameError
         # and MALFORMED_NOTEBOOK_ERRORS already get elsewhere in this file
         # instead of a 500 that looks like a server-side bug.
         raise HTTPException(
