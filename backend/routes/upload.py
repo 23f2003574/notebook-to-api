@@ -27,22 +27,15 @@ from backend.compiler import (
     package_name_for_output_dir,
 )
 from backend.generator.api_generator import (
-    LONG_RUNNING_KEYWORDS,
     ReservedFunctionNameError,
 )
 from backend.inspector import (
     EXCLUDED_GENERATED_DIR_NAMES,
     EXCLUDED_GENERATED_FILE_NAMES,
-    _aggregate_skipped_functions,
     inspect_notebook_data,
 )
 from backend.parser.notebook_parser import (
     load_notebook,
-    extract_code_cells,
-)
-from backend.parser.ast_parser import (
-    extract_functions_from_code,
-    deduplicate_functions_by_name,
 )
 
 # Endpoints below that operate on the compiled app (export-openapi,
@@ -650,72 +643,49 @@ def compile_notebook_endpoint(
 
     try:
 
-        notebook = load_notebook(
+        # A cheap up-front validity check (mirroring the identical
+        # load_notebook call every other route in this file makes before
+        # doing anything else) so a malformed notebook is reported as the
+        # MALFORMED_NOTEBOOK_ERRORS 400 below, rather than surfacing from
+        # deep inside compile_notebook as an unrelated-looking failure.
+        load_notebook(
             str(full_path)
         )
-
-        code_cells = extract_code_cells(
-            notebook
-        )
-
-        functions = []
-
-        for cell in code_cells:
-
-            funcs = extract_functions_from_code(
-                cell
-            )
-
-            functions.extend(funcs)
-
-        functions = deduplicate_functions_by_name(functions)
 
         compile_notebook(
             str(full_path),
             GENERATED_DIR
         )
 
-        endpoints = []
-
-        for func in functions:
-
-            if isinstance(func, dict):
-
-                name = func.get("name")
-
-                if name:
-
-                    # Mirrors generate_fastapi_code's own is_background
-                    # check (generator/api_generator.py) exactly, so this
-                    # never drifts from which endpoints the compiled app
-                    # actually generates as background/task_id-based vs
-                    # synchronous. Before this, a caller building a UI
-                    # from /api/compile's response (rather than the
-                    # separately-fetched OpenAPI schema, which already
-                    # marks these with x-notebook-to-api-async) had no way
-                    # to tell the two apart short of re-implementing this
-                    # same keyword check itself.
-                    is_async = any(
-                        kw in name.lower()
-                        for kw in LONG_RUNNING_KEYWORDS
-                    )
-
-                    endpoints.append({
-                        "path": f"/{name}",
-                        "method": "POST",
-                        "is_async": is_async,
-                    })
-
-        skipped_functions = _aggregate_skipped_functions(
-            code_cells, {func["name"] for func in functions}
+        # inspect_notebook_data (backend/inspector.py) already computes
+        # everything this response needs -- functions, endpoints,
+        # skipped_functions, dependencies, generated_files -- and is
+        # exactly what the CLI's `compile --json` already returns for the
+        # identical operation (see _dispatch_core_command in cli.py).
+        # Before this, this endpoint hand-rolled its own, separate
+        # extraction of functions/endpoints/skipped_functions instead of
+        # reusing it, which meant its response was a strict *subset* of
+        # what `compile --json` gives for the same compile: no
+        # "dependencies" (what actually got pinned into requirements.txt,
+        # and from there the Docker image `deploy`/`docker build` would
+        # ship) and no "generated_files" (what a caller could go fetch via
+        # GET /api/download or /api/generated/{filename}) -- a dashboard
+        # frontend showing "here's what your notebook compiled into" had
+        # no way to answer either question without a separate, redundant
+        # POST /api/inspect call right after.
+        data = inspect_notebook_data(
+            str(full_path),
+            GENERATED_DIR
         )
 
         return {
             "status": "success",
             "notebook": notebook_path,
-            "functions": functions,
-            "endpoints": endpoints,
-            "skipped_functions": skipped_functions,
+            "functions": data["functions"],
+            "endpoints": data["endpoints"],
+            "skipped_functions": data["skipped_functions"],
+            "dependencies": data["dependencies"],
+            "generated_files": data["generated_files"],
             "message": "Notebook compiled successfully"
         }
 

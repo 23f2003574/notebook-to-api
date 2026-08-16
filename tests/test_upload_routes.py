@@ -861,6 +861,76 @@ def test_compile_endpoints_flag_background_functions_as_async():
     }
 
 
+def test_compile_response_reports_the_dependencies_actually_pinned_in_requirements_txt():
+    """Before this, /api/compile's response had no "dependencies" field
+    at all -- a dashboard frontend showing "here's what your notebook
+    compiled into" had no way to say what would actually get installed
+    into the Docker image (`deploy`/`docker build`'s `pip install -r
+    requirements.txt`) without a separate, redundant POST /api/inspect
+    call right after compiling.
+    """
+
+    content = _notebook_bytes(
+        "import pandas as pd\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "compile_dependencies_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "compile_dependencies_test.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    assert "pandas" in compile_resp.json()["dependencies"]
+
+
+def test_compile_response_lists_the_generated_files_it_just_wrote():
+    """Same gap as "dependencies" above, for the files this compile
+    actually produced (app.py, requirements.txt, Dockerfile, ...) -- the
+    same "generated_files" field GET /api/download's zip and
+    /api/inspect's preview already expose, now also available from the
+    compile response itself instead of requiring a follow-up call.
+    """
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "compile_generated_files_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "compile_generated_files_test.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    generated_files = compile_resp.json()["generated_files"]
+
+    assert "app.py" in generated_files
+    assert "requirements.txt" in generated_files
+    assert "Dockerfile" in generated_files
+
+
 def test_compile_reports_skipped_functions():
     """Before this, a function that couldn't be turned into an endpoint
     (e.g. one taking **kwargs) just silently had no corresponding route in
