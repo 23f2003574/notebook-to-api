@@ -2616,3 +2616,72 @@ def test_inspect_waits_for_an_in_flight_compile_to_release_compile_lock():
 
     assert not request_thread.is_alive()
     assert result["resp"].status_code == 200
+
+
+def test_compile_response_waits_for_a_release_compile_lock_before_reading_generated_files():
+    """Confirmed missing before this fix: compile_notebook (called first,
+    inside compile_notebook_endpoint) only holds COMPILE_LOCK for its own
+    write phase, releasing it before returning -- the endpoint's
+    subsequent inspect_notebook_data call (which builds the
+    "dependencies"/"generated_files" fields of the response, see
+    test_compile_response_reports_the_dependencies_actually_pinned_in_requirements_txt
+    above) read GENERATED_DIR with no lock held at all. A concurrent
+    POST /api/compile for a *different* notebook racing in that exact
+    window runs clear_stale_export_artifacts as part of its own
+    recompile, which rmtree's the sdk/ subdirectory -- the os.walk inside
+    _list_generated_files (backend/inspector.py) can raise
+    FileNotFoundError if that subdirectory disappears out from under it
+    mid-walk. Held externally here, this proves the endpoint's entire
+    compile-then-read lifecycle is now serialized against a concurrent
+    lock holder, not just its write phase.
+    """
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "compile_lock_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    lock_acquired = threading.Event()
+    release_lock = threading.Event()
+
+    def hold_lock():
+        with COMPILE_LOCK:
+            lock_acquired.set()
+            assert release_lock.wait(timeout=5)
+
+    holder = threading.Thread(target=hold_lock)
+    holder.start()
+    assert lock_acquired.wait(timeout=5)
+
+    result = {}
+
+    def do_compile():
+        result["resp"] = client.post(
+            "/api/compile", json={"notebook_path": "compile_lock_test.ipynb"}
+        )
+
+    request_thread = threading.Thread(target=do_compile)
+    request_thread.start()
+    request_thread.join(timeout=0.3)
+
+    assert request_thread.is_alive(), (
+        "POST /api/compile should still be blocked on COMPILE_LOCK"
+    )
+
+    release_lock.set()
+    request_thread.join(timeout=5)
+    holder.join(timeout=5)
+
+    assert not request_thread.is_alive()
+    assert result["resp"].status_code == 200
+    assert "generated_files" in result["resp"].json()

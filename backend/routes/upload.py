@@ -719,10 +719,23 @@ def compile_notebook_endpoint(
         # frontend showing "here's what your notebook compiled into" had
         # no way to answer either question without a separate, redundant
         # POST /api/inspect call right after.
-        data = inspect_notebook_data(
-            str(full_path),
-            GENERATED_DIR
-        )
+        #
+        # compile_notebook (just above) only holds COMPILE_LOCK for its
+        # own write phase, releasing it before returning -- so this read
+        # needs its own lock, the same way POST /api/inspect's identical
+        # call into inspect_notebook_data now does. Without it, a
+        # concurrent POST /api/compile for a *different* notebook racing
+        # in this exact window runs clear_stale_export_artifacts as part
+        # of its own recompile, which rmtree's the sdk/ subdirectory --
+        # the os.walk inside inspect_notebook_data's "generated_files"
+        # field (_list_generated_files) can raise FileNotFoundError if
+        # that subdirectory disappears out from under it mid-walk.
+        with COMPILE_LOCK:
+
+            data = inspect_notebook_data(
+                str(full_path),
+                GENERATED_DIR
+            )
 
         return {
             "status": "success",
