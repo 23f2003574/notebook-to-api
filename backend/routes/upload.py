@@ -1276,8 +1276,34 @@ def get_generated_file(filename: str):
 
 @router.get("/health")
 def health_check():
+    """Liveness/readiness probe for the dashboard API.
+
+    Before this, GET /api/health returned the exact same static
+    {"status": "healthy", ...} body whether or not a notebook had ever
+    been compiled -- a load balancer or Kubernetes readinessProbe pointed
+    at it could only ever confirm the dashboard process itself was up,
+    never that it actually had a compiled app ready to serve traffic for
+    (e.g. right after a fresh deploy, before the first POST /api/compile
+    has run). "compiled_app_present" and "compiled_at" close that gap,
+    reusing the exact same .compile_metadata.json read list_notebooks
+    already does for its own "compiled_at" field, so this never drifts
+    from what that endpoint already reports.
+
+    Deliberately omits .compile_metadata.json's "source_notebook" field
+    (an absolute filesystem path on the compiling server) -- the same
+    field EXCLUDED_GENERATED_FILE_NAMES already keeps out of GET
+    /api/download, GET /api/generated/{filename}, and the generated
+    Docker image, for the same reason: a health probe has no business
+    leaking server-side filesystem layout to whatever's polling it.
+    """
+
+    _, _, compiled_at = _currently_compiled_notebook_metadata()
+
+    compiled_app_present = (Path(GENERATED_DIR) / "app.py").is_file()
 
     return {
         "status": "healthy",
-        "service": "notebook-to-api"
+        "service": "notebook-to-api",
+        "compiled_app_present": compiled_app_present,
+        "compiled_at": compiled_at if compiled_app_present else None,
     }

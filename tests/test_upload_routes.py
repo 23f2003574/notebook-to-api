@@ -2388,3 +2388,60 @@ def test_export_openapi_waits_for_an_in_flight_compile_to_release_compile_lock()
 
     assert not request_thread.is_alive()
     assert result["resp"].status_code == 200
+
+
+def test_health_check_reports_no_compiled_app_before_anything_has_been_compiled(
+    monkeypatch, tmp_path
+):
+    """Before this, GET /api/health returned the exact same static body
+    whether or not a notebook had ever been compiled -- a readinessProbe
+    pointed at it could only ever confirm the process itself was up, not
+    that it actually had a compiled app ready to serve traffic for.
+    """
+
+    from backend.routes import upload as upload_module
+
+    empty_dir = tmp_path / "generated_health_empty_test"
+    empty_dir.mkdir()
+
+    monkeypatch.setattr(upload_module, "GENERATED_DIR", str(empty_dir))
+
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "healthy"
+    assert body["compiled_app_present"] is False
+    assert body["compiled_at"] is None
+
+
+def test_health_check_reports_a_compiled_app_and_its_compiled_at_timestamp():
+
+    _compile_a_notebook("health_check_compiled_test.ipynb")
+
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "healthy"
+    assert body["compiled_app_present"] is True
+    assert body["compiled_at"] is not None
+
+
+def test_health_check_never_leaks_the_source_notebooks_server_side_filesystem_path():
+    """.compile_metadata.json's "source_notebook" field is the source
+    notebook's absolute filesystem path on the compiling server -- the
+    same field EXCLUDED_GENERATED_FILE_NAMES already keeps out of GET
+    /api/download and GET /api/generated/{filename}. A health probe,
+    polled by infrastructure outside this tool's own trust boundary, has
+    even less business exposing that than an authenticated dashboard
+    caller does.
+    """
+
+    _compile_a_notebook("health_check_no_leak_test.ipynb")
+
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 200
+    assert "source_notebook" not in resp.json()
+    assert "uploads" not in json.dumps(resp.json())
