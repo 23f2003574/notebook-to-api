@@ -367,6 +367,46 @@ DEPLOY_SUBPROCESS_TIMEOUT_SECONDS = int(
 )
 
 
+def _fallback_openapi_export_path(openapi_path):
+    """If `openapi_path` doesn't exist but a sibling OpenAPI export using
+    the other extension does (e.g. --openapi generated/openapi.json is
+    missing because the only export actually run was `export-openapi
+    --format yaml`, which wrote generated/openapi.yaml right next to it),
+    return that sibling's path instead of None.
+
+    Before this, `export-sdk --openapi generated/openapi.json` (its own
+    documented default) against a notebook only ever exported as yaml
+    crashed with a bare FileNotFoundError -- "[Errno 2] No such file or
+    directory: 'generated/openapi.json'" -- with nothing pointing at the
+    export that actually exists one directory listing away. Falling back
+    to it here doesn't make export-sdk succeed (it still only reads JSON
+    schemas): generate_python_sdk/generate_typescript_sdk will read this
+    returned path and _load_openapi_schema (exporters/sdk_generator.py)
+    will still refuse it -- but now via the specific, actionable message
+    it already writes for exactly this situation ("This looks like a YAML
+    export ... re-export with --format json first"), the same message
+    POST /api/export-sdk (routes/upload.py) was already fixed to reach.
+    """
+    path = Path(openapi_path)
+    suffix = path.suffix.lower()
+
+    if suffix == ".json":
+        alternate_suffixes = (".yaml", ".yml")
+    elif suffix in (".yaml", ".yml"):
+        alternate_suffixes = (".json",)
+    else:
+        return None
+
+    for alt_suffix in alternate_suffixes:
+
+        candidate = path.with_suffix(alt_suffix)
+
+        if candidate.is_file():
+            return str(candidate)
+
+    return None
+
+
 def _run_deploy_docker_command(args, cwd):
     """Run a `docker ...` subprocess for the `deploy` command.
 
@@ -453,14 +493,22 @@ def _dispatch_core_command(args):
         # "generated/sdk/..." regardless of where --openapi actually
         # points.
         openapi_dir = os.path.dirname(args.openapi)
+
+        openapi_path = args.openapi
+
+        if not os.path.isfile(openapi_path):
+            fallback_path = _fallback_openapi_export_path(openapi_path)
+            if fallback_path:
+                openapi_path = fallback_path
+
         if args.language == "typescript":
             from backend.exporters.sdk_generator import generate_typescript_sdk
             output = args.output or os.path.join(openapi_dir, "sdk", "typescript_client.ts")
-            generate_typescript_sdk(args.openapi, output)
+            generate_typescript_sdk(openapi_path, output)
         else:
             from backend.exporters.sdk_generator import generate_python_sdk
             output = args.output or os.path.join(openapi_dir, "sdk", "python_client.py")
-            generate_python_sdk(args.openapi, output)
+            generate_python_sdk(openapi_path, output)
     elif args.command == "serve":
         serve_notebook(args.notebook, args.output, args.port, args.host)
     elif args.command == "deploy":

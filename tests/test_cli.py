@@ -738,6 +738,55 @@ def test_export_sdk_command_reports_a_clean_error_for_a_missing_openapi_file(tmp
     _assert_clean_cli_error(proc, "No such file or directory")
 
 
+def test_export_sdk_command_hints_at_a_yaml_export_when_the_json_default_is_missing(
+    tmp_path,
+):
+    """Confirmed exploitable before this fix: `export-sdk --openapi
+    generated/openapi.json` (its own documented default) against a
+    notebook only ever exported as yaml -- via `export-openapi --format
+    yaml` -- crashed with a bare FileNotFoundError ("No such file or
+    directory: 'openapi.json'"), giving no indication that the export the
+    caller actually ran wrote openapi.yaml right next to it. Now falls
+    back to reading that sibling file, which still can't be turned into
+    an SDK (export-sdk only reads JSON schemas) but surfaces
+    _load_openapi_schema's own specific hint (exporters/sdk_generator.py)
+    instead of the generic OS error.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    (workdir / "openapi.yaml").write_text(
+        "openapi: 3.0.0\ninfo:\n  title: Test\n  version: '1.0'\npaths: {}\n",
+        encoding="utf-8",
+    )
+
+    proc = _run_cli(
+        ["export-sdk", "--openapi", "openapi.json"], cwd=workdir
+    )
+
+    _assert_clean_cli_error(proc, "This looks like a YAML export")
+
+
+def test_export_sdk_command_still_reports_a_clean_missing_file_error_with_no_yaml_sibling(
+    tmp_path,
+):
+    """The fallback above must not mask a genuinely missing export --
+    with no openapi.json *or* a sibling openapi.yaml/.yml anywhere to
+    fall back to, this must behave exactly as before: a clean "No such
+    file or directory" error, not a confusing reference to a yaml file
+    that doesn't exist either.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["export-sdk", "--openapi", "openapi.json"], cwd=workdir
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
 def test_export_sdk_command_reports_a_clean_error_for_a_corrupt_openapi_file(tmp_path):
 
     workdir = tmp_path / "workdir"
