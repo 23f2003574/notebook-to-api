@@ -172,12 +172,42 @@ def _resolve_path_within(root_dir: str, name: str, dir_label: str) -> Path:
 
 def resolve_upload_path(name: str) -> Path:
     """Resolve `name` against UPLOAD_DIR, rejecting anything that would
-    escape it.
+    escape it -- and, unlike resolve_generated_path below, anything that
+    isn't a single flat filename directly inside it.
 
-    Without this check, /upload allows writing arbitrary files outside
-    UPLOAD_DIR, and /inspect and /compile allow reading them (confirmed:
-    both were exploitable before this check existed).
+    Without the escape check, /upload allows writing arbitrary files
+    outside UPLOAD_DIR, and /inspect and /compile allow reading them
+    (confirmed: both were exploitable before that check existed).
+
+    The flat-filename check is a separate, later fix: `name` staying
+    within UPLOAD_DIR doesn't mean it has no directory component of its
+    own -- confirmed exploitable: POST /api/upload with
+    file.filename="subdir/nb.ipynb" passed the escape check fine (it
+    never leaves UPLOAD_DIR) but crashed with an unhandled
+    FileNotFoundError from upload_notebook's own os.replace(temp_path,
+    file_path) call, an uncaught 500 instead of the same clean 400 every
+    other malformed-input case in this file already gets, since nothing
+    ever creates the intermediate "subdir/" directory. Even granting that
+    directory existed, every other route that operates on an uploaded
+    notebook by name already assumes a flat, single-segment filename --
+    list_notebooks only ever walks UPLOAD_DIR's top level
+    (Path.iterdir(), not rglob), and get_notebook/delete_notebook's
+    "{filename}" route parameter can't be reached with a literal '/' in
+    it through normal routing -- so a notebook tucked into a subdirectory
+    would have been permanently invisible to every one of them, reachable
+    only by whoever remembered the exact nested notebook_path they'd
+    typed into /api/compile or /api/inspect's JSON body (which, unlike a
+    URL path segment, has no such routing restriction).
     """
+    if isinstance(name, str) and name and os.path.basename(name) != name:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid path: must be a single filename within the "
+                "uploads directory, not a nested path"
+            )
+        )
+
     return _resolve_path_within(UPLOAD_DIR, name, "uploads")
 
 

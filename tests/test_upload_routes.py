@@ -139,6 +139,70 @@ def test_upload_rejects_filename_that_escapes_upload_dir():
     assert not os.path.exists("escape_test.ipynb")
 
 
+def test_upload_rejects_a_filename_containing_a_nested_directory():
+    """Confirmed exploitable before this fix: file.filename staying
+    within UPLOAD_DIR (so the traversal check above lets it through) does
+    not mean it has no directory component of its own. "subdir/nb.ipynb"
+    crashed upload_notebook's own os.replace(temp_path, file_path) call
+    with an unhandled FileNotFoundError -- an uncaught 500, not a clean
+    400 -- since nothing ever creates the intermediate "subdir/"
+    directory, and even if it did, every other route that operates on an
+    uploaded notebook by name (list_notebooks, get_notebook,
+    delete_notebook) already assumes a flat, single-segment filename.
+    """
+
+    resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "nested_dir_test/nb.ipynb",
+                io.BytesIO(b"data"),
+                "application/json",
+            )
+        },
+    )
+
+    assert resp.status_code == 400
+    assert not os.path.isdir("uploads/nested_dir_test")
+
+
+def test_compile_rejects_a_notebook_path_containing_a_nested_directory():
+    """The same flat-filename restriction applies to notebook_path on
+    every route that resolves it via resolve_upload_path, not just
+    upload's own file.filename -- a caller can't route around it by
+    typing a nested path directly into the JSON body instead.
+    """
+
+    resp = client.post(
+        "/api/compile", json={"notebook_path": "some_dir/nb.ipynb"}
+    )
+
+    assert resp.status_code == 400
+
+
+def test_upload_still_accepts_a_normal_flat_filename():
+    """Sanity check alongside the nested-directory rejection above: an
+    ordinary, single-segment filename must still upload successfully.
+    """
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "flat_filename_sanity_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    assert resp.status_code == 200
+
+
 def test_upload_rejects_content_that_is_not_a_valid_notebook():
     """Before this fix, /api/upload only checked the filename ended in
     ".ipynb" -- literally any content was accepted onto disk with a 200
