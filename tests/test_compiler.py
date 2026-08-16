@@ -1923,6 +1923,91 @@ def test_package_name_for_output_dir_allows_a_name_that_merely_looks_like_a_buil
     assert package_name_for_output_dir("list") == "list"
 
 
+@pytest.mark.parametrize("installed_package_name", ["fastapi", "pytest", "httpx"])
+def test_package_name_for_output_dir_rejects_an_installed_third_party_package_name(
+    installed_package_name,
+):
+    """Confirmed exploitable before this fix: `--output fastapi` (or any
+    other package genuinely `pip install`ed in the compiling environment
+    -- fastapi/pytest/httpx are all in this project's own requirements.txt,
+    so they're guaranteed present here) passed the isidentifier()/keyword/
+    STANDARD_LIBS checks fine and compiled without error, but the
+    generated app.py's `import fastapi.runtime.notebook_module` statement
+    then resolved to the real, already-installed `fastapi` package
+    instead of the locally compiled one -- reproduced against a real
+    `python -m uvicorn fastapi.app:app`, which fails outright with
+    "Could not import module 'fastapi.app'" since the real package has no
+    such submodule. This is the exact same import-shadowing hazard the
+    standard-library check above already guards against, just for a
+    third-party package instead of one built into the interpreter.
+    """
+
+    with pytest.raises(ValueError, match="already-installed"):
+        package_name_for_output_dir(installed_package_name)
+
+
+def test_package_name_for_output_dir_allows_a_name_with_no_installed_package():
+    """A name that isn't a standard-library module and isn't an installed
+    third-party package either has nothing real for
+    `import <name>.runtime.notebook_module` to incorrectly resolve to, so
+    it's allowed through exactly as before.
+    """
+
+    assert (
+        package_name_for_output_dir("definitely_not_an_installed_package_xyz")
+        == "definitely_not_an_installed_package_xyz"
+    )
+
+
+def test_package_name_for_output_dir_does_not_flag_this_tools_own_prior_output_dirs():
+    """A directory this tool itself already compiled into (e.g.
+    "generated", the documented default) is a real, on-disk Python
+    package the moment it exists -- but it was never `pip install`ed, so
+    it must not trip the installed-third-party-package check above. Using
+    importlib.util.find_spec (which also matches local, non-installed
+    directories) instead of importlib.metadata.packages_distributions()
+    would have made this tool's own default --output start failing the
+    very first time it was reused for a second compile.
+    """
+
+    assert package_name_for_output_dir("generated") == "generated"
+    assert package_name_for_output_dir("test_generated") == "test_generated"
+
+
+def test_compiler_pipeline_rejects_output_dir_colliding_with_an_installed_package(
+    tmp_path,
+):
+    """End-to-end confirmation that compile_notebook itself -- not just
+    the package_name_for_output_dir helper in isolation -- refuses to
+    compile into an --output directory whose basename shadows an
+    installed package, and does so before writing anything.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "fastapi"
+
+    with pytest.raises(ValueError, match="already-installed"):
+        compile_notebook(str(notebook_path), str(output_dir))
+
+    # The collision is rejected before anything is actually written --
+    # only the (empty) output directory itself may exist, from
+    # compile_notebook_to_api's own os.makedirs call that precedes the
+    # package-name check.
+    assert not (output_dir / "app.py").exists()
+
+
 def test_compiler_pipeline_respects_custom_output_dir(tmp_path):
     """The --output flag is documented as configurable (it has a CLI flag
     with a default), but write_runtime_module used to hardcode

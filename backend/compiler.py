@@ -1,4 +1,5 @@
 import datetime
+import functools
 import hashlib
 import importlib.metadata
 import json
@@ -52,6 +53,35 @@ from backend.generator.docker_generator import (
 )
 
 
+@functools.lru_cache(maxsize=1)
+def _installed_third_party_package_names():
+    """Top-level import names of every distribution installed in the
+    interpreter compiling this notebook (e.g. "fastapi", "numpy",
+    "pandas", ...), used by package_name_for_output_dir's collision check
+    below.
+
+    importlib.metadata.packages_distributions() reads each installed
+    distribution's own metadata (effectively its top_level.txt) rather
+    than searching sys.path for anything that merely happens to be
+    importable right now -- unlike importlib.util.find_spec, it can't
+    pick up a local directory that just looks like a package. That
+    distinction matters here specifically because this tool's own
+    previous output directories (e.g. "generated", "test_generated") are
+    exactly that: real, on-disk Python packages sitting in this project's
+    own directory tree the moment they've been compiled once. Using
+    find_spec instead would have made this tool's own documented default,
+    `--output generated`, start failing the very next time it ran.
+
+    Cached (this scan costs ~100ms and re-reads every installed
+    distribution's metadata each time) since the set of installed
+    packages doesn't change over the lifetime of a single compiling
+    process -- the CLI's compile/serve/deploy commands each run once per
+    process anyway, and the dashboard's compile-on-every-request path
+    would otherwise re-pay this cost on every single POST /api/compile.
+    """
+    return frozenset(importlib.metadata.packages_distributions().keys())
+
+
 def package_name_for_output_dir(output_dir):
     """The generated app imports its runtime module as
     `<package_name>.runtime.notebook_module`, so the output directory's
@@ -100,6 +130,34 @@ def package_name_for_output_dir(output_dir):
             "instead of the locally compiled package. Choose a different "
             "--output directory whose final path segment isn't a standard "
             "library module name."
+        )
+
+    # Same import-shadowing hazard as the standard-library check above,
+    # but for an already-installed *third-party* package rather than one
+    # built into the interpreter. Confirmed exploitable: `--output
+    # fastapi` (or numpy/pandas/httpx/... any package actually `pip
+    # install`ed in the compiling environment, discovered via
+    # _installed_third_party_package_names() above) compiled without
+    # error, but the generated app.py's `import
+    # fastapi.runtime.notebook_module` statement then resolved to the
+    # real installed `fastapi` package instead of the locally compiled
+    # one -- reproduced against a real `python -m uvicorn fastapi.app:app`,
+    # which fails outright with "Could not import module 'fastapi.app'"
+    # since the real package has no such submodule. It's worse still when
+    # the notebook itself imports the same package: the runtime module's
+    # own `import fastapi` (or whichever package collided) would then
+    # resolve to the local, generated package -- which has none of the
+    # real library's actual content -- breaking the notebook's own code,
+    # not just app.py's outer import.
+    if name in _installed_third_party_package_names():
+        raise ValueError(
+            f"Output directory {output_dir!r} (basename {name!r}) collides "
+            f"with the already-installed Python package {name!r} -- the "
+            f"generated app's `import {name}.runtime.notebook_module` "
+            "statement would resolve to that installed package instead of "
+            "the locally compiled one. Choose a different --output "
+            "directory whose final path segment isn't an installed "
+            "package name."
         )
 
     return name
