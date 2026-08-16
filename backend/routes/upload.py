@@ -627,10 +627,26 @@ def inspect_notebook_endpoint(
 
     try:
 
-        inspection = inspect_notebook_data(
-            str(full_path),
-            GENERATED_DIR
-        )
+        # inspect_notebook_data's "generated_files" field walks
+        # GENERATED_DIR (see _list_generated_files in backend/inspector.py)
+        # -- every other route that reads GENERATED_DIR's compiled output
+        # already holds COMPILE_LOCK while doing so (POST
+        # /api/export-openapi, POST /api/export-sdk, POST /api/deploy,
+        # GET /api/download, GET /api/generated/{filename} -- see
+        # COMPILE_LOCK in backend/compiler.py), but this endpoint held it
+        # nowhere. Without it, a concurrent POST /api/compile racing this
+        # on another thread runs clear_stale_export_artifacts as part of
+        # every recompile, which rmtree's the sdk/ subdirectory --
+        # os.walk (inside _list_generated_files) can raise
+        # FileNotFoundError if that subdirectory is removed out from
+        # under it mid-walk, an avoidable 500 for what both call this
+        # endpoint's own "preview what compiling will do" step.
+        with COMPILE_LOCK:
+
+            inspection = inspect_notebook_data(
+                str(full_path),
+                GENERATED_DIR
+            )
 
         return {
             "status": "success",

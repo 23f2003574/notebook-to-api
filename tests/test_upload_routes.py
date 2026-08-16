@@ -2566,3 +2566,53 @@ def test_export_sdk_waits_for_an_in_flight_compile_to_release_compile_lock():
 
     assert not request_thread.is_alive()
     assert result["resp"].status_code == 200
+
+
+def test_inspect_waits_for_an_in_flight_compile_to_release_compile_lock():
+    """Confirmed missing before this fix: unlike export-openapi,
+    export-sdk, deploy, download, and get_generated_file (see the
+    identical tests above), /api/inspect held COMPILE_LOCK nowhere at
+    all, even though its response's "generated_files" field walks
+    GENERATED_DIR the exact same way those other routes read it. A
+    concurrent POST /api/compile racing it on another thread runs
+    clear_stale_export_artifacts (backend/compiler.py) as part of every
+    recompile, which rmtree's the sdk/ subdirectory -- without the lock,
+    that walk could raise FileNotFoundError if the subdirectory
+    disappeared out from under it mid-walk.
+    """
+
+    _compile_a_notebook("inspect_lock_test.ipynb")
+
+    lock_acquired = threading.Event()
+    release_lock = threading.Event()
+
+    def hold_lock():
+        with COMPILE_LOCK:
+            lock_acquired.set()
+            assert release_lock.wait(timeout=5)
+
+    holder = threading.Thread(target=hold_lock)
+    holder.start()
+    assert lock_acquired.wait(timeout=5)
+
+    result = {}
+
+    def do_inspect():
+        result["resp"] = client.post(
+            "/api/inspect", json={"notebook_path": "inspect_lock_test.ipynb"}
+        )
+
+    request_thread = threading.Thread(target=do_inspect)
+    request_thread.start()
+    request_thread.join(timeout=0.3)
+
+    assert request_thread.is_alive(), (
+        "POST /api/inspect should still be blocked on COMPILE_LOCK"
+    )
+
+    release_lock.set()
+    request_thread.join(timeout=5)
+    holder.join(timeout=5)
+
+    assert not request_thread.is_alive()
+    assert result["resp"].status_code == 200
