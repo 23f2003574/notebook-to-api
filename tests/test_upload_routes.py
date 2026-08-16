@@ -279,6 +279,82 @@ def test_upload_reports_overwritten_false_for_a_brand_new_notebook():
     assert resp.json()["overwritten"] is False
 
 
+def test_upload_sweeps_a_stale_leftover_temp_file_from_a_previous_crashed_upload(
+    monkeypatch,
+):
+    """A hard process crash/restart between upload_notebook creating its
+    hidden ".part" temp file and finishing the request skips every one of
+    upload_notebook's own cleanup paths, leaving that file behind
+    permanently -- it doesn't end in ".ipynb", so GET /api/notebooks never
+    lists it, and nothing else ever looked at UPLOAD_DIR for one again.
+    Confirmed: before this fix, such a file just sat there forever with
+    no way to reclaim the disk space short of an operator finding and
+    deleting a hidden dot-file on the server by hand.
+    """
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "STALE_UPLOAD_TEMP_FILE_SECONDS", 1)
+
+    stale_temp_path = Path(UPLOAD_DIR) / ".crash_leftover_test.ipynb.deadbeef.part"
+    stale_temp_path.write_text("leftover from a crashed upload", encoding="utf-8")
+
+    old_time = os.path.getmtime(stale_temp_path) - 100
+    os.utime(stale_temp_path, (old_time, old_time))
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "stale_temp_sweep_trigger.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    assert resp.status_code == 200
+    assert not stale_temp_path.exists()
+
+
+def test_upload_leaves_a_recent_in_flight_temp_file_alone(monkeypatch):
+    """The sweep must be age-gated, not indiscriminate -- a ".part" file
+    younger than the staleness threshold could belong to a large upload
+    that is itself still genuinely streaming on another concurrent
+    request, and must not be deleted out from under it.
+    """
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "STALE_UPLOAD_TEMP_FILE_SECONDS", 3600)
+
+    recent_temp_path = Path(UPLOAD_DIR) / ".still_in_flight_test.ipynb.deadbeef.part"
+    recent_temp_path.write_text("still streaming", encoding="utf-8")
+
+    try:
+        content = _notebook_bytes(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+        resp = client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    "recent_temp_sweep_trigger.ipynb",
+                    io.BytesIO(content),
+                    "application/json",
+                )
+            },
+        )
+
+        assert resp.status_code == 200
+        assert recent_temp_path.exists()
+    finally:
+        recent_temp_path.unlink(missing_ok=True)
+
+
 def test_upload_rejects_a_same_named_reupload_without_overwrite():
     """Before overwrite protection existed, re-uploading an existing
     filename silently replaced its bytes as they streamed in -- with no

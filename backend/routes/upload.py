@@ -122,6 +122,68 @@ DEPLOY_SUBPROCESS_TIMEOUT_SECONDS = int(
     os.getenv("NOTEBOOK_API_DEPLOY_TIMEOUT_SECONDS", "600")
 )
 
+# Same NOTEBOOK_API_* convention as MAX_UPLOAD_BYTES/DEPLOY_SUBPROCESS_
+# TIMEOUT_SECONDS above. upload_notebook's own hidden ".<name>.<uuid>.part"
+# temp files (see temp_path below) are already cleaned up on every error
+# path it can reach on its own -- but a hard process crash or restart
+# (OOM kill, a container recreated mid-deploy, ...) between that file
+# being created and the request finishing skips every one of those,
+# leaving it behind permanently. Nothing else in this codebase ever
+# looked at UPLOAD_DIR for a leftover ".part" file again: it doesn't end
+# in ".ipynb", so GET /api/notebooks never lists it, and there was no
+# admin endpoint or startup sweep to find or remove it either -- on a
+# long-running dashboard seeing occasional upload failures (a flaky
+# client connection, a repeatedly-retried oversized file, ...), these
+# accumulate invisibly and consume disk space forever with no way to
+# reclaim it short of an operator manually finding and deleting hidden
+# dot-files on the server's filesystem by hand.
+STALE_UPLOAD_TEMP_FILE_SECONDS = int(
+    os.getenv("NOTEBOOK_API_STALE_UPLOAD_TEMP_FILE_SECONDS", str(60 * 60))
+)
+
+
+def _cleanup_stale_upload_temp_files():
+    """Remove any "*.part" temp file directly inside UPLOAD_DIR whose
+    last modification is older than STALE_UPLOAD_TEMP_FILE_SECONDS.
+
+    Called opportunistically at the start of every upload (see
+    upload_notebook below) rather than via a separate background thread
+    or scheduler -- this codebase has no such machinery for the core
+    notebook-to-API path, and a periodic sweep would need one just for
+    this. Piggybacking on the one code path that already creates these
+    files self-heals the leak without adding a new moving part: as long
+    as uploads keep happening at all, old orphaned temp files never
+    survive longer than STALE_UPLOAD_TEMP_FILE_SECONDS past the next one.
+
+    Age-gated (not "every .part file, always") specifically so this never
+    races an upload that is itself still genuinely streaming -- a large,
+    slow, or merely in-flight upload's own temp file is younger than the
+    threshold and is left alone.
+
+    Best-effort: a temp file that's already gone by the time this tries
+    to remove it (e.g. its own upload finished and swapped it into place
+    in the meantime) is not an error.
+    """
+    upload_root = Path(UPLOAD_DIR)
+
+    if not upload_root.is_dir():
+        return
+
+    now = datetime.now(timezone.utc).timestamp()
+
+    for entry in upload_root.iterdir():
+
+        if not entry.is_file() or not entry.name.endswith(".part"):
+            continue
+
+        try:
+            age_seconds = now - entry.stat().st_mtime
+        except OSError:
+            continue
+
+        if age_seconds > STALE_UPLOAD_TEMP_FILE_SECONDS:
+            entry.unlink(missing_ok=True)
+
 
 def _resolve_path_within(root_dir: str, name: str, dir_label: str) -> Path:
     """Resolve `name` against `root_dir`, rejecting anything that would
@@ -253,6 +315,12 @@ async def upload_notebook(
             status_code=400,
             detail="File must be a .ipynb notebook"
         )
+
+    # Opportunistic sweep for temp files a *previous* upload left behind
+    # after a hard crash/restart (see STALE_UPLOAD_TEMP_FILE_SECONDS
+    # above) -- run before this upload creates its own, so it never
+    # touches anything from this request.
+    _cleanup_stale_upload_temp_files()
 
     file_path = resolve_upload_path(file.filename)
 
