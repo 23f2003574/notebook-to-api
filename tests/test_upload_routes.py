@@ -2761,3 +2761,58 @@ def test_compile_response_waits_for_a_release_compile_lock_before_reading_genera
     assert not request_thread.is_alive()
     assert result["resp"].status_code == 200
     assert "generated_files" in result["resp"].json()
+
+
+def test_export_openapi_read_back_does_not_race_a_concurrent_recompiles_cleanup():
+    """Confirmed exploitable before this fix: export_openapi_endpoint
+    released COMPILE_LOCK right after export_openapi_schema wrote
+    output_path, then read that same file back completely unlocked. A
+    concurrent POST /api/compile racing in during that exact window runs
+    clear_stale_export_artifacts (backend/compiler.py) as part of its own
+    recompile, which unlinks openapi.json/.yaml unconditionally --
+    reproduced directly against clear_stale_export_artifacts: a file
+    written successfully one moment raised a bare FileNotFoundError on
+    the very next read, immediately after. The write and the read-back
+    are now both inside the same COMPILE_LOCK section, so a thread
+    racing to acquire that same lock (simulating clear_stale_export_
+    artifacts, which itself only ever runs from inside a compile that
+    already holds COMPILE_LOCK -- see compile_notebook_to_api) can't run
+    between them anymore -- it can only run before the write starts or
+    after the read has already finished.
+    """
+
+    _compile_a_notebook("export_openapi_read_race_test.ipynb")
+
+    lock_acquired = threading.Event()
+    release_lock = threading.Event()
+
+    def hold_lock():
+        with COMPILE_LOCK:
+            lock_acquired.set()
+            assert release_lock.wait(timeout=5)
+
+    holder = threading.Thread(target=hold_lock)
+    holder.start()
+    assert lock_acquired.wait(timeout=5)
+
+    result = {}
+
+    def do_export():
+        result["resp"] = client.post("/api/export-openapi", json={"format": "json"})
+
+    request_thread = threading.Thread(target=do_export)
+    request_thread.start()
+    request_thread.join(timeout=0.3)
+
+    assert request_thread.is_alive(), (
+        "POST /api/export-openapi should still be blocked on COMPILE_LOCK "
+        "for its whole write-then-read-back sequence"
+    )
+
+    release_lock.set()
+    request_thread.join(timeout=5)
+    holder.join(timeout=5)
+
+    assert not request_thread.is_alive()
+    assert result["resp"].status_code == 200
+    assert "paths" in result["resp"].json()["schema"]

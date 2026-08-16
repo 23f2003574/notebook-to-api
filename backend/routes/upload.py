@@ -912,6 +912,18 @@ def export_openapi_endpoint(
         # could import "<package_name>.app" mid-write from a concurrent
         # compile racing it on another thread, reading a torn mix of the
         # old and new compiled output instead of a consistent one.
+        #
+        # Extended to cover the read-back below too, not just the write --
+        # confirmed exploitable: releasing the lock right after
+        # export_openapi_schema writes output_path and only then reading
+        # it back left a window where a concurrent POST /api/compile
+        # racing in could run clear_stale_export_artifacts as part of its
+        # own recompile, which unlinks openapi.json/.yaml unconditionally.
+        # Reproduced directly against clear_stale_export_artifacts: a file
+        # written successfully one moment raised a bare FileNotFoundError
+        # on the very next read, immediately after -- this endpoint's own
+        # write succeeding gave no guarantee its own read-back, a few
+        # lines later, still would.
         with COMPILE_LOCK:
 
             package_name = package_name_for_output_dir(GENERATED_DIR)
@@ -923,6 +935,9 @@ def export_openapi_endpoint(
                 package_name,
                 format=export_format
             )
+
+            with open(output_path, "r", encoding="utf-8") as f:
+                content = f.read()
 
     except ModuleNotFoundError:
 
@@ -937,9 +952,6 @@ def export_openapi_endpoint(
             status_code=500,
             detail=f"OpenAPI export error: {str(e)}"
         )
-
-    with open(output_path, "r", encoding="utf-8") as f:
-        content = f.read()
 
     response = {
         "status": "success",
