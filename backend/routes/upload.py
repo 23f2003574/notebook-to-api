@@ -34,6 +34,7 @@ from backend.inspector import (
     EXCLUDED_GENERATED_DIR_NAMES,
     EXCLUDED_GENERATED_FILE_NAMES,
     inspect_notebook_data,
+    list_generated_files,
 )
 from backend.parser.notebook_parser import (
     load_notebook,
@@ -1468,6 +1469,66 @@ def download_generated_app():
             )
         }
     )
+
+
+@router.get("/generated")
+def list_generated_files_endpoint():
+    """List the files currently sitting in GENERATED_DIR, without requiring
+    a notebook_path -- unlike POST /api/inspect, which can also list this
+    same generated_files set, but only alongside a full inspection of a
+    notebook that must still exist in UPLOAD_DIR.
+
+    GET /api/notebooks already reports "currently_compiled" and
+    "compiled_at" for whichever *uploaded* notebook produced GENERATED_DIR's
+    current contents -- but DELETE /api/notebooks/{filename} (its own
+    "was_currently_compiled" flag documents this) doesn't touch
+    GENERATED_DIR at all when that notebook is removed: the compiled app
+    keeps running exactly as before, just with no uploaded notebook left to
+    ask /api/inspect about. Previously, that left no way to even list
+    what's still in GENERATED_DIR short of GET /api/download's zip (opaque
+    bytes, not a listing) or already knowing an exact filename to pass GET
+    /api/generated/{filename}. A dashboard frontend showing "here's what's
+    currently deployed" after a page refresh -- with the notebook that
+    produced it possibly long since deleted -- had no endpoint to ask for
+    that.
+
+    "source_notebook_filename" is the currently-compiled notebook's name
+    relative to UPLOAD_DIR, for a direct GET /api/notebooks/{filename}
+    follow-up -- or null if nothing has been compiled yet, or if whatever
+    was compiled came from outside UPLOAD_DIR entirely (e.g. compiled by
+    the CLI directly against an arbitrary path, not through /api/upload).
+    "source_notebook_exists" says whether that notebook still exists on
+    disk right now -- distinct from and independent of
+    "source_notebook_filename", since a notebook can be deleted (this goes
+    false) without GENERATED_DIR's own contents changing at all.
+    """
+
+    with COMPILE_LOCK:
+
+        generated_files = list_generated_files(GENERATED_DIR)
+        compiled_path, _, compiled_at = _currently_compiled_notebook_metadata()
+
+    source_notebook_filename = None
+    source_notebook_exists = False
+
+    if compiled_path is not None:
+
+        source_notebook_exists = compiled_path.is_file()
+
+        try:
+            source_notebook_filename = str(
+                compiled_path.relative_to(Path(UPLOAD_DIR).resolve())
+            )
+        except ValueError:
+            source_notebook_filename = None
+
+    return {
+        "status": "success",
+        "generated_files": generated_files,
+        "compiled_at": compiled_at,
+        "source_notebook_filename": source_notebook_filename,
+        "source_notebook_exists": source_notebook_exists,
+    }
 
 
 @router.get("/generated/{filename:path}")

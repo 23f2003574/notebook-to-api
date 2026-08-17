@@ -95,6 +95,22 @@ def _list_generated_files(output_dir):
     return generated_files
 
 
+def list_generated_files(output_dir):
+    """Public, sorted wrapper around _list_generated_files.
+
+    Used directly by GET /api/generated (backend/routes/upload.py) to list
+    what's currently sitting in an output directory without needing a
+    notebook_path to inspect alongside it -- unlike inspect_notebook and
+    inspect_notebook_data above, both of which require a notebook to
+    inspect and only report generated_files as one field of that larger
+    report. GET /api/generated has no notebook to parse at all (the whole
+    point is listing what's compiled even after its source notebook is
+    gone -- see DELETE /api/notebooks/{filename}'s "was_currently_compiled"
+    flag), so it calls straight through to this instead.
+    """
+    return sorted(_list_generated_files(output_dir))
+
+
 def _third_party_dependencies(all_imports):
     """`all_imports` (raw import names collected via
     extract_imports_from_code) filtered down to the ones that will
@@ -347,9 +363,7 @@ def inspect_notebook_data(
     return {
         "functions": all_functions,
         "dependencies": _third_party_dependencies(all_imports),
-        "generated_files": sorted(
-            _list_generated_files(output_dir)
-        ),
+        "generated_files": list_generated_files(output_dir),
         "reserved_name_conflicts": _reserved_name_conflicts(all_functions),
         "endpoints": _endpoint_metadata(all_functions),
         "skipped_functions": _aggregate_skipped_functions(

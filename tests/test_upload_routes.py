@@ -71,6 +71,7 @@ def test_blocking_endpoints_are_declared_as_plain_def_not_async_def():
         upload_module.export_sdk_endpoint,
         upload_module.deploy_generated_app,
         upload_module.download_generated_app,
+        upload_module.list_generated_files_endpoint,
         upload_module.health_check,
     ]
 
@@ -2521,6 +2522,131 @@ def test_download_waits_for_an_in_flight_compile_to_release_compile_lock():
 
     assert not request_thread.is_alive()
     assert result["resp"].status_code == 200
+
+
+def test_list_generated_files_returns_empty_before_any_compile(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(
+        upload_module, "GENERATED_DIR", "generated_list_files_test_missing_dir"
+    )
+
+    resp = client.get("/api/generated")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["generated_files"] == []
+    assert body["compiled_at"] is None
+    assert body["source_notebook_filename"] is None
+    assert body["source_notebook_exists"] is False
+
+
+def test_list_generated_files_lists_the_compiled_output():
+
+    _compile_a_notebook("list_generated_files_test.ipynb")
+
+    resp = client.get("/api/generated")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert "app.py" in body["generated_files"]
+    assert "requirements.txt" in body["generated_files"]
+    assert body["compiled_at"] is not None
+    assert body["source_notebook_filename"] == "list_generated_files_test.ipynb"
+    assert body["source_notebook_exists"] is True
+
+    os.remove(Path(UPLOAD_DIR) / "list_generated_files_test.ipynb")
+
+
+def test_list_generated_files_excludes_pycache_and_compile_metadata():
+    """Same exclusions GET /api/download's zip and GET
+    /api/generated/{filename} already apply -- __pycache__ is a Python-
+    created implementation artifact never written by the compiler, and
+    .compile_metadata.json is dashboard-internal bookkeeping whose
+    "source_notebook" field is an absolute filesystem path on the
+    compiling server, not a compiled deliverable this listing should
+    expose.
+    """
+
+    from backend.routes import upload as upload_module
+
+    filename = "list_generated_files_exclusions_test.ipynb"
+    _compile_a_notebook(filename)
+
+    pycache_dir = Path(upload_module.GENERATED_DIR) / "__pycache__"
+    pycache_dir.mkdir(exist_ok=True)
+    (pycache_dir / "app.cpython-000.pyc").write_bytes(b"")
+
+    resp = client.get("/api/generated")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert not any("__pycache__" in f for f in body["generated_files"])
+    assert COMPILE_METADATA_FILENAME not in body["generated_files"]
+
+    shutil.rmtree(pycache_dir)
+    os.remove(Path(UPLOAD_DIR) / filename)
+
+
+def test_list_generated_files_reports_the_notebook_still_exists_after_deleting_an_unrelated_one():
+
+    filename = "list_generated_files_survives_test.ipynb"
+    _compile_a_notebook(filename)
+
+    other_content = _notebook_bytes("def sub(a, b):\n    return a - b\n")
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "list_generated_files_unrelated.ipynb",
+                io.BytesIO(other_content),
+                "application/json",
+            )
+        },
+    )
+
+    delete_resp = client.delete("/api/notebooks/list_generated_files_unrelated.ipynb")
+    assert delete_resp.status_code == 200
+    assert delete_resp.json()["was_currently_compiled"] is False
+
+    resp = client.get("/api/generated")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source_notebook_filename"] == filename
+    assert body["source_notebook_exists"] is True
+
+    os.remove(Path(UPLOAD_DIR) / filename)
+
+
+def test_list_generated_files_reports_source_notebook_gone_after_it_is_deleted():
+    """The gap this endpoint closes: deleting the notebook that produced
+    GENERATED_DIR's current contents (DELETE /api/notebooks/{filename},
+    "was_currently_compiled": true) doesn't touch GENERATED_DIR at all --
+    the compiled app keeps running exactly as before -- but previously
+    left no way to even list what's still in it, short of GET
+    /api/download's opaque zip bytes or already knowing an exact filename
+    to pass GET /api/generated/{filename}.
+    """
+
+    filename = "list_generated_files_orphan_test.ipynb"
+    _compile_a_notebook(filename)
+
+    delete_resp = client.delete(f"/api/notebooks/{filename}")
+    assert delete_resp.status_code == 200
+    assert delete_resp.json()["was_currently_compiled"] is True
+
+    resp = client.get("/api/generated")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    # The generated app itself is untouched by deleting its source
+    # notebook -- it's still fully listable.
+    assert "app.py" in body["generated_files"]
+    assert body["source_notebook_filename"] == filename
+    assert body["source_notebook_exists"] is False
 
 
 def test_get_generated_file_returns_404_when_nothing_compiled_yet(monkeypatch):
