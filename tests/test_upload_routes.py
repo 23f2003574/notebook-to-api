@@ -72,6 +72,7 @@ def test_blocking_endpoints_are_declared_as_plain_def_not_async_def():
         upload_module.deploy_generated_app,
         upload_module.download_generated_app,
         upload_module.list_generated_files_endpoint,
+        upload_module.delete_generated_app,
         upload_module.health_check,
     ]
 
@@ -2647,6 +2648,120 @@ def test_list_generated_files_reports_source_notebook_gone_after_it_is_deleted()
     assert "app.py" in body["generated_files"]
     assert body["source_notebook_filename"] == filename
     assert body["source_notebook_exists"] is False
+
+
+def test_delete_generated_app_returns_404_when_nothing_compiled_yet(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(
+        upload_module, "GENERATED_DIR", "generated_delete_test_missing_dir"
+    )
+
+    resp = client.delete("/api/generated")
+
+    assert resp.status_code == 404
+
+
+def test_delete_generated_app_removes_the_generated_directory(tmp_path, monkeypatch):
+    """Before this, the only ways to make GENERATED_DIR empty again were
+    to delete it by hand on the server's filesystem, or to recompile some
+    other notebook over it -- which still leaves *a* compiled app sitting
+    there, just a different one. An operator who wants to actually
+    reclaim the disk space or reset the dashboard to a clean slate had no
+    endpoint to call for it.
+    """
+
+    from backend.routes import upload as upload_module
+
+    custom_dir = tmp_path / "generated_delete_test"
+    monkeypatch.setattr(upload_module, "GENERATED_DIR", str(custom_dir))
+
+    filename = "delete_generated_app_test.ipynb"
+    _compile_a_notebook(filename)
+
+    assert custom_dir.is_dir()
+
+    resp = client.delete("/api/generated")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["generated_dir"] == str(custom_dir)
+    assert not custom_dir.exists()
+
+    os.remove(Path(UPLOAD_DIR) / filename)
+
+
+def test_delete_generated_app_resets_list_generated_files_to_empty(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    custom_dir = tmp_path / "generated_delete_reset_test"
+    monkeypatch.setattr(upload_module, "GENERATED_DIR", str(custom_dir))
+
+    filename = "delete_generated_app_reset_test.ipynb"
+    _compile_a_notebook(filename)
+
+    delete_resp = client.delete("/api/generated")
+    assert delete_resp.status_code == 200
+
+    list_resp = client.get("/api/generated")
+    assert list_resp.status_code == 200
+    body = list_resp.json()
+    assert body["generated_files"] == []
+    assert body["compiled_at"] is None
+    assert body["source_notebook_filename"] is None
+    assert body["source_notebook_exists"] is False
+
+    os.remove(Path(UPLOAD_DIR) / filename)
+
+
+def test_delete_generated_app_evicts_the_compiled_app_from_the_module_cache():
+    """Confirmed exploitable for a different endpoint before
+    _evict_compiled_app_from_module_cache existed (see its own docstring
+    on POST /api/export-openapi): plain importlib.import_module resolves
+    an already-imported package straight from sys.modules, not from disk.
+    Once GENERATED_DIR is deleted entirely, a cached import of it in this
+    long-running dashboard process no longer corresponds to anything on
+    disk at all -- the same staleness class /api/export-openapi's own
+    eviction already guards against, just total instead of partial.
+
+    Deliberately exercises the real, default GENERATED_DIR ("generated")
+    rather than an isolated tmp_path one: export_openapi_schema imports
+    "<package_name>.app" via plain importlib.import_module, which only
+    resolves at all when GENERATED_DIR's parent is already on sys.path --
+    true for the project root every other export-openapi test in this file
+    already relies on, not for an arbitrary tmp_path directory.
+    """
+
+    import sys
+
+    from backend.routes import upload as upload_module
+
+    filename = "delete_generated_app_evict_test.ipynb"
+    _compile_a_notebook(filename)
+
+    # POST /api/export-openapi already imports "<package_name>.app" into
+    # sys.modules as part of exporting the schema.
+    export_resp = client.post("/api/export-openapi", json={"format": "json"})
+    assert export_resp.status_code == 200
+
+    package_name = upload_module.package_name_for_output_dir(
+        upload_module.GENERATED_DIR
+    )
+    assert package_name in sys.modules
+
+    delete_resp = client.delete("/api/generated")
+    assert delete_resp.status_code == 200
+
+    assert package_name not in sys.modules
+    assert not any(
+        name == package_name or name.startswith(f"{package_name}.")
+        for name in sys.modules
+    )
+
+    os.remove(Path(UPLOAD_DIR) / filename)
 
 
 def test_get_generated_file_returns_404_when_nothing_compiled_yet(monkeypatch):

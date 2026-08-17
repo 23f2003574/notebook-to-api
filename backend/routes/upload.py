@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import uuid
@@ -1528,6 +1529,78 @@ def list_generated_files_endpoint():
         "compiled_at": compiled_at,
         "source_notebook_filename": source_notebook_filename,
         "source_notebook_exists": source_notebook_exists,
+    }
+
+
+@router.delete("/generated")
+def delete_generated_app():
+    """Remove GENERATED_DIR and everything compiled into it, resetting the
+    dashboard's compiled-app state back to "nothing compiled yet".
+
+    Every write path in this codebase already handles a *stale* compiled
+    output (clear_stale_export_artifacts in backend/compiler.py replaces
+    the previous notebook's app.py/exports on every recompile), but there
+    was previously no way to remove one outright: the only ways to make
+    GENERATED_DIR empty again were to delete it by hand on the server's
+    filesystem, or to recompile some other notebook over it, which still
+    leaves *a* compiled app sitting there -- just a different one. An
+    operator who has deleted the notebook that produced the current
+    compile (DELETE /api/notebooks/{filename}'s "was_currently_compiled"
+    flag, or GET /api/generated's "source_notebook_exists": false, already
+    surface this orphaned state) and wants to actually reclaim the disk
+    space or reset the dashboard to a clean slate had no endpoint to call
+    for it.
+
+    Mirrors GET /api/download's own "is there anything to act on"
+    check (app.py must exist) rather than a bare directory existence
+    check, and the same 404 message /api/deploy and /api/download already
+    use for "nothing compiled yet" -- so a caller can't tell this apart
+    from those by response shape alone.
+
+    Also evicts the compiled app from sys.modules the same way POST
+    /api/export-openapi already does before every import of it (see
+    _evict_compiled_app_from_module_cache above): once GENERATED_DIR is
+    gone, a cached import of it in a long-running dashboard process no
+    longer corresponds to anything on disk at all, not just a stale
+    version of it.
+    """
+
+    generated_path = Path(GENERATED_DIR)
+
+    # Held for the same reason every other route that touches
+    # GENERATED_DIR's compiled output already does (see COMPILE_LOCK in
+    # backend/compiler.py): without it, a concurrent POST /api/compile
+    # racing this on another thread could be left writing into a
+    # directory this request is simultaneously deleting out from under
+    # it, or this could delete a directory a concurrent compile just
+    # finished writing to.
+    with COMPILE_LOCK:
+
+        if not (generated_path / "app.py").is_file():
+
+            raise HTTPException(
+                status_code=404,
+                detail="No compiled app found. Run /api/compile first."
+            )
+
+        try:
+            package_name = package_name_for_output_dir(GENERATED_DIR)
+        except ValueError:
+            # GENERATED_DIR's basename isn't a valid Python package name
+            # (e.g. NOTEBOOK_API_GENERATED_DIR was reconfigured to
+            # something unusual after the compile that produced this
+            # directory) -- nothing could have been imported under an
+            # invalid name in the first place, so there's nothing to
+            # evict from sys.modules.
+            pass
+        else:
+            _evict_compiled_app_from_module_cache(package_name)
+
+        shutil.rmtree(generated_path)
+
+    return {
+        "status": "success",
+        "generated_dir": str(generated_path),
     }
 
 
