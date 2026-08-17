@@ -453,6 +453,71 @@ def test_inspect_notebook_report_excludes_standard_library_imports(tmp_path, cap
     assert "- sys" not in dependencies_section
 
 
+def test_inspect_notebook_data_dependencies_resolves_the_actual_distribution_name(
+    tmp_path,
+):
+    """A notebook's `import` statement names a *module*, not necessarily
+    the PyPI *distribution* that provides it -- write_requirements
+    (backend/compiler.py) was fixed to resolve and pin the real
+    distribution name (e.g. "multipart" -> "python-multipart") instead of
+    the raw import name, but this function kept returning the raw import
+    name unchanged. Confirmed: compiling a notebook importing "multipart"
+    wrote "python-multipart==<version>" to requirements.txt, while
+    inspect_notebook_data's own "dependencies" field still reported
+    "multipart" -- a name that appears nowhere in the requirements.txt
+    that same compile just produced.
+
+    Uses python-multipart as the notebook's import for the same
+    reliability reason test_requirements_resolves_an_import_name_to_its_
+    actual_distribution_name (test_compiler.py) already documents: its
+    import name ("multipart") differs from its distribution name
+    ("python-multipart"), and it's a direct, guaranteed dependency of
+    this very project.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "import multipart\n\n"
+        "def noop() -> int:\n    return 1\n",
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    assert data["dependencies"] == ["python-multipart"]
+
+
+def test_print_compile_summary_resolves_the_actual_distribution_name(tmp_path, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "import multipart\n\n"
+        "def noop() -> int:\n    return 1\n",
+    )
+
+    print_compile_summary(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "Dependencies: python-multipart" in output
+
+
+def test_inspect_notebook_report_resolves_the_actual_distribution_name(tmp_path, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "import multipart\n\n"
+        "def noop() -> int:\n    return 1\n",
+    )
+
+    inspect_notebook(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    dependencies_section = output.split("Dependencies:")[1].split("Generated Files:")[0]
+    assert "- python-multipart" in dependencies_section
+
+
 def test_aggregate_skipped_functions_reports_unsupported_signatures():
 
     code_cells = [

@@ -103,7 +103,7 @@ def _installed_third_party_package_names():
     return frozenset(_installed_packages_distributions().keys())
 
 
-def _distribution_name_for_import(import_name):
+def distribution_name_for_import(import_name):
     """The actual PyPI distribution name that provides `import_name`, if
     it's satisfied by something installed in the environment compiling
     this notebook, else `import_name` unchanged.
@@ -346,14 +346,14 @@ def write_requirements(imports, output_dir):
     )
 
     # Resolve each notebook import to the actual PyPI distribution name
-    # that provides it before pinning -- see _distribution_name_for_import's
+    # that provides it before pinning -- see distribution_name_for_import's
     # own docstring for why this can't just pin the raw import name
     # directly. A set here (not a list) since two distinct import names
     # occasionally resolve to the same distribution (e.g. "attr" and
     # "attrs" are both provided by the "attrs" distribution), and this
     # must not write a duplicate requirements.txt line for it.
     distribution_names = sorted({
-        _distribution_name_for_import(dep) for dep in final_deps
+        distribution_name_for_import(dep) for dep in final_deps
     })
 
     pinned_deps = [_pinned_requirement(dep) for dep in distribution_names]

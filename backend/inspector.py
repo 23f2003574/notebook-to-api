@@ -1,7 +1,11 @@
 import os
 from pathlib import Path
 
-from backend.compiler import COMPILE_METADATA_FILENAME, STANDARD_LIBS
+from backend.compiler import (
+    COMPILE_METADATA_FILENAME,
+    distribution_name_for_import,
+    STANDARD_LIBS,
+)
 
 from backend.parser.notebook_parser import (
     load_notebook,
@@ -115,23 +119,43 @@ def _third_party_dependencies(all_imports):
     """`all_imports` (raw import names collected via
     extract_imports_from_code) filtered down to the ones that will
     actually end up pinned in requirements.txt by write_requirements
-    (backend/compiler.py), which applies this exact same STANDARD_LIBS
-    filter to what it writes.
+    (backend/compiler.py), and resolved to the exact same distribution
+    names write_requirements itself pins -- both apply this identical
+    STANDARD_LIBS filter and distribution_name_for_import resolution to
+    what write_requirements writes, so this can't drift from it.
 
-    Before this, inspect_notebook/inspect_notebook_data's "dependencies"
-    listed every import a notebook made, standard-library ones included
-    (e.g. "os", "json", "sys") -- confirmed misleading: a notebook doing
-    `import os` and `import pandas` had both `inspect` and, after an
-    actual compile, `compile`/`serve`/`deploy`'s own print_compile_summary
-    (below) report "Dependencies: json, os, pandas", even though
-    requirements.txt -- and from there the Docker image `deploy`/`docker
-    build` would actually ship -- only ever contained "pandas". A
-    notebook author reading either "preview what compiling will do" or
-    "here's what this compile just produced" had no way to tell which of
-    their imports would actually be installed without separately knowing
-    which of them happen to be standard-library.
+    Before the STANDARD_LIBS filter, inspect_notebook/inspect_notebook_data's
+    "dependencies" listed every import a notebook made, standard-library
+    ones included (e.g. "os", "json", "sys") -- confirmed misleading: a
+    notebook doing `import os` and `import pandas` had both `inspect` and,
+    after an actual compile, `compile`/`serve`/`deploy`'s own
+    print_compile_summary (below) report "Dependencies: json, os, pandas",
+    even though requirements.txt -- and from there the Docker image
+    `deploy`/`docker build` would actually ship -- only ever contained
+    "pandas".
+
+    Before the distribution_name_for_import resolution, added later, the
+    identical drift reopened for a different reason: a notebook's `import`
+    statement names a *module*, not necessarily the PyPI *distribution*
+    that provides it (`import multipart` is provided by "python-multipart",
+    `import cv2` by "opencv-python", ...) -- write_requirements was fixed
+    to resolve and pin the real distribution name, but this function kept
+    returning the raw import name unchanged. Confirmed: compiling a
+    notebook importing "multipart" wrote "python-multipart==<version>" to
+    requirements.txt, while `compile --json`'s own "dependencies" field
+    (built from this function) still reported "multipart" -- a name that
+    appears nowhere in the requirements.txt that same compile just
+    produced, and isn't installable via pip on its own. A notebook author
+    reading either "preview what compiling will do" or "here's what this
+    compile just produced" had no way to tell which of their imports
+    would actually be installed, or under what name, without separately
+    reading requirements.txt themselves.
     """
-    return sorted(imp for imp in all_imports if imp not in STANDARD_LIBS)
+    return sorted({
+        distribution_name_for_import(imp)
+        for imp in all_imports
+        if imp not in STANDARD_LIBS
+    })
 
 
 def _is_background_function(name):

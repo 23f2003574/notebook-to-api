@@ -2488,7 +2488,7 @@ def test_requirements_deduplicates_distinct_imports_resolving_to_the_same_distri
 
     monkeypatch.setattr(
         compiler_module,
-        "_distribution_name_for_import",
+        "distribution_name_for_import",
         lambda import_name: "shared_distribution_test_pkg",
     )
 
@@ -2516,16 +2516,16 @@ def test_requirements_deduplicates_distinct_imports_resolving_to_the_same_distri
 
 def test_distribution_name_for_import_helper_resolves_a_known_alias():
 
-    from backend.compiler import _distribution_name_for_import
+    from backend.compiler import distribution_name_for_import
 
-    assert _distribution_name_for_import("multipart") == "python-multipart"
+    assert distribution_name_for_import("multipart") == "python-multipart"
 
 
 def test_distribution_name_for_import_helper_falls_back_for_an_unknown_import():
 
-    from backend.compiler import _distribution_name_for_import
+    from backend.compiler import distribution_name_for_import
 
-    assert _distribution_name_for_import("definitely_not_a_real_import_xyz") == (
+    assert distribution_name_for_import("definitely_not_a_real_import_xyz") == (
         "definitely_not_a_real_import_xyz"
     )
 
