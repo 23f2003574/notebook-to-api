@@ -100,7 +100,21 @@ router = APIRouter(
 # StreamingResponse, ...), so this changes nothing about how any of these
 # already-synchronous handlers work -- only how FastAPI schedules them.
 
-UPLOAD_DIR = "uploads"
+# Configurable via NOTEBOOK_API_UPLOAD_DIR, matching this exact same
+# NOTEBOOK_API_* env-var convention GENERATED_DIR above already
+# establishes for its own sibling directory -- rather than being
+# permanently fixed to "uploads" with no way for an operator to point the
+# dashboard at a different uploads directory (e.g. a mounted persistent
+# volume in a container, or to avoid colliding with an "uploads"
+# directory something else on the same host already uses). Read once at
+# import time, same as GENERATED_DIR: unlike GENERATED_DIR's directory
+# (created fresh on every compile_notebook_to_api call, wherever it
+# currently points), UPLOAD_DIR's directory is only ever created here,
+# eagerly, so this env var must be set before the process starts for it
+# to take effect -- setting it afterward, or monkeypatching this module's
+# UPLOAD_DIR attribute in-process, changes where uploads are written but
+# not this one-time directory creation.
+UPLOAD_DIR = os.getenv("NOTEBOOK_API_UPLOAD_DIR", "uploads")
 os.makedirs(
     UPLOAD_DIR,
     exist_ok=True

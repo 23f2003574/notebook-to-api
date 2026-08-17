@@ -4,6 +4,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import threading
 import zipfile
 from pathlib import Path
@@ -15,6 +16,8 @@ from fastapi.testclient import TestClient
 from backend.compiler import COMPILE_LOCK, COMPILE_METADATA_FILENAME
 from backend.dashboard import app
 from backend.routes.upload import UPLOAD_DIR, resolve_generated_path, resolve_upload_path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 client = TestClient(app)
 
@@ -125,6 +128,87 @@ def test_resolve_generated_path_accepts_a_nested_path():
 
     assert resolved.name == "notebook_module.py"
     assert str(resolved).startswith(os.path.abspath("generated"))
+
+
+def test_upload_dir_defaults_to_uploads_without_the_env_var():
+    """Run in a fresh subprocess (no NOTEBOOK_API_UPLOAD_DIR set) rather
+    than asserting against the already-imported UPLOAD_DIR in this test
+    process, which could be misleadingly "correct" simply because nothing
+    in this test session happens to have set the env var -- the same
+    care test_allowed_origins_env_var_overrides_default_list
+    (test_dashboard_cors.py) already takes for GENERATED_DIR's sibling
+    NOTEBOOK_API_ALLOWED_ORIGINS.
+    """
+
+    env = {k: v for k, v in os.environ.items() if k != "NOTEBOOK_API_UPLOAD_DIR"}
+
+    proc = subprocess.run(
+        [sys.executable, "-c", "from backend.routes.upload import UPLOAD_DIR; print(UPLOAD_DIR)"],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.strip() == "uploads"
+
+
+def test_upload_dir_env_var_overrides_the_default(tmp_path):
+    """Before this, UPLOAD_DIR was permanently fixed to "uploads" with no
+    way for an operator to point the dashboard at a different uploads
+    directory -- unlike its sibling GENERATED_DIR, which already supports
+    exactly this via NOTEBOOK_API_GENERATED_DIR (see GENERATED_DIR's own
+    comment in backend/routes/upload.py). A container deployment wanting
+    to mount a persistent volume for uploads at a specific path, or avoid
+    colliding with an "uploads" directory something else on the host
+    already uses, had no way to configure that without editing source.
+
+    Run end-to-end in a fresh subprocess (POST /api/upload through a real
+    TestClient, then confirm the file landed on disk at the configured
+    path) since UPLOAD_DIR's directory is created once, eagerly, at
+    import time -- setting the env var only takes effect for a process
+    that hasn't imported backend.routes.upload yet.
+    """
+
+    custom_dir = tmp_path / "custom_uploads_env_var_test"
+
+    script = f"""
+import io
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+
+from fastapi.testclient import TestClient
+from backend.dashboard import app
+from backend.routes.upload import UPLOAD_DIR
+
+assert UPLOAD_DIR == {str(custom_dir)!r}, UPLOAD_DIR
+
+client = TestClient(app)
+resp = client.post(
+    "/api/upload",
+    files={{"file": ("env_var_test.ipynb", io.BytesIO(b'{{"cells": [], "metadata": {{}}, "nbformat": 4, "nbformat_minor": 5}}'), "application/json")}},
+)
+assert resp.status_code == 200, resp.text
+
+print("UPLOAD_DIR_ENV_OVERRIDE_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={**os.environ, "NOTEBOOK_API_UPLOAD_DIR": str(custom_dir)},
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "UPLOAD_DIR_ENV_OVERRIDE_OK" in proc.stdout
+    assert (custom_dir / "env_var_test.ipynb").is_file()
+    # Must not have fallen back to the default "uploads" directory instead.
+    assert not (PROJECT_ROOT / "uploads" / "env_var_test.ipynb").exists()
 
 
 def test_upload_rejects_filename_that_escapes_upload_dir():
