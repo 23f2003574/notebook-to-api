@@ -102,6 +102,21 @@ def test_resolve_upload_path_rejects_relative_traversal():
         resolve_upload_path("../../../../etc/passwd")
 
 
+def test_resolve_upload_path_rejects_an_embedded_null_byte():
+    """Confirmed exploitable before this fix: Path("nb\x00.ipynb").is_absolute()
+    doesn't raise (a null byte isn't special to pathlib's own parsing),
+    so this sailed past the existing absolute-path guard clause -- but
+    the later .resolve() call eventually hands it to the underlying
+    os.path.realpath/lstat syscalls, which do reject it, as a bare
+    ValueError ("embedded null character in path"), an unhandled 500
+    instead of the same clean 400 every other malformed-path case in
+    this file already gets.
+    """
+
+    with pytest.raises(Exception):
+        resolve_upload_path("nb\x00.ipynb")
+
+
 def test_resolve_upload_path_accepts_plain_filename():
 
     resolved = resolve_upload_path("my_notebook.ipynb")
@@ -120,6 +135,12 @@ def test_resolve_generated_path_rejects_relative_traversal():
 
     with pytest.raises(Exception):
         resolve_generated_path("../../../../etc/passwd")
+
+
+def test_resolve_generated_path_rejects_an_embedded_null_byte():
+
+    with pytest.raises(Exception):
+        resolve_generated_path("app\x00.py")
 
 
 def test_resolve_generated_path_accepts_a_nested_path():
@@ -951,6 +972,27 @@ def test_get_notebook_rejects_absolute_filename():
     assert "root:" not in resp.text
 
 
+def test_get_notebook_rejects_a_filename_with_an_embedded_null_byte():
+    """Confirmed exploitable before this fix: a null byte in the filename
+    sailed past resolve_upload_path's absolute-path guard clause (a null
+    byte isn't special to pathlib's own parsing), but the later
+    .resolve() call raised a bare ValueError from the underlying
+    os.path.realpath/lstat syscalls, an unhandled 500 instead of a clean
+    400.
+    """
+
+    resp = client.get("/api/notebooks/nb%00.ipynb")
+
+    assert resp.status_code == 400
+
+
+def test_delete_notebook_rejects_a_filename_with_an_embedded_null_byte():
+
+    resp = client.delete("/api/notebooks/nb%00.ipynb")
+
+    assert resp.status_code == 400
+
+
 def test_rename_notebook_renames_the_file_on_disk():
 
     content = _notebook_bytes(
@@ -1044,6 +1086,24 @@ def test_rename_notebook_rejects_a_traversal_target_name():
 
     assert resp.status_code == 400
     assert (Path(UPLOAD_DIR) / "rename_traversal_source.ipynb").is_file()
+
+
+def test_rename_notebook_rejects_a_new_filename_with_an_embedded_null_byte():
+
+    content = _notebook_bytes("def add(a, b):\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("rename_null_byte_source.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.patch(
+        "/api/notebooks/rename_null_byte_source.ipynb",
+        json={"new_filename": "evil\x00.ipynb"},
+    )
+
+    assert resp.status_code == 400
+    assert (Path(UPLOAD_DIR) / "rename_null_byte_source.ipynb").is_file()
 
 
 def test_rename_notebook_to_its_own_name_is_a_no_op():
@@ -1192,6 +1252,27 @@ def test_compile_rejects_relative_traversal_notebook_path():
     resp = client.post(
         "/api/compile", json={"notebook_path": "../../../../etc/passwd"}
     )
+
+    assert resp.status_code == 400
+
+
+def test_inspect_rejects_a_notebook_path_with_an_embedded_null_byte():
+    """Confirmed exploitable before this fix: a null byte in
+    "notebook_path" sailed past resolve_upload_path's absolute-path guard
+    clause (a null byte isn't special to pathlib's own parsing), but the
+    later .resolve() call raised a bare ValueError from the underlying
+    os.path.realpath/lstat syscalls, an unhandled 500 instead of the same
+    clean 400 an absolute or traversal path already gets above.
+    """
+
+    resp = client.post("/api/inspect", json={"notebook_path": "nb\x00.ipynb"})
+
+    assert resp.status_code == 400
+
+
+def test_compile_rejects_a_notebook_path_with_an_embedded_null_byte():
+
+    resp = client.post("/api/compile", json={"notebook_path": "nb\x00.ipynb"})
 
     assert resp.status_code == 400
 
@@ -2941,6 +3022,22 @@ def test_get_generated_file_rejects_relative_traversal():
 
     assert resp.status_code in (400, 404)
     assert "root:" not in resp.text
+
+
+def test_get_generated_file_rejects_a_filename_with_an_embedded_null_byte():
+    """Confirmed exploitable before this fix: a null byte in the filename
+    sailed past resolve_generated_path's absolute-path guard clause, but
+    the later .resolve() call raised a bare ValueError from the
+    underlying os.path.realpath/lstat syscalls, an unhandled 500 instead
+    of the same clean 400/404 an absolute or traversal path already gets
+    above.
+    """
+
+    _compile_a_notebook("get_file_null_byte_test.ipynb")
+
+    resp = client.get("/api/generated/app%00.py")
+
+    assert resp.status_code == 400
 
 
 def test_get_generated_file_excludes_pycache():

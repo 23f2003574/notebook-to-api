@@ -227,9 +227,29 @@ def _resolve_path_within(root_dir: str, name: str, dir_label: str) -> Path:
     `{"notebook_path": 123}` crashed the request with an unhandled 500
     instead of the same clean, actionable 400 a malformed *string* path
     already got.
+
+    The embedded-null-byte check is a separate, later fix, for the same
+    reason: `Path(name).is_absolute()` above doesn't raise for a name
+    like "nb\x00.ipynb" -- a null byte isn't special to pathlib's own
+    parsing -- but the `.resolve()` call further down eventually hands it
+    to the underlying os.path.realpath/lstat syscalls, which do reject
+    it, as a bare ValueError ("embedded null character in path").
+    Confirmed exploitable before this check existed, across every route
+    that calls through here (POST /api/inspect, POST /api/compile, GET/
+    DELETE/PATCH /api/notebooks/{filename}, GET
+    /api/generated/{filename}): a name or new_filename containing "\x00"
+    crashed the request with an unhandled 500, the exact same failure
+    mode the isinstance check above already closed for a non-string
+    "notebook_path" -- just reached through a valid *string* this time,
+    so that check alone didn't catch it.
     """
 
-    if not isinstance(name, str) or not name or Path(name).is_absolute():
+    if (
+        not isinstance(name, str)
+        or not name
+        or "\x00" in name
+        or Path(name).is_absolute()
+    ):
         raise HTTPException(
             status_code=400,
             detail=f"Invalid path: must be a relative filename within the {dir_label} directory"
