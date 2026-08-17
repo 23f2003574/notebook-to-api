@@ -833,7 +833,20 @@ def inspect_notebook_endpoint(
 
     full_path = resolve_upload_path(notebook_path)
 
-    if not full_path.exists():
+    # .is_file(), not the previous .exists() -- confirmed exploitable:
+    # .exists() is also true for a directory, and UPLOAD_DIR itself is a
+    # valid, in-bounds resolution target for notebook_path (e.g. "."
+    # resolves right back to it via resolve_upload_path). The
+    # load_notebook call just below raises IsADirectoryError (an OSError
+    # subclass) for one, which isn't in MALFORMED_NOTEBOOK_ERRORS -- so it
+    # propagated completely unhandled, past both try blocks in this
+    # function, into FastAPI's generic, detail-free 500. Every other
+    # route in this file that resolves a client-supplied path to a file
+    # it's about to read already checks .is_file() before doing so
+    # (get_notebook, delete_notebook, rename_notebook,
+    # get_generated_file) -- this endpoint (and POST /api/compile, just
+    # below) were the two exceptions.
+    if not full_path.is_file():
 
         raise HTTPException(
             status_code=404,
@@ -906,7 +919,15 @@ def compile_notebook_endpoint(
 
     full_path = resolve_upload_path(notebook_path)
 
-    if not full_path.exists():
+    # .is_file(), not .exists() -- see the identical fix and its docstring
+    # on POST /api/inspect's own resolve_upload_path check above. This
+    # endpoint doesn't crash unhandled the way that one did (the
+    # IsADirectoryError load_notebook raises for a directory lands inside
+    # this function's own broad `except Exception` below), but it still
+    # surfaced as an unhelpful `500 {"detail": "Compilation error: [Errno
+    # 21] Is a directory: ..."}` instead of the same clean 404 a missing
+    # or otherwise-invalid notebook_path already gets.
+    if not full_path.is_file():
 
         raise HTTPException(
             status_code=404,

@@ -1537,6 +1537,41 @@ def test_inspect_missing_notebook_still_returns_404_not_400():
     assert resp.status_code == 404
 
 
+def test_inspect_returns_404_not_500_when_notebook_path_is_a_directory():
+    """Confirmed exploitable before this fix: the existence check here
+    used to be full_path.exists(), which is also true for a directory --
+    and UPLOAD_DIR itself is a valid, in-bounds resolution target for
+    notebook_path ("." resolves right back to it via resolve_upload_path,
+    the same way it would for any other relative path staying within
+    UPLOAD_DIR). The load_notebook call just after it raises
+    IsADirectoryError for a directory -- an OSError subclass, not one of
+    MALFORMED_NOTEBOOK_ERRORS -- so it propagated completely unhandled,
+    past both of this endpoint's own try blocks, into FastAPI's generic,
+    detail-free 500.
+    """
+
+    resp = client.post("/api/inspect", json={"notebook_path": "."})
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Notebook file not found"
+
+
+def test_compile_returns_404_not_500_when_notebook_path_is_a_directory():
+    """Same underlying gap as /api/inspect's identical fix just above,
+    for /api/compile's own identical full_path.exists() check -- this
+    endpoint doesn't crash unhandled (its own broad `except Exception`
+    catches the IsADirectoryError load_notebook raises), but it still
+    surfaced as an unhelpful `500 {"detail": "Compilation error: [Errno
+    21] Is a directory: ..."}` instead of the same clean 404 a missing
+    notebook_path already gets.
+    """
+
+    resp = client.post("/api/compile", json={"notebook_path": "."})
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Notebook file not found"
+
+
 def test_inspect_returns_400_not_500_for_a_malformed_notebook_file():
     """Confirmed exploitable before this fix: a notebook file that fails
     nbformat's own load/validation (invalid JSON, or valid JSON missing
