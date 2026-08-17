@@ -54,23 +54,25 @@ from backend.generator.docker_generator import (
 
 
 @functools.lru_cache(maxsize=1)
-def _installed_third_party_package_names():
-    """Top-level import names of every distribution installed in the
-    interpreter compiling this notebook (e.g. "fastapi", "numpy",
-    "pandas", ...), used by package_name_for_output_dir's collision check
-    below.
+def _installed_packages_distributions():
+    """Cached importlib.metadata.packages_distributions() result: a map of
+    top-level import name -> list of distribution names that provide it,
+    for every distribution installed in the interpreter compiling this
+    notebook (e.g. "cv2" -> ["opencv-python"], "fastapi" -> ["fastapi"]).
 
-    importlib.metadata.packages_distributions() reads each installed
-    distribution's own metadata (effectively its top_level.txt) rather
-    than searching sys.path for anything that merely happens to be
-    importable right now -- unlike importlib.util.find_spec, it can't
-    pick up a local directory that just looks like a package. That
-    distinction matters here specifically because this tool's own
-    previous output directories (e.g. "generated", "test_generated") are
-    exactly that: real, on-disk Python packages sitting in this project's
-    own directory tree the moment they've been compiled once. Using
-    find_spec instead would have made this tool's own documented default,
-    `--output generated`, start failing the very next time it ran.
+    Reads each installed distribution's own metadata (effectively its
+    top_level.txt) rather than searching sys.path for anything that
+    merely happens to be importable right now -- unlike
+    importlib.util.find_spec, it can't pick up a local directory that
+    just looks like a package. That distinction matters here specifically
+    because this tool's own previous output directories (e.g.
+    "generated", "test_generated") are exactly that: real, on-disk Python
+    packages sitting in this project's own directory tree the moment
+    they've been compiled once. Using find_spec instead would have made
+    this tool's own documented default, `--output generated`, start
+    failing the very next time it ran (see
+    _installed_third_party_package_names below, built from this same
+    call).
 
     Cached (this scan costs ~100ms and re-reads every installed
     distribution's metadata each time) since the set of installed
@@ -78,8 +80,62 @@ def _installed_third_party_package_names():
     process -- the CLI's compile/serve/deploy commands each run once per
     process anyway, and the dashboard's compile-on-every-request path
     would otherwise re-pay this cost on every single POST /api/compile.
+    Kept as its own function (rather than having each caller below call
+    importlib.metadata.packages_distributions() directly) so the
+    underlying scan only ever runs once per process no matter how many of
+    them need it.
     """
-    return frozenset(importlib.metadata.packages_distributions().keys())
+    return importlib.metadata.packages_distributions()
+
+
+def _installed_third_party_package_names():
+    """Top-level import names of every distribution installed in the
+    interpreter compiling this notebook (e.g. "fastapi", "numpy",
+    "pandas", ...), used by package_name_for_output_dir's collision check
+    below.
+    """
+    return frozenset(_installed_packages_distributions().keys())
+
+
+def _distribution_name_for_import(import_name):
+    """The actual PyPI distribution name that provides `import_name`, if
+    it's satisfied by something installed in the environment compiling
+    this notebook, else `import_name` unchanged.
+
+    A notebook's own `import` statement names a *module*, not necessarily
+    the PyPI *distribution* that provides it -- `pip install <name>` only
+    works for the latter, and the two frequently differ: `import cv2` is
+    provided by "opencv-python", `import yaml` by "PyYAML", `import
+    dateutil` by "python-dateutil", and so on. Before this, write_requirements
+    (below) wrote the raw import name straight into requirements.txt
+    unchanged, so `pip install -r requirements.txt` -- and from there
+    every `deploy`/`docker build` -- failed outright for any notebook
+    using one of these: confirmed against this exact environment, a
+    notebook doing `import dateutil` (satisfied here by the installed
+    "python-dateutil") produced a requirements.txt literally containing
+    "dateutil", not a real PyPI package name. _pinned_requirement's own
+    importlib.metadata.version() lookup didn't catch this either -- it
+    resolves *distribution* names, not import names, so it raised
+    PackageNotFoundError for "dateutil" too and silently fell back to
+    writing that same wrong, unpinned name, with nothing in the output to
+    indicate anything was off.
+
+    _installed_packages_distributions() above is the authoritative
+    reverse mapping for this: it reads each installed distribution's own
+    metadata to report which top-level import names it actually provides.
+    On the rare case more than one installed distribution provides the
+    same import name, picks one deterministically (sorted, first). Falls
+    back to `import_name` unchanged if it isn't installed here at all --
+    preserving _pinned_requirement's own existing fallback for a
+    dependency this tool has no way to introspect, rather than guessing
+    at a distribution name it can't confirm.
+    """
+    distributions = _installed_packages_distributions().get(import_name)
+
+    if not distributions:
+        return import_name
+
+    return sorted(distributions)[0]
 
 
 def package_name_for_output_dir(output_dir):
@@ -247,7 +303,18 @@ def write_requirements(imports, output_dir):
         set(list(imports) + core_dependencies)
     )
 
-    pinned_deps = [_pinned_requirement(dep) for dep in final_deps]
+    # Resolve each notebook import to the actual PyPI distribution name
+    # that provides it before pinning -- see _distribution_name_for_import's
+    # own docstring for why this can't just pin the raw import name
+    # directly. A set here (not a list) since two distinct import names
+    # occasionally resolve to the same distribution (e.g. "attr" and
+    # "attrs" are both provided by the "attrs" distribution), and this
+    # must not write a duplicate requirements.txt line for it.
+    distribution_names = sorted({
+        _distribution_name_for_import(dep) for dep in final_deps
+    })
+
+    pinned_deps = [_pinned_requirement(dep) for dep in distribution_names]
 
     with open(requirements_path, "w", encoding="utf-8") as f:
         for dep in pinned_deps:

@@ -2366,6 +2366,108 @@ def test_pinned_requirement_helper_falls_back_for_an_unknown_package():
     )
 
 
+def test_requirements_resolves_an_import_name_to_its_actual_distribution_name(
+    tmp_path
+):
+    """A notebook's `import` statement names a *module*, not necessarily
+    the PyPI *distribution* that provides it -- `pip install <name>` only
+    works for the latter, and the two frequently differ. Before this,
+    write_requirements wrote the raw import name straight into
+    requirements.txt unchanged, so `pip install -r requirements.txt` --
+    and from there every `deploy`/`docker build` -- failed outright for
+    any notebook using one of these.
+
+    Uses python-multipart as the notebook's import: its import name
+    ("multipart") differs from its distribution name ("python-multipart"),
+    and it's a direct, guaranteed dependency of this very project (see
+    requirements.txt) -- reliably installed in any environment capable of
+    running this suite at all, the same reliability rationale
+    test_requirements_pins_a_notebook_dependency_installed_in_this_environment
+    (just above) already documents for its own choice of nbformat.
+    """
+
+    import importlib.metadata
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import multipart\n\n"
+            "def noop() -> int:\n    return 1\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    requirements = (output_dir / "requirements.txt").read_text(encoding="utf-8")
+    lines = set(requirements.split())
+
+    installed_version = importlib.metadata.version("python-multipart")
+    assert f"python-multipart=={installed_version}" in lines
+    # Must not also (or instead) list the raw, uninstallable import name.
+    assert "multipart" not in lines
+    assert not any(line.startswith("multipart==") for line in lines)
+
+
+def test_requirements_deduplicates_distinct_imports_resolving_to_the_same_distribution(
+    tmp_path, monkeypatch
+):
+    """Two distinct import names occasionally resolve to the same PyPI
+    distribution (e.g. "attr" and "attrs" are both provided by the
+    "attrs" distribution) -- this must not write a duplicate
+    requirements.txt line for it.
+    """
+
+    import backend.compiler as compiler_module
+
+    monkeypatch.setattr(
+        compiler_module,
+        "_distribution_name_for_import",
+        lambda import_name: "shared_distribution_test_pkg",
+    )
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import alias_one\n"
+            "import alias_two\n\n"
+            "def noop() -> int:\n    return 1\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    requirements = (output_dir / "requirements.txt").read_text(encoding="utf-8")
+    lines = requirements.split()
+
+    assert lines.count("shared_distribution_test_pkg") == 1
+
+
+def test_distribution_name_for_import_helper_resolves_a_known_alias():
+
+    from backend.compiler import _distribution_name_for_import
+
+    assert _distribution_name_for_import("multipart") == "python-multipart"
+
+
+def test_distribution_name_for_import_helper_falls_back_for_an_unknown_import():
+
+    from backend.compiler import _distribution_name_for_import
+
+    assert _distribution_name_for_import("definitely_not_a_real_import_xyz") == (
+        "definitely_not_a_real_import_xyz"
+    )
+
+
 def test_compile_writes_metadata_recording_the_source_notebook(tmp_path):
     """Nothing on disk (or via the API) previously recorded which
     notebook produced a given `generated/` output -- GET /api/notebooks
