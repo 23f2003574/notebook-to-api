@@ -21,7 +21,8 @@ from backend.compiler import (
     compile_notebook_to_api,
     compiling_python_version,
     package_name_for_output_dir,
-    STANDARD_LIBS
+    STANDARD_LIBS,
+    THIS_TOOLS_OWN_PACKAGE_NAME,
 )
 from backend.generator.docker_generator import generate_dockerfile, generate_dockerignore
 
@@ -1972,6 +1973,67 @@ def test_package_name_for_output_dir_does_not_flag_this_tools_own_prior_output_d
 
     assert package_name_for_output_dir("generated") == "generated"
     assert package_name_for_output_dir("test_generated") == "test_generated"
+
+
+def test_this_tools_own_package_name_is_backend():
+    """Sanity check on the constant itself: derived from __name__
+    ("backend.compiler") rather than hardcoded, so it can't drift if this
+    package is ever renamed -- but the collision check below is only
+    meaningful if it actually resolves to the real package name.
+    """
+
+    assert THIS_TOOLS_OWN_PACKAGE_NAME == "backend"
+
+
+def test_package_name_for_output_dir_rejects_this_tools_own_package_name():
+    """Confirmed exploitable before this fix: `--output backend` passed
+    the isidentifier()/keyword/STANDARD_LIBS/installed-third-party-package
+    checks fine (this project was never `pip install`ed, so
+    importlib.metadata.packages_distributions() has no metadata for
+    "backend" at all -- the identical reason this tool's own prior
+    --output dirs like "generated" are deliberately allowed through) and
+    compiled without error -- but the generated app.py's `import
+    backend.runtime.notebook_module` statement would then resolve to this
+    tool's own real "backend" package instead of the locally compiled
+    one. Unlike an ordinary already-installed third-party package, this
+    collision isn't merely possible: backend/compiler.py (the module
+    performing this very check) is part of the "backend" package, so it
+    is unconditionally already imported in every single invocation of
+    this tool.
+    """
+
+    with pytest.raises(ValueError, match="this tool's own top-level package"):
+        package_name_for_output_dir("backend")
+
+
+def test_compiler_pipeline_rejects_output_dir_colliding_with_this_tools_own_package(
+    tmp_path,
+):
+    """End-to-end confirmation that compile_notebook itself -- not just
+    the package_name_for_output_dir helper in isolation -- refuses to
+    compile into an --output directory named "backend", and does so
+    before writing anything.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "backend"
+
+    with pytest.raises(ValueError, match="this tool's own top-level package"):
+        compile_notebook(str(notebook_path), str(output_dir))
+
+    assert not (output_dir / "app.py").exists()
 
 
 def test_compiler_pipeline_rejects_output_dir_colliding_with_an_installed_package(

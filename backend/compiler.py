@@ -24,6 +24,12 @@ from pathlib import Path
 # generated app rather than just add a redundant line.
 STANDARD_LIBS = set(sys.stdlib_module_names)
 
+# This tool's own top-level package name -- derived from __name__ (this
+# module's own fully-qualified name is "backend.compiler") rather than
+# hardcoded, so it can't drift if this package is ever renamed. Used by
+# package_name_for_output_dir's own-package collision check below.
+THIS_TOOLS_OWN_PACKAGE_NAME = __name__.partition(".")[0]
+
 # Ensure project root is in sys.path for proper imports
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -186,6 +192,42 @@ def package_name_for_output_dir(output_dir):
             "instead of the locally compiled package. Choose a different "
             "--output directory whose final path segment isn't a standard "
             "library module name."
+        )
+
+    # Same import-shadowing hazard as the standard-library check above,
+    # but for this tool's own top-level package -- the one this very
+    # function (backend/compiler.py) lives inside. Confirmed exploitable:
+    # `--output backend` passed the isidentifier()/keyword/STANDARD_LIBS
+    # checks fine and compiled without error, but the generated app.py's
+    # `import backend.runtime.notebook_module` statement would then
+    # resolve to this tool's own real "backend" package instead of the
+    # locally compiled one. Neither check above catches this: "backend"
+    # isn't a standard-library module, and
+    # importlib.metadata.packages_distributions() (used by the
+    # already-installed-package check just below) doesn't know about it
+    # either -- this project was never `pip install`ed, so it has no
+    # distribution metadata of its own, the identical reason this tool's
+    # own prior --output dirs like "generated" don't trip that check (see
+    # _installed_third_party_package_names's own docstring). Unlike an
+    # ordinary third-party package, though, this collision isn't merely
+    # *possible* -- backend/compiler.py (this very module) is part of the
+    # "backend" package, so it is unconditionally already imported and in
+    # sys.modules by the time this function ever runs, in every single
+    # invocation of this tool: the CLI, the dashboard, and any process
+    # that has imported backend.compiler at all. Checked here, ahead of
+    # the installed-third-party-package scan below, since it's a plain
+    # string comparison against a known constant rather than needing that
+    # scan's own ~100ms metadata read to answer a question this already
+    # answers for free.
+    if name == THIS_TOOLS_OWN_PACKAGE_NAME:
+        raise ValueError(
+            f"Output directory {output_dir!r} (basename {name!r}) collides "
+            f"with this tool's own top-level package {name!r} -- the "
+            f"generated app's `import {name}.runtime.notebook_module` "
+            "statement would resolve to this tool's own package instead of "
+            "the locally compiled one. Choose a different --output "
+            "directory whose final path segment isn't this tool's own "
+            "package name."
         )
 
     # Same import-shadowing hazard as the standard-library check above,
