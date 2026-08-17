@@ -20,6 +20,7 @@ class _FakePopen:
 
     def __init__(self, cmd, *args, **kwargs):
         self.cmd = cmd
+        self.cwd = kwargs.get("cwd")
         self.terminated = False
         self.waited_timeout = None
         self.poll_returncode = _FakePopen.default_poll_returncode
@@ -172,6 +173,52 @@ def test_serve_notebook_passes_custom_host_to_uvicorn_command(tmp_path, monkeypa
 
     assert len(_FakePopen.instances) == 1
     assert _FakePopen.instances[0].cmd[-4:-2] == ["--host", "127.0.0.1"]
+
+
+def test_serve_notebook_runs_uvicorn_from_the_output_dirs_parent_directory(
+    tmp_path, monkeypatch
+):
+    """package_name_for_output_dir(output_dir) only ever returns
+    output_dir's *basename* (e.g. "built" for a "subdir/built"
+    output_dir), so "{package_name}.app:app" is only importable by a
+    process whose own cwd has that basename as a direct child. Confirmed
+    exploitable before this fix: `serve nb.ipynb --output subdir/built`
+    compiled cleanly, but the uvicorn subprocess -- launched with no
+    explicit cwd, so it inherited whatever directory `serve` itself was
+    invoked from -- crashed immediately with "ModuleNotFoundError: No
+    module named 'built'", since "built" was never a direct child of the
+    invocation directory, only of "subdir/".
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "subdir" / "built"
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    assert len(_FakePopen.instances) == 1
+    assert _FakePopen.instances[0].cwd == str(output_dir.parent)
+    assert _FakePopen.instances[0].cmd[3] == "built.app:app"
+
+
+def test_serve_notebook_cwd_is_the_invocation_directory_for_the_default_output(
+    tmp_path, monkeypatch
+):
+    """The fix above must be a complete no-op for the documented default
+    (--output "generated", a direct child of wherever `serve` is
+    invoked from): Path("generated").resolve().parent is exactly the
+    original invocation directory, identical to the previous
+    unset-cwd behavior.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    assert len(_FakePopen.instances) == 1
+    assert _FakePopen.instances[0].cwd == str(tmp_path)
 
 
 def test_serve_notebook_prints_localhost_for_the_default_host(tmp_path, monkeypatch, capsys):

@@ -165,6 +165,34 @@ def serve_notebook(notebook_path, output_dir="generated", port=8000, host="0.0.0
 
     # Start Uvicorn server with reload
     package_name = package_name_for_output_dir(output_dir)
+
+    # package_name is only output_dir's *basename* (e.g. "built" for
+    # --output subdir/built) -- "{package_name}.app:app" below is only
+    # importable by a process whose own cwd has package_name as a direct
+    # child. Without an explicit cwd here, this subprocess inherited
+    # whatever directory `notebook-to-api serve` itself happened to be
+    # invoked from, which only ever matched by coincidence for the
+    # documented default (--output "generated", a direct child of the
+    # typical invocation directory). Confirmed exploitable for anything
+    # else: `serve nb.ipynb --output subdir/built` compiled cleanly (compile_notebook
+    # doesn't care about cwd), but the uvicorn subprocess crashed
+    # immediately with "ModuleNotFoundError: No module named 'built'" --
+    # "built" was never a direct child of the invocation directory, only
+    # of "subdir/". That raw crash then got mis-reported one layer up:
+    # the poll() loop below (see its own comment) already detects *that*
+    # the subprocess exited, but folds every cause into the same "a
+    # common cause is another process already listening on that port"
+    # RuntimeError, actively misleading for this one.
+    #
+    # Setting cwd to output_dir's own parent directory makes package_name
+    # a direct child of it again, regardless of how many path segments
+    # --output has or whether it's relative or absolute -- and is a
+    # complete no-op for the documented default: Path("generated").resolve().parent
+    # is exactly the original invocation directory, identical to the
+    # previous unset-cwd behavior. This also fixes `--reload`'s own
+    # default watch directory (cwd, when no --reload-dir is given), which
+    # had the identical mismatch -- watching the invocation directory
+    # instead of wherever output_dir's compiled app.py actually lives.
     server_process = subprocess.Popen(
         [
             sys.executable,
@@ -176,7 +204,8 @@ def serve_notebook(notebook_path, output_dir="generated", port=8000, host="0.0.0
             str(host),
             "--port",
             str(port),
-        ]
+        ],
+        cwd=str(Path(output_dir).resolve().parent),
     )
 
     try:
