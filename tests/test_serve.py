@@ -454,6 +454,134 @@ def test_notebook_change_handler_ignores_an_unrelated_file_moved_into_the_direct
     assert compiled_calls == []
 
 
+def test_notebook_change_handler_warns_when_the_notebook_is_deleted(
+    tmp_path, monkeypatch, capsys
+):
+    """Before this, deleting the notebook mid-`serve` session (e.g. `rm
+    notebook.ipynb`, a git checkout/branch switch) printed nothing and
+    raised nothing at all -- the live uvicorn subprocess just kept
+    serving the last successfully compiled app forever, with zero
+    indication its source had disappeared.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out: compiled_calls.append((nb, out))
+    )
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    notebook_path.unlink()
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_deleted(event)
+
+    # A deletion is never a recompile-able change.
+    assert compiled_calls == []
+
+    captured = capsys.readouterr()
+    assert "no longer found" in captured.out
+    assert str(notebook_path) in captured.out
+
+
+def test_notebook_change_handler_ignores_deletion_of_an_unrelated_file(
+    tmp_path, monkeypatch, capsys
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    other_path = tmp_path / "other.ipynb"
+    other_path.write_text("{}", encoding="utf-8")
+    other_path.unlink()
+
+    event = type("Event", (), {"src_path": str(other_path)})()
+    handler.on_deleted(event)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+
+
+def test_notebook_change_handler_warns_when_the_notebook_is_moved_away(
+    tmp_path, monkeypatch, capsys
+):
+    """The same "notebook no longer at the watched path" condition as a
+    hard delete above, just reached by renaming the watched notebook
+    itself away instead -- on_moved's existing dest_path check only
+    catches something new arriving at notebook_path, not notebook_path's
+    own content leaving it.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out: compiled_calls.append((nb, out))
+    )
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    renamed_path = tmp_path / "nb_renamed_away.ipynb"
+    notebook_path.rename(renamed_path)
+
+    event = type(
+        "Event", (), {"src_path": str(notebook_path), "dest_path": str(renamed_path)}
+    )()
+    handler.on_moved(event)
+
+    assert compiled_calls == []
+
+    captured = capsys.readouterr()
+    assert "no longer found" in captured.out
+
+
+def test_notebook_change_handler_recovers_after_the_notebook_is_recreated(
+    tmp_path, monkeypatch, capsys
+):
+    """Recovery from the "deleted" warning above needs no separate code
+    path: recreating a notebook at the watched path fires on_created,
+    which _handle_possible_notebook_change already treats as an ordinary
+    change and recompiles from.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out: compiled_calls.append((nb, out))
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out: None)
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    notebook_path.unlink()
+    handler.on_deleted(type("Event", (), {"src_path": str(notebook_path)})())
+    capsys.readouterr()
+
+    notebook_path.write_text("{}", encoding="utf-8")
+    handler.last_compile_time = 0
+    handler.on_created(type("Event", (), {"src_path": str(notebook_path)})())
+
+    assert compiled_calls == [(str(notebook_path), str(output_dir))]
+
+
 def test_notebook_change_handler_prints_a_compile_summary_after_recompiling(tmp_path, monkeypatch):
     """A live `serve` session's entire point is a fast, informative
     feedback loop after every save -- before this, a hot-recompile gave

@@ -28,6 +28,25 @@ class NotebookChangeHandler(FileSystemEventHandler):
     point of running a live server instead of a plain `compile` -- simply
     never fired for those saves, silently, with no error to indicate
     anything had gone wrong.
+
+    Also reacts to on_deleted, and to on_moved's *src_path* side (the
+    notebook itself moving away from the watched path, as opposed to
+    dest_path above, something else moving into it) -- both the same
+    underlying "the notebook this server is supposed to be watching is no
+    longer at that path" condition, just reached by a hard delete instead
+    of a rename. Before this, neither was handled at all either: deleting
+    or renaming away the notebook mid-`serve` session (e.g. `rm
+    notebook.ipynb`, a git checkout/branch switch, an editor's "move to
+    trash") printed nothing and raised nothing -- the live uvicorn
+    subprocess just kept serving the last successfully compiled app
+    forever, with zero indication its source had disappeared, the exact
+    same "orphaned compile" state GET/DELETE /api/generated
+    (routes/upload.py) already surface and let an operator act on
+    dashboard-side, but with no equivalent signal at all on this, the
+    CLI's own live-serving side. Recovery already works once this is
+    reported: recreating a notebook at the watched path fires on_created,
+    which _handle_possible_notebook_change (below) already treats as an
+    ordinary change and recompiles from.
     """
 
     def __init__(self, notebook_path, output_dir):
@@ -44,8 +63,32 @@ class NotebookChangeHandler(FileSystemEventHandler):
     def on_moved(self, event):
         # dest_path is where the file ends up after the rename -- the path
         # that now matches notebook_path, if anything does. src_path (the
-        # temp file's name) is irrelevant here.
+        # temp file's name) is irrelevant here for that check.
         self._handle_possible_notebook_change(event.dest_path)
+        # src_path is where the file *used to be* -- if that's the
+        # notebook being watched, it just moved away from the path this
+        # handler watches, the same "no longer here" condition on_deleted
+        # (below) reports for a hard delete instead of a rename.
+        self._handle_possible_notebook_departure(event.src_path)
+
+    def on_deleted(self, event):
+        self._handle_possible_notebook_departure(event.src_path)
+
+    def _handle_possible_notebook_departure(self, event_path):
+        # Only react to the notebook file itself disappearing from the
+        # watched path -- Path.resolve() works fine here even though
+        # event_path (and, on a hard delete, self.notebook_path too) no
+        # longer exists on disk: with strict=False (the default), it
+        # resolves symlinks/".."/"." as far as it can and appends the
+        # rest unchanged, the same non-strict resolution
+        # _handle_possible_notebook_change below already relies on.
+        if event_path.endswith(".ipynb") and Path(event_path).resolve() == Path(self.notebook_path).resolve():
+            print(
+                f"\n⚠️  Notebook no longer found at {self.notebook_path} "
+                "(deleted or moved). The API server keeps running the "
+                "last successfully compiled version -- restore a "
+                "notebook at this path to resume hot recompilation.\n"
+            )
 
     def _handle_possible_notebook_change(self, event_path):
         # Only react to changes to the notebook file itself
