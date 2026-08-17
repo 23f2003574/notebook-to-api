@@ -484,9 +484,36 @@ def _dispatch_core_command(args):
             else os.path.join(args.app_dir, "openapi.json")
         )
         output = args.output or default_output
-        export_openapi_schema(
-            output, package_name_for_output_dir(args.app_dir), format=args.format
-        )
+        package_name = package_name_for_output_dir(args.app_dir)
+
+        if args.json_output:
+            # export_openapi_schema unconditionally prints its own
+            # "OpenAPI schema written to ..." progress line -- meant for
+            # the human-readable path below, but mixed into --json's
+            # stdout it would break a script trying to json.loads() it.
+            # Same suppression `compile --json`/`deploy --json` already
+            # apply to their own writer functions' prints, for the same
+            # reason.
+            with contextlib.redirect_stdout(io.StringIO()):
+                export_openapi_schema(output, package_name, format=args.format)
+
+            with open(output, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            # Same {"status", "format", "path", "schema"/"content"} shape
+            # POST /api/export-openapi (routes/upload.py) already returns
+            # for the same operation, so a script driving either surface
+            # can parse both the same way.
+            response = {"status": "success", "format": args.format, "path": output}
+
+            if args.format == "json":
+                response["schema"] = json.loads(content)
+            else:
+                response["content"] = content
+
+            print(json.dumps(response, indent=2))
+        else:
+            export_openapi_schema(output, package_name, format=args.format)
     elif args.command == "export-sdk":
         # Same fix as export-openapi just above, for the same reason:
         # defaults next to --openapi's own directory, not a literal
@@ -502,13 +529,37 @@ def _dispatch_core_command(args):
                 openapi_path = fallback_path
 
         if args.language == "typescript":
-            from backend.exporters.sdk_generator import generate_typescript_sdk
+            from backend.exporters.sdk_generator import generate_typescript_sdk as generate_sdk
             output = args.output or os.path.join(openapi_dir, "sdk", "typescript_client.ts")
-            generate_typescript_sdk(openapi_path, output)
         else:
-            from backend.exporters.sdk_generator import generate_python_sdk
+            from backend.exporters.sdk_generator import generate_python_sdk as generate_sdk
             output = args.output or os.path.join(openapi_dir, "sdk", "python_client.py")
-            generate_python_sdk(openapi_path, output)
+
+        if args.json_output:
+            # Same reasoning as export-openapi --json above: generate_sdk
+            # unconditionally prints its own "<language> SDK generated at
+            # ..." progress line, which must not leak into --json's
+            # stdout.
+            with contextlib.redirect_stdout(io.StringIO()):
+                generate_sdk(openapi_path, output)
+
+            with open(output, "r", encoding="utf-8") as f:
+                code = f.read()
+
+            # Same {"status", "language", "path", "code"} shape POST
+            # /api/export-sdk (routes/upload.py) already returns for the
+            # same operation.
+            print(json.dumps(
+                {
+                    "status": "success",
+                    "language": args.language,
+                    "path": output,
+                    "code": code,
+                },
+                indent=2,
+            ))
+        else:
+            generate_sdk(openapi_path, output)
     elif args.command == "serve":
         serve_notebook(args.notebook, args.output, args.port, args.host)
     elif args.command == "deploy":
@@ -640,6 +691,18 @@ def main():
             "<app-dir>/openapi.yaml for --format yaml."
         )
     )
+    openapi_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit a machine-readable JSON result "
+            "({\"status\", \"format\", \"path\", \"schema\"/\"content\"}) "
+            "instead of only writing the schema file, for "
+            "scripting/automation -- the same shape POST /api/export-openapi "
+            "already returns for the same operation."
+        )
+    )
 
     # SDK export command
     sdk_parser = subparsers.add_parser(
@@ -664,6 +727,18 @@ def main():
             "<openapi-dir>/sdk/python_client.py for --language python, or "
             "<openapi-dir>/sdk/typescript_client.ts for --language "
             "typescript, where <openapi-dir> is --openapi's own directory."
+        )
+    )
+    sdk_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit a machine-readable JSON result "
+            "({\"status\", \"language\", \"path\", \"code\"}) instead of "
+            "only writing the client file, for scripting/automation -- the "
+            "same shape POST /api/export-sdk already returns for the same "
+            "operation."
         )
     )
 

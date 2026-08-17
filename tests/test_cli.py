@@ -647,6 +647,148 @@ def test_export_sdk_command_rejects_invalid_language_choice(tmp_path):
     assert "invalid choice: 'rust'" in proc.stderr
 
 
+def test_export_openapi_command_json_flag_emits_machine_readable_output(tmp_path):
+    """Before --json existed on `export-openapi`, the only way to get its
+    outcome was reading the schema file it wrote back off disk -- the
+    command itself only ever printed a single human-readable "OpenAPI
+    schema written to ..." line (export_openapi_schema's own print), even
+    though POST /api/export-openapi's REST response already returns the
+    schema inline as structured data for the same operation.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    compile_proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+    assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
+
+    proc = _run_cli(
+        [
+            "export-openapi", "--app-dir", "built",
+            "--output", "built/openapi.json", "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    # export_openapi_schema unconditionally prints its own "OpenAPI schema
+    # written to ..." progress line -- none of that may leak onto stdout
+    # in --json mode, or a script doing json.loads(stdout) would choke on
+    # it. The whole of stdout must be nothing but the JSON document
+    # itself.
+    data = json.loads(proc.stdout)
+    assert data["status"] == "success"
+    assert data["format"] == "json"
+    assert data["path"] == "built/openapi.json"
+    assert "/add" in data["schema"]["paths"]
+
+
+def test_export_openapi_command_json_flag_reports_yaml_content_inline(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    compile_proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+    assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
+
+    proc = _run_cli(
+        [
+            "export-openapi", "--app-dir", "built", "--format", "yaml",
+            "--output", "built/openapi.yaml", "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["status"] == "success"
+    assert data["format"] == "yaml"
+    assert "/add:" in data["content"]
+    assert "schema" not in data
+
+
+def test_export_sdk_command_json_flag_emits_machine_readable_output(tmp_path):
+    """Same gap as `export-openapi --json` above, for `export-sdk`:
+    generate_python_sdk/generate_typescript_sdk only ever print a single
+    "Python SDK generated at ..."/"TypeScript SDK generated at ..." line,
+    even though POST /api/export-sdk's REST response already returns the
+    generated client source inline for the same operation.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    compile_proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+    assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
+
+    openapi_proc = _run_cli(
+        ["export-openapi", "--app-dir", "built", "--output", "built/openapi.json"],
+        cwd=workdir,
+    )
+    assert openapi_proc.returncode == 0, openapi_proc.stdout + openapi_proc.stderr
+
+    proc = _run_cli(
+        [
+            "export-sdk", "--openapi", "built/openapi.json",
+            "--output", "built/sdk/python_client.py", "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["status"] == "success"
+    assert data["language"] == "python"
+    assert data["path"] == "built/sdk/python_client.py"
+    assert "class NotebookAPIClient" in data["code"]
+    assert "def add(" in data["code"]
+
+
+def test_export_sdk_command_json_flag_reports_typescript_language(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    compile_proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+    assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
+
+    openapi_proc = _run_cli(
+        ["export-openapi", "--app-dir", "built", "--output", "built/openapi.json"],
+        cwd=workdir,
+    )
+    assert openapi_proc.returncode == 0, openapi_proc.stdout + openapi_proc.stderr
+
+    proc = _run_cli(
+        [
+            "export-sdk", "--openapi", "built/openapi.json", "--language", "typescript",
+            "--output", "built/sdk/typescript_client.ts", "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["status"] == "success"
+    assert data["language"] == "typescript"
+    assert "class NotebookAPIClient" in data["code"]
+
+
 def _assert_clean_cli_error(proc, expected_message_fragment):
     """A core command's expected failure modes (missing file, invalid
     notebook, etc.) must produce a single-line "Error: ..." message on
