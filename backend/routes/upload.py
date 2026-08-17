@@ -25,6 +25,7 @@ from backend.compiler import (
     compile_notebook,
     hash_notebook_file,
     package_name_for_output_dir,
+    update_compile_metadata_source_notebook,
 )
 from backend.generator.api_generator import (
     ReservedFunctionNameError,
@@ -643,6 +644,127 @@ def get_notebook(filename: str):
         media_type="application/x-ipynb+json",
         filename=filename,
     )
+
+
+@router.patch("/notebooks/{filename}")
+def rename_notebook(filename: str, data: dict):
+    """Rename a previously uploaded notebook in place, keeping its bytes
+    untouched.
+
+    Before this, the only way to change an uploaded notebook's name was to
+    download it, delete it, and re-upload it under the new name -- and
+    doing that to the notebook currently backing GENERATED_DIR silently
+    broke every "currently_compiled"/staleness check this dashboard makes
+    (see _currently_compiled_notebook_metadata above): the delete step
+    left .compile_metadata.json's "source_notebook" pointing at a path
+    that no longer existed, so GET /api/notebooks would report
+    "currently_compiled": false for every uploaded notebook afterward,
+    with none of them any longer identifiable as the one that actually
+    produced what's still running in GENERATED_DIR.
+
+    Renaming in place (os.replace, same directory) avoids that entirely:
+    it's the same file, so its content hash never changes, and -- if it
+    *was* the currently-compiled notebook --
+    update_compile_metadata_source_notebook (backend/compiler.py) keeps
+    .compile_metadata.json's "source_notebook" pointing at wherever it now
+    lives, so "currently_compiled" keeps tracking it correctly under its
+    new name instead of going dark.
+
+    Same explicit-overwrite opt-in as /api/upload's own reupload
+    collision: renaming onto an existing filename is rejected with 409
+    unless the caller passes "overwrite": true.
+    """
+
+    new_filename = data.get("new_filename")
+
+    if not isinstance(new_filename, str) or not new_filename:
+
+        raise HTTPException(
+            status_code=400,
+            detail="new_filename is required"
+        )
+
+    if not new_filename.endswith(".ipynb"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="new_filename must be a .ipynb notebook"
+        )
+
+    overwrite = bool(data.get("overwrite", False))
+
+    old_path = resolve_upload_path(filename)
+
+    if not old_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    new_path = resolve_upload_path(new_filename)
+
+    if new_path == old_path:
+
+        # Renaming a notebook to its own current name is a no-op --
+        # nothing moved, so there's nothing for the metadata update below
+        # to do either, and it must not be rejected by the collision check
+        # below (the destination "already exists" precisely because it's
+        # the same file).
+        return {
+            "status": "success",
+            "filename": filename,
+            "new_filename": new_filename,
+            "was_currently_compiled": False,
+        }
+
+    if new_path.exists() and not overwrite:
+
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"A notebook named '{new_filename}' already exists. "
+                'Pass "overwrite": true to replace it.'
+            )
+        )
+
+    compiled_path, _, _ = _currently_compiled_notebook_metadata()
+
+    was_currently_compiled = (
+        compiled_path is not None and old_path.resolve() == compiled_path
+    )
+
+    try:
+
+        os.replace(old_path, new_path)
+
+    except OSError as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+    if was_currently_compiled:
+
+        # Held for the same reason every other read/write of
+        # .compile_metadata.json already does (see COMPILE_LOCK in
+        # backend/compiler.py): without it, a concurrent POST /api/compile
+        # racing this rename could write a fresh .compile_metadata.json
+        # for an unrelated notebook and have this call immediately
+        # clobber it with the just-renamed path instead.
+        with COMPILE_LOCK:
+
+            update_compile_metadata_source_notebook(
+                GENERATED_DIR, str(new_path.resolve())
+            )
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "new_filename": new_filename,
+        "was_currently_compiled": was_currently_compiled,
+    }
 
 
 @router.post("/inspect")

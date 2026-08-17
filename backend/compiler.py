@@ -336,6 +336,53 @@ def write_compile_metadata(notebook_path, output_dir):
         json.dump(metadata, f, indent=2)
 
 
+def update_compile_metadata_source_notebook(output_dir, new_source_notebook_path):
+    """Update the "source_notebook" field recorded in `output_dir`'s
+    .compile_metadata.json to `new_source_notebook_path`, leaving its
+    "source_notebook_sha256" and "compiled_at" fields untouched.
+
+    Used by PATCH /api/notebooks/{filename} (backend/routes/upload.py)
+    when the notebook being renamed is the one that produced the app
+    currently in output_dir. Renaming a file on disk doesn't change its
+    bytes, so the recorded sha256 is still accurate -- but
+    write_compile_metadata's "source_notebook" field is an absolute path
+    baked in at compile time, and every "currently_compiled"/staleness
+    check this dashboard makes
+    (_currently_compiled_notebook_metadata/_currently_compiled_notebook_is_stale
+    in routes/upload.py) resolves that exact path. Left untouched by a
+    rename, it would keep pointing at a path that no longer exists,
+    silently and permanently orphaning the currently-compiled app from
+    its own source notebook -- indistinguishable, from the API's
+    perspective, from that notebook having been deleted outright.
+
+    A no-op (returns False) if output_dir has no .compile_metadata.json
+    yet, or if it's missing/unreadable/corrupt -- nothing to update in
+    that case, mirroring _currently_compiled_notebook_metadata's own
+    best-effort handling of the same file. Callers are expected to hold
+    COMPILE_LOCK, the same way every other read/write of this file
+    already does.
+    """
+    metadata_path = os.path.join(output_dir, COMPILE_METADATA_FILENAME)
+
+    if not os.path.isfile(metadata_path):
+        return False
+
+    try:
+
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+
+    except (OSError, ValueError):
+        return False
+
+    metadata["source_notebook"] = os.path.abspath(new_source_notebook_path)
+
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
+
+    return True
+
+
 def clear_stale_export_artifacts(output_dir):
     """Remove a previous compile's exported openapi.json/openapi.yaml and
     sdk/ directory from `output_dir`, if present.

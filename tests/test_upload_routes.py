@@ -64,6 +64,7 @@ def test_blocking_endpoints_are_declared_as_plain_def_not_async_def():
         upload_module.list_notebooks,
         upload_module.delete_notebook,
         upload_module.get_notebook,
+        upload_module.rename_notebook,
         upload_module.inspect_notebook_endpoint,
         upload_module.compile_notebook_endpoint,
         upload_module.export_openapi_endpoint,
@@ -862,6 +863,214 @@ def test_get_notebook_rejects_absolute_filename():
 
     assert resp.status_code in (400, 404)
     assert "root:" not in resp.text
+
+
+def test_rename_notebook_renames_the_file_on_disk():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={"file": ("rename_source.ipynb", io.BytesIO(content), "application/json")},
+    )
+    assert upload_resp.status_code == 200
+
+    rename_resp = client.patch(
+        "/api/notebooks/rename_source.ipynb",
+        json={"new_filename": "rename_target.ipynb"},
+    )
+
+    assert rename_resp.status_code == 200
+    body = rename_resp.json()
+    assert body["filename"] == "rename_source.ipynb"
+    assert body["new_filename"] == "rename_target.ipynb"
+    assert body["was_currently_compiled"] is False
+
+    assert not (Path(UPLOAD_DIR) / "rename_source.ipynb").exists()
+    assert (Path(UPLOAD_DIR) / "rename_target.ipynb").is_file()
+
+    filenames = {nb["filename"] for nb in client.get("/api/notebooks").json()["notebooks"]}
+    assert "rename_source.ipynb" not in filenames
+    assert "rename_target.ipynb" in filenames
+
+    os.remove(Path(UPLOAD_DIR) / "rename_target.ipynb")
+
+
+def test_rename_notebook_returns_404_for_missing_file():
+
+    resp = client.patch(
+        "/api/notebooks/does_not_exist_at_all.ipynb",
+        json={"new_filename": "whatever.ipynb"},
+    )
+
+    assert resp.status_code == 404
+
+
+def test_rename_notebook_requires_new_filename():
+
+    content = _notebook_bytes("def add(a, b):\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("rename_missing_target.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.patch(
+        "/api/notebooks/rename_missing_target.ipynb",
+        json={},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_rename_notebook_rejects_a_non_ipynb_target_name():
+
+    content = _notebook_bytes("def add(a, b):\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("rename_bad_ext.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.patch(
+        "/api/notebooks/rename_bad_ext.ipynb",
+        json={"new_filename": "rename_bad_ext.txt"},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_rename_notebook_rejects_a_traversal_target_name():
+
+    content = _notebook_bytes("def add(a, b):\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("rename_traversal_source.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.patch(
+        "/api/notebooks/rename_traversal_source.ipynb",
+        json={"new_filename": "../../../../etc/passwd.ipynb"},
+    )
+
+    assert resp.status_code == 400
+    assert (Path(UPLOAD_DIR) / "rename_traversal_source.ipynb").is_file()
+
+
+def test_rename_notebook_to_its_own_name_is_a_no_op():
+
+    content = _notebook_bytes("def add(a, b):\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("rename_noop.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.patch(
+        "/api/notebooks/rename_noop.ipynb",
+        json={"new_filename": "rename_noop.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["was_currently_compiled"] is False
+    assert (Path(UPLOAD_DIR) / "rename_noop.ipynb").is_file()
+
+
+def test_rename_notebook_rejects_collision_without_overwrite():
+
+    content_a = _notebook_bytes("def add(a, b):\n    return a + b\n")
+    content_b = _notebook_bytes("def sub(a, b):\n    return a - b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("rename_collision_a.ipynb", io.BytesIO(content_a), "application/json")},
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("rename_collision_b.ipynb", io.BytesIO(content_b), "application/json")},
+    )
+
+    resp = client.patch(
+        "/api/notebooks/rename_collision_a.ipynb",
+        json={"new_filename": "rename_collision_b.ipynb"},
+    )
+
+    assert resp.status_code == 409
+    # Neither file should have moved.
+    assert (Path(UPLOAD_DIR) / "rename_collision_a.ipynb").is_file()
+    assert json.loads((Path(UPLOAD_DIR) / "rename_collision_b.ipynb").read_bytes()) == json.loads(content_b)
+
+
+def test_rename_notebook_overwrites_when_requested():
+
+    content_a = _notebook_bytes("def add(a, b):\n    return a + b\n")
+    content_b = _notebook_bytes("def sub(a, b):\n    return a - b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("rename_overwrite_a.ipynb", io.BytesIO(content_a), "application/json")},
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("rename_overwrite_b.ipynb", io.BytesIO(content_b), "application/json")},
+    )
+
+    resp = client.patch(
+        "/api/notebooks/rename_overwrite_a.ipynb",
+        json={"new_filename": "rename_overwrite_b.ipynb", "overwrite": True},
+    )
+
+    assert resp.status_code == 200
+    assert not (Path(UPLOAD_DIR) / "rename_overwrite_a.ipynb").exists()
+    assert json.loads((Path(UPLOAD_DIR) / "rename_overwrite_b.ipynb").read_bytes()) == json.loads(content_a)
+
+
+def test_rename_notebook_keeps_currently_compiled_tracking_under_the_new_name():
+    """The gap this closes: deleting and re-uploading the currently-
+    compiled notebook under a new name left .compile_metadata.json's
+    "source_notebook" pointing at a path that no longer existed, so every
+    uploaded notebook -- including the freshly re-uploaded one -- reported
+    "currently_compiled": false afterward, with no way to tell which
+    notebook (if any) actually produced what's still running in
+    GENERATED_DIR. Renaming in place must not have the same failure mode.
+    """
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={"file": ("rename_compiled_source.ipynb", io.BytesIO(content), "application/json")},
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "rename_compiled_source.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    rename_resp = client.patch(
+        "/api/notebooks/rename_compiled_source.ipynb",
+        json={"new_filename": "rename_compiled_target.ipynb"},
+    )
+
+    assert rename_resp.status_code == 200
+    assert rename_resp.json()["was_currently_compiled"] is True
+
+    notebooks = {
+        nb["filename"]: nb for nb in client.get("/api/notebooks").json()["notebooks"]
+    }
+    assert notebooks["rename_compiled_target.ipynb"]["currently_compiled"] is True
+    assert (
+        notebooks["rename_compiled_target.ipynb"]["notebook_changed_since_compile"]
+        is False
+    )
+
+    os.remove(Path(UPLOAD_DIR) / "rename_compiled_target.ipynb")
 
 
 def test_inspect_rejects_absolute_notebook_path():
