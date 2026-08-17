@@ -462,8 +462,28 @@ def _dispatch_core_command(args):
             print("\nCompilation finished. FastAPI app is ready in", output_dir)
             print_compile_summary(args.notebook, output_dir)
     elif args.command == "inspect":
+        # Deliberately does NOT create output_dir the way "compile" above
+        # does -- `inspect` is documented as a read-only "preview what
+        # compiling this notebook will do" step (see its own --help), but
+        # this branch used to unconditionally `mkdir(parents=True,
+        # exist_ok=True)` before ever reading anything. Confirmed
+        # exploitable: `inspect nb.ipynb --output some/nested/path`
+        # against a notebook that had never been compiled created the
+        # entire "some/nested/path" directory tree on disk, purely as a
+        # side effect of what a user reasonably expects to be a
+        # side-effect-free command -- and, unlike "compile", `inspect`
+        # never writes anything else there either, so nothing depended on
+        # that directory existing. inspect_notebook/inspect_notebook_data's
+        # own "Generated Files" listing (_list_generated_files, backend/
+        # inspector.py) already handles a missing output_dir gracefully
+        # (its own `if generated_path.is_dir()` check), the same way GET
+        # /api/generated (routes/upload.py) already relies on for a
+        # notebook that's never been compiled -- POST /api/inspect
+        # (routes/upload.py) has no equivalent mkdir either, so this also
+        # brings the CLI in line with the dashboard's own read-only
+        # /api/inspect endpoint instead of the two disagreeing about
+        # whether inspecting a notebook touches the filesystem.
         output_dir = Path(args.output)
-        output_dir.mkdir(parents=True, exist_ok=True)
         if args.json_output:
             data = inspect_notebook_data(notebook_path=args.notebook, output_dir=str(output_dir))
             print(json.dumps(data, indent=2))

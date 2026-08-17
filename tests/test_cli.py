@@ -275,6 +275,95 @@ def test_inspect_command_reports_the_notebooks_function(tmp_path):
     assert "Route: POST /add" in proc.stdout
 
 
+def test_inspect_command_does_not_create_the_output_directory(tmp_path):
+    """`inspect` is documented as a read-only "preview what compiling this
+    notebook will do" step (see its own --help), but the dispatch branch
+    handling it used to unconditionally `mkdir(parents=True,
+    exist_ok=True)` on --output before ever reading anything -- so it
+    left an empty directory tree on disk purely as a side effect, even
+    against a notebook that had never been compiled and even for a
+    multi-segment --output path that didn't exist yet.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["inspect", str(notebook_path), "--output", "some/nested/output_dir"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not (workdir / "some").exists()
+
+
+def test_inspect_command_json_flag_does_not_create_the_output_directory(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["inspect", str(notebook_path), "--output", "built", "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["generated_files"] == []
+    assert not (workdir / "built").exists()
+
+
+def test_inspect_command_still_lists_generated_files_when_the_directory_already_exists(
+    tmp_path
+):
+    """The fix for the mkdir side effect above must not regress the
+    ordinary case: `inspect` after a real `compile` still reports the
+    files that compile actually wrote.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    compile_proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+    assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
+
+    proc = _run_cli(
+        ["inspect", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "app.py" in proc.stdout
+    assert "requirements.txt" in proc.stdout
+
+
+def test_compile_command_still_creates_the_output_directory(tmp_path):
+    """Unlike `inspect`, `compile` genuinely writes output there, so its
+    own mkdir (and compile_notebook_to_api's own os.makedirs, backend/
+    compiler.py) must be unaffected by inspect's fix above.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "some/nested/output_dir"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "some" / "nested" / "output_dir" / "app.py").is_file()
+
+
 def test_inspect_command_reports_a_functions_own_docstring(tmp_path):
     """`inspect --json` (see inspect_notebook_data) already carried a
     function's own docstring, but the plain human-readable `inspect`
