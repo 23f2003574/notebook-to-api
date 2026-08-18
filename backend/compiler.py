@@ -649,23 +649,61 @@ def compile_notebook_to_api(
             output_path
         )
 
-        dockerfile_path = os.path.join(
-            output_dir,
-            "Dockerfile"
-        )
+        # From here on, app.py (and its runtime module) already reflect
+        # *this* compile's notebook -- if anything below raises
+        # (generate_dockerfile/generate_dockerignore, or write_compile_metadata
+        # itself), app.py has already moved on to the new notebook while
+        # .compile_metadata.json, left untouched, would still describe
+        # whichever notebook the *previous* successful compile actually
+        # wrote it for. Confirmed reproduced: recompiling a working "add"
+        # app with a notebook exposing "multiply" while generate_dockerfile
+        # was made to raise (standing in for a real disk/permission
+        # failure) left app.py and its runtime module already serving
+        # multiply, while .compile_metadata.json's "source_notebook" still
+        # pointed at the notebook that produced the *previous* compile --
+        # silently wrong, not merely stale: every metadata-driven consumer
+        # (GET /api/notebooks' "currently_compiled"/"compiled_at"/
+        # "notebook_changed_since_compile", GET /api/generated's
+        # "source_notebook_filename"/"source_notebook_exists") would
+        # confidently report the wrong notebook as the one actually being
+        # served, with nothing to indicate the mismatch. Removing
+        # .compile_metadata.json here instead turns that into a correctly-
+        # reported "unknown" state -- _currently_compiled_notebook_metadata
+        # (routes/upload.py) already treats a missing metadata file exactly
+        # this way (returns (None, None, None)), the same graceful
+        # degradation it already applies when nothing has ever been
+        # compiled at all. This also cleans up a metadata file
+        # write_compile_metadata itself might have left partially written
+        # (a mid-json.dump I/O failure), not just one from the two steps
+        # before it.
+        try:
 
-        generate_dockerfile(
-            dockerfile_path, package_name, compiling_python_version()
-        )
+            dockerfile_path = os.path.join(
+                output_dir,
+                "Dockerfile"
+            )
 
-        dockerignore_path = os.path.join(
-            output_dir,
-            ".dockerignore"
-        )
+            generate_dockerfile(
+                dockerfile_path, package_name, compiling_python_version()
+            )
 
-        generate_dockerignore(dockerignore_path)
+            dockerignore_path = os.path.join(
+                output_dir,
+                ".dockerignore"
+            )
 
-        write_compile_metadata(notebook_path, output_dir)
+            generate_dockerignore(dockerignore_path)
+
+            write_compile_metadata(notebook_path, output_dir)
+
+        except Exception:
+
+            metadata_path = os.path.join(output_dir, COMPILE_METADATA_FILENAME)
+
+            if os.path.isfile(metadata_path):
+                os.remove(metadata_path)
+
+            raise
 
         print(
             f"Successfully generated FastAPI app at: {output_path}"

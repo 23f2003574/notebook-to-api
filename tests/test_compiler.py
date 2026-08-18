@@ -2723,6 +2723,111 @@ def test_recompiling_overwrites_the_previous_compile_metadata(tmp_path):
     assert metadata["source_notebook"] == str(notebook_b.resolve())
 
 
+def test_recompile_removes_stale_compile_metadata_when_a_later_write_step_fails(
+    tmp_path, monkeypatch
+):
+    """app.py (and its runtime module) are written before Dockerfile/
+    .dockerignore generation and write_compile_metadata -- so a failure in
+    any of those three later steps (a real disk/permission failure; here
+    simulated via generate_dockerfile) previously left app.py already
+    reflecting the *new* notebook while .compile_metadata.json, untouched,
+    still described whichever notebook the *previous* successful compile
+    actually produced it for. That's not merely stale, it's silently
+    wrong: every metadata-driven consumer (GET /api/notebooks'
+    "currently_compiled"/"compiled_at"/"notebook_changed_since_compile",
+    GET /api/generated's "source_notebook_filename"/
+    "source_notebook_exists") would confidently report the wrong notebook
+    as the one actually being served, with nothing to indicate the
+    mismatch. Confirmed reproduced before this fix: recompiling a working
+    "add" app with a notebook exposing "multiply" while generate_dockerfile
+    was made to raise left the runtime module already containing only
+    "multiply", with .compile_metadata.json's "source_notebook" still
+    naming the "add" notebook.
+    """
+
+    import backend.compiler as compiler_module
+
+    def _make_notebook(path, source):
+        notebook = nbformat.v4.new_notebook()
+        notebook.cells.append(nbformat.v4.new_code_cell(source))
+        with open(path, "w", encoding="utf-8") as f:
+            nbformat.write(notebook, f)
+
+    notebook_a = tmp_path / "add.ipynb"
+    notebook_b = tmp_path / "multiply.ipynb"
+    _make_notebook(notebook_a, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _make_notebook(
+        notebook_b, "def multiply(a: int, b: int) -> int:\n    return a * b\n"
+    )
+
+    output_dir = tmp_path / "generated"
+
+    # First, a genuinely successful compile.
+    compile_notebook(str(notebook_a), str(output_dir))
+
+    metadata_path = output_dir / compiler_module.COMPILE_METADATA_FILENAME
+    assert metadata_path.is_file()
+
+    # Now recompile with a different notebook, but make the post-app.py
+    # Dockerfile generation step fail -- standing in for a real
+    # disk/permission failure at that point.
+    monkeypatch.setattr(
+        compiler_module,
+        "generate_dockerfile",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            PermissionError("simulated disk failure")
+        ),
+    )
+
+    with pytest.raises(PermissionError):
+        compile_notebook(str(notebook_b), str(output_dir))
+
+    # app.py's runtime module already moved on to the new notebook...
+    runtime_module_source = (
+        output_dir / "runtime" / "notebook_module.py"
+    ).read_text(encoding="utf-8")
+    assert "def multiply(" in runtime_module_source
+    assert "def add(" not in runtime_module_source
+
+    # ...so the now-stale metadata (still describing the *old* notebook)
+    # must be gone, not left silently pointing at the wrong one.
+    assert not metadata_path.exists()
+
+
+def test_first_ever_compile_failing_at_a_post_app_py_step_leaves_no_metadata_file(
+    tmp_path, monkeypatch
+):
+    """The no-previous-compile case: there's no stale metadata file to
+    remove (none was ever written), so this must be a clean no-op rather
+    than crashing trying to remove a file that was never there.
+    """
+
+    import backend.compiler as compiler_module
+
+    notebook = tmp_path / "nb.ipynb"
+    nb = nbformat.v4.new_notebook()
+    nb.cells.append(
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    )
+    with open(notebook, "w", encoding="utf-8") as f:
+        nbformat.write(nb, f)
+
+    output_dir = tmp_path / "generated"
+
+    monkeypatch.setattr(
+        compiler_module,
+        "generate_dockerfile",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            PermissionError("simulated disk failure")
+        ),
+    )
+
+    with pytest.raises(PermissionError):
+        compile_notebook(str(notebook), str(output_dir))
+
+    assert not (output_dir / compiler_module.COMPILE_METADATA_FILENAME).exists()
+
+
 def test_hash_notebook_file_is_deterministic_and_content_sensitive(tmp_path):
 
     from backend.compiler import hash_notebook_file
