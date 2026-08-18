@@ -598,6 +598,153 @@ def test_upload_leaves_no_temp_files_behind_after_a_rejected_reupload():
     assert leftover == []
 
 
+def test_upload_lock_for_returns_the_same_lock_for_the_same_filename():
+    """_upload_lock_for must hand back the *same* Lock instance for the
+    same filename across separate calls (separate requests, in practice)
+    -- otherwise two concurrent uploads of the same filename would each
+    acquire their own independent Lock and never actually exclude each
+    other at all, silently defeating the whole point of it.
+    """
+
+    from backend.routes.upload import _upload_lock_for
+
+    assert (
+        _upload_lock_for("same_lock_test.ipynb")
+        is _upload_lock_for("same_lock_test.ipynb")
+    )
+
+
+def test_upload_lock_for_returns_different_locks_for_different_filenames():
+    """Scoped per filename, not a single global lock -- two concurrent
+    uploads of two *different* notebooks (the overwhelmingly common case)
+    must stay fully concurrent; only genuinely colliding same-name
+    uploads should ever need to serialize.
+    """
+
+    from backend.routes.upload import _upload_lock_for
+
+    assert (
+        _upload_lock_for("different_lock_test_a.ipynb")
+        is not _upload_lock_for("different_lock_test_b.ipynb")
+    )
+
+
+def test_upload_lock_for_enforces_mutual_exclusion_for_the_same_filename():
+    """The actual property upload_notebook depends on to close the race
+    this fix exists for: two coroutines contending for the same
+    filename's lock can never both be inside the critical section at
+    once, and the second only ever enters after the first has fully
+    exited (not merely "started exiting") -- reproduced deterministically
+    via two coroutines racing the identical lock, driven by
+    asyncio.gather on a single event loop, rather than trying to force
+    this specific interleaving through two full, independent HTTP
+    requests (whose exact timing an in-memory ASGI transport doesn't
+    reliably reproduce -- confirmed while writing this test: even a
+    deliberately delayed UploadFile.read() didn't reliably interleave
+    two concurrent POST /api/upload calls to the same filename through
+    TestClient/httpx's in-memory transport, unlike a real network
+    connection's genuine I/O wait). Testing the lock's own guarantee
+    directly is both deterministic and exactly what upload_notebook
+    actually relies on.
+    """
+
+    import asyncio
+
+    from backend.routes.upload import _upload_lock_for
+
+    async def scenario():
+
+        filename = "mutual_exclusion_test.ipynb"
+
+        currently_inside = 0
+        max_concurrent = 0
+        events = []
+
+        async def critical_section(tag):
+            nonlocal currently_inside, max_concurrent
+
+            async with _upload_lock_for(filename):
+
+                currently_inside += 1
+                max_concurrent = max(max_concurrent, currently_inside)
+                events.append((tag, "enter"))
+
+                # Stands in for upload_notebook's own streaming/validation
+                # work while holding the lock -- long enough that, if the
+                # lock weren't actually excluding the other coroutine, it
+                # would have every opportunity to interleave its own
+                # "enter" in between.
+                await asyncio.sleep(0.05)
+
+                events.append((tag, "exit"))
+                currently_inside -= 1
+
+        await asyncio.gather(critical_section("A"), critical_section("B"))
+
+        return max_concurrent, events
+
+    max_concurrent, events = asyncio.run(scenario())
+
+    assert max_concurrent == 1
+
+    # Whichever coroutine goes first must fully enter *and exit* before
+    # the other ever enters -- not just start before the other starts.
+    assert events in (
+        [("A", "enter"), ("A", "exit"), ("B", "enter"), ("B", "exit")],
+        [("B", "enter"), ("B", "exit"), ("A", "enter"), ("A", "exit")],
+    )
+
+
+def test_upload_lock_for_does_not_serialize_different_filenames():
+    """The flip side of the mutual-exclusion test above: two coroutines
+    holding *different* filenames' locks must be able to run fully
+    concurrently, with neither waiting on the other at all.
+    """
+
+    import asyncio
+
+    from backend.routes.upload import _upload_lock_for
+
+    async def scenario():
+
+        both_entered = asyncio.Event()
+        entered_count = 0
+        events = []
+
+        async def critical_section(tag, filename):
+            nonlocal entered_count
+
+            async with _upload_lock_for(filename):
+
+                events.append((tag, "enter"))
+                entered_count += 1
+
+                if entered_count == 2:
+                    both_entered.set()
+
+                # If these two were sharing a lock, this wait would never
+                # be satisfied within the timeout below -- the second
+                # coroutine couldn't have entered while the first still
+                # holds a shared lock.
+                await asyncio.wait_for(both_entered.wait(), timeout=1)
+
+                events.append((tag, "exit"))
+
+        await asyncio.gather(
+            critical_section("A", "concurrent_lock_test_a.ipynb"),
+            critical_section("B", "concurrent_lock_test_b.ipynb"),
+        )
+
+        return events
+
+    events = asyncio.run(scenario())
+
+    # Both must have entered before either exited -- true concurrency,
+    # not one waiting for the other to finish first.
+    assert events[0][1] == "enter"
+    assert events[1][1] == "enter"
+
+
 def test_list_notebooks_includes_uploaded_files():
     """/api/upload was previously a one-way door: nothing in the API let
     a caller see what had already been uploaded, or remove it again.

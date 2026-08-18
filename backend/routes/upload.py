@@ -2,6 +2,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pathlib import Path
 from datetime import datetime, timezone
+import asyncio
 import io
 import json
 import os
@@ -319,6 +320,57 @@ def resolve_generated_path(name: str) -> Path:
     return _resolve_path_within(GENERATED_DIR, name, "generated output")
 
 
+# Serializes upload_notebook's own check-then-write critical section per
+# destination filename within UPLOAD_DIR -- see _upload_lock_for's own
+# docstring below for why this exists. Module-level (not per-request) so
+# every concurrent request targeting the same filename shares the same
+# Lock instance.
+_upload_locks_by_filename = {}
+
+
+def _upload_lock_for(filename: str) -> asyncio.Lock:
+    """asyncio.Lock scoped to a single destination filename within
+    UPLOAD_DIR, created lazily and kept for the lifetime of this process.
+
+    Without this, two truly concurrent POST /api/upload requests for the
+    same, brand-new filename raced this endpoint's own check-then-write
+    sequence -- confirmed exploitable, reproduced directly: firing two
+    concurrent uploads of different content under the same never-before-
+    seen filename from two threads against a live server in a tight loop
+    reliably produced trials where both requests' "does this already
+    exist" check (either the early one at the top of this function, or
+    the one re-checked immediately before the final os.replace, added
+    specifically so "overwritten" stays accurate against a concurrent
+    writer -- see that check's own comment) observed "not yet", since
+    neither request's os.replace() had run yet when either checked. Both
+    then proceeded straight through to os.replace() with no 409 raised by
+    either, one silently clobbered the other's just-uploaded content, and
+    *both* responses reported "overwritten": false -- directly
+    contradicting this endpoint's own explicit contract (see
+    upload_notebook's own docstring: a same-named notebook is supposed to
+    be rejected with 409 unless the caller opts in via ?overwrite=true).
+    That's the exact "silently destroyed with no way to recover it"
+    failure mode that contract exists to prevent in the first place, just
+    reintroduced through a race window between the check and the write,
+    rather than the original "write immediately, validate after" ordering
+    that contract was written to fix.
+
+    Scoped per filename, not a single global lock covering every upload:
+    two concurrent uploads of two *different* notebooks -- the
+    overwhelmingly common case -- must stay fully concurrent; only
+    genuinely colliding same-name uploads need to serialize at all.
+
+    Never removed once created: this dict grows by at most one small Lock
+    object per distinct filename ever uploaded over this process's
+    lifetime -- a deliberately simple tradeoff over the added complexity
+    (and its own race: safely deciding "nothing is waiting on this lock
+    anymore" isn't a single atomic check either) of expiring entries,
+    negligible next to what UPLOAD_DIR itself would already need to hold
+    that many distinct files on disk.
+    """
+    return _upload_locks_by_filename.setdefault(filename, asyncio.Lock())
+
+
 @router.post("/upload")
 async def upload_notebook(
     file: UploadFile = File(...),
@@ -361,105 +413,118 @@ async def upload_notebook(
 
     file_path = resolve_upload_path(file.filename)
 
-    if file_path.exists() and not overwrite:
+    # See _upload_lock_for's own docstring for exactly what this closes:
+    # without it, two truly concurrent uploads of the same, brand-new
+    # filename could both pass every "does this already exist" check
+    # below (neither has written file_path yet when either checks) and
+    # both proceed straight through to os.replace() -- one silently
+    # clobbering the other's just-uploaded content, with *both* responses
+    # wrongly reporting "overwritten": false and no 409 raised by either.
+    async with _upload_lock_for(file_path.name):
 
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"A notebook named '{file.filename}' already exists. "
-                "Pass ?overwrite=true to replace it."
+        if file_path.exists() and not overwrite:
+
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"A notebook named '{file.filename}' already exists. "
+                    "Pass ?overwrite=true to replace it."
+                )
             )
-        )
 
-    upload_root = Path(UPLOAD_DIR).resolve()
-    # A hidden, uniquely-suffixed name in the same directory as the final
-    # destination: hidden so it never shows up in GET /api/notebooks (which
-    # only lists ".ipynb" files, and this doesn't end in that suffix), and
-    # in the same directory so the final os.replace() below is an atomic
-    # rename rather than a cross-filesystem copy.
-    temp_path = upload_root / f".{file_path.name}.{uuid.uuid4().hex}.part"
+        upload_root = Path(UPLOAD_DIR).resolve()
+        # A hidden, uniquely-suffixed name in the same directory as the final
+        # destination: hidden so it never shows up in GET /api/notebooks (which
+        # only lists ".ipynb" files, and this doesn't end in that suffix), and
+        # in the same directory so the final os.replace() below is an atomic
+        # rename rather than a cross-filesystem copy.
+        temp_path = upload_root / f".{file_path.name}.{uuid.uuid4().hex}.part"
 
-    size = 0
+        size = 0
 
-    try:
+        try:
 
-        with open(temp_path, "wb") as buffer:
+            with open(temp_path, "wb") as buffer:
 
-            while True:
+                while True:
 
-                chunk = await file.read(_UPLOAD_CHUNK_BYTES)
+                    chunk = await file.read(_UPLOAD_CHUNK_BYTES)
 
-                if not chunk:
-                    break
+                    if not chunk:
+                        break
 
-                size += len(chunk)
+                    size += len(chunk)
 
-                if size > MAX_UPLOAD_BYTES:
-                    break
+                    if size > MAX_UPLOAD_BYTES:
+                        break
 
-                buffer.write(chunk)
+                    buffer.write(chunk)
 
-    except Exception as e:
+        except Exception as e:
 
-        if temp_path.exists():
+            if temp_path.exists():
+                os.remove(temp_path)
+
+            raise HTTPException(
+                status_code=500,
+                detail=str(e)
+            )
+
+        if size > MAX_UPLOAD_BYTES:
+
             os.remove(temp_path)
 
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
-
-    if size > MAX_UPLOAD_BYTES:
-
-        os.remove(temp_path)
-
-        raise HTTPException(
-            status_code=413,
-            detail=(
-                f"Notebook exceeds the maximum upload size of "
-                f"{MAX_UPLOAD_BYTES} bytes"
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Notebook exceeds the maximum upload size of "
+                    f"{MAX_UPLOAD_BYTES} bytes"
+                )
             )
-        )
 
-    try:
+        try:
 
-        load_notebook(str(temp_path))
+            load_notebook(str(temp_path))
 
-    except Exception as e:
+        except Exception as e:
 
-        os.remove(temp_path)
+            os.remove(temp_path)
 
-        raise HTTPException(
-            status_code=400,
-            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
-        )
-
-    # Re-checked immediately before the swap (rather than trusting the
-    # early check above) so the "overwritten" flag in the response stays
-    # accurate even if a concurrent request created the file while this
-    # one's body was still streaming/validating.
-    overwritten = file_path.exists()
-
-    if overwritten and not overwrite:
-
-        os.remove(temp_path)
-
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"A notebook named '{file.filename}' already exists. "
-                "Pass ?overwrite=true to replace it."
+            raise HTTPException(
+                status_code=400,
+                detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
             )
-        )
 
-    os.replace(temp_path, file_path)
+        # Re-checked immediately before the swap (rather than trusting the
+        # early check above) so the "overwritten" flag in the response stays
+        # accurate even if a concurrent request created the file while this
+        # one's body was still streaming/validating. Still meaningful even
+        # under the lock above: it's what catches the *sequential* case (an
+        # earlier request for this same filename that already completed
+        # and released the lock before this one acquired it), as opposed to
+        # the truly-concurrent case the lock itself prevents.
+        overwritten = file_path.exists()
 
-    return {
-        "status": "success",
-        "filename": file.filename,
-        "path": str(file_path),
-        "overwritten": overwritten,
-    }
+        if overwritten and not overwrite:
+
+            os.remove(temp_path)
+
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"A notebook named '{file.filename}' already exists. "
+                    "Pass ?overwrite=true to replace it."
+                )
+            )
+
+        os.replace(temp_path, file_path)
+
+        return {
+            "status": "success",
+            "filename": file.filename,
+            "path": str(file_path),
+            "overwritten": overwritten,
+        }
 
 
 def _currently_compiled_notebook_metadata():
