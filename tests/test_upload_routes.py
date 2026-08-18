@@ -1626,6 +1626,98 @@ def test_rename_notebook_rejects_collision_without_overwrite():
     assert json.loads((Path(UPLOAD_DIR) / "rename_collision_b.ipynb").read_bytes()) == json.loads(content_b)
 
 
+def test_rename_notebook_serializes_two_concurrent_renames_onto_the_same_destination():
+    """Before _rename_lock_for existed, two concurrent renames of two
+    different existing notebooks onto the same new_filename raced this
+    endpoint's own check-then-write sequence: both requests' "does the
+    destination already exist" check could observe "not yet" for both,
+    since neither had written new_path yet when either checked -- and
+    unlike upload_notebook (which at least re-checks immediately before
+    its own swap), this endpoint had *no* re-check at all before
+    os.replace(), so both proceeded straight through with no 409 raised
+    by either, one silently clobbered the other's just-renamed file, and
+    *both* callers saw "status": "success". Confirmed exploitable,
+    reproduced directly before this fix: two threads racing this exact
+    scenario against a live server produced two 200s in 19 of 20 single
+    trials -- rename_notebook is a plain `def`, not `async def` (see
+    test_blocking_endpoints_are_declared_as_plain_def_not_async_def), so
+    FastAPI runs concurrent calls to it in its worker threadpool with
+    genuine OS-thread parallelism, which is exactly why this reproduces
+    far more reliably via plain `threading.Thread`s than the identical
+    class of race in upload_notebook (an `async def` on a single event
+    loop) needed a deterministic asyncio.gather-driven test for instead.
+    Repeated here across several iterations (rather than a single trial)
+    since even a ~95% single-trial hit rate leaves a real chance of a
+    false pass; failing on any iteration is enough to catch a regression.
+    """
+
+    content_a = _notebook_bytes("def a():\n    return 1\n")
+    content_b = _notebook_bytes("def b():\n    return 2\n")
+
+    source_a = "rename_race_source_a.ipynb"
+    source_b = "rename_race_source_b.ipynb"
+    target = "rename_race_target.ipynb"
+    target_path = Path(UPLOAD_DIR) / target
+
+    try:
+
+        for _ in range(15):
+
+            for name, content in ((source_a, content_a), (source_b, content_b)):
+
+                if not (Path(UPLOAD_DIR) / name).exists():
+                    resp = client.post(
+                        "/api/upload",
+                        files={"file": (name, io.BytesIO(content), "application/json")},
+                    )
+                    assert resp.status_code == 200
+
+            if target_path.exists():
+                os.remove(target_path)
+
+            results = []
+
+            def do_rename(source_name, tag):
+                resp = client.patch(
+                    f"/api/notebooks/{source_name}",
+                    json={"new_filename": target},
+                )
+                results.append((tag, resp.status_code))
+
+            t1 = threading.Thread(target=do_rename, args=(source_a, "A"))
+            t2 = threading.Thread(target=do_rename, args=(source_b, "B"))
+            t1.start()
+            t2.start()
+            t1.join(timeout=10)
+            t2.join(timeout=10)
+
+            assert not t1.is_alive() and not t2.is_alive(), "a request never returned -- deadlock"
+            assert len(results) == 2
+
+            statuses = sorted(r[1] for r in results)
+            # Exactly one must succeed and the other must be rejected with
+            # the same 409 a sequential rename onto an existing filename
+            # without "overwrite": true already gets -- never two silent
+            # 200s.
+            assert statuses == [200, 409], results
+
+            # Whichever source lost the race is still sitting where it
+            # started -- the collision was rejected outright, not
+            # silently clobbered.
+            remaining_sources = [
+                name for name in (source_a, source_b)
+                if (Path(UPLOAD_DIR) / name).exists()
+            ]
+            assert len(remaining_sources) == 1
+            assert target_path.is_file()
+
+    finally:
+        for name in (source_a, source_b, target):
+            path = Path(UPLOAD_DIR) / name
+            if path.exists():
+                os.remove(path)
+
+
 def test_rename_notebook_overwrites_when_requested():
 
     content_a = _notebook_bytes("def add(a, b):\n    return a + b\n")

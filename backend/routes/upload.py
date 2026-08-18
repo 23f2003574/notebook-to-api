@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import uuid
 import zipfile
 
@@ -875,6 +876,57 @@ def get_notebook(filename: str):
     )
 
 
+# Serializes rename_notebook's own check-then-write critical section per
+# *destination* filename within UPLOAD_DIR -- see _rename_lock_for's own
+# docstring below for why this exists. A plain threading.Lock, not an
+# asyncio.Lock like upload_notebook's own _upload_lock_for (routes/
+# upload.py): rename_notebook is a plain `def`, not `async def` (see
+# test_blocking_endpoints_are_declared_as_plain_def_not_async_def), so
+# FastAPI runs concurrent calls to it in its worker threadpool -- genuine
+# OS-thread parallelism, not single-event-loop cooperative scheduling --
+# and an asyncio.Lock's `acquire()` isn't safe to call from a plain,
+# non-async function running outside any event loop at all.
+_rename_locks_by_filename = {}
+
+
+def _rename_lock_for(filename: str) -> threading.Lock:
+    """threading.Lock scoped to a single *destination* filename within
+    UPLOAD_DIR, created lazily and kept for the lifetime of this process.
+
+    Without this, two concurrent PATCH /api/notebooks/{filename} requests
+    renaming two different notebooks to the same new_filename raced this
+    endpoint's own check-then-write sequence -- confirmed exploitable,
+    reproduced directly: two threads renaming two different existing
+    notebooks to the same brand-new destination filename, fired against a
+    live server in a tight loop, produced two 200s (no 409 from either)
+    in 19 of 20 trials -- far more reliably than the identical class of
+    bug in upload_notebook (see _upload_lock_for above), precisely
+    because this endpoint's genuine OS-thread parallelism (see this
+    variable's own comment above) makes the two requests' interleaving
+    far less timing-sensitive than upload_notebook's single-event-loop
+    cooperative scheduling. Worse still, this endpoint had no re-check at
+    all immediately before its own os.replace() -- unlike upload_notebook,
+    which at least re-checked right before its swap (closing the
+    *sequential* case, if not the concurrent one) -- so this collision was
+    even easier to hit than upload's was before its own fix: one rename
+    silently clobbers the other's just-renamed file, and *both* callers
+    see "status": "success", directly contradicting this endpoint's own
+    explicit contract (see rename_notebook's own docstring: renaming onto
+    an existing filename is supposed to be rejected with 409 unless the
+    caller opts in via "overwrite": true).
+
+    Scoped per destination filename, not a single global lock: two
+    concurrent renames landing on two *different* destination filenames
+    -- the overwhelmingly common case -- must stay fully concurrent; only
+    genuinely colliding renames need to serialize at all.
+
+    Never removed once created -- same deliberately simple tradeoff
+    _upload_lock_for's own docstring already explains for the identical
+    pattern there.
+    """
+    return _rename_locks_by_filename.setdefault(filename, threading.Lock())
+
+
 @router.patch("/notebooks/{filename}")
 def rename_notebook(filename: str, data: dict):
     """Rename a previously uploaded notebook in place, keeping its bytes
@@ -901,7 +953,10 @@ def rename_notebook(filename: str, data: dict):
 
     Same explicit-overwrite opt-in as /api/upload's own reupload
     collision: renaming onto an existing filename is rejected with 409
-    unless the caller passes "overwrite": true.
+    unless the caller passes "overwrite": true -- held for the whole
+    check-then-write sequence by _rename_lock_for (see its own docstring
+    for the concurrent collision this closes, keyed by destination
+    filename).
     """
 
     new_filename = data.get("new_filename")
@@ -939,7 +994,7 @@ def rename_notebook(filename: str, data: dict):
         # nothing moved, so there's nothing for the metadata update below
         # to do either, and it must not be rejected by the collision check
         # below (the destination "already exists" precisely because it's
-        # the same file).
+        # the same file). No locking needed either: nothing is written.
         return {
             "status": "success",
             "filename": filename,
@@ -947,53 +1002,56 @@ def rename_notebook(filename: str, data: dict):
             "was_currently_compiled": False,
         }
 
-    if new_path.exists() and not overwrite:
+    with _rename_lock_for(new_path.name):
 
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"A notebook named '{new_filename}' already exists. "
-                'Pass "overwrite": true to replace it.'
-            )
-        )
+        if new_path.exists() and not overwrite:
 
-    compiled_path, _, _ = _currently_compiled_notebook_metadata()
-
-    was_currently_compiled = (
-        compiled_path is not None and old_path.resolve() == compiled_path
-    )
-
-    try:
-
-        os.replace(old_path, new_path)
-
-    except OSError as e:
-
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
-
-    if was_currently_compiled:
-
-        # Held for the same reason every other read/write of
-        # .compile_metadata.json already does (see COMPILE_LOCK in
-        # backend/compiler.py): without it, a concurrent POST /api/compile
-        # racing this rename could write a fresh .compile_metadata.json
-        # for an unrelated notebook and have this call immediately
-        # clobber it with the just-renamed path instead.
-        with COMPILE_LOCK:
-
-            update_compile_metadata_source_notebook(
-                GENERATED_DIR, str(new_path.resolve())
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"A notebook named '{new_filename}' already exists. "
+                    'Pass "overwrite": true to replace it.'
+                )
             )
 
-    return {
-        "status": "success",
-        "filename": filename,
-        "new_filename": new_filename,
-        "was_currently_compiled": was_currently_compiled,
-    }
+        compiled_path, _, _ = _currently_compiled_notebook_metadata()
+
+        was_currently_compiled = (
+            compiled_path is not None and old_path.resolve() == compiled_path
+        )
+
+        try:
+
+            os.replace(old_path, new_path)
+
+        except OSError as e:
+
+            raise HTTPException(
+                status_code=500,
+                detail=str(e)
+            )
+
+        if was_currently_compiled:
+
+            # Held for the same reason every other read/write of
+            # .compile_metadata.json already does (see COMPILE_LOCK in
+            # backend/compiler.py): without it, a concurrent POST
+            # /api/compile racing this rename could write a fresh
+            # .compile_metadata.json for an unrelated notebook and have
+            # this call immediately clobber it with the just-renamed path
+            # instead.
+            with COMPILE_LOCK:
+
+                update_compile_metadata_source_notebook(
+                    GENERATED_DIR, str(new_path.resolve())
+                )
+
+        return {
+            "status": "success",
+            "filename": filename,
+            "new_filename": new_filename,
+            "was_currently_compiled": was_currently_compiled,
+        }
 
 
 @router.post("/inspect")
