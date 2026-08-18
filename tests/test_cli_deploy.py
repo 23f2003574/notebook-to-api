@@ -51,6 +51,33 @@ def _install_fake_docker(bin_dir, log_path):
     docker_stub.chmod(docker_stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
 
+def _install_fake_docker_verbose_on_stdout(bin_dir, log_path):
+    """Like _install_fake_docker, but -- unlike every other fake `docker`
+    stub in this file -- also echoes realistic build-log lines to its own
+    stdout before exiting, the way a *real* `docker build`/`docker push`
+    always does ("Step 1/5 : FROM ...", "Successfully built ...", ...).
+
+    Every other stub here writes only to a log file, never to stdout, so
+    none of them can expose a --json run's stdout getting real build-log
+    text mixed into it -- confirmed: this was the one gap that let
+    `deploy --json`'s "stdout is valid JSON, full stop" guarantee go
+    unverified against anything resembling real Docker's own verbosity.
+    """
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    docker_stub = bin_dir / "docker"
+    docker_stub.write_text(
+        "#!/bin/sh\n"
+        f'printf \'%s\\n\' "$@" > "{log_path}"\n'
+        f'pwd >> "{log_path}"\n'
+        "echo 'Step 1/5 : FROM python:3.12-slim'\n"
+        "echo 'Successfully built abc123'\n"
+        "echo 'Successfully tagged built_api:latest'\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    docker_stub.chmod(docker_stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+
 def _install_fake_docker_recording_all_calls(bin_dir, log_path):
     """Like _install_fake_docker, but appends a record per invocation
     instead of overwriting, separated by a marker line -- so a test
@@ -593,6 +620,80 @@ def test_deploy_json_flag_emits_machine_readable_output(tmp_path):
         "tag": "built_api:latest",
         "pushed": False,
     }
+
+
+def test_deploy_json_flag_stdout_is_still_valid_json_against_a_verbose_docker(tmp_path):
+    """`deploy --json`'s own contextlib.redirect_stdout only patches this
+    process's Python-level sys.stdout -- it has no effect on a subprocess's
+    inherited OS-level stdout file descriptor. Confirmed exploitable
+    before this fix: `docker build`/`docker push` are always verbose on
+    stdout in real life ("Step 1/5 : FROM ...", "Successfully built ...",
+    ...), and without capture_output=True on the subprocess.run call
+    itself, that text was written straight through to this process's real
+    stdout -- immediately followed by the JSON blob -- so
+    json.loads(stdout) failed outright ("Expecting value: line 1 column
+    1") the moment Docker actually printed anything, which every other
+    fake `docker` stub in this file (silent on stdout, only ever writing
+    to a log file) could never expose. Uses
+    _install_fake_docker_verbose_on_stdout specifically because it does
+    what real Docker does: write build-log lines to its own stdout before
+    exiting 0.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker_verbose_on_stdout(bin_dir, log_path)
+
+    proc = _run_cli(
+        ["deploy", str(notebook_path), "--output", "built_api", "--json"],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    # The whole point: stdout must be nothing but the JSON blob, with none
+    # of the fake docker's build-log lines mixed in.
+    data = json.loads(proc.stdout)
+    assert data == {
+        "status": "success",
+        "tag": "built_api:latest",
+        "pushed": False,
+    }
+    assert "Step 1/5" not in proc.stdout
+    assert "Successfully built" not in proc.stdout
+
+
+def test_deploy_without_json_still_streams_dockers_own_output_live(tmp_path):
+    """The fix above must be scoped to --json only -- the human-readable
+    `deploy` path (no --json) is expected to show `docker build`/`docker
+    push`'s own live progress output on the real terminal, the same as
+    always, not capture and hide it.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker_verbose_on_stdout(bin_dir, log_path)
+
+    proc = _run_cli(
+        ["deploy", str(notebook_path), "--output", "built_api"],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Step 1/5" in proc.stdout
+    assert "Successfully built" in proc.stdout
 
 
 def test_deploy_json_flag_reports_pushed_true_after_a_successful_push(tmp_path):

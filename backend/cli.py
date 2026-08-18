@@ -407,7 +407,7 @@ def _fallback_openapi_export_path(openapi_path):
     return None
 
 
-def _run_deploy_docker_command(args, cwd):
+def _run_deploy_docker_command(args, cwd, capture_output=False):
     """Run a `docker ...` subprocess for the `deploy` command.
 
     Converts a missing Docker CLI into a friendlier RuntimeError, same as
@@ -415,6 +415,36 @@ def _run_deploy_docker_command(args, cwd):
     default message (the command and configured timeout) is already
     clear, and it's caught the same way as every other expected failure
     here, via CLI_USER_FACING_ERRORS in main().
+
+    capture_output defaults to False -- the human-readable `deploy` path
+    (below) wants `docker build`/`docker push`'s own live progress output
+    to reach the user's real terminal, same as always.
+
+    `deploy --json` (below) passes capture_output=True instead: real
+    Docker is always verbose on stdout ("Step 1/5 : FROM ...",
+    "Successfully built ...", ...), and this subprocess's stdout is
+    inherited directly from this CLI process's own OS-level stdout file
+    descriptor regardless of what Python code around the call does --
+    confirmed exploitable, reproduced directly: the `--json` branch below
+    already wraps this call in `contextlib.redirect_stdout(io.StringIO())`
+    to keep compile_notebook's/print_compile_summary's/its own progress
+    prints out of --json's stdout, and that comment claimed it also
+    covered this subprocess -- but redirect_stdout only patches Python's
+    own sys.stdout object, which a child process never reads from or
+    writes to; it inherits the real fd 1 directly. A bare `subprocess.run`
+    inside a redirect_stdout block writes straight through to the real
+    terminal, unaffected, confirmed with a two-line reproduction. Every
+    fake `docker` stub this file's own tests use writes only to a log
+    file, never to stdout, so none of them exposed this: `deploy --json`
+    against a *real* Docker build wrote its progress log directly to
+    stdout, immediately followed by the JSON blob -- `json.loads(stdout)`
+    on the combined output fails outright ("Expecting value: line 1
+    column 1"). routes/upload.py's own `_run_docker_command`, the
+    dashboard's equivalent of this exact function, already passes
+    capture_output=True unconditionally (it always needs the output, to
+    report a failed build/push's stderr back to the caller) -- this was
+    the one place that operation was still done differently between the
+    CLI and the dashboard.
     """
     try:
 
@@ -423,6 +453,8 @@ def _run_deploy_docker_command(args, cwd):
             cwd=str(cwd),
             check=True,
             timeout=DEPLOY_SUBPROCESS_TIMEOUT_SECONDS,
+            capture_output=capture_output,
+            text=True if capture_output else None,
         )
 
     except FileNotFoundError as exc:
@@ -612,15 +644,27 @@ def _dispatch_core_command(args):
             # {"status", "tag", "pushed"} shape for the same operation;
             # matched here rather than inventing a different one so a
             # script driving either surface can parse both the same way.
+            #
+            # redirect_stdout above only covers this process's own
+            # print() calls, though -- it has no effect on a subprocess's
+            # inherited stdout file descriptor (see
+            # _run_deploy_docker_command's own docstring for the
+            # confirmed-reproduced failure this caused). capture_output=True
+            # here is what actually keeps `docker build`/`docker push`'s
+            # own progress output off of --json's stdout, the same way
+            # routes/upload.py's `_run_docker_command` already captures it
+            # unconditionally for the identical operation.
             with contextlib.redirect_stdout(io.StringIO()):
                 compile_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
                 dockerfile_path = output_dir / "Dockerfile"
                 if not dockerfile_path.is_file():
                     raise FileNotFoundError(f"Dockerfile not found at {dockerfile_path}. Ensure the compiler generated it.")
-                _run_deploy_docker_command(build_args, output_dir)
+                _run_deploy_docker_command(build_args, output_dir, capture_output=True)
                 pushed = False
                 if args.push:
-                    _run_deploy_docker_command(["docker", "push", tag], output_dir)
+                    _run_deploy_docker_command(
+                        ["docker", "push", tag], output_dir, capture_output=True
+                    )
                     pushed = True
             print(json.dumps({"status": "success", "tag": tag, "pushed": pushed}, indent=2))
         else:
