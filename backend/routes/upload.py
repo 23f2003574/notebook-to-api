@@ -1685,11 +1685,48 @@ def list_generated_files_endpoint():
     disk right now -- distinct from and independent of
     "source_notebook_filename", since a notebook can be deleted (this goes
     false) without GENERATED_DIR's own contents changing at all.
+
+    "file_details" carries the same filenames as "generated_files" (kept
+    for backward compatibility -- and because inspect_notebook_data's own
+    "generated_files" field, shared by POST /api/inspect and POST
+    /api/compile, is a plain list of names too, and this stays consistent
+    with it), each paired with its "size_bytes" and "modified_at" --
+    exactly the level of detail GET /api/notebooks already reports per
+    uploaded notebook (see list_notebooks above), which this endpoint's
+    own "generated_files" never had. Before this, a dashboard frontend
+    wanting to show "here's what's compiled" as a real file browser (file
+    sizes, most-recently-touched-first, ...) had to issue a separate GET
+    /api/generated/{filename} call per file just to learn how big each one
+    is -- N+1 requests for what "list what's in GENERATED_DIR" should
+    answer in one.
     """
 
     with COMPILE_LOCK:
 
         generated_files = list_generated_files(GENERATED_DIR)
+
+        # Stat'd under the same COMPILE_LOCK hold as the listing above --
+        # not a separate, later acquisition -- so a concurrent POST
+        # /api/compile racing in on another thread can't remove or replace
+        # one of these files (see clear_stale_export_artifacts, backend/
+        # compiler.py) in the gap between listing it and stat'ing it,
+        # which would otherwise raise an avoidable FileNotFoundError for
+        # what's supposed to be this endpoint's own safe, read-only
+        # listing step.
+        generated_file_details = []
+
+        for relative_name in generated_files:
+
+            file_stat = (Path(GENERATED_DIR) / relative_name).stat()
+
+            generated_file_details.append({
+                "filename": relative_name,
+                "size_bytes": file_stat.st_size,
+                "modified_at": datetime.fromtimestamp(
+                    file_stat.st_mtime, tz=timezone.utc
+                ).isoformat(),
+            })
+
         compiled_path, _, compiled_at = _currently_compiled_notebook_metadata()
 
     source_notebook_filename = None
@@ -1709,6 +1746,7 @@ def list_generated_files_endpoint():
     return {
         "status": "success",
         "generated_files": generated_files,
+        "file_details": generated_file_details,
         "compiled_at": compiled_at,
         "source_notebook_filename": source_notebook_filename,
         "source_notebook_exists": source_notebook_exists,

@@ -3068,6 +3068,7 @@ def test_list_generated_files_returns_empty_before_any_compile(monkeypatch):
     body = resp.json()
     assert body["status"] == "success"
     assert body["generated_files"] == []
+    assert body["file_details"] == []
     assert body["compiled_at"] is None
     assert body["source_notebook_filename"] is None
     assert body["source_notebook_exists"] is False
@@ -3089,6 +3090,66 @@ def test_list_generated_files_lists_the_compiled_output():
     assert body["source_notebook_exists"] is True
 
     os.remove(Path(UPLOAD_DIR) / "list_generated_files_test.ipynb")
+
+
+def test_list_generated_files_file_details_reports_size_and_modified_at():
+    """"file_details" closes a gap "generated_files" (a bare list of
+    names) always had: a dashboard frontend wanting to show a real file
+    browser for what's compiled (file sizes, most-recently-touched-first,
+    ...) had to issue a separate GET /api/generated/{filename} call per
+    file just to learn how big each one is -- exactly the level of detail
+    GET /api/notebooks already reports per uploaded notebook.
+    """
+
+    from backend.routes import upload as upload_module
+
+    filename = "list_generated_files_file_details_test.ipynb"
+    _compile_a_notebook(filename)
+
+    resp = client.get("/api/generated")
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    file_details_by_name = {
+        entry["filename"]: entry for entry in body["file_details"]
+    }
+
+    assert set(file_details_by_name) == set(body["generated_files"])
+
+    app_py_details = file_details_by_name["app.py"]
+    expected_size = (Path(upload_module.GENERATED_DIR) / "app.py").stat().st_size
+
+    assert app_py_details["size_bytes"] == expected_size
+    assert app_py_details["size_bytes"] > 0
+    assert "modified_at" in app_py_details
+
+    os.remove(Path(UPLOAD_DIR) / filename)
+
+
+def test_list_generated_files_file_details_excludes_pycache_and_compile_metadata():
+
+    from backend.routes import upload as upload_module
+
+    filename = "list_generated_files_file_details_exclusions_test.ipynb"
+    _compile_a_notebook(filename)
+
+    pycache_dir = Path(upload_module.GENERATED_DIR) / "__pycache__"
+    pycache_dir.mkdir(exist_ok=True)
+    (pycache_dir / "app.cpython-000.pyc").write_bytes(b"")
+
+    resp = client.get("/api/generated")
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    detail_filenames = {entry["filename"] for entry in body["file_details"]}
+
+    assert not any("__pycache__" in name for name in detail_filenames)
+    assert COMPILE_METADATA_FILENAME not in detail_filenames
+
+    shutil.rmtree(pycache_dir)
+    os.remove(Path(UPLOAD_DIR) / filename)
 
 
 def test_list_generated_files_excludes_pycache_and_compile_metadata():
