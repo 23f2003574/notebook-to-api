@@ -525,8 +525,12 @@ def _currently_compiled_notebook_is_stale():
     return hash_notebook_file(compiled_path) != compiled_sha256
 
 
+_NOTEBOOK_SORT_KEYS = frozenset({"name", "size", "modified"})
+_NOTEBOOK_SORT_ORDERS = frozenset({"asc", "desc"})
+
+
 @router.get("/notebooks")
-def list_notebooks():
+def list_notebooks(search: str = None, sort: str = "name", order: str = "asc"):
     """List previously uploaded notebooks.
 
     /api/upload was previously a one-way door: notebooks could be
@@ -559,41 +563,89 @@ def list_notebooks():
     running app might be stale (via notebook_changed_since_compile) but
     had no way to tell *how* stale -- e.g. to show "last compiled 3
     minutes ago" -- without a separate, redundant read of the same file.
+
+    "search", "sort", and "order" close a gap that only gets worse as
+    UPLOAD_DIR accumulates notebooks over a dashboard's lifetime: before
+    this, the response was always every ".ipynb" file in UPLOAD_DIR, in a
+    fixed alphabetical-by-filename order, with no way to find one by name
+    or see the newest/largest first short of a caller sorting/filtering
+    the full list itself on every page load. "search" matches a
+    case-insensitive substring of the filename; "sort" is one of "name"
+    (the previous, and still default, order), "size", or "modified"; and
+    "order" is "asc" (default) or "desc". An invalid "sort"/"order" value
+    is rejected with 400 rather than silently falling back to the
+    default, the same way an invalid "format" already is elsewhere in
+    this file (see POST /api/export-openapi).
     """
+
+    if sort not in _NOTEBOOK_SORT_KEYS:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"sort must be one of {sorted(_NOTEBOOK_SORT_KEYS)}"
+        )
+
+    if order not in _NOTEBOOK_SORT_ORDERS:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"order must be one of {sorted(_NOTEBOOK_SORT_ORDERS)}"
+        )
 
     upload_root = Path(UPLOAD_DIR)
 
     compiled_path, compiled_sha256, compiled_at = _currently_compiled_notebook_metadata()
 
-    notebooks = []
+    # (name, size_bytes, mtime, entry dict) tuples -- name/size_bytes/mtime
+    # kept alongside the dict itself so sorting by "size"/"modified" can use
+    # the raw numeric stat values rather than re-deriving them from the
+    # dict's own already-formatted "size_bytes"/"modified_at" fields (the
+    # latter is an ISO 8601 string, not safely sortable as one: isoformat()
+    # only appends a microseconds component when it's non-zero, so two
+    # timestamps that differ only in whether they happen to land on a whole
+    # second don't compare consistently as plain strings).
+    entries = []
 
     for entry in sorted(upload_root.iterdir()):
 
-        if entry.is_file() and entry.suffix == ".ipynb":
+        if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
 
-            entry_stat = entry.stat()
+        if search and search.lower() not in entry.name.lower():
+            continue
 
-            is_currently_compiled = (
-                compiled_path is not None and entry.resolve() == compiled_path
+        entry_stat = entry.stat()
+
+        is_currently_compiled = (
+            compiled_path is not None and entry.resolve() == compiled_path
+        )
+
+        notebook_entry = {
+            "filename": entry.name,
+            "size_bytes": entry_stat.st_size,
+            "modified_at": datetime.fromtimestamp(
+                entry_stat.st_mtime, tz=timezone.utc
+            ).isoformat(),
+            "currently_compiled": is_currently_compiled,
+        }
+
+        if is_currently_compiled:
+            notebook_entry["notebook_changed_since_compile"] = (
+                compiled_sha256 is not None
+                and hash_notebook_file(entry) != compiled_sha256
             )
+            notebook_entry["compiled_at"] = compiled_at
 
-            notebook_entry = {
-                "filename": entry.name,
-                "size_bytes": entry_stat.st_size,
-                "modified_at": datetime.fromtimestamp(
-                    entry_stat.st_mtime, tz=timezone.utc
-                ).isoformat(),
-                "currently_compiled": is_currently_compiled,
-            }
+        entries.append((entry.name, entry_stat.st_size, entry_stat.st_mtime, notebook_entry))
 
-            if is_currently_compiled:
-                notebook_entry["notebook_changed_since_compile"] = (
-                    compiled_sha256 is not None
-                    and hash_notebook_file(entry) != compiled_sha256
-                )
-                notebook_entry["compiled_at"] = compiled_at
+    sort_key_index = {"name": 0, "size": 1, "modified": 2}[sort]
 
-            notebooks.append(notebook_entry)
+    entries.sort(
+        key=lambda entry_tuple: entry_tuple[sort_key_index],
+        reverse=(order == "desc"),
+    )
+
+    notebooks = [entry_tuple[3] for entry_tuple in entries]
 
     return {
         "status": "success",

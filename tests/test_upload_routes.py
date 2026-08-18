@@ -850,6 +850,155 @@ def test_list_notebooks_omits_compiled_at_for_a_notebook_that_is_not_currently_c
     assert "compiled_at" not in entry_b
 
 
+def test_list_notebooks_search_filters_by_a_case_insensitive_filename_substring():
+
+    for filename in ("search_apple.ipynb", "search_banana.ipynb"):
+        resp = client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                    "application/json",
+                )
+            },
+        )
+        assert resp.status_code == 200
+
+    notebooks = client.get("/api/notebooks?search=APPLE").json()["notebooks"]
+    filenames = {nb["filename"] for nb in notebooks}
+
+    assert filenames == {"search_apple.ipynb"}
+
+
+def test_list_notebooks_search_matching_nothing_returns_an_empty_list():
+
+    resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "search_only_this.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    assert resp.status_code == 200
+
+    notebooks = client.get(
+        "/api/notebooks?search=this_substring_matches_nothing_at_all"
+    ).json()["notebooks"]
+
+    assert notebooks == []
+
+
+def test_list_notebooks_sorts_by_name_ascending_by_default():
+    """Preserves the previous, and still default, behavior -- a plain GET
+    /api/notebooks with no query string -- so an existing caller relying
+    on alphabetical-by-filename order sees no change.
+    """
+
+    for filename in ("sort_default_b.ipynb", "sort_default_a.ipynb"):
+        resp = client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                    "application/json",
+                )
+            },
+        )
+        assert resp.status_code == 200
+
+    notebooks = client.get("/api/notebooks?search=sort_default_").json()["notebooks"]
+    filenames = [nb["filename"] for nb in notebooks]
+
+    assert filenames == ["sort_default_a.ipynb", "sort_default_b.ipynb"]
+
+
+def test_list_notebooks_sorts_by_size_ascending_and_descending():
+
+    for filename, function_source in (
+        ("sort_size_small.ipynb", "def f() -> int:\n    return 1\n"),
+        (
+            "sort_size_large.ipynb",
+            "def f() -> int:\n    return 1  # padding to make this cell bigger\n",
+        ),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes(function_source)),
+                    "application/json",
+                )
+            },
+        )
+        assert resp.status_code == 200
+
+    asc = client.get("/api/notebooks?search=sort_size_&sort=size&order=asc").json()["notebooks"]
+    assert [nb["filename"] for nb in asc] == ["sort_size_small.ipynb", "sort_size_large.ipynb"]
+
+    desc = client.get("/api/notebooks?search=sort_size_&sort=size&order=desc").json()["notebooks"]
+    assert [nb["filename"] for nb in desc] == ["sort_size_large.ipynb", "sort_size_small.ipynb"]
+
+
+def test_list_notebooks_sorts_by_modified_descending_shows_the_newest_first():
+
+    resp_older = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "sort_modified_older.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    assert resp_older.status_code == 200
+
+    older_path = Path(UPLOAD_DIR) / "sort_modified_older.ipynb"
+    older_stat = older_path.stat()
+    os.utime(older_path, (older_stat.st_atime, older_stat.st_mtime - 3600))
+
+    resp_newer = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "sort_modified_newer.ipynb",
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    assert resp_newer.status_code == 200
+
+    notebooks = client.get(
+        "/api/notebooks?search=sort_modified_&sort=modified&order=desc"
+    ).json()["notebooks"]
+
+    assert [nb["filename"] for nb in notebooks] == [
+        "sort_modified_newer.ipynb",
+        "sort_modified_older.ipynb",
+    ]
+
+
+def test_list_notebooks_rejects_an_invalid_sort_value():
+
+    resp = client.get("/api/notebooks?sort=not_a_real_field")
+
+    assert resp.status_code == 400
+
+
+def test_list_notebooks_rejects_an_invalid_order_value():
+
+    resp = client.get("/api/notebooks?order=sideways")
+
+    assert resp.status_code == 400
+
+
 def test_delete_notebook_removes_an_uploaded_file():
 
     content = _notebook_bytes(
