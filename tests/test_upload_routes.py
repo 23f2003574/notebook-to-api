@@ -30,10 +30,26 @@ def _notebook_bytes(function_source):
 
 @pytest.fixture(autouse=True)
 def _cleanup_uploaded_files():
-    created_before = set(os.listdir(UPLOAD_DIR))
+    # Backs up full file contents, not just names -- test_delete_all_notebooks_*
+    # below exercises DELETE /api/notebooks, which (correctly, by design) removes
+    # every ".ipynb" file directly in UPLOAD_DIR, including any that predate this
+    # test run (e.g. uploads/sample.ipynb, checked into this repo). Restoring by
+    # name alone (the previous behavior: remove whatever's new, ignore what's
+    # missing) left a pre-existing file permanently deleted from disk the first
+    # time a test actually exercised that endpoint -- confirmed: it happened.
+    names_before = set(os.listdir(UPLOAD_DIR))
+    backup = {
+        name: (Path(UPLOAD_DIR) / name).read_bytes()
+        for name in names_before
+        if (Path(UPLOAD_DIR) / name).is_file()
+    }
     yield
-    for name in set(os.listdir(UPLOAD_DIR)) - created_before:
+    names_after = set(os.listdir(UPLOAD_DIR))
+    for name in names_after - names_before:
         os.remove(os.path.join(UPLOAD_DIR, name))
+    for name in names_before - names_after:
+        if name in backup:
+            (Path(UPLOAD_DIR) / name).write_bytes(backup[name])
 
 
 def test_blocking_endpoints_are_declared_as_plain_def_not_async_def():
@@ -65,6 +81,7 @@ def test_blocking_endpoints_are_declared_as_plain_def_not_async_def():
 
     blocking_endpoints = [
         upload_module.list_notebooks,
+        upload_module.delete_all_notebooks,
         upload_module.delete_notebook,
         upload_module.get_notebook,
         upload_module.rename_notebook,
@@ -991,6 +1008,169 @@ def test_delete_notebook_rejects_a_filename_with_an_embedded_null_byte():
     resp = client.delete("/api/notebooks/nb%00.ipynb")
 
     assert resp.status_code == 400
+
+
+def test_delete_all_notebooks_requires_confirm_true():
+    """A bulk delete with real, hard-to-undo consequences (the notebooks
+    in UPLOAD_DIR are the only copy of a user's original uploaded source
+    on this server) must not run without the same explicit opt-in
+    /api/upload's own "overwrite" and /api/deploy's "force"/"push"
+    already require elsewhere in this file.
+    """
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={"file": ("bulk_delete_no_confirm.ipynb", io.BytesIO(content), "application/json")},
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.delete("/api/notebooks")
+
+    assert resp.status_code == 400
+
+    list_resp = client.get("/api/notebooks")
+    filenames = {nb["filename"] for nb in list_resp.json()["notebooks"]}
+    assert "bulk_delete_no_confirm.ipynb" in filenames
+
+
+def test_delete_all_notebooks_removes_every_uploaded_notebook():
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    content_b = _notebook_bytes(
+        "def sub(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    for filename, content in (
+        ("bulk_delete_a.ipynb", content_a),
+        ("bulk_delete_b.ipynb", content_b),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    delete_resp = client.delete("/api/notebooks?confirm=true")
+
+    assert delete_resp.status_code == 200
+    body = delete_resp.json()
+    assert body["deleted_count"] >= 2
+    assert "bulk_delete_a.ipynb" in body["deleted_filenames"]
+    assert "bulk_delete_b.ipynb" in body["deleted_filenames"]
+    assert body["currently_compiled_notebook_deleted"] is False
+
+    list_resp = client.get("/api/notebooks")
+    filenames = {nb["filename"] for nb in list_resp.json()["notebooks"]}
+    assert "bulk_delete_a.ipynb" not in filenames
+    assert "bulk_delete_b.ipynb" not in filenames
+
+
+def test_delete_all_notebooks_flags_currently_compiled_notebook_deleted():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "bulk_delete_currently_compiled.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile",
+        json={"notebook_path": "bulk_delete_currently_compiled.ipynb"},
+    )
+    assert compile_resp.status_code == 200
+
+    delete_resp = client.delete("/api/notebooks?confirm=true")
+
+    assert delete_resp.status_code == 200
+    assert delete_resp.json()["currently_compiled_notebook_deleted"] is True
+
+
+def test_delete_all_notebooks_does_not_touch_generated_dir():
+    """Mirrors DELETE /api/notebooks/{filename}'s own behavior: the
+    compiled app currently running must keep running exactly as before --
+    this only ever clears UPLOAD_DIR, never GENERATED_DIR.
+    """
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "bulk_delete_keeps_generated.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile",
+        json={"notebook_path": "bulk_delete_keeps_generated.ipynb"},
+    )
+    assert compile_resp.status_code == 200
+
+    delete_resp = client.delete("/api/notebooks?confirm=true")
+    assert delete_resp.status_code == 200
+
+    generated_resp = client.get("/api/generated")
+    assert generated_resp.status_code == 200
+    assert "app.py" in generated_resp.json()["generated_files"]
+
+
+def test_delete_all_notebooks_leaves_stale_part_files_alone():
+    """Only ever removes ".ipynb" files directly inside UPLOAD_DIR -- the
+    same set GET /api/notebooks already lists -- so an in-flight upload's
+    own hidden ".part" temp file must never be touched by this.
+    """
+
+    stale_part_path = Path(UPLOAD_DIR) / ".bulk_delete_in_flight.ipynb.abc123.part"
+    stale_part_path.write_bytes(b"not yet a real notebook")
+
+    try:
+        resp = client.delete("/api/notebooks?confirm=true")
+        assert resp.status_code in (200, 400)
+        assert stale_part_path.exists()
+    finally:
+        stale_part_path.unlink(missing_ok=True)
+
+
+def test_delete_all_notebooks_returns_zero_when_nothing_uploaded():
+    """UPLOAD_DIR isn't guaranteed empty at test time -- e.g. this repo
+    ships uploads/sample.ipynb -- so this drains it first via the same
+    endpoint under test rather than assuming a pristine directory, then
+    confirms a second call against the now-genuinely-empty directory
+    reports zero.
+    """
+
+    client.delete("/api/notebooks?confirm=true")
+
+    resp = client.delete("/api/notebooks?confirm=true")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["deleted_count"] == 0
+    assert body["deleted_filenames"] == []
+    assert body["currently_compiled_notebook_deleted"] is False
 
 
 def test_rename_notebook_renames_the_file_on_disk():

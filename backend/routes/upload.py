@@ -601,6 +601,82 @@ def list_notebooks():
     }
 
 
+@router.delete("/notebooks")
+def delete_all_notebooks(confirm: bool = False):
+    """Remove every uploaded notebook in UPLOAD_DIR at once.
+
+    GET /api/notebooks and DELETE /api/generated already form a
+    "list what's here" / "clear all of it" pair for GENERATED_DIR, but
+    UPLOAD_DIR only ever had the single-file DELETE /api/notebooks/{filename}
+    -- no bulk equivalent. An operator wanting to reset the uploads
+    directory entirely (e.g. before a demo, to reclaim disk space after
+    accumulating scratch notebooks, or to clear out everything before a
+    fresh batch of uploads) had to call DELETE /api/notebooks/{filename}
+    once per file, discovering each name from a separate GET
+    /api/notebooks first -- there was no single call that emptied it.
+
+    Unlike DELETE /api/generated (whose target is reproducible build
+    output -- recompiling regenerates it), the notebooks here are the only
+    copy of a user's original uploaded source on this server, so this
+    requires an explicit "?confirm=true" opt-in before it does anything,
+    the same explicit-confirmation pattern /api/upload's own "overwrite"
+    and /api/deploy's "force"/"push" already use elsewhere in this file
+    for actions with real, hard-to-undo consequences -- a plain DELETE
+    /api/notebooks with no query string is rejected with 400 rather than
+    silently wiping every uploaded notebook.
+
+    Deliberately leaves GENERATED_DIR completely untouched, the same way
+    the single-file DELETE /api/notebooks/{filename} already does: the
+    compiled app currently running keeps running exactly as before. The
+    response's "currently_compiled_notebook_deleted" flag mirrors that
+    endpoint's own "was_currently_compiled" flag for the same reason --
+    without it, a caller had no way to know this bulk delete had just
+    orphaned whatever's currently compiled, short of a separate GET
+    /api/notebooks call beforehand to check every entry's
+    "currently_compiled" flag itself.
+
+    Only ever removes ".ipynb" files directly inside UPLOAD_DIR -- the
+    same set GET /api/notebooks already lists -- so an in-flight upload's
+    own hidden ".part" temp file (see _cleanup_stale_upload_temp_files
+    above) is never touched by this.
+    """
+
+    if not confirm:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This deletes every uploaded notebook. Pass "
+                '"?confirm=true" to proceed.'
+            )
+        )
+
+    upload_root = Path(UPLOAD_DIR)
+
+    compiled_path, _, _ = _currently_compiled_notebook_metadata()
+
+    deleted_filenames = []
+    currently_compiled_notebook_deleted = False
+
+    for entry in sorted(upload_root.iterdir()):
+
+        if not entry.is_file() or entry.suffix != ".ipynb":
+            continue
+
+        if compiled_path is not None and entry.resolve() == compiled_path:
+            currently_compiled_notebook_deleted = True
+
+        os.remove(entry)
+        deleted_filenames.append(entry.name)
+
+    return {
+        "status": "success",
+        "deleted_count": len(deleted_filenames),
+        "deleted_filenames": deleted_filenames,
+        "currently_compiled_notebook_deleted": currently_compiled_notebook_deleted,
+    }
+
+
 @router.delete("/notebooks/{filename}")
 def delete_notebook(filename: str):
     """Delete a previously uploaded notebook.
