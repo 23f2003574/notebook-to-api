@@ -567,13 +567,30 @@ def _dispatch_core_command(args):
         else:
             export_openapi_schema(output, package_name, format=args.format)
     elif args.command == "export-sdk":
+        # --app-dir mirrors export-openapi's own --app-dir-derived default
+        # (see its own comment above): before this, --openapi's default
+        # was a flat "generated/openapi.json" literal with no --app-dir
+        # concept at all, so `export-sdk` after `compile nb.ipynb --output
+        # built` + `export-openapi --app-dir built` (which correctly wrote
+        # built/openapi.json) either crashed looking for a nonexistent
+        # generated/openapi.json, or -- worse, if an unrelated notebook
+        # had ever been compiled into the default "generated" dir and
+        # exported there too -- silently generated an SDK client for that
+        # stale, unrelated schema instead, with no error or warning at
+        # all. Confirmed reproduced: compiling two different notebooks
+        # into "built" and "generated" respectively, exporting both
+        # schemas, then running `export-sdk` with no args produced a
+        # client exposing the "generated" notebook's endpoints, not the
+        # one actually just built and exported via --app-dir built. An
+        # explicit --openapi still always wins, exactly as before --
+        # --app-dir only changes the default when --openapi isn't given.
+        openapi_path = args.openapi or os.path.join(args.app_dir, "openapi.json")
+
         # Same fix as export-openapi just above, for the same reason:
         # defaults next to --openapi's own directory, not a literal
         # "generated/sdk/..." regardless of where --openapi actually
         # points.
-        openapi_dir = os.path.dirname(args.openapi)
-
-        openapi_path = args.openapi
+        openapi_dir = os.path.dirname(openapi_path)
 
         if not os.path.isfile(openapi_path):
             fallback_path = _fallback_openapi_export_path(openapi_path)
@@ -773,9 +790,23 @@ def main():
         "export-sdk", help="Generate an SDK client from an exported OpenAPI schema."
     )
     sdk_parser.add_argument(
+        "--app-dir",
+        default="generated",
+        help=(
+            "Directory the app was compiled into (the --output used with "
+            "`compile`) -- used to locate the exported OpenAPI schema "
+            "when --openapi isn't given (<app-dir>/openapi.json), the same "
+            "convention `export-openapi --app-dir` already uses for its "
+            "own default --output."
+        )
+    )
+    sdk_parser.add_argument(
         "--openapi",
-        default="generated/openapi.json",
-        help="Path to the OpenAPI JSON file to generate the client from (see export-openapi)."
+        default=None,
+        help=(
+            "Path to the OpenAPI JSON file to generate the client from "
+            "(see export-openapi). Defaults to <app-dir>/openapi.json."
+        )
     )
     sdk_parser.add_argument(
         "--language",

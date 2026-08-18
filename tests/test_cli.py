@@ -32,6 +32,28 @@ def _write_notebook(path):
     )
 
 
+def _write_notebook_with_function(path, function_source):
+    path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": function_source,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _run_cli(args, cwd):
     env = dict(os.environ)
     env["PYTHONPATH"] = str(PROJECT_ROOT)
@@ -723,6 +745,98 @@ def test_export_sdk_command_defaults_typescript_output_next_to_the_openapi_file(
     client_path = workdir / "built" / "sdk" / "typescript_client.ts"
     assert client_path.exists()
     assert not (workdir / "generated").exists()
+
+
+def test_export_sdk_command_app_dir_locates_the_matching_openapi_export(tmp_path):
+    """Confirmed broken before this fix: --openapi's default was a flat
+    "generated/openapi.json" literal with no --app-dir concept at all --
+    unlike export-openapi, which already derives its own default --output
+    from --app-dir. `export-sdk --app-dir built` (mirroring `compile
+    --output built` + `export-openapi --app-dir built`, an entirely
+    normal non-default workflow) crashed looking for a nonexistent
+    generated/openapi.json instead of finding built/openapi.json, the
+    schema that command's own prerequisite step just wrote.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    compile_proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+    assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
+
+    openapi_proc = _run_cli(["export-openapi", "--app-dir", "built"], cwd=workdir)
+    assert openapi_proc.returncode == 0, openapi_proc.stdout + openapi_proc.stderr
+
+    proc = _run_cli(["export-sdk", "--app-dir", "built"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    client_path = workdir / "built" / "sdk" / "python_client.py"
+    assert client_path.exists()
+    assert "def add(" in client_path.read_text(encoding="utf-8")
+
+
+def test_export_sdk_command_does_not_silently_use_a_stale_default_app_dir_export(
+    tmp_path
+):
+    """The worse failure mode this fix closes: without --app-dir/--openapi
+    pointing export-sdk at the right schema, it fell back to a flat
+    "generated/openapi.json" literal -- so if an *unrelated* notebook had
+    ever been compiled into the default "generated" directory and
+    exported there too, export-sdk silently generated a client for that
+    stale, unrelated schema instead, with no error or warning at all.
+    Confirmed reproduced: compiling two different notebooks into "built"
+    and "generated" respectively and exporting both schemas, then running
+    `export-sdk --app-dir built` produced a client exposing "add" (the
+    "built" notebook actually being worked with), not "multiply" (the
+    unrelated notebook that happened to be sitting in the default
+    "generated" directory).
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    built_notebook = workdir / "nb_add.ipynb"
+    _write_notebook_with_function(
+        built_notebook, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    stale_notebook = workdir / "nb_multiply.ipynb"
+    _write_notebook_with_function(
+        stale_notebook,
+        "def multiply(a: int, b: int) -> int:\n    return a * b\n",
+    )
+
+    # The unrelated notebook compiled and exported into the *default*
+    # "generated" directory first -- simulating a previous, unrelated
+    # `compile`/`export-openapi` run against this same working directory.
+    compile_stale = _run_cli(
+        ["compile", str(stale_notebook), "--output", "generated"], cwd=workdir
+    )
+    assert compile_stale.returncode == 0, compile_stale.stdout + compile_stale.stderr
+    openapi_stale = _run_cli(["export-openapi", "--app-dir", "generated"], cwd=workdir)
+    assert openapi_stale.returncode == 0, openapi_stale.stdout + openapi_stale.stderr
+
+    # The notebook actually being worked with now, compiled and exported
+    # into a different directory.
+    compile_built = _run_cli(
+        ["compile", str(built_notebook), "--output", "built"], cwd=workdir
+    )
+    assert compile_built.returncode == 0, compile_built.stdout + compile_built.stderr
+    openapi_built = _run_cli(["export-openapi", "--app-dir", "built"], cwd=workdir)
+    assert openapi_built.returncode == 0, openapi_built.stdout + openapi_built.stderr
+
+    proc = _run_cli(["export-sdk", "--app-dir", "built"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    client_source = (workdir / "built" / "sdk" / "python_client.py").read_text(
+        encoding="utf-8"
+    )
+    assert "def add(" in client_source
+    assert "def multiply(" not in client_source
 
 
 def test_export_sdk_command_rejects_invalid_language_choice(tmp_path):
