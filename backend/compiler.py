@@ -295,13 +295,36 @@ def _pinned_requirement(package_name):
     notebook imports a third-party library the compiling host doesn't
     have) preserves the previous behavior instead of failing the whole
     compile over a dependency this tool has no way to introspect.
+
+    The PEP 440 local version segment (everything from the first "+"
+    onward, e.g. "2.1.0+cu121" for a CUDA-specific torch build,
+    "0.1.0+dirty" or "0.1.0.dev3+g1a2b3c4" from a setuptools-scm/git-based
+    build, or whatever an editable `pip install -e .` records) is stripped
+    before pinning. PyPI rejects any upload whose version contains one --
+    it exists specifically to distinguish a locally-modified build from
+    the public release it's based on, never to be redistributed itself --
+    so importlib.metadata.version() reporting one here means this exact
+    "package_name==version" string can never resolve against PyPI.
+    Confirmed reproduced: installing a package under a version string
+    containing "+", then compiling a notebook that imports it, wrote that
+    unresolvable pin straight into requirements.txt, and `pip install -r
+    requirements.txt` -- and from there every `deploy`/`docker build` --
+    failed outright with "No matching distribution found for
+    <package>==<version>+<local>", even though the public version right
+    before the "+" is very likely actually installable. This can affect
+    any dependency in the pin list, not just an unusual one deliberately
+    reproducing it: this tool's own compiling environment is exactly as
+    likely to have a locally-built or editable-installed package as any
+    other, and nothing before this caught it.
     """
     try:
         version = importlib.metadata.version(package_name)
     except importlib.metadata.PackageNotFoundError:
         return package_name
 
-    return f"{package_name}=={version}"
+    public_version = version.partition("+")[0]
+
+    return f"{package_name}=={public_version}"
 
 
 def compiling_python_version():

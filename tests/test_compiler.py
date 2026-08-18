@@ -2428,6 +2428,101 @@ def test_pinned_requirement_helper_falls_back_for_an_unknown_package():
     )
 
 
+def test_pinned_requirement_helper_strips_a_pep440_local_version_segment(monkeypatch):
+    """PyPI rejects any upload whose version contains a "+" (PEP 440's
+    local version segment) -- it exists specifically to distinguish a
+    locally-modified build (a CUDA-specific wheel, a setuptools-scm/git
+    "+dirty" build, an editable install, ...) from the public release it's
+    based on, never to be redistributed itself. Pinning the exact local
+    version importlib.metadata.version() reports bakes an unresolvable
+    "package==version+local" line into requirements.txt: confirmed
+    reproduced against a real `pip install` of exactly this kind of pin,
+    which fails with "No matching distribution found for ...".
+    """
+
+    import backend.compiler as compiler_module
+
+    monkeypatch.setattr(
+        compiler_module.importlib.metadata,
+        "version",
+        lambda package_name: "2.1.0+cu121",
+    )
+
+    assert compiler_module._pinned_requirement("torch_local_version_test") == (
+        "torch_local_version_test==2.1.0"
+    )
+
+
+def test_pinned_requirement_helper_leaves_an_ordinary_version_untouched(monkeypatch):
+    """The common case -- no "+" in the reported version at all -- must
+    behave exactly as before: pinned to the full version string, unchanged.
+    """
+
+    import backend.compiler as compiler_module
+
+    monkeypatch.setattr(
+        compiler_module.importlib.metadata,
+        "version",
+        lambda package_name: "1.2.3",
+    )
+
+    assert compiler_module._pinned_requirement("ordinary_version_test") == (
+        "ordinary_version_test==1.2.3"
+    )
+
+
+def test_requirements_strips_a_local_version_segment_from_a_pinned_dependency(
+    tmp_path, monkeypatch
+):
+    """End-to-end: a notebook importing a package whose installed version
+    happens to carry a PEP 440 local version segment must still get a
+    requirements.txt pin that `pip install` can actually resolve, not the
+    unresolvable exact local build.
+    """
+
+    import backend.compiler as compiler_module
+
+    real_version = compiler_module.importlib.metadata.version
+
+    def fake_version(package_name):
+        if package_name == "local_version_dependency_test":
+            return "0.1.0+dirty"
+        return real_version(package_name)
+
+    monkeypatch.setattr(compiler_module.importlib.metadata, "version", fake_version)
+    monkeypatch.setattr(
+        compiler_module,
+        "distribution_name_for_import",
+        lambda import_name: (
+            "local_version_dependency_test"
+            if import_name == "local_version_dependency_test"
+            else import_name
+        ),
+    )
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import local_version_dependency_test\n\n"
+            "def noop() -> int:\n    return 1\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    requirements = (output_dir / "requirements.txt").read_text(encoding="utf-8")
+    lines = set(requirements.split())
+
+    assert "local_version_dependency_test==0.1.0" in lines
+    assert "local_version_dependency_test==0.1.0+dirty" not in lines
+    assert not any("+dirty" in line for line in lines)
+
+
 def test_requirements_resolves_an_import_name_to_its_actual_distribution_name(
     tmp_path
 ):
