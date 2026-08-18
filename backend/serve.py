@@ -189,10 +189,28 @@ def serve_notebook(notebook_path, output_dir="generated", port=8000, host="0.0.0
     # --output has or whether it's relative or absolute -- and is a
     # complete no-op for the documented default: Path("generated").resolve().parent
     # is exactly the original invocation directory, identical to the
-    # previous unset-cwd behavior. This also fixes `--reload`'s own
-    # default watch directory (cwd, when no --reload-dir is given), which
-    # had the identical mismatch -- watching the invocation directory
-    # instead of wherever output_dir's compiled app.py actually lives.
+    # previous unset-cwd behavior.
+    #
+    # --reload-dir is a separate fix, for a distinct problem: uvicorn's
+    # own --reload watcher, when no --reload-dir is given, defaults to
+    # watching `Path.cwd()` recursively (confirmed against the installed
+    # uvicorn's own Config.__init__: reload_dirs falls back to
+    # [Path.cwd()] whenever it ends up empty) -- and cwd here is
+    # output_dir's *parent*, not output_dir itself, since that's what the
+    # import-resolution fix just above needs it to be. Without this,
+    # `serve`'s uvicorn subprocess watched the *entire* invocation
+    # directory tree for the documented default (--output "generated",
+    # whose parent is the project root) -- every unrelated file in the
+    # project, not just the compiled app -- triggering a spurious restart
+    # on a totally unrelated edit (e.g. a test file, a doc, anything under
+    # the same tree) and paying the filesystem-watch cost of a
+    # potentially large, unrelated directory tree for no benefit. The
+    # notebook-source watcher (NotebookChangeHandler's own Observer,
+    # scheduled on just notebook_dir above) was already correctly scoped
+    # this way; uvicorn's own reload watcher had no equivalent scoping
+    # until now. Explicitly pointing it at output_dir itself (resolved,
+    # independent of cwd) narrows it to exactly the compiled app's own
+    # files, regardless of how many path segments --output has.
     server_process = subprocess.Popen(
         [
             sys.executable,
@@ -200,6 +218,8 @@ def serve_notebook(notebook_path, output_dir="generated", port=8000, host="0.0.0
             "uvicorn",
             f"{package_name}.app:app",
             "--reload",
+            "--reload-dir",
+            str(Path(output_dir).resolve()),
             "--host",
             str(host),
             "--port",

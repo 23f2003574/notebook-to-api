@@ -221,6 +221,58 @@ def test_serve_notebook_cwd_is_the_invocation_directory_for_the_default_output(
     assert _FakePopen.instances[0].cwd == str(tmp_path)
 
 
+def test_serve_notebook_passes_reload_dir_scoped_to_the_output_dir(tmp_path, monkeypatch):
+    """uvicorn's own --reload watcher, when no --reload-dir is given,
+    defaults to watching `Path.cwd()` recursively (confirmed against the
+    installed uvicorn's own Config.__init__: reload_dirs falls back to
+    [Path.cwd()] whenever it ends up empty) -- and cwd here is
+    output_dir's *parent* (needed for `{package_name}.app:app` to be
+    importable), not output_dir itself. Without an explicit --reload-dir,
+    the uvicorn subprocess watched the *entire* invocation directory tree
+    for the documented default (--output "generated", whose parent is the
+    project root) -- every unrelated file in the project, not just the
+    compiled app -- triggering a spurious restart on a totally unrelated
+    edit and paying the filesystem-watch cost of a potentially large,
+    unrelated directory tree for no benefit.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    assert len(_FakePopen.instances) == 1
+    cmd = _FakePopen.instances[0].cmd
+    assert "--reload-dir" in cmd
+    reload_dir_index = cmd.index("--reload-dir")
+    assert cmd[reload_dir_index + 1] == str(output_dir.resolve())
+
+
+def test_serve_notebook_scopes_reload_dir_to_output_dir_not_its_parent_for_a_nested_output(
+    tmp_path, monkeypatch
+):
+    """Same fix as above, verified for a multi-segment --output: the
+    reload watcher must stay scoped to output_dir itself even when cwd
+    (output_dir's parent, for import resolution) is a different, wider
+    directory than output_dir.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "subdir" / "built"
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    assert len(_FakePopen.instances) == 1
+    cmd = _FakePopen.instances[0].cmd
+    reload_dir_index = cmd.index("--reload-dir")
+    assert cmd[reload_dir_index + 1] == str(output_dir.resolve())
+    # The reload dir must be output_dir itself, not the (wider) cwd the
+    # subprocess was launched from.
+    assert cmd[reload_dir_index + 1] != _FakePopen.instances[0].cwd
+
+
 def test_serve_notebook_prints_localhost_for_the_default_host(tmp_path, monkeypatch, capsys):
     """"0.0.0.0" isn't itself a browsable address -- the printed API/Docs
     URLs must still say "localhost" for the common default, exactly as
