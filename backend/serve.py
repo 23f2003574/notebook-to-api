@@ -259,7 +259,40 @@ def serve_notebook(notebook_path, output_dir="generated", port=8000, host="0.0.0
         print("\n\n🛑 Shutting down...")
         observer.stop()
         server_process.terminate()
-        server_process.wait(timeout=5)
+
+        try:
+
+            server_process.wait(timeout=5)
+
+        except subprocess.TimeoutExpired:
+
+            # terminate() sends SIGTERM once, with no escalation -- a
+            # child uvicorn that doesn't exit within 5s (an in-flight
+            # long-running request, a slow debugger attach, a loaded
+            # system, or a process that simply ignores SIGTERM) left this
+            # wait() raising TimeoutExpired unhandled, which propagated
+            # straight out of Ctrl+C's own documented graceful-shutdown
+            # path -- the one mechanism `serve --help` tells a user to
+            # rely on -- as a raw traceback instead of the "✅ Server
+            # stopped." this block already prints for the common case.
+            # Worse, observer.join() below (guaranteeing the notebook-
+            # watcher thread has actually stopped, not just been asked
+            # to) never ran either, since it sits after this whole
+            # try/except, unreached by an exception escaping this block --
+            # leaving the uvicorn subprocess potentially still running,
+            # orphaned, after the CLI process itself had already crashed.
+            # SIGKILL (unlike SIGTERM) can't be ignored or delayed by the
+            # target process, so the unconditional wait() right after it
+            # is bounded in practice, the same escalation any real
+            # process supervisor (systemd, Docker, ...) already applies
+            # after a SIGTERM grace period expires.
+            print(
+                "⚠️  API server did not stop within 5s after SIGTERM -- "
+                "forcing it to stop.\n"
+            )
+            server_process.kill()
+            server_process.wait()
+
         print("✅ Server stopped.\n")
 
     observer.join()

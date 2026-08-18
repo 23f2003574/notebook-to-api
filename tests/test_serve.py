@@ -1,3 +1,5 @@
+import subprocess
+
 import pytest
 
 from backend import serve as serve_module
@@ -13,24 +15,43 @@ class _FakePopen:
     server process having already exited (e.g. `port` already in use) --
     None means "still running", matching subprocess.Popen.poll()'s own
     contract.
+
+    default_wait_raises_timeout_expired (also reset in _reset_fakes) lets
+    a test simulate a child process that doesn't stop within wait()'s own
+    timeout after terminate() (SIGTERM) -- the exact scenario
+    serve_notebook's own Ctrl+C shutdown path must escalate to kill()
+    (SIGKILL) for. Only the *first* wait() call raises; a real killed
+    process can't ignore SIGKILL, so the second wait() (after kill())
+    succeeds, the same way a real subprocess would.
     """
 
     instances = []
     default_poll_returncode = None
+    default_wait_raises_timeout_expired = False
 
     def __init__(self, cmd, *args, **kwargs):
         self.cmd = cmd
         self.cwd = kwargs.get("cwd")
         self.terminated = False
+        self.killed = False
         self.waited_timeout = None
+        self.wait_call_count = 0
         self.poll_returncode = _FakePopen.default_poll_returncode
+        self._raises_timeout_expired_once = _FakePopen.default_wait_raises_timeout_expired
         _FakePopen.instances.append(self)
 
     def terminate(self):
         self.terminated = True
 
+    def kill(self):
+        self.killed = True
+
     def wait(self, timeout=None):
+        self.wait_call_count += 1
         self.waited_timeout = timeout
+
+        if self._raises_timeout_expired_once and self.wait_call_count == 1:
+            raise subprocess.TimeoutExpired(cmd=self.cmd, timeout=timeout)
 
     def poll(self):
         return self.poll_returncode
@@ -70,6 +91,7 @@ def _raise_keyboard_interrupt(*args, **kwargs):
 def _reset_fakes():
     _FakePopen.instances.clear()
     _FakePopen.default_poll_returncode = None
+    _FakePopen.default_wait_raises_timeout_expired = False
     _FakeObserver.instances.clear()
     yield
 
@@ -358,6 +380,74 @@ def test_serve_notebook_stops_server_and_observer_on_keyboard_interrupt(tmp_path
     assert _FakePopen.instances[0].waited_timeout == 5
     assert _FakeObserver.instances[0].stopped is True
     assert _FakeObserver.instances[0].joined is True
+
+
+def test_serve_notebook_kills_the_server_process_if_it_does_not_stop_within_the_timeout(
+    tmp_path, monkeypatch
+):
+    """terminate() sends SIGTERM once, with no escalation. Confirmed
+    exploitable before this fix: a child uvicorn that doesn't exit within
+    wait()'s own 5s timeout (an in-flight long-running request, a slow
+    debugger attach, a loaded system, or a process that simply ignores
+    SIGTERM) left wait(timeout=5) raising subprocess.TimeoutExpired
+    unhandled, propagating straight out of Ctrl+C's own documented
+    graceful-shutdown path as a raw traceback instead of the "Server
+    stopped." message this same shutdown block already prints for the
+    common case.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _FakePopen.default_wait_raises_timeout_expired = True
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    assert _FakePopen.instances[0].terminated is True
+    assert _FakePopen.instances[0].killed is True
+    # wait() is called twice: the first (timing out) after terminate(),
+    # the second (succeeding, the same way a real killed process can't
+    # ignore SIGKILL) after kill().
+    assert _FakePopen.instances[0].wait_call_count == 2
+
+
+def test_serve_notebook_still_joins_the_observer_after_the_server_process_is_killed(
+    tmp_path, monkeypatch
+):
+    """observer.join() (confirming the notebook-watcher thread has
+    actually stopped, not just been asked to) sits after the whole
+    terminate/wait try/except in serve_notebook -- before this fix, an
+    unhandled TimeoutExpired escaping that block skipped it entirely,
+    potentially leaving that thread unjoined on top of the already-crashed
+    shutdown.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _FakePopen.default_wait_raises_timeout_expired = True
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    assert _FakeObserver.instances[0].stopped is True
+    assert _FakeObserver.instances[0].joined is True
+
+
+def test_serve_notebook_prints_a_warning_when_escalating_to_kill(tmp_path, monkeypatch, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _FakePopen.default_wait_raises_timeout_expired = True
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    captured = capsys.readouterr()
+    assert "forcing it to stop" in captured.out
+    assert "Server stopped" in captured.out
 
 
 def test_serve_notebook_raises_when_the_server_process_exits_unexpectedly(tmp_path, monkeypatch):
