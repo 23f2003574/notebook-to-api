@@ -117,6 +117,46 @@ router = APIRouter(
 # UPLOAD_DIR attribute in-process, changes where uploads are written but
 # not this one-time directory creation.
 UPLOAD_DIR = os.getenv("NOTEBOOK_API_UPLOAD_DIR", "uploads")
+
+# Confirmed catastrophic if left unchecked: NOTEBOOK_API_UPLOAD_DIR and
+# NOTEBOOK_API_GENERATED_DIR are each read independently above, with
+# nothing stopping an operator from -- accidentally or otherwise --
+# configuring them to the same directory, or one nested inside the
+# other. Reproduced live: pointing both at the same path, uploading a
+# notebook, compiling it, then calling DELETE /api/generated -- whose own
+# docstring says it "resets the dashboard's compiled-app state back to
+# nothing compiled yet" via shutil.rmtree(GENERATED_DIR) -- permanently
+# destroyed the uploaded notebook right along with it: the whole shared
+# directory vanished outright, not just the compiled output, with no way
+# to recover it. The identical destructive potential applies to
+# GENERATED_DIR nested inside UPLOAD_DIR (that same rmtree call would
+# still remove real uploaded notebooks sitting under it) and UPLOAD_DIR
+# nested inside GENERATED_DIR (the reverse -- a recompile's own
+# clear_stale_export_artifacts, backend/compiler.py, or a future
+# GENERATED_DIR-wide write could just as easily reach into it). Rejected
+# outright at import time instead of silently running with it, the same
+# "fail fast on a configuration this dangerous" precedent
+# allowed_origins()'s own wildcard-CORS-origin rejection already sets
+# (backend/dashboard.py) -- by the time a request has arrived to trigger
+# the actual data loss, it's too late to warn about it.
+_upload_dir_resolved = Path(UPLOAD_DIR).resolve()
+_generated_dir_resolved = Path(GENERATED_DIR).resolve()
+
+if (
+    _upload_dir_resolved == _generated_dir_resolved
+    or _upload_dir_resolved in _generated_dir_resolved.parents
+    or _generated_dir_resolved in _upload_dir_resolved.parents
+):
+    raise ValueError(
+        f"NOTEBOOK_API_UPLOAD_DIR ({UPLOAD_DIR!r}) and "
+        f"NOTEBOOK_API_GENERATED_DIR ({GENERATED_DIR!r}) must not be the "
+        "same directory, or nested inside each other -- DELETE "
+        "/api/generated removes GENERATED_DIR (and everything under it) "
+        "outright, which would destroy uploaded notebooks too if the two "
+        "overlap. Configure them to point at two separate, non-nested "
+        "directories."
+    )
+
 os.makedirs(
     UPLOAD_DIR,
     exist_ok=True

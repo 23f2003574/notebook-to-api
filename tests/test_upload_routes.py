@@ -249,6 +249,96 @@ print("UPLOAD_DIR_ENV_OVERRIDE_OK")
     assert not (PROJECT_ROOT / "uploads" / "env_var_test.ipynb").exists()
 
 
+def test_upload_dir_and_generated_dir_configured_to_the_same_path_are_rejected_at_import(
+    tmp_path
+):
+    """Confirmed catastrophic if left unchecked: UPLOAD_DIR and
+    GENERATED_DIR are each read independently from their own env var, with
+    nothing stopping an operator from configuring them to the same
+    directory. Reproduced live before this fix: pointing both at the same
+    path, uploading a notebook, compiling it, then calling DELETE
+    /api/generated -- whose own docstring says it resets the dashboard's
+    compiled-app state back to "nothing compiled yet" via
+    shutil.rmtree(GENERATED_DIR) -- permanently destroyed the uploaded
+    notebook right along with it: the whole shared directory vanished
+    outright, not just the compiled output, with no way to recover it.
+
+    Run in a fresh subprocess since both directories are only ever read
+    once, at import time.
+    """
+
+    shared_dir = tmp_path / "shared_dir"
+
+    proc = subprocess.run(
+        [sys.executable, "-c", "from backend.routes import upload"],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={
+            **os.environ,
+            "NOTEBOOK_API_UPLOAD_DIR": str(shared_dir),
+            "NOTEBOOK_API_GENERATED_DIR": str(shared_dir),
+        },
+    )
+
+    assert proc.returncode != 0
+    assert "must not be the same directory" in proc.stderr
+
+
+def test_upload_dir_nested_inside_generated_dir_is_rejected_at_import(tmp_path):
+    """Same class of destructive overlap as the identical-path case above,
+    just reached the other way around: GENERATED_DIR nested inside
+    UPLOAD_DIR (DELETE /api/generated's own shutil.rmtree(GENERATED_DIR)
+    would still remove real uploaded notebooks sitting under it) or
+    UPLOAD_DIR nested inside GENERATED_DIR (the reverse -- a recompile's
+    own directory-wide writes could just as easily reach into it).
+    """
+
+    parent_dir = tmp_path / "parent_dir"
+    nested_dir = parent_dir / "nested"
+
+    proc = subprocess.run(
+        [sys.executable, "-c", "from backend.routes import upload"],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={
+            **os.environ,
+            "NOTEBOOK_API_UPLOAD_DIR": str(parent_dir),
+            "NOTEBOOK_API_GENERATED_DIR": str(nested_dir),
+        },
+    )
+
+    assert proc.returncode != 0
+    assert "must not be the same directory" in proc.stderr
+
+
+def test_upload_dir_and_generated_dir_configured_to_separate_paths_import_cleanly(
+    tmp_path
+):
+    """The common, correct case -- two distinct, non-nested directories --
+    must be completely unaffected by the collision check above.
+    """
+
+    proc = subprocess.run(
+        [sys.executable, "-c", "from backend.routes import upload; print('IMPORT_OK')"],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={
+            **os.environ,
+            "NOTEBOOK_API_UPLOAD_DIR": str(tmp_path / "separate_uploads"),
+            "NOTEBOOK_API_GENERATED_DIR": str(tmp_path / "separate_generated"),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "IMPORT_OK" in proc.stdout
+
+
 def test_upload_rejects_filename_that_escapes_upload_dir():
     """Confirmed exploitable before this fix: an uploaded file named
     '../poc.ipynb' was written one directory above uploads/, outside the
