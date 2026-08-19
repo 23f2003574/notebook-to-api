@@ -1,8 +1,12 @@
+import http.server
 import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
+
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -1551,6 +1555,220 @@ def test_export_curl_command_reports_a_clean_error_for_a_missing_notebook(tmp_pa
 
     proc = _run_cli(
         ["export-curl", str(workdir / "does-not-exist.ipynb")], cwd=workdir
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
+class _FakeDashboardHandler(http.server.BaseHTTPRequestHandler):
+    """A minimal stand-in for a running dashboard, used only to exercise
+    the `upload` CLI command's own HTTP handling (request construction,
+    success/error response handling, connection-failure handling) --
+    not to re-verify the dashboard's own POST /api/upload behavior
+    (multipart parsing, validation, atomic writes, ...), which is
+    already exhaustively covered directly in tests/test_upload_routes.py.
+
+    `responses` is consumed FIFO, one entry (status_code, json_body) per
+    request received; `requests` records each request's raw path
+    (including its query string) so a test can confirm e.g. "overwrite"
+    was actually passed through.
+    """
+
+    responses = []
+    requests = []
+
+    def do_POST(self):
+        content_length = int(self.headers.get("Content-Length", 0))
+        self.rfile.read(content_length)
+
+        type(self).requests.append(self.path)
+
+        status_code, body = type(self).responses.pop(0)
+        payload = json.dumps(body).encode("utf-8")
+
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def fake_dashboard():
+    _FakeDashboardHandler.responses = []
+    _FakeDashboardHandler.requests = []
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _FakeDashboardHandler)
+    port = server.server_address[1]
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    try:
+        yield f"http://127.0.0.1:{port}", _FakeDashboardHandler
+    finally:
+        server.shutdown()
+        server_thread.join(timeout=5)
+
+
+def test_upload_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "upload" in proc.stdout
+
+
+def test_upload_command_reports_success(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        (200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "path": "/srv/uploads/nb.ipynb",
+            "overwritten": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["upload", str(notebook_path), "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Uploaded 'nb.ipynb'" in proc.stdout
+    assert "overwritten: False" in proc.stdout
+    assert handler.requests == ["/api/upload?overwrite=false"]
+
+
+def test_upload_command_passes_the_overwrite_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        (200, {
+            "status": "success", "filename": "nb.ipynb",
+            "path": "/srv/uploads/nb.ipynb", "overwritten": True,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "upload", str(notebook_path),
+            "--dashboard-url", dashboard_url, "--overwrite",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/upload?overwrite=true"]
+
+
+def test_upload_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        (200, {
+            "status": "success", "filename": "nb.ipynb",
+            "path": "/srv/uploads/nb.ipynb", "overwritten": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["upload", str(notebook_path), "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == {
+        "status": "success", "filename": "nb.ipynb",
+        "path": "/srv/uploads/nb.ipynb", "overwritten": False,
+    }
+
+
+def test_upload_command_reports_a_clean_error_for_a_rejected_upload(
+    tmp_path, fake_dashboard
+):
+    """A 409 (same-name collision without --overwrite), or any other
+    non-2xx the dashboard returns, must surface as the same clean
+    "Error: ..." single-line message every other core command's expected
+    failure modes already get, using the dashboard's own {"detail": ...}
+    body -- not a raw HTTP response dump.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        (409, {"detail": "A notebook named 'nb.ipynb' already exists."})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["upload", str(notebook_path), "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "already exists")
+
+
+def test_upload_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "upload", str(notebook_path),
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
+def test_upload_command_reports_a_clean_error_for_a_missing_notebook(tmp_path):
+    """The local file must be checked before ever attempting to reach the
+    dashboard -- no server is running for this test at all, so a
+    connection-error message here (instead of the missing-file one) would
+    mean the CLI tried to open a request before validating its own input.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "upload", str(workdir / "does-not-exist.ipynb"),
+            "--dashboard-url", "http://127.0.0.1:1",
+        ],
+        cwd=workdir,
     )
 
     _assert_clean_cli_error(proc, "No such file or directory")

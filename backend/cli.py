@@ -338,7 +338,7 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 # commands through _dispatch_core_command's shared error handling.
 _CORE_COMMANDS = frozenset({
     "compile", "inspect", "export-openapi", "export-sdk", "export-curl",
-    "serve", "watch", "deploy", "diff",
+    "serve", "watch", "deploy", "diff", "upload",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -510,6 +510,39 @@ def _parse_comma_separated_names(value):
     names = [name.strip() for name in value.split(",") if name.strip()]
 
     return names or None
+
+
+def _extract_dashboard_error_detail(response):
+    """The most useful message extractable from a non-2xx `response` from
+    a dashboard's own POST /api/upload -- its own {"detail": "..."} body
+    (every HTTPException raised there already has this shape) if present,
+    else the raw response text as a fallback for a non-JSON response
+    (e.g. a reverse proxy's own HTML error page in front of a dashboard
+    that isn't actually reachable behind it).
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return response.text
+
+    if isinstance(body, dict) and "detail" in body:
+        return body["detail"]
+
+    return response.text
+
+
+def _dashboard_connection_error(exc, dashboard_url):
+    """Translate an httpx transport-level failure reaching `dashboard_url`
+    into the same clean, actionable RuntimeError every other core
+    command's own expected failure modes already get via
+    CLI_USER_FACING_ERRORS -- instead of a raw httpx traceback (connection
+    refused, DNS failure, a timeout, ...) that gives no hint the actual
+    problem is simply that no dashboard is listening there at all.
+    """
+    return RuntimeError(
+        f"Could not reach the dashboard at {dashboard_url}: {exc}. Is it "
+        "running? (see `python -m backend.dashboard`)"
+    )
 
 
 def _dispatch_core_command(args):
@@ -820,6 +853,50 @@ def _dispatch_core_command(args):
             print(json.dumps(diff, indent=2))
         else:
             print_notebook_diff(diff)
+    elif args.command == "upload":
+        # Imported here, not at module scope, the same deferred-import
+        # convention export-openapi/export-sdk's own dynamic imports
+        # already use elsewhere in this file -- httpx is only ever needed
+        # for this one command, not for every `notebook-to-api` invocation
+        # (including `--help`).
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+
+            with open(args.notebook, "rb") as f:
+
+                response = httpx.post(
+                    f"{dashboard_url}/api/upload",
+                    params={"overwrite": args.overwrite},
+                    files={
+                        "file": (
+                            os.path.basename(args.notebook), f,
+                            "application/json",
+                        )
+                    },
+                    timeout=args.timeout,
+                )
+
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the upload ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"Uploaded '{data.get('filename', args.notebook)}' to {dashboard_url}")
+            print(f"  path: {data.get('path')}")
+            print(f"  overwritten: {data.get('overwritten')}")
 
 
 def main():
@@ -1106,6 +1183,50 @@ def main():
             "\"changed\", \"unchanged\"}) instead of the human-readable "
             "report, for scripting/automation -- e.g. failing a CI check "
             "when \"removed\" or \"changed\" is non-empty."
+        )
+    )
+
+    # upload command (push a local notebook to a running dashboard)
+    upload_parser = subparsers.add_parser(
+        "upload",
+        help="Upload a notebook to a running dashboard instance's POST /api/upload."
+    )
+    upload_parser.add_argument("notebook", help="Path to the notebook file.")
+    upload_parser.add_argument(
+        "--dashboard-url",
+        default="http://localhost:8001",
+        dest="dashboard_url",
+        help=(
+            "Base URL of the running dashboard API (default: "
+            "http://localhost:8001, matching dashboard_port()'s own "
+            "default in backend/dashboard.py)."
+        )
+    )
+    upload_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Replace an existing notebook of the same name on the "
+            "dashboard, mirroring POST /api/upload's own ?overwrite=true "
+            "-- without this, uploading onto an existing filename is "
+            "rejected with a 409, exactly as it already is through that "
+            "endpoint directly."
+        )
+    )
+    upload_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=30.0,
+        help="Seconds to wait for the dashboard to respond before giving up (default: 30)."
+    )
+    upload_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"filename\", \"path\", \"overwritten\"}) "
+            "instead of a human-readable summary, for scripting/automation."
         )
     )
 
