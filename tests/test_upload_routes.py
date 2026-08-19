@@ -5102,3 +5102,79 @@ def test_export_openapi_read_back_does_not_race_a_concurrent_recompiles_cleanup(
     assert not request_thread.is_alive()
     assert result["resp"].status_code == 200
     assert "paths" in result["resp"].json()["schema"]
+
+
+def test_get_config_reports_the_configured_limits():
+
+    resp = client.get("/api/config")
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["status"] == "success"
+    assert isinstance(body["max_upload_bytes"], int)
+    assert isinstance(body["max_batch_upload_files"], int)
+    assert isinstance(body["max_notebook_versions"], int)
+    assert isinstance(body["max_tag_length"], int)
+    assert isinstance(body["max_tags_per_notebook"], int)
+    assert isinstance(body["deploy_subprocess_timeout_seconds"], int)
+
+
+def test_get_config_reflects_a_configured_max_upload_bytes(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_UPLOAD_BYTES", 12345)
+
+    resp = client.get("/api/config")
+
+    assert resp.json()["max_upload_bytes"] == 12345
+
+
+def test_get_config_reflects_a_configured_max_batch_upload_files(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 7)
+
+    resp = client.get("/api/config")
+
+    assert resp.json()["max_batch_upload_files"] == 7
+
+
+def test_get_config_reports_notebook_sort_keys_and_orders_matching_list_notebooks():
+    """GET /api/notebooks' own "sort"/"order" query parameters accept
+    exactly _NOTEBOOK_SORT_KEYS/_NOTEBOOK_SORT_ORDERS -- this must report
+    the same values, not a second, independently-drifting copy of them.
+    """
+
+    from backend.routes.upload import _NOTEBOOK_SORT_KEYS, _NOTEBOOK_SORT_ORDERS
+
+    resp = client.get("/api/config")
+    body = resp.json()
+
+    assert body["notebook_sort_keys"] == sorted(_NOTEBOOK_SORT_KEYS)
+    assert body["notebook_sort_orders"] == sorted(_NOTEBOOK_SORT_ORDERS)
+
+    for sort_key in body["notebook_sort_keys"]:
+        assert client.get(f"/api/notebooks?sort={sort_key}").status_code == 200
+
+    for order in body["notebook_sort_orders"]:
+        assert client.get(f"/api/notebooks?order={order}").status_code == 200
+
+
+def test_get_config_never_leaks_the_upload_or_generated_directory_path():
+    """UPLOAD_DIR/GENERATED_DIR are filesystem paths on the compiling
+    server -- the same category of information GET /api/health's own
+    docstring already explains has no business leaking out of a
+    dashboard API response.
+    """
+
+    resp = client.get("/api/config")
+
+    assert resp.status_code == 200
+    body_text = json.dumps(resp.json())
+
+    assert "upload_dir" not in resp.json()
+    assert "generated_dir" not in resp.json()
+    assert UPLOAD_DIR not in body_text

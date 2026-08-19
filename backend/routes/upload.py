@@ -2826,3 +2826,49 @@ def health_check():
         "compiled_app_present": compiled_app_present,
         "compiled_at": compiled_at if compiled_app_present else None,
     }
+
+
+@router.get("/config")
+def get_config():
+    """Expose this dashboard's own configured limits and accepted
+    parameter values, so a client (a frontend, or a script driving this
+    API directly) can adapt to them instead of hardcoding a guess that
+    silently drifts from whatever the server is actually enforcing.
+
+    Before this, every one of these limits was only discoverable the hard
+    way: attempt the operation and read the resulting error. A dashboard
+    frontend wanting to reject an oversized file before even starting the
+    upload (rather than waiting on a real request just to get back the
+    same 413 POST /api/upload already raises), grey out a batch-upload
+    "add more files" control once MAX_BATCH_UPLOAD_FILES is reached, warn
+    a user approaching PUT /api/notebooks/{filename}/tags' own per-tag or
+    per-notebook caps, or populate a "sort by" control from
+    GET /api/notebooks' own actual accepted "sort"/"order" values instead
+    of a second, hardcoded copy of _NOTEBOOK_SORT_KEYS/_NOTEBOOK_SORT_ORDERS
+    that could drift out of sync with this file's own definitions -- had
+    no way to know any of this ahead of time.
+
+    Every one of these is already independently configurable via its own
+    NOTEBOOK_API_* environment variable (see each constant's own comment
+    above) -- this endpoint doesn't add any new configuration, only a way
+    to read back whatever was actually configured, in one place, without
+    an operator or a client needing separate access to the server's own
+    environment to know what it is.
+
+    Deliberately omits UPLOAD_DIR and GENERATED_DIR: those are absolute
+    (or process-relative) filesystem paths on the compiling server, the
+    same category of information GET /api/health's own docstring already
+    explains has no business leaking out of a dashboard API response.
+    """
+
+    return {
+        "status": "success",
+        "max_upload_bytes": MAX_UPLOAD_BYTES,
+        "max_batch_upload_files": MAX_BATCH_UPLOAD_FILES,
+        "max_notebook_versions": MAX_NOTEBOOK_VERSIONS,
+        "max_tag_length": _MAX_TAG_LENGTH,
+        "max_tags_per_notebook": _MAX_TAGS_PER_NOTEBOOK,
+        "deploy_subprocess_timeout_seconds": DEPLOY_SUBPROCESS_TIMEOUT_SECONDS,
+        "notebook_sort_keys": sorted(_NOTEBOOK_SORT_KEYS),
+        "notebook_sort_orders": sorted(_NOTEBOOK_SORT_ORDERS),
+    }
