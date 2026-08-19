@@ -3,6 +3,7 @@ from pathlib import Path
 
 from backend.compiler import (
     COMPILE_METADATA_FILENAME,
+    _filter_functions_by_name,
     distribution_name_for_import,
     STANDARD_LIBS,
 )
@@ -396,7 +397,7 @@ def inspect_notebook_data(
     }
 
 
-def print_compile_summary(notebook_path, output_dir="generated"):
+def print_compile_summary(notebook_path, output_dir="generated", only=None, exclude=None):
     """Print what compiling `notebook_path` into `output_dir` actually
     produced: its endpoints (flagging background/task_id-based ones the
     same way POST /api/compile's "endpoints" field does) and third-party
@@ -409,12 +410,23 @@ def print_compile_summary(notebook_path, output_dir="generated"):
     fast, informative feedback loop after every save is the entire point
     of running a live server in the first place. `compile` had the same
     gap until this was first added there and later reused here.
+
+    `only`/`exclude`, when given, restrict which functions are reported
+    here to whichever ones _filter_functions_by_name (backend/compiler.py)
+    actually left compiled -- inspect_notebook_data below re-parses the
+    notebook fresh and has no idea a compile that just ran was restricted
+    at all, so without this, `compile --only add` would still report an
+    endpoint for every *other* function the notebook defines, claiming
+    endpoints exist for functions the compiled app doesn't actually have.
     """
     data = inspect_notebook_data(
         notebook_path=notebook_path, output_dir=str(output_dir)
     )
 
     functions = data["functions"]
+
+    if only or exclude:
+        functions = _filter_functions_by_name(functions, only, exclude)
 
     print(f"\nGenerated {len(functions)} endpoint(s):")
 

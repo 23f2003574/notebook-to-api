@@ -15,6 +15,7 @@ import nbformat
 import pytest
 
 from backend.compiler import (
+    _filter_functions_by_name,
     clear_stale_export_artifacts,
     COMPILE_LOCK,
     compile_notebook,
@@ -806,6 +807,147 @@ def test_compiler_pipeline_deduplicates_functions_redefined_across_cells(
 
     assert generated_app.count('"/add"') == 1
     assert generated_app.count("def add(") == 1
+
+
+def _add_and_subtract_notebook(tmp_path, filename="add_subtract.ipynb"):
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n"
+            "    return a + b\n"
+            "\n"
+            "def subtract(a: int, b: int) -> int:\n"
+            "    return a - b\n"
+        )
+    )
+
+    notebook_path = tmp_path / filename
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    return notebook_path
+
+
+def test_filter_functions_by_name_only_keeps_just_the_named_functions():
+
+    functions = [{"name": "add"}, {"name": "subtract"}]
+
+    filtered = _filter_functions_by_name(functions, only=["add"], exclude=None)
+
+    assert [f["name"] for f in filtered] == ["add"]
+
+
+def test_filter_functions_by_name_exclude_drops_just_the_named_functions():
+
+    functions = [{"name": "add"}, {"name": "subtract"}]
+
+    filtered = _filter_functions_by_name(functions, only=None, exclude=["subtract"])
+
+    assert [f["name"] for f in filtered] == ["add"]
+
+
+def test_filter_functions_by_name_with_neither_returns_everything_unchanged():
+
+    functions = [{"name": "add"}, {"name": "subtract"}]
+
+    filtered = _filter_functions_by_name(functions, only=None, exclude=None)
+
+    assert filtered is functions
+
+
+def test_filter_functions_by_name_rejects_only_and_exclude_together():
+
+    with pytest.raises(ValueError, match="can't both be given"):
+        _filter_functions_by_name(
+            [{"name": "add"}], only=["add"], exclude=["add"]
+        )
+
+
+def test_filter_functions_by_name_rejects_an_unknown_only_name():
+
+    with pytest.raises(ValueError, match="not defined in this notebook"):
+        _filter_functions_by_name(
+            [{"name": "add"}], only=["nope"], exclude=None
+        )
+
+
+def test_filter_functions_by_name_rejects_an_unknown_exclude_name():
+
+    with pytest.raises(ValueError, match="not defined in this notebook"):
+        _filter_functions_by_name(
+            [{"name": "add"}], only=None, exclude=["nope"]
+        )
+
+
+def test_compile_notebook_with_only_generates_an_endpoint_for_just_that_function(
+    tmp_path
+):
+    """The generated app.py must expose exactly the requested function as
+    an endpoint -- and no others -- while the excluded function must still
+    be present and callable in the runtime module, since a compiled-out
+    function may still be called internally by one that *is* exposed.
+    """
+
+    notebook_path = _add_and_subtract_notebook(tmp_path)
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir), only=["add"])
+
+    generated_app = (output_dir / "app.py").read_text(encoding="utf-8")
+    runtime_module = (
+        output_dir / "runtime" / "notebook_module.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"/add"' in generated_app
+    assert '"/subtract"' not in generated_app
+    assert "def add(" in runtime_module
+    assert "def subtract(" in runtime_module
+
+
+def test_compile_notebook_with_exclude_omits_just_that_functions_endpoint(
+    tmp_path
+):
+
+    notebook_path = _add_and_subtract_notebook(tmp_path)
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir), exclude=["subtract"])
+
+    generated_app = (output_dir / "app.py").read_text(encoding="utf-8")
+
+    assert '"/add"' in generated_app
+    assert '"/subtract"' not in generated_app
+
+
+def test_compile_notebook_with_neither_only_nor_exclude_compiles_every_function(
+    tmp_path
+):
+    """Preserves the previous, still-default behavior -- every top-level
+    function becomes an endpoint when --only/--exclude aren't given.
+    """
+
+    notebook_path = _add_and_subtract_notebook(tmp_path)
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    generated_app = (output_dir / "app.py").read_text(encoding="utf-8")
+
+    assert '"/add"' in generated_app
+    assert '"/subtract"' in generated_app
+
+
+def test_compile_notebook_only_and_exclude_together_is_a_clean_error(tmp_path):
+
+    notebook_path = _add_and_subtract_notebook(tmp_path)
+    output_dir = tmp_path / "generated"
+
+    with pytest.raises(ValueError, match="can't both be given"):
+        compile_notebook(
+            str(notebook_path), str(output_dir), only=["add"], exclude=["subtract"]
+        )
 
 
 def test_compiler_pipeline_generates_awaitable_endpoint_for_async_function(

@@ -108,6 +108,160 @@ def test_compile_command_defaults_output_to_generated(tmp_path):
     assert (workdir / "generated" / "app.py").exists()
 
 
+def _write_add_subtract_notebook(path):
+    _write_notebook_with_function(
+        path,
+        "def add(a: int, b: int) -> int:\n"
+        "    return a + b\n"
+        "\n"
+        "def subtract(a: int, b: int) -> int:\n"
+        "    return a - b\n",
+    )
+
+
+def test_compile_command_only_compiles_just_the_named_function(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_add_subtract_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built", "--only", "add"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    generated_app = (workdir / "built" / "app.py").read_text(encoding="utf-8")
+    assert '"/add"' in generated_app
+    assert '"/subtract"' not in generated_app
+    assert "Generated 1 endpoint(s):" in proc.stdout
+    assert "POST /add" in proc.stdout
+    assert "POST /subtract" not in proc.stdout
+
+
+def test_compile_command_exclude_omits_just_the_named_function(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_add_subtract_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built", "--exclude", "subtract"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    generated_app = (workdir / "built" / "app.py").read_text(encoding="utf-8")
+    assert '"/add"' in generated_app
+    assert '"/subtract"' not in generated_app
+
+
+def test_compile_command_only_accepts_a_comma_separated_list(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+                            "def subtract(a: int, b: int) -> int:\n    return a - b\n\n"
+                            "def multiply(a: int, b: int) -> int:\n    return a * b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    proc = _run_cli(
+        [
+            "compile", str(notebook_path), "--output", "built",
+            "--only", "add, multiply",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    generated_app = (workdir / "built" / "app.py").read_text(encoding="utf-8")
+    assert '"/add"' in generated_app
+    assert '"/multiply"' in generated_app
+    assert '"/subtract"' not in generated_app
+
+
+def test_compile_command_only_and_exclude_together_reports_a_clean_error(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_add_subtract_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "compile", str(notebook_path), "--output", "built",
+            "--only", "add", "--exclude", "subtract",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "can't both be given")
+
+
+def test_compile_command_only_reports_a_clean_error_for_an_unknown_function(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_add_subtract_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built", "--only", "nope"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "not defined in this notebook")
+
+
+def test_compile_command_json_with_only_reflects_just_the_compiled_functions(tmp_path):
+    """compile --json's own output must not claim an endpoint exists for a
+    function --only just excluded from the actual compile -- confirmed
+    this would otherwise happen, since inspect_notebook_data re-parses the
+    notebook fresh with no idea --only/--exclude restricted anything.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_add_subtract_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "compile", str(notebook_path), "--output", "built",
+            "--only", "add", "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+
+    assert [f["name"] for f in data["functions"]] == ["add"]
+    assert [ep["path"] for ep in data["endpoints"]] == ["/add"]
+
+
 def test_compile_command_prints_a_summary_of_generated_endpoints(tmp_path):
     """Before this, `compile` printed a single "Compilation finished"
     line and nothing else -- seeing what had actually been generated

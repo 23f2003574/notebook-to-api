@@ -552,9 +552,67 @@ def clear_stale_export_artifacts(output_dir):
         shutil.rmtree(stale_sdk_dir)
 
 
+def _filter_functions_by_name(functions, only, exclude):
+    """Restrict `functions` (already deduplicated by name) to the ones a
+    caller actually wants compiled into endpoints, via at most one of
+    `only` or `exclude` (each an iterable of function names, or falsy for
+    "no filtering" -- the default).
+
+    Every module-level function a notebook defines (barring a *args/
+    **kwargs one -- see extract_functions_from_code) becomes a public API
+    endpoint, with no previous way to opt any of them out: a notebook's
+    own internal helper functions (data loading, validation, formatting,
+    ...) were compiled into endpoints exactly like the functions actually
+    meant to be part of the API's public surface. Renaming a helper
+    doesn't help either -- extract_functions_from_code applies no
+    leading-underscore (or any other) naming convention, so it's
+    extracted and exposed identically to every other top-level function.
+
+    `only` keeps just the named functions; `exclude` keeps every function
+    except the named ones. Either way, this only changes what
+    generate_fastapi_code (below) turns into endpoints -- write_runtime_module
+    still writes *every* cell's code, filtered or not, so an excluded
+    helper function stays fully callable from whichever exposed function
+    actually calls it; it just doesn't get its own endpoint.
+
+    Raises ValueError naming the unrecognized function(s) if `only`/
+    `exclude` names one this notebook doesn't actually define -- the same
+    "fail loudly on a name that doesn't do what the caller thinks"
+    precedent ReservedFunctionNameError already sets for a different kind
+    of name problem (generator/api_generator.py), rather than silently
+    compiling as if a typo'd name had simply never been requested at all.
+    """
+    if only and exclude:
+        raise ValueError(
+            "only and exclude can't both be given -- choose one."
+        )
+
+    if not only and not exclude:
+        return functions
+
+    known_names = {func["name"] for func in functions}
+    requested_names = set(only) if only else set(exclude)
+
+    unknown_names = sorted(requested_names - known_names)
+
+    if unknown_names:
+        raise ValueError(
+            f"{'only' if only else 'exclude'} names function(s) not defined "
+            f"in this notebook: {', '.join(unknown_names)}. Available: "
+            f"{', '.join(sorted(known_names)) or '(none)'}"
+        )
+
+    if only:
+        return [func for func in functions if func["name"] in requested_names]
+
+    return [func for func in functions if func["name"] not in requested_names]
+
+
 def compile_notebook_to_api(
     notebook_path,
-    output_path
+    output_path,
+    only=None,
+    exclude=None
 ):
 
     # compile_notebook_to_api writes several files to output_dir
@@ -600,6 +658,13 @@ def compile_notebook_to_api(
             functions.extend(funcs)
 
         functions = deduplicate_functions_by_name(functions)
+
+        # Applied before generate_fastapi_code, and before the reserved-
+        # name-collision check it performs, so an --only/--exclude typo is
+        # reported as its own clear error rather than silently changing
+        # which (if any) reserved-name collision generate_fastapi_code
+        # happens to hit first.
+        functions = _filter_functions_by_name(functions, only, exclude)
 
         # Generate the API code -- and let it raise (e.g.
         # ReservedFunctionNameError, generator/api_generator.py, for a
@@ -712,11 +777,17 @@ def compile_notebook_to_api(
 
 def compile_notebook(
     notebook_path,
-    output_dir
+    output_dir,
+    only=None,
+    exclude=None
 ):
     """
     Convenient wrapper for CLI.
     Generates the FastAPI app at <output_dir>/app.py.
+
+    `only`/`exclude` are passed straight through to
+    compile_notebook_to_api -- see _filter_functions_by_name's own
+    docstring for what they do and why.
     """
 
     output_path = os.path.join(
@@ -726,5 +797,7 @@ def compile_notebook(
 
     compile_notebook_to_api(
         notebook_path,
-        output_path
+        output_path,
+        only=only,
+        exclude=exclude
     )

@@ -33,6 +33,34 @@ def _write_notebook(path):
     )
 
 
+def _write_add_subtract_notebook(path):
+    path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n"
+                            "    return a + b\n"
+                            "\n"
+                            "def subtract(a: int, b: int) -> int:\n"
+                            "    return a - b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _install_fake_docker(bin_dir, log_path):
     """A fake `docker` executable that records how it was invoked instead of
     actually building an image, so these tests don't need a real Docker
@@ -294,6 +322,45 @@ def test_deploy_respects_custom_platform(tmp_path):
     assert log_lines[:-1] == [
         "build", "-t", "myapp:v2", "--platform", "linux/amd64", ".",
     ]
+
+
+def test_deploy_only_builds_an_image_with_just_the_named_function_compiled(tmp_path):
+    """`compile`'s own --only/--exclude (see tests/test_cli.py) must work
+    identically through `deploy`, since deploy compiles the notebook as
+    its own first step before building the Docker image from whatever
+    that compile produced -- a helper function a notebook author doesn't
+    want as part of a *deployed* app's public surface needed a way to be
+    left out of the image `deploy` actually builds and (optionally)
+    pushes, not just out of a local `compile` a developer runs by hand.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_add_subtract_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+
+    proc = _run_cli(
+        [
+            "deploy", str(notebook_path), "--output", "built_api",
+            "--only", "add",
+        ],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    generated_app = (workdir / "built_api" / "app.py").read_text(encoding="utf-8")
+    assert '"/add"' in generated_app
+    assert '"/subtract"' not in generated_app
+
+    assert "Generated 1 endpoint(s):" in proc.stdout
+    assert "POST /add" in proc.stdout
+    assert "POST /subtract" not in proc.stdout
 
 
 def test_deploy_omits_platform_flag_by_default(tmp_path):

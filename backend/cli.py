@@ -16,7 +16,7 @@ from pathlib import Path
 from nbformat import ValidationError as NotebookValidationError
 
 # Import the compiler function
-from backend.compiler import compile_notebook
+from backend.compiler import compile_notebook, _filter_functions_by_name
 # Import inspector for analysis
 from backend.inspector import (
     inspect_notebook,
@@ -464,6 +464,49 @@ def _run_deploy_docker_command(args, cwd, capture_output=False):
         ) from exc
 
 
+def _add_function_selection_arguments(parser):
+    """Add --only/--exclude to `parser` -- shared by the `compile` and
+    `deploy` subparsers below, so their help text and dest names can't
+    drift apart from each other.
+    """
+    parser.add_argument(
+        "--only",
+        default=None,
+        help=(
+            "Comma-separated function names to compile as endpoints, "
+            "excluding every other function the notebook defines (they "
+            "stay callable from the ones that are compiled, just without "
+            "an endpoint of their own). Mutually exclusive with --exclude."
+        )
+    )
+    parser.add_argument(
+        "--exclude",
+        default=None,
+        help=(
+            "Comma-separated function names to exclude from becoming "
+            "endpoints; every other function the notebook defines is "
+            "compiled normally. Mutually exclusive with --only."
+        )
+    )
+
+
+def _parse_comma_separated_names(value):
+    """Parse a `--only`/`--exclude` argparse value ("add,subtract", or
+    None) into a list of names, or None if nothing was given.
+
+    Whitespace around each name is stripped and empty entries (a
+    trailing comma, "a,,b") are dropped, rather than passing an empty
+    string through as a "function name" _filter_functions_by_name would
+    then correctly, but confusingly, reject as unknown.
+    """
+    if not value:
+        return None
+
+    names = [name.strip() for name in value.split(",") if name.strip()]
+
+    return names or None
+
+
 def _dispatch_core_command(args):
     """Run one of the core notebook-to-API commands.
 
@@ -474,6 +517,8 @@ def _dispatch_core_command(args):
     if args.command == "compile":
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
+        only = _parse_comma_separated_names(args.only)
+        exclude = _parse_comma_separated_names(args.exclude)
         if args.json_output:
             # compile_notebook (backend/compiler.py) unconditionally prints
             # its own progress lines ("Starting compilation for: ...",
@@ -486,13 +531,33 @@ def _dispatch_core_command(args):
             # give --json the same "stdout is valid JSON, full stop"
             # guarantee.
             with contextlib.redirect_stdout(io.StringIO()):
-                compile_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
+                compile_notebook(
+                    notebook_path=args.notebook, output_dir=str(output_dir),
+                    only=only, exclude=exclude,
+                )
             data = inspect_notebook_data(notebook_path=args.notebook, output_dir=str(output_dir))
+            # inspect_notebook_data re-parses the notebook fresh, with no
+            # idea --only/--exclude just restricted which functions the
+            # compile above actually turned into endpoints -- without
+            # this, `compile --json --only add` would still list every
+            # *other* function the notebook defines under "functions"/
+            # "endpoints", claiming endpoints exist for functions the
+            # compiled app doesn't actually have.
+            if only or exclude:
+                data["functions"] = _filter_functions_by_name(data["functions"], only, exclude)
+                kept_names = {func["name"] for func in data["functions"]}
+                data["endpoints"] = [
+                    endpoint for endpoint in data["endpoints"]
+                    if endpoint["path"].lstrip("/") in kept_names
+                ]
             print(json.dumps(data, indent=2))
         else:
-            compile_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
+            compile_notebook(
+                notebook_path=args.notebook, output_dir=str(output_dir),
+                only=only, exclude=exclude,
+            )
             print("\nCompilation finished. FastAPI app is ready in", output_dir)
-            print_compile_summary(args.notebook, output_dir)
+            print_compile_summary(args.notebook, output_dir, only=only, exclude=exclude)
     elif args.command == "inspect":
         # Deliberately does NOT create output_dir the way "compile" above
         # does -- `inspect` is documented as a read-only "preview what
@@ -636,6 +701,8 @@ def _dispatch_core_command(args):
     elif args.command == "deploy":
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
+        only = _parse_comma_separated_names(args.only)
+        exclude = _parse_comma_separated_names(args.exclude)
         tag = args.tag or f"{output_dir.name.lower()}:latest"
         # `docker build`'s own default target platform is whatever the
         # local Docker daemon's host architecture is -- correct for a
@@ -674,7 +741,10 @@ def _dispatch_core_command(args):
             # routes/upload.py's `_run_docker_command` already captures it
             # unconditionally for the identical operation.
             with contextlib.redirect_stdout(io.StringIO()):
-                compile_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
+                compile_notebook(
+                    notebook_path=args.notebook, output_dir=str(output_dir),
+                    only=only, exclude=exclude,
+                )
                 dockerfile_path = output_dir / "Dockerfile"
                 if not dockerfile_path.is_file():
                     raise FileNotFoundError(f"Dockerfile not found at {dockerfile_path}. Ensure the compiler generated it.")
@@ -687,8 +757,11 @@ def _dispatch_core_command(args):
                     pushed = True
             print(json.dumps({"status": "success", "tag": tag, "pushed": pushed}, indent=2))
         else:
-            compile_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
-            print_compile_summary(args.notebook, output_dir)
+            compile_notebook(
+                notebook_path=args.notebook, output_dir=str(output_dir),
+                only=only, exclude=exclude,
+            )
+            print_compile_summary(args.notebook, output_dir, only=only, exclude=exclude)
             # Build Docker image
             dockerfile_path = output_dir / "Dockerfile"
             if not dockerfile_path.is_file():
@@ -730,6 +803,7 @@ def main():
             "this compile just produced."
         )
     )
+    _add_function_selection_arguments(compile_parser)
 
     # inspect command (show analysis report)
     inspect_parser = subparsers.add_parser("inspect", help="Inspect a notebook and display analysis report.")
@@ -924,6 +998,7 @@ def main():
             "already returns for the same operation."
         )
     )
+    _add_function_selection_arguments(deploy_parser)
 
     # governance command group
     governance_parser = subparsers.add_parser(
