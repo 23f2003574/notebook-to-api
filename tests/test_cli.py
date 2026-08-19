@@ -1155,3 +1155,41 @@ def test_serve_command_reports_a_clean_error_for_a_missing_notebook(tmp_path):
     )
 
     _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_watch_command_is_registered():
+    """`watch` (like `deploy` -- see test_deploy_command_is_registered in
+    test_cli_deploy.py) needs both a subparsers.add_parser("watch", ...)
+    call and a matching `elif args.command == "watch":` dispatch branch in
+    _dispatch_core_command -- one without the other either makes argparse
+    reject "watch" outright, or dispatches successfully into a command
+    that was never actually declared. Exercised through the real
+    `backend.cli` argparse entry point rather than calling
+    watch_notebook directly, the same gap test_compile_command_writes_the_generated_app's
+    own docstring documents for the other core commands.
+    """
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "watch" in proc.stdout
+
+
+def test_watch_command_reports_a_clean_error_for_a_missing_notebook(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["watch", str(workdir / "does-not-exist.ipynb")], cwd=workdir
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_watch_command_requires_a_notebook_argument():
+
+    proc = _run_cli(["watch"], cwd=Path.cwd())
+
+    assert proc.returncode != 0
+    assert "notebook" in proc.stderr

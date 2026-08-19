@@ -528,6 +528,125 @@ def test_serve_notebook_stops_and_joins_the_observer_when_the_server_dies(tmp_pa
     assert _FakePopen.instances[0].terminated is False
 
 
+def _run_watch(
+    monkeypatch, notebook_path, output_dir, compiled_calls=None, summary_calls=None,
+):
+    """watch_notebook only returns because time.sleep is patched to raise
+    KeyboardInterrupt on its first call inside the `while True` loop,
+    mirroring _run_serve above -- the same technique, since watch_notebook
+    reuses the identical Observer/NotebookChangeHandler setup and
+    KeyboardInterrupt-driven shutdown loop as serve_notebook, just with no
+    uvicorn subprocess at all.
+    """
+    if compiled_calls is None:
+        compiled_calls = []
+
+    if summary_calls is None:
+        summary_calls = []
+
+    def fake_compile_notebook(nb_path, out_dir):
+        compiled_calls.append((nb_path, out_dir))
+
+    def fake_print_compile_summary(nb_path, out_dir):
+        summary_calls.append((nb_path, out_dir))
+
+    monkeypatch.setattr(serve_module, "compile_notebook", fake_compile_notebook)
+    monkeypatch.setattr(
+        serve_module, "print_compile_summary", fake_print_compile_summary
+    )
+    monkeypatch.setattr(serve_module, "Observer", _FakeObserver)
+    monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(serve_module.time, "sleep", _raise_keyboard_interrupt)
+
+    serve_module.watch_notebook(str(notebook_path), str(output_dir))
+
+
+def test_watch_notebook_compiles_before_watching(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    compiled_calls = []
+
+    _run_watch(monkeypatch, notebook_path, output_dir, compiled_calls=compiled_calls)
+
+    assert compiled_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_watch_notebook_prints_a_compile_summary_after_the_initial_compile(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    summary_calls = []
+
+    _run_watch(monkeypatch, notebook_path, output_dir, summary_calls=summary_calls)
+
+    assert summary_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_watch_notebook_watches_the_notebooks_parent_directory(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_watch(monkeypatch, notebook_path, output_dir)
+
+    assert len(_FakeObserver.instances) == 1
+    [(handler, path, recursive)] = _FakeObserver.instances[0].scheduled
+    assert isinstance(handler, serve_module.NotebookChangeHandler)
+    assert path == str(tmp_path.resolve())
+    assert recursive is False
+
+
+def test_watch_notebook_never_spawns_a_subprocess(tmp_path, monkeypatch):
+    """The entire point of `watch` over `serve`: no uvicorn subprocess, no
+    port bound, nothing left running that a developer would need to
+    remember to stop separately.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_watch(monkeypatch, notebook_path, output_dir)
+
+    assert _FakePopen.instances == []
+
+
+def test_watch_notebook_stops_and_joins_the_observer_on_keyboard_interrupt(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_watch(monkeypatch, notebook_path, output_dir)
+
+    assert _FakeObserver.instances[0].stopped is True
+    assert _FakeObserver.instances[0].joined is True
+
+
+def test_watch_notebook_prints_a_watching_message_naming_the_notebook_path(
+    tmp_path, monkeypatch, capsys
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_watch(monkeypatch, notebook_path, output_dir)
+
+    out = capsys.readouterr().out
+    assert "Watching" in out
+    assert str(notebook_path.resolve()) in out
+    assert "Watch stopped" in out
+
+
 def test_notebook_change_handler_recompiles_on_matching_notebook_modification(tmp_path, monkeypatch):
 
     notebook_path = tmp_path / "nb.ipynb"

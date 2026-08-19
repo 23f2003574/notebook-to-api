@@ -23,7 +23,7 @@ from backend.inspector import (
     inspect_notebook_data,
     print_compile_summary,
 )
-from backend.serve import serve_notebook
+from backend.serve import serve_notebook, watch_notebook
 from backend.observability.deployment_governance_doctor import (
     run_deployment_governance_doctor,
 )
@@ -333,7 +333,7 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 # sys.exit(exit_code)). Kept as a set so main() can route these six, and
 # only these six, through _dispatch_core_command's shared error handling.
 _CORE_COMMANDS = frozenset({
-    "compile", "inspect", "export-openapi", "export-sdk", "serve", "deploy",
+    "compile", "inspect", "export-openapi", "export-sdk", "serve", "watch", "deploy",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -341,7 +341,7 @@ _CORE_COMMANDS = frozenset({
 # package name, a malformed .ipynb, a compiled app that doesn't exist yet,
 # a corrupt openapi.json, Docker not being installed, `docker build`/
 # `docker push` exiting non-zero, or one of them running past
-# DEPLOY_SUBPROCESS_TIMEOUT_SECONDS. Before this, none of the six core
+# DEPLOY_SUBPROCESS_TIMEOUT_SECONDS. Before this, none of the core
 # commands caught any of these: a plain `notebook-to-api compile
 # missing.ipynb` crashed with a raw multi-frame Python traceback (confirmed
 # by running it) instead of a one-line, actionable error message -- the
@@ -631,6 +631,8 @@ def _dispatch_core_command(args):
             generate_sdk(openapi_path, output)
     elif args.command == "serve":
         serve_notebook(args.notebook, args.output, args.port, args.host)
+    elif args.command == "watch":
+        watch_notebook(args.notebook, args.output)
     elif args.command == "deploy":
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -859,6 +861,18 @@ def main():
             "every interface). Set to 127.0.0.1 to only accept "
             "connections from this machine."
         )
+    )
+
+    # watch command (recompile on save, no live API server)
+    watch_parser = subparsers.add_parser(
+        "watch",
+        help="Recompile a notebook on every save, without running a live API server."
+    )
+    watch_parser.add_argument("notebook", help="Path to the notebook file.")
+    watch_parser.add_argument(
+        "--output",
+        default="generated",
+        help="Output directory where the FastAPI app and assets will be written."
     )
 
     # deploy command (compile + build a Docker image)

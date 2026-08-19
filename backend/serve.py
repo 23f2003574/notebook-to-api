@@ -296,3 +296,54 @@ def serve_notebook(notebook_path, output_dir="generated", port=8000, host="0.0.0
         print("✅ Server stopped.\n")
 
     observer.join()
+
+
+def watch_notebook(notebook_path, output_dir="generated"):
+    """Compile a notebook once, then keep recompiling it on every save --
+    without also starting a live API server the way `serve` does.
+
+    serve_notebook (above) already does the "compile once, then recompile
+    on every change" half of this as part of running a live dev server,
+    reusing the exact same NotebookChangeHandler and Observer -- but a
+    developer who only wants fast recompile-on-save feedback while
+    iterating on a notebook (confirming each change still compiles
+    cleanly, or just watching print_compile_summary's output evolve as
+    they edit) had no way to get that without also standing up and
+    holding open a uvicorn subprocess bound to a port, which `serve`
+    requires whether or not anything is actually calling the API in the
+    meantime -- a real cost in a container/CI sandbox with no spare port,
+    or simply an extra background process a developer has to remember to
+    kill afterward for a workflow that never needed one running at all.
+
+    Args:
+        notebook_path: Path to the notebook file.
+        output_dir: Output directory for the generated API (default:
+            "generated"), same as compile_notebook/serve_notebook.
+    """
+
+    print("📝 Initial compilation...")
+    compile_notebook(notebook_path, output_dir)
+    print("✅ Initial compilation complete.")
+    print_compile_summary(notebook_path, output_dir)
+
+    observer = Observer()
+    handler = NotebookChangeHandler(notebook_path, output_dir)
+
+    notebook_dir = Path(notebook_path).parent.resolve()
+    observer.schedule(handler, path=str(notebook_dir), recursive=False)
+    observer.start()
+
+    print(f"\n👀 Watching {Path(notebook_path).resolve()} for changes.")
+    print("Press Ctrl+C to stop.\n")
+
+    try:
+
+        while True:
+            time.sleep(1)
+
+    except KeyboardInterrupt:
+        print("\n\n🛑 Stopping watch...")
+        observer.stop()
+
+    observer.join()
+    print("✅ Watch stopped.\n")
