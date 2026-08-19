@@ -4502,7 +4502,7 @@ def test_compile_notebook_explicit_requirement_coexists_with_auto_detected_ones(
     notebook.cells.append(
         nbformat.v4.new_code_cell(
             "# notebook-to-api: requires my-private-pkg @ git+https://example.com/pkg.git\n"
-            "import pandas\n\n"
+            "import nbformat\n\n"
             "def f() -> int:\n    return 1\n"
         )
     )
@@ -4518,7 +4518,7 @@ def test_compile_notebook_explicit_requirement_coexists_with_auto_detected_ones(
     lines = requirements.splitlines()
 
     assert "my-private-pkg @ git+https://example.com/pkg.git" in lines
-    assert any(line.startswith("pandas==") for line in lines)
+    assert any(line.startswith("nbformat==") for line in lines)
     assert any(line.startswith("fastapi==") for line in lines)
 
 
@@ -4526,12 +4526,17 @@ def test_compile_notebook_without_any_directive_behaves_as_before(tmp_path):
     """Preserves the previous, still-default behavior -- a notebook with
     no "# notebook-to-api: requires ..." comment compiles exactly as it
     always has.
+
+    Uses nbformat as the auto-detected import -- see
+    test_requirements_pins_a_notebook_dependency_installed_in_this_environment's
+    own docstring above for why this can't be pandas: it isn't listed in
+    the project's requirements.txt, so it's absent in a clean CI install.
     """
 
     notebook = nbformat.v4.new_notebook()
     notebook.cells.append(
         nbformat.v4.new_code_cell(
-            "import pandas\n\ndef f() -> int:\n    return 1\n"
+            "import nbformat\n\ndef f() -> int:\n    return 1\n"
         )
     )
 
@@ -4545,5 +4550,5 @@ def test_compile_notebook_without_any_directive_behaves_as_before(tmp_path):
     requirements = (output_dir / "requirements.txt").read_text(encoding="utf-8")
     lines = requirements.split()
 
-    assert any(line.startswith("pandas==") for line in lines)
+    assert any(line.startswith("nbformat==") for line in lines)
     assert any(line.startswith("fastapi==") for line in lines)
