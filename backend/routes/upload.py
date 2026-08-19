@@ -636,7 +636,13 @@ _NOTEBOOK_SORT_ORDERS = frozenset({"asc", "desc"})
 
 
 @router.get("/notebooks")
-def list_notebooks(search: str = None, sort: str = "name", order: str = "asc"):
+def list_notebooks(
+    search: str = None,
+    sort: str = "name",
+    order: str = "asc",
+    limit: int = None,
+    offset: int = 0,
+):
     """List previously uploaded notebooks.
 
     /api/upload was previously a one-way door: notebooks could be
@@ -682,6 +688,26 @@ def list_notebooks(search: str = None, sort: str = "name", order: str = "asc"):
     is rejected with 400 rather than silently falling back to the
     default, the same way an invalid "format" already is elsewhere in
     this file (see POST /api/export-openapi).
+
+    "limit" and "offset" close a related gap "search"/"sort"/"order" alone
+    didn't: without them, this endpoint always returned every matching
+    notebook in one response, no matter how many UPLOAD_DIR has
+    accumulated -- a dashboard frontend paginating a large notebook list
+    (or simply wanting "the 20 most recently modified") had to fetch the
+    entire list on every page load and slice it client-side itself, and a
+    caller scripting against this endpoint had no way to bound response
+    size at all. "offset" (default 0) is how many matching notebooks,
+    after "search"/"sort"/"order" are applied, to skip before the page
+    starts; "limit", if given, caps how many are returned from there. Both
+    apply after sorting/filtering, not before, so paging through results
+    stays stable across pages for a given search/sort/order combination.
+    "total_count" is returned alongside the (possibly paginated)
+    "notebooks" list -- the count of notebooks matching "search" before
+    "limit"/"offset" are applied -- so a caller can compute how many pages
+    remain without a separate, unpaginated request just to learn the
+    total. A negative "offset", or a "limit" that isn't a positive
+    integer, is rejected with 400, the same way an invalid "sort"/"order"
+    already is above.
     """
 
     if sort not in _NOTEBOOK_SORT_KEYS:
@@ -696,6 +722,20 @@ def list_notebooks(search: str = None, sort: str = "name", order: str = "asc"):
         raise HTTPException(
             status_code=400,
             detail=f"order must be one of {sorted(_NOTEBOOK_SORT_ORDERS)}"
+        )
+
+    if offset < 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="offset must be a non-negative integer"
+        )
+
+    if limit is not None and limit <= 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="limit must be a positive integer"
         )
 
     upload_root = Path(UPLOAD_DIR)
@@ -751,11 +791,20 @@ def list_notebooks(search: str = None, sort: str = "name", order: str = "asc"):
         reverse=(order == "desc"),
     )
 
-    notebooks = [entry_tuple[3] for entry_tuple in entries]
+    total_count = len(entries)
+
+    paginated_entries = (
+        entries[offset:offset + limit] if limit is not None else entries[offset:]
+    )
+
+    notebooks = [entry_tuple[3] for entry_tuple in paginated_entries]
 
     return {
         "status": "success",
         "notebooks": notebooks,
+        "total_count": total_count,
+        "limit": limit,
+        "offset": offset,
     }
 
 

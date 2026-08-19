@@ -1236,6 +1236,111 @@ def test_list_notebooks_rejects_an_invalid_order_value():
     assert resp.status_code == 400
 
 
+def test_list_notebooks_paginates_with_limit_and_offset():
+
+    for filename in (
+        "page_a.ipynb",
+        "page_b.ipynb",
+        "page_c.ipynb",
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                    "application/json",
+                )
+            },
+        )
+        assert resp.status_code == 200
+
+    first_page = client.get("/api/notebooks?search=page_&limit=2&offset=0").json()
+    assert [nb["filename"] for nb in first_page["notebooks"]] == [
+        "page_a.ipynb",
+        "page_b.ipynb",
+    ]
+    assert first_page["total_count"] == 3
+    assert first_page["limit"] == 2
+    assert first_page["offset"] == 0
+
+    second_page = client.get("/api/notebooks?search=page_&limit=2&offset=2").json()
+    assert [nb["filename"] for nb in second_page["notebooks"]] == ["page_c.ipynb"]
+    assert second_page["total_count"] == 3
+    assert second_page["limit"] == 2
+    assert second_page["offset"] == 2
+
+
+def test_list_notebooks_without_limit_returns_every_matching_notebook():
+    """Preserves the previous, still-default behavior -- a plain GET
+    /api/notebooks with no "limit" returns everything matching "search",
+    not just some implicit page size.
+    """
+
+    for filename in ("nolimit_a.ipynb", "nolimit_b.ipynb"):
+        resp = client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                    "application/json",
+                )
+            },
+        )
+        assert resp.status_code == 200
+
+    body = client.get("/api/notebooks?search=nolimit_").json()
+
+    assert [nb["filename"] for nb in body["notebooks"]] == [
+        "nolimit_a.ipynb",
+        "nolimit_b.ipynb",
+    ]
+    assert body["total_count"] == 2
+    assert body["limit"] is None
+    assert body["offset"] == 0
+
+
+def test_list_notebooks_offset_past_the_end_returns_an_empty_list():
+
+    resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "offset_only_one.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    assert resp.status_code == 200
+
+    body = client.get(
+        "/api/notebooks?search=offset_only_one&offset=5"
+    ).json()
+
+    assert body["notebooks"] == []
+    assert body["total_count"] == 1
+
+
+def test_list_notebooks_rejects_a_negative_offset():
+
+    resp = client.get("/api/notebooks?offset=-1")
+
+    assert resp.status_code == 400
+
+
+def test_list_notebooks_rejects_a_non_positive_limit():
+
+    resp = client.get("/api/notebooks?limit=0")
+
+    assert resp.status_code == 400
+
+    resp = client.get("/api/notebooks?limit=-5")
+
+    assert resp.status_code == 400
+
+
 def test_delete_notebook_removes_an_uploaded_file():
 
     content = _notebook_bytes(
