@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -575,3 +576,94 @@ def print_notebook_diff(diff):
 
     if not (diff["added"] or diff["removed"] or diff["changed"]):
         print("\nNo changes to the compiled API surface.")
+
+# The generated app's own default API key (see write_app_config /
+# verify_api_key in generator/api_generator.py: `API_KEYS` defaults to
+# os.getenv("NOTEBOOK_API_KEY", "notebook-to-api-dev-key")) -- duplicated
+# here as a literal, not imported, since api_generator.py only ever
+# embeds it as a string inside generated source lines, never as an
+# importable constant of its own. The same soft-coupling
+# EXCLUDED_GENERATED_FILE_NAMES's own docstring above already accepts for
+# generator/docker_generator.py's identical inability to import
+# COMPILE_METADATA_FILENAME without a circular import.
+DEFAULT_DEV_API_KEY = "notebook-to-api-dev-key"
+
+
+def generate_curl_commands(notebook_path, host="localhost", port=8000, api_key=None):
+    """A ready-to-run `curl` command for every function `notebook_path`
+    would compile into an endpoint, using each function's own
+    "example_payload" (see inspect_notebook_data's "functions" field) as
+    the request body.
+
+    Before this, trying out a notebook's compiled API meant either
+    hand-writing a curl invocation (or opening a separate HTTP client)
+    per endpoint -- correctly guessing its JSON body shape and, easy to
+    miss, that every generated endpoint requires an `X-API-Key` header at
+    all (see verify_api_key, generator/api_generator.py) -- or compiling
+    first and reading /docs. This needs no compile step at all: it works
+    directly from the same notebook analysis `inspect`/POST /api/inspect
+    already do, so a caller can preview exactly what they'll be able to
+    call before ever running `compile`.
+
+    Functions with a reserved-name collision (see
+    _reserved_name_conflicts above) are skipped -- generate_fastapi_code
+    refuses to compile a notebook containing one at all, so a curl
+    command hitting that path would never actually resolve to anything.
+
+    A background/task_id-based function's own command is commented to
+    note that its POST only returns {"task_id": ...}, not the actual
+    result -- unlike a synchronous endpoint's command, there's no way to
+    know the task_id ahead of actually running it, so this can't also
+    generate the GET /tasks/{task_id} follow-up command the way it can
+    for everything else.
+
+    `api_key` defaults to DEFAULT_DEV_API_KEY -- the generated app's own
+    default when NOTEBOOK_API_KEY isn't set -- so the emitted commands
+    work out of the box against a locally `serve`d app with no
+    configuration; a caller who has set NOTEBOOK_API_KEY to something
+    else needs to pass the matching value here instead.
+
+    Returns a list of ready-to-paste (or execute) multi-line command
+    strings, one per function, in the same order inspect_notebook_data's
+    own "functions" field returns them.
+    """
+    if api_key is None:
+        api_key = DEFAULT_DEV_API_KEY
+
+    data = inspect_notebook_data(notebook_path)
+
+    reserved_names = set(data["reserved_name_conflicts"])
+
+    base_url = f"http://{host}:{port}"
+
+    commands = []
+
+    for func in data["functions"]:
+
+        name = func["name"]
+
+        if name in reserved_names:
+            continue
+
+        payload = json.dumps(func.get("example_payload", {}))
+
+        if _is_background_function(name):
+            comment = (
+                f'# {name} (background task -- POST only returns '
+                f'{{"task_id": ...}}; poll GET /tasks/{{task_id}} for the '
+                f"actual result)"
+            )
+        else:
+            comment = f"# {name}"
+
+        command = (
+            f"{comment}\n"
+            f"curl -X POST {base_url}/{name} \\\n"
+            f'  -H "Content-Type: application/json" \\\n'
+            f'  -H "X-API-Key: {api_key}" \\\n'
+            f"  -d '{payload}'"
+        )
+
+        commands.append(command)
+
+    return commands

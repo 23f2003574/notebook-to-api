@@ -2,7 +2,9 @@ import nbformat
 import pytest
 
 from backend.inspector import (
+    DEFAULT_DEV_API_KEY,
     diff_notebook_functions,
+    generate_curl_commands,
     inspect_notebook,
     inspect_notebook_data,
     print_compile_summary,
@@ -832,3 +834,103 @@ def test_print_notebook_diff_prints_added_removed_and_changed(capsys):
     assert "POST /subtract" in output
     assert "Changed 1 endpoint(s):" in output
     assert "POST /add" in output
+
+
+def test_generate_curl_commands_returns_one_command_per_function(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n",
+    )
+
+    commands = generate_curl_commands(str(notebook_path))
+
+    assert len(commands) == 2
+    assert any("curl -X POST http://localhost:8000/add" in c for c in commands)
+    assert any("curl -X POST http://localhost:8000/subtract" in c for c in commands)
+
+
+def test_generate_curl_commands_includes_the_example_payload_as_the_body(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    [command] = generate_curl_commands(str(notebook_path))
+
+    assert '-d \'{"a": 0, "b": 0}\'' in command
+
+
+def test_generate_curl_commands_includes_the_api_key_header(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    [default_command] = generate_curl_commands(str(notebook_path))
+    assert f'-H "X-API-Key: {DEFAULT_DEV_API_KEY}"' in default_command
+
+    [custom_command] = generate_curl_commands(str(notebook_path), api_key="mykey123")
+    assert '-H "X-API-Key: mykey123"' in custom_command
+
+
+def test_generate_curl_commands_respects_custom_host_and_port(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    [command] = generate_curl_commands(
+        str(notebook_path), host="api.example.com", port=9000
+    )
+
+    assert "curl -X POST http://api.example.com:9000/add" in command
+
+
+def test_generate_curl_commands_flags_a_background_function(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    [command] = generate_curl_commands(str(notebook_path))
+
+    assert "background task" in command
+    assert "task_id" in command
+    assert "curl -X POST http://localhost:8000/train_model" in command
+
+
+def test_generate_curl_commands_excludes_a_reserved_name_conflict(tmp_path):
+    """generate_fastapi_code refuses to compile a notebook containing a
+    reserved-name collision at all -- a curl command targeting that path
+    would never resolve to anything real, so it must not be generated.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def health_check() -> dict:\n    return {}\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    commands = generate_curl_commands(str(notebook_path))
+
+    assert len(commands) == 1
+    assert "/add" in commands[0]
+    assert not any("/health_check" in c for c in commands)
+
+
+def test_generate_curl_commands_returns_an_empty_list_for_a_notebook_with_no_functions(
+    tmp_path
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(notebook_path, "x = 1\n")
+
+    assert generate_curl_commands(str(notebook_path)) == []

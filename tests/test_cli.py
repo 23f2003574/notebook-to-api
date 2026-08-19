@@ -1461,3 +1461,96 @@ def test_diff_command_requires_both_notebook_arguments(tmp_path):
 
     assert proc.returncode != 0
     assert "new_notebook" in proc.stderr
+
+
+def test_export_curl_command_is_registered():
+    """Same subparser/dispatch-branch mismatch gap test_deploy_command_is_registered
+    (test_cli_deploy.py) and test_watch_command_is_registered (above)
+    already guard against for `deploy`/`watch`.
+    """
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "export-curl" in proc.stdout
+
+
+def test_export_curl_command_writes_a_script_with_a_command_per_function(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n",
+    )
+
+    proc = _run_cli(["export-curl", str(notebook_path)], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "cURL script written to: requests.sh (2 request(s))" in proc.stdout
+
+    script = (workdir / "requests.sh").read_text(encoding="utf-8")
+    assert "curl -X POST http://localhost:8000/add" in script
+    assert "curl -X POST http://localhost:8000/subtract" in script
+    assert "X-API-Key: notebook-to-api-dev-key" in script
+
+
+def test_export_curl_command_respects_host_port_api_key_and_output(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    proc = _run_cli(
+        [
+            "export-curl", str(notebook_path),
+            "--host", "api.example.com", "--port", "9000",
+            "--api-key", "mykey123", "--output", "custom.sh",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    script = (workdir / "custom.sh").read_text(encoding="utf-8")
+    assert "curl -X POST http://api.example.com:9000/add" in script
+    assert "X-API-Key: mykey123" in script
+    assert not (workdir / "requests.sh").exists()
+
+
+def test_export_curl_command_json_flag_emits_machine_readable_output(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    proc = _run_cli(
+        ["export-curl", str(notebook_path), "--json"], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+
+    assert data["status"] == "success"
+    assert data["path"] == "requests.sh"
+    assert len(data["commands"]) == 1
+    assert "curl -X POST http://localhost:8000/add" in data["commands"][0]
+
+
+def test_export_curl_command_reports_a_clean_error_for_a_missing_notebook(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["export-curl", str(workdir / "does-not-exist.ipynb")], cwd=workdir
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
