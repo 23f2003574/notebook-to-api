@@ -706,6 +706,156 @@ def test_upload_leaves_no_temp_files_behind_after_a_rejected_reupload():
     assert leftover == []
 
 
+def test_upload_batch_uploads_multiple_notebooks_in_one_request():
+
+    first_content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+    second_content = _notebook_bytes("def subtract(a: int, b: int) -> int:\n    return a - b\n")
+
+    resp = client.post(
+        "/api/upload/batch",
+        files=[
+            ("files", ("batch_a.ipynb", io.BytesIO(first_content), "application/json")),
+            ("files", ("batch_b.ipynb", io.BytesIO(second_content), "application/json")),
+        ],
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["succeeded_count"] == 2
+    assert body["failed_count"] == 0
+    assert [r["filename"] for r in body["results"]] == ["batch_a.ipynb", "batch_b.ipynb"]
+    assert all(r["status"] == "success" for r in body["results"])
+    assert all(r["overwritten"] is False for r in body["results"])
+
+    assert (Path(UPLOAD_DIR) / "batch_a.ipynb").read_bytes() == first_content
+    assert (Path(UPLOAD_DIR) / "batch_b.ipynb").read_bytes() == second_content
+
+
+def test_upload_batch_continues_past_a_single_invalid_file():
+    """One bad file in the batch must not abort the rest -- each file is
+    processed independently, unlike a naive loop of individual POST
+    /api/upload calls a caller might otherwise have to write, where an
+    unhandled error on file N could leave files after it never attempted.
+    """
+
+    good_content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    resp = client.post(
+        "/api/upload/batch",
+        files=[
+            ("files", ("batch_good.ipynb", io.BytesIO(good_content), "application/json")),
+            ("files", ("batch_bad.ipynb", io.BytesIO(b"not a notebook"), "application/json")),
+        ],
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    good_result, bad_result = body["results"]
+    assert good_result == {
+        "status": "success",
+        "filename": "batch_good.ipynb",
+        "path": str(resolve_upload_path("batch_good.ipynb")),
+        "overwritten": False,
+    }
+    assert bad_result["filename"] == "batch_bad.ipynb"
+    assert bad_result["status"] == "error"
+    assert "not a valid Jupyter notebook" in bad_result["detail"]
+
+    assert (Path(UPLOAD_DIR) / "batch_good.ipynb").is_file()
+    assert not (Path(UPLOAD_DIR) / "batch_bad.ipynb").exists()
+
+
+def test_upload_batch_reports_a_collision_error_without_overwrite():
+
+    original_content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("batch_collide.ipynb", io.BytesIO(original_content), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/upload/batch",
+        files=[
+            (
+                "files",
+                (
+                    "batch_collide.ipynb",
+                    io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                    "application/json",
+                ),
+            ),
+        ],
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["succeeded_count"] == 0
+    assert body["failed_count"] == 1
+    assert body["results"][0]["status"] == "error"
+    assert "already exists" in body["results"][0]["detail"]
+
+    # The original file must be completely untouched.
+    assert (Path(UPLOAD_DIR) / "batch_collide.ipynb").read_bytes() == original_content
+
+
+def test_upload_batch_overwrite_applies_to_every_file():
+
+    original_content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("batch_overwrite.ipynb", io.BytesIO(original_content), "application/json")},
+    )
+
+    replacement_content = _notebook_bytes("def subtract(a: int, b: int) -> int:\n    return a - b\n")
+
+    resp = client.post(
+        "/api/upload/batch?overwrite=true",
+        files=[
+            (
+                "files",
+                ("batch_overwrite.ipynb", io.BytesIO(replacement_content), "application/json"),
+            ),
+        ],
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["succeeded_count"] == 1
+    assert body["results"][0]["overwritten"] is True
+    assert (Path(UPLOAD_DIR) / "batch_overwrite.ipynb").read_bytes() == replacement_content
+
+
+def test_upload_batch_rejects_more_files_than_the_configured_maximum(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 1)
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    resp = client.post(
+        "/api/upload/batch",
+        files=[
+            ("files", ("batch_max_a.ipynb", io.BytesIO(content), "application/json")),
+            ("files", ("batch_max_b.ipynb", io.BytesIO(content), "application/json")),
+        ],
+    )
+
+    assert resp.status_code == 400
+    assert "at most 1" in resp.json()["detail"]
+    assert not (Path(UPLOAD_DIR) / "batch_max_a.ipynb").exists()
+    assert not (Path(UPLOAD_DIR) / "batch_max_b.ipynb").exists()
+
+
 def test_upload_lock_for_returns_the_same_lock_for_the_same_filename():
     """_upload_lock_for must hand back the *same* Lock instance for the
     same filename across separate calls (separate requests, in practice)

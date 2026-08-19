@@ -2,6 +2,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import List
 import asyncio
 import io
 import json
@@ -79,8 +80,9 @@ router = APIRouter(
     tags=["dashboard"]
 )
 
-# Every route below except upload_notebook (which genuinely awaits
-# UploadFile.read) is declared as a plain `def`, not `async def`. FastAPI
+# Every route below except upload_notebook and upload_notebooks_batch
+# (which genuinely await UploadFile.read, via _save_uploaded_notebook) is
+# declared as a plain `def`, not `async def`. FastAPI
 # only runs `async def` path operations directly on the single asyncio
 # event loop; every one of these does purely synchronous, blocking work
 # (file I/O, subprocess.run for `docker build`/`docker push` -- up to
@@ -171,6 +173,16 @@ MAX_UPLOAD_BYTES = int(
     os.getenv("NOTEBOOK_API_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))
 )
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+# Same NOTEBOOK_API_* convention as MAX_UPLOAD_BYTES above. Without this,
+# POST /api/upload/batch (see upload_notebooks_batch below) accepted a
+# multipart request with any number of files at all -- a single request
+# could try to stream, validate, and write an unbounded number of
+# notebooks, each up to MAX_UPLOAD_BYTES on its own, tying up a worker
+# thread for as long as that takes with nothing to cap the total.
+MAX_BATCH_UPLOAD_FILES = int(
+    os.getenv("NOTEBOOK_API_MAX_BATCH_UPLOAD_FILES", "50")
+)
 
 # Same NOTEBOOK_API_* convention as MAX_UPLOAD_BYTES above, rather than the
 # fixed 600s every `docker build`/`docker push` call in /api/deploy
@@ -521,37 +533,17 @@ def _version_lock_for(filename: str) -> threading.Lock:
     return _version_locks_by_filename.setdefault(filename, threading.Lock())
 
 
-@router.post("/upload")
-async def upload_notebook(
-    file: UploadFile = File(...),
-    overwrite: bool = False,
-):
-    """Upload a Jupyter notebook file.
+async def _save_uploaded_notebook(file: UploadFile, overwrite: bool) -> dict:
+    """Validate and save one uploaded notebook, exactly as upload_notebook
+    (below) always has -- extracted into its own function so
+    upload_notebook and upload_notebooks_batch (below) share this one
+    implementation instead of a second, inevitably-drifting copy of it.
 
-    Streams to a temporary file inside UPLOAD_DIR first and only moves it
-    into place -- atomically, via os.replace -- after it passes the same
-    size and notebook-validity checks this endpoint already enforced.
-    Previously the upload was written straight to its final
-    "<filename>.ipynb" path as it streamed in: re-uploading a name that
-    already existed overwrote the previous file's bytes immediately, before
-    any validation ran, so an oversized or invalid re-upload permanently
-    destroyed a previously good notebook with no way to recover it
-    (confirmed: uploading garbage over an existing valid notebook silently
-    replaced it, then deleted the garbage too on the validation-failure
-    cleanup path, losing the original for good). There was also no way to
-    even detect a same-name collision was about to happen.
-
-    A same-named notebook is now rejected outright with 409 before the
-    upload body is even read, unless the caller passes ?overwrite=true to
-    confirm the replacement -- mirroring the explicit opt-in `deploy
-    --push` already uses elsewhere in this codebase for another
-    action with real, hard-to-undo consequences.
-
-    An overwrite is no longer permanently destructive, either: the
-    previous content is snapshotted (see
-    _snapshot_current_notebook_version above) right before it's replaced,
-    recoverable afterward via GET/POST
-    /api/notebooks/{filename}/versions[/{version_id}[/restore]].
+    Raises the identical HTTPException upload_notebook always raised for
+    each failure mode -- unchanged behavior for upload_notebook's own
+    single-file callers. upload_notebooks_batch instead catches that
+    HTTPException per file, so one bad file in a batch doesn't abort every
+    other file's own upload.
     """
 
     if not file.filename.endswith(".ipynb"):
@@ -684,6 +676,118 @@ async def upload_notebook(
             "path": str(file_path),
             "overwritten": overwritten,
         }
+
+
+@router.post("/upload")
+async def upload_notebook(
+    file: UploadFile = File(...),
+    overwrite: bool = False,
+):
+    """Upload a Jupyter notebook file.
+
+    Streams to a temporary file inside UPLOAD_DIR first and only moves it
+    into place -- atomically, via os.replace -- after it passes the same
+    size and notebook-validity checks this endpoint already enforced.
+    Previously the upload was written straight to its final
+    "<filename>.ipynb" path as it streamed in: re-uploading a name that
+    already existed overwrote the previous file's bytes immediately, before
+    any validation ran, so an oversized or invalid re-upload permanently
+    destroyed a previously good notebook with no way to recover it
+    (confirmed: uploading garbage over an existing valid notebook silently
+    replaced it, then deleted the garbage too on the validation-failure
+    cleanup path, losing the original for good). There was also no way to
+    even detect a same-name collision was about to happen.
+
+    A same-named notebook is now rejected outright with 409 before the
+    upload body is even read, unless the caller passes ?overwrite=true to
+    confirm the replacement -- mirroring the explicit opt-in `deploy
+    --push` already uses elsewhere in this codebase for another
+    action with real, hard-to-undo consequences.
+
+    An overwrite is no longer permanently destructive, either: the
+    previous content is snapshotted (see
+    _snapshot_current_notebook_version above) right before it's replaced,
+    recoverable afterward via GET/POST
+    /api/notebooks/{filename}/versions[/{version_id}[/restore]].
+    """
+    return await _save_uploaded_notebook(file, overwrite)
+
+
+@router.post("/upload/batch")
+async def upload_notebooks_batch(
+    files: List[UploadFile] = File(...),
+    overwrite: bool = False,
+):
+    """Upload several Jupyter notebook files in a single request.
+
+    POST /api/upload only ever accepted one file per request -- uploading
+    a whole batch of notebooks (an initial import, restoring several from
+    a backup, seeding a demo environment, ...) meant one HTTP round trip
+    per file, with a caller left to script that themselves. Reuses the
+    exact same per-file validation and atomic-write logic as
+    upload_notebook (see _save_uploaded_notebook above), so a notebook
+    uploaded through either endpoint is validated, versioned on overwrite,
+    and written identically.
+
+    Unlike a plain loop of individual POST /api/upload calls, one bad file
+    in the batch (invalid notebook content, an oversized file, a same-name
+    collision without ?overwrite=true, ...) does not abort the rest: each
+    file is processed independently, and "results" reports a
+    {"filename", "status", ...} entry per file -- "success" with the same
+    shape upload_notebook's own response has, or "error" with the
+    HTTPException detail that file's own upload would have raised on its
+    own. The response is always 200 (even if every file failed) since the
+    batch request itself was handled successfully; "succeeded_count"/
+    "failed_count" tell the caller how many of "results" landed which way
+    without needing to scan the whole list themselves.
+
+    "overwrite" applies uniformly to every file in the batch, the same
+    single flag POST /api/upload itself takes -- there's no per-file
+    override; a caller needing different overwrite behavior per file
+    still needs separate requests for those.
+
+    Bounded by MAX_BATCH_UPLOAD_FILES (default 50, configurable via
+    NOTEBOOK_API_MAX_BATCH_UPLOAD_FILES) so a single request can't try to
+    stream, validate, and write an unbounded number of notebooks at once.
+    """
+
+    if len(files) > MAX_BATCH_UPLOAD_FILES:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"A batch upload accepts at most {MAX_BATCH_UPLOAD_FILES} "
+                f"files at once (got {len(files)})."
+            )
+        )
+
+    results = []
+    succeeded_count = 0
+    failed_count = 0
+
+    for file in files:
+
+        try:
+
+            result = await _save_uploaded_notebook(file, overwrite)
+            results.append(result)
+            succeeded_count += 1
+
+        except HTTPException as exc:
+
+            results.append({
+                "filename": file.filename,
+                "status": "error",
+                "detail": exc.detail,
+            })
+            failed_count += 1
+
+    return {
+        "status": "success",
+        "results": results,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
+    }
 
 
 def _currently_compiled_notebook_metadata():
