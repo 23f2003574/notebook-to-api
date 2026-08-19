@@ -15,7 +15,12 @@ from fastapi.testclient import TestClient
 
 from backend.compiler import COMPILE_LOCK, COMPILE_METADATA_FILENAME
 from backend.dashboard import app
-from backend.routes.upload import UPLOAD_DIR, resolve_generated_path, resolve_upload_path
+from backend.routes.upload import (
+    UPLOAD_DIR,
+    _tags_sidecar_path,
+    resolve_generated_path,
+    resolve_upload_path,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -1980,6 +1985,265 @@ def test_rename_notebook_keeps_currently_compiled_tracking_under_the_new_name():
     )
 
     os.remove(Path(UPLOAD_DIR) / "rename_compiled_target.ipynb")
+
+
+def _upload_sample_notebook(filename):
+    resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    assert resp.status_code == 200
+
+
+def test_get_notebook_tags_is_empty_for_a_never_tagged_notebook():
+
+    _upload_sample_notebook("tags_untagged.ipynb")
+
+    resp = client.get("/api/notebooks/tags_untagged.ipynb/tags")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "success",
+        "filename": "tags_untagged.ipynb",
+        "tags": [],
+    }
+
+
+def test_get_notebook_tags_returns_404_for_missing_file():
+
+    resp = client.get("/api/notebooks/tags_does_not_exist.ipynb/tags")
+
+    assert resp.status_code == 404
+
+
+def test_set_notebook_tags_returns_404_for_missing_file():
+
+    resp = client.put(
+        "/api/notebooks/tags_does_not_exist.ipynb/tags",
+        json={"tags": ["bug"]},
+    )
+
+    assert resp.status_code == 404
+
+
+def test_set_notebook_tags_persists_and_is_readable_back():
+
+    _upload_sample_notebook("tags_persist.ipynb")
+
+    set_resp = client.put(
+        "/api/notebooks/tags_persist.ipynb/tags",
+        json={"tags": ["production", "bug"]},
+    )
+
+    assert set_resp.status_code == 200
+    assert set_resp.json() == {
+        "status": "success",
+        "filename": "tags_persist.ipynb",
+        "tags": ["bug", "production"],
+    }
+
+    get_resp = client.get("/api/notebooks/tags_persist.ipynb/tags")
+
+    assert get_resp.json()["tags"] == ["bug", "production"]
+
+
+def test_set_notebook_tags_strips_whitespace_and_deduplicates():
+
+    _upload_sample_notebook("tags_dedupe.ipynb")
+
+    resp = client.put(
+        "/api/notebooks/tags_dedupe.ipynb/tags",
+        json={"tags": ["bug", "  bug  ", "feature"]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["tags"] == ["bug", "feature"]
+
+
+def test_set_notebook_tags_with_empty_list_clears_tags_and_removes_the_sidecar_file():
+
+    _upload_sample_notebook("tags_clear.ipynb")
+
+    client.put("/api/notebooks/tags_clear.ipynb/tags", json={"tags": ["bug"]})
+    assert _tags_sidecar_path("tags_clear.ipynb").is_file()
+
+    clear_resp = client.put("/api/notebooks/tags_clear.ipynb/tags", json={"tags": []})
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json()["tags"] == []
+    assert not _tags_sidecar_path("tags_clear.ipynb").is_file()
+
+
+def test_set_notebook_tags_rejects_a_non_list_tags_value():
+
+    _upload_sample_notebook("tags_not_a_list.ipynb")
+
+    resp = client.put(
+        "/api/notebooks/tags_not_a_list.ipynb/tags",
+        json={"tags": "bug"},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_set_notebook_tags_rejects_a_non_string_tag():
+
+    _upload_sample_notebook("tags_non_string.ipynb")
+
+    resp = client.put(
+        "/api/notebooks/tags_non_string.ipynb/tags",
+        json={"tags": ["bug", 5]},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_set_notebook_tags_rejects_an_empty_or_whitespace_only_tag():
+
+    _upload_sample_notebook("tags_blank.ipynb")
+
+    resp = client.put(
+        "/api/notebooks/tags_blank.ipynb/tags",
+        json={"tags": ["   "]},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_set_notebook_tags_rejects_a_tag_over_the_max_length():
+
+    _upload_sample_notebook("tags_too_long.ipynb")
+
+    resp = client.put(
+        "/api/notebooks/tags_too_long.ipynb/tags",
+        json={"tags": ["x" * 51]},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_set_notebook_tags_rejects_more_than_the_max_distinct_tags():
+
+    _upload_sample_notebook("tags_too_many.ipynb")
+
+    resp = client.put(
+        "/api/notebooks/tags_too_many.ipynb/tags",
+        json={"tags": [f"tag{i}" for i in range(21)]},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_list_notebooks_reports_tags_for_each_entry():
+
+    _upload_sample_notebook("tags_in_list.ipynb")
+
+    client.put("/api/notebooks/tags_in_list.ipynb/tags", json={"tags": ["demo"]})
+
+    notebooks = {
+        nb["filename"]: nb for nb in client.get("/api/notebooks").json()["notebooks"]
+    }
+
+    assert notebooks["tags_in_list.ipynb"]["tags"] == ["demo"]
+
+
+def test_list_notebooks_filters_by_tag():
+
+    _upload_sample_notebook("tags_filter_a.ipynb")
+    _upload_sample_notebook("tags_filter_b.ipynb")
+
+    client.put("/api/notebooks/tags_filter_a.ipynb/tags", json={"tags": ["keepme"]})
+
+    notebooks = client.get(
+        "/api/notebooks?search=tags_filter_&tag=keepme"
+    ).json()["notebooks"]
+
+    assert [nb["filename"] for nb in notebooks] == ["tags_filter_a.ipynb"]
+
+
+def test_delete_notebook_removes_its_tags_sidecar_file():
+
+    _upload_sample_notebook("tags_delete_single.ipynb")
+    client.put("/api/notebooks/tags_delete_single.ipynb/tags", json={"tags": ["bug"]})
+    assert _tags_sidecar_path("tags_delete_single.ipynb").is_file()
+
+    delete_resp = client.delete("/api/notebooks/tags_delete_single.ipynb")
+    assert delete_resp.status_code == 200
+
+    assert not _tags_sidecar_path("tags_delete_single.ipynb").is_file()
+
+    # A notebook re-uploaded under the same name afterward must not
+    # silently inherit the deleted notebook's old tags.
+    _upload_sample_notebook("tags_delete_single.ipynb")
+    assert client.get(
+        "/api/notebooks/tags_delete_single.ipynb/tags"
+    ).json()["tags"] == []
+
+
+def test_delete_all_notebooks_removes_tags_sidecar_files():
+
+    _upload_sample_notebook("tags_delete_all.ipynb")
+    client.put("/api/notebooks/tags_delete_all.ipynb/tags", json={"tags": ["bug"]})
+    assert _tags_sidecar_path("tags_delete_all.ipynb").is_file()
+
+    resp = client.delete("/api/notebooks?confirm=true")
+    assert resp.status_code == 200
+
+    assert not _tags_sidecar_path("tags_delete_all.ipynb").is_file()
+
+
+def test_rename_notebook_moves_its_tags_to_the_new_name():
+
+    _upload_sample_notebook("tags_rename_source.ipynb")
+    client.put(
+        "/api/notebooks/tags_rename_source.ipynb/tags", json={"tags": ["bug"]}
+    )
+
+    rename_resp = client.patch(
+        "/api/notebooks/tags_rename_source.ipynb",
+        json={"new_filename": "tags_rename_target.ipynb"},
+    )
+    assert rename_resp.status_code == 200
+
+    assert not _tags_sidecar_path("tags_rename_source.ipynb").is_file()
+    assert client.get(
+        "/api/notebooks/tags_rename_target.ipynb/tags"
+    ).json()["tags"] == ["bug"]
+
+    os.remove(Path(UPLOAD_DIR) / "tags_rename_target.ipynb")
+    _tags_sidecar_path("tags_rename_target.ipynb").unlink(missing_ok=True)
+
+
+def test_rename_notebook_overwrite_discards_the_destinations_previous_tags():
+
+    _upload_sample_notebook("tags_rename_overwrite_source.ipynb")
+    _upload_sample_notebook("tags_rename_overwrite_target.ipynb")
+    client.put(
+        "/api/notebooks/tags_rename_overwrite_target.ipynb/tags",
+        json={"tags": ["stale"]},
+    )
+
+    rename_resp = client.patch(
+        "/api/notebooks/tags_rename_overwrite_source.ipynb",
+        json={
+            "new_filename": "tags_rename_overwrite_target.ipynb",
+            "overwrite": True,
+        },
+    )
+    assert rename_resp.status_code == 200
+
+    assert client.get(
+        "/api/notebooks/tags_rename_overwrite_target.ipynb/tags"
+    ).json()["tags"] == []
+
+    os.remove(Path(UPLOAD_DIR) / "tags_rename_overwrite_target.ipynb")
+    _tags_sidecar_path("tags_rename_overwrite_target.ipynb").unlink(missing_ok=True)
 
 
 def test_inspect_rejects_absolute_notebook_path():

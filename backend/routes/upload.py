@@ -634,6 +634,165 @@ def _currently_compiled_notebook_is_stale():
 _NOTEBOOK_SORT_KEYS = frozenset({"name", "size", "modified"})
 _NOTEBOOK_SORT_ORDERS = frozenset({"asc", "desc"})
 
+# Bounds enforced by _validate_and_normalize_tags below. Without them, a
+# single PUT /api/notebooks/{filename}/tags call could attach an unbounded
+# number of arbitrarily long strings to a notebook -- there was previously
+# no tagging concept at all, so nothing constrained what a caller could
+# stuff into the sidecar file _write_notebook_tags writes, or into every
+# GET /api/notebooks response listing it back out afterward.
+_MAX_TAG_LENGTH = 50
+_MAX_TAGS_PER_NOTEBOOK = 20
+
+
+def _tags_sidecar_path(notebook_filename: str) -> Path:
+    """Path to the hidden JSON sidecar file that stores a notebook's tags.
+
+    Stored as ".<filename>.tags.json" directly inside UPLOAD_DIR -- hidden
+    (leading dot) so it's invisible to list_notebooks' own ".ipynb"-only
+    iterdir() filter below, the same way an in-flight upload's own hidden
+    "*.part" temp file already is (see _cleanup_stale_upload_temp_files
+    above).
+
+    `notebook_filename` is always a notebook's own already-validated
+    Path.name (from resolve_upload_path, e.g. file_path.name), never raw,
+    unresolved client input directly -- so unlike resolve_upload_path's own
+    callers, this doesn't need its own traversal check.
+    """
+    return Path(UPLOAD_DIR) / f".{notebook_filename}.tags.json"
+
+
+def _read_notebook_tags(notebook_filename: str) -> list:
+    """Tags currently recorded for the notebook named `notebook_filename`,
+    sorted, or [] if it has none -- no sidecar file yet (the common case:
+    most notebooks are never tagged), or one that's
+    missing/unreadable/corrupt. Tags are optional, best-effort metadata,
+    the same way .compile_metadata.json already is for
+    _currently_compiled_notebook_metadata above -- a bad sidecar file
+    should never break GET /api/notebooks over it.
+    """
+    sidecar_path = _tags_sidecar_path(notebook_filename)
+
+    if not sidecar_path.is_file():
+        return []
+
+    try:
+
+        with open(sidecar_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+    except (OSError, ValueError):
+        return []
+
+    tags = data.get("tags")
+
+    if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+        return []
+
+    return sorted(tags)
+
+
+def _write_notebook_tags(notebook_filename: str, tags: list) -> None:
+    """Persist `tags` (already validated/deduplicated/sorted by the
+    caller -- see _validate_and_normalize_tags) as the tag set for the
+    notebook named `notebook_filename`.
+
+    Removes the sidecar file entirely, rather than writing an empty
+    "tags": [] one, when `tags` is empty -- so an untagged notebook (every
+    notebook, before this feature existed at all) never accumulates a
+    sidecar file on disk just from an empty PUT. Mirrors
+    write_compile_metadata's own file only ever existing once something
+    has actually been recorded (backend/compiler.py).
+
+    Writes via a temp-file-then-os.replace swap in the same directory --
+    the identical atomic-write pattern upload_notebook already uses for
+    the notebook file itself (see temp_path in upload_notebook above) --
+    so a concurrent reader (list_notebooks, GET .../tags) never observes a
+    partially-written sidecar file. The temp file's own name ends in
+    ".part", so if a hard crash ever left one behind mid-write, it's swept
+    up by the exact same _cleanup_stale_upload_temp_files opportunistic
+    sweep that already handles upload_notebook's identical leftover-temp-
+    file case, with no separate cleanup mechanism needed.
+    """
+    sidecar_path = _tags_sidecar_path(notebook_filename)
+
+    if not tags:
+        sidecar_path.unlink(missing_ok=True)
+        return
+
+    upload_root = Path(UPLOAD_DIR).resolve()
+    temp_path = upload_root / f".{notebook_filename}.tags.{uuid.uuid4().hex}.part"
+
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump({"tags": tags}, f)
+
+    os.replace(temp_path, sidecar_path)
+
+
+def _validate_and_normalize_tags(raw_tags) -> list:
+    """Validate `raw_tags` (the "tags" field of a PUT
+    /api/notebooks/{filename}/tags JSON body) and return it deduplicated
+    and sorted.
+
+    `raw_tags` comes straight from a raw JSON body field, not a
+    Pydantic-validated type -- the same reason resolve_upload_path's own
+    isinstance check exists for "notebook_path" elsewhere in this file --
+    so it can be any JSON type at all (a string, a number, null, ...), not
+    necessarily the list of strings this endpoint actually needs.
+
+    Each tag is stripped of surrounding whitespace before validation, so
+    "  bug  " and "bug" are treated as the same tag rather than two
+    distinct ones that merely look identical -- and an empty or
+    whitespace-only string is rejected rather than silently becoming a
+    blank, meaningless tag. Deduplicated case-sensitively (a set) since
+    two callers tagging the same notebook with "bug" don't need two
+    identical entries, but "bug" and "Bug" are left as distinct tags --
+    this endpoint has no basis for deciding those are the same label.
+    """
+    if not isinstance(raw_tags, list):
+
+        raise HTTPException(
+            status_code=400,
+            detail="tags must be a list of strings"
+        )
+
+    normalized = set()
+
+    for tag in raw_tags:
+
+        if not isinstance(tag, str):
+
+            raise HTTPException(
+                status_code=400,
+                detail="each tag must be a string"
+            )
+
+        cleaned = tag.strip()
+
+        if not cleaned:
+
+            raise HTTPException(
+                status_code=400,
+                detail="tags must not be empty or whitespace-only strings"
+            )
+
+        if len(cleaned) > _MAX_TAG_LENGTH:
+
+            raise HTTPException(
+                status_code=400,
+                detail=f"tags must be at most {_MAX_TAG_LENGTH} characters long"
+            )
+
+        normalized.add(cleaned)
+
+    if len(normalized) > _MAX_TAGS_PER_NOTEBOOK:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"a notebook may have at most {_MAX_TAGS_PER_NOTEBOOK} distinct tags"
+        )
+
+    return sorted(normalized)
+
 
 @router.get("/notebooks")
 def list_notebooks(
@@ -642,6 +801,7 @@ def list_notebooks(
     order: str = "asc",
     limit: int = None,
     offset: int = 0,
+    tag: str = None,
 ):
     """List previously uploaded notebooks.
 
@@ -708,6 +868,17 @@ def list_notebooks(
     total. A negative "offset", or a "limit" that isn't a positive
     integer, is rejected with 400, the same way an invalid "sort"/"order"
     already is above.
+
+    Each entry's "tags" field lists the labels PUT
+    /api/notebooks/{filename}/tags has recorded for it (see
+    _read_notebook_tags above), or [] for a notebook that's never been
+    tagged. Before tagging existed at all, a dashboard with many uploaded
+    notebooks had no way to categorize or group them beyond filename
+    "search" -- e.g. separating a handful of "production" notebooks from a
+    much larger pile of one-off scratch ones. The "tag" query parameter
+    filters the list down to notebooks carrying that exact tag, applied
+    (like "search") before "sort"/"limit"/"offset", so it composes with
+    every other filter/pagination parameter this endpoint already has.
     """
 
     if sort not in _NOTEBOOK_SORT_KEYS:
@@ -760,6 +931,11 @@ def list_notebooks(
         if search and search.lower() not in entry.name.lower():
             continue
 
+        notebook_tags = _read_notebook_tags(entry.name)
+
+        if tag and tag not in notebook_tags:
+            continue
+
         entry_stat = entry.stat()
 
         is_currently_compiled = (
@@ -773,6 +949,7 @@ def list_notebooks(
                 entry_stat.st_mtime, tz=timezone.utc
             ).isoformat(),
             "currently_compiled": is_currently_compiled,
+            "tags": notebook_tags,
         }
 
         if is_currently_compiled:
@@ -846,6 +1023,12 @@ def delete_all_notebooks(confirm: bool = False):
     same set GET /api/notebooks already lists -- so an in-flight upload's
     own hidden ".part" temp file (see _cleanup_stale_upload_temp_files
     above) is never touched by this.
+
+    Also removes each deleted notebook's tags sidecar file, if it has one
+    (see _tags_sidecar_path above) -- without this, a notebook re-uploaded
+    later under the same filename would silently inherit tags left behind
+    by a completely different, previously-deleted notebook that just
+    happened to share its name.
     """
 
     if not confirm:
@@ -874,6 +1057,7 @@ def delete_all_notebooks(confirm: bool = False):
             currently_compiled_notebook_deleted = True
 
         os.remove(entry)
+        _tags_sidecar_path(entry.name).unlink(missing_ok=True)
         deleted_filenames.append(entry.name)
 
     return {
@@ -903,6 +1087,11 @@ def delete_notebook(filename: str):
     diff, or recompile from to confirm what's currently being served.
     Without this, a caller had no way to know that had just happened
     short of a separate GET /api/notebooks call beforehand to check.
+
+    Also removes this notebook's tags sidecar file, if it has one -- see
+    delete_all_notebooks' own identical cleanup above for why a stale one
+    left behind must not silently carry over to a future notebook
+    re-uploaded under the same filename.
     """
 
     file_path = resolve_upload_path(filename)
@@ -923,6 +1112,7 @@ def delete_notebook(filename: str):
     try:
 
         os.remove(file_path)
+        _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
 
     except Exception as e:
 
@@ -1046,6 +1236,15 @@ def rename_notebook(filename: str, data: dict):
     check-then-write sequence by _rename_lock_for (see its own docstring
     for the concurrent collision this closes, keyed by destination
     filename).
+
+    A notebook's tags (see PUT /api/notebooks/{filename}/tags) move along
+    with it: without this, a rename would silently orphan the old
+    filename's tags sidecar file (never read again -- nothing looks up
+    tags by a name that no longer exists) while the notebook's new name
+    read back as untagged. If "overwrite": true replaces an existing
+    destination notebook, that destination's own previous tags are
+    discarded along with the rest of the file it belonged to, rather than
+    left to be silently inherited by the just-renamed notebook.
     """
 
     new_filename = data.get("new_filename")
@@ -1120,6 +1319,14 @@ def rename_notebook(filename: str, data: dict):
                 detail=str(e)
             )
 
+        old_tags_path = _tags_sidecar_path(old_path.name)
+        new_tags_path = _tags_sidecar_path(new_path.name)
+
+        if old_tags_path.is_file():
+            os.replace(old_tags_path, new_tags_path)
+        else:
+            new_tags_path.unlink(missing_ok=True)
+
         if was_currently_compiled:
 
             # Held for the same reason every other read/write of
@@ -1141,6 +1348,84 @@ def rename_notebook(filename: str, data: dict):
             "new_filename": new_filename,
             "was_currently_compiled": was_currently_compiled,
         }
+
+
+@router.get("/notebooks/{filename}/tags")
+def get_notebook_tags(filename: str):
+    """Return the tags currently recorded for a previously uploaded
+    notebook.
+
+    GET /api/notebooks already lists every notebook's "tags" field
+    alongside its other metadata, but had no equivalent for a single
+    notebook without re-fetching (and re-filtering) the entire list --
+    the same gap GET /api/notebooks/{filename} already closes for a
+    notebook's raw content, just for its tags instead.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "tags": _read_notebook_tags(file_path.name),
+    }
+
+
+@router.put("/notebooks/{filename}/tags")
+def set_notebook_tags(filename: str, data: dict):
+    """Replace the full set of tags recorded for a previously uploaded
+    notebook.
+
+    Before this, there was no way to categorize or group uploaded
+    notebooks at all beyond their filename -- GET /api/notebooks' own
+    "search" only ever matches a substring of it. A dashboard with many
+    uploaded notebooks (production ones, scratch experiments, notebooks
+    for a specific project, ...) had no way to label and later filter by
+    that beyond renaming files to encode it, which collides with
+    filenames already being how a notebook's own identity is tracked
+    elsewhere in this file (currently_compiled, .compile_metadata.json's
+    "source_notebook", ...).
+
+    A PUT, not a PATCH that adds/removes individual tags: this always
+    replaces the notebook's entire tag set with "tags" from the request
+    body, the simplest contract for a caller to reason about ("this is
+    now the complete list") without needing separate add/remove
+    endpoints. Pass an empty list to clear every tag.
+
+    "tags" must be a list of non-empty, non-whitespace-only strings (see
+    _validate_and_normalize_tags), each at most _MAX_TAG_LENGTH
+    characters, with at most _MAX_TAGS_PER_NOTEBOOK distinct tags in
+    total -- an invalid "tags" value is rejected with 400, the same way
+    /api/deploy's own "tag" (a Docker image tag, an unrelated concept)
+    and "platform" fields already are elsewhere in this file for a
+    non-string value.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    tags = _validate_and_normalize_tags(data.get("tags", []))
+
+    _write_notebook_tags(file_path.name, tags)
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "tags": tags,
+    }
 
 
 @router.post("/inspect")
