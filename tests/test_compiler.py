@@ -15,6 +15,7 @@ import nbformat
 import pytest
 
 from backend.compiler import (
+    _extract_explicit_requirements,
     _filter_functions_by_name,
     clear_stale_export_artifacts,
     COMPILE_LOCK,
@@ -4401,3 +4402,148 @@ print("TASKS_AUTH_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "TASKS_AUTH_E2E_OK" in proc.stdout
+
+def test_extract_explicit_requirements_finds_a_directive_in_a_cell():
+
+    code_cells = [
+        "# notebook-to-api: requires opencv-python-headless==4.9.0.80\n"
+        "import pandas\n"
+    ]
+
+    assert _extract_explicit_requirements(code_cells) == [
+        "opencv-python-headless==4.9.0.80"
+    ]
+
+
+def test_extract_explicit_requirements_finds_a_directive_indented_inside_a_function():
+
+    code_cells = [
+        "def f() -> int:\n"
+        "    # notebook-to-api: requires extra-runtime-only-pkg==2.0\n"
+        "    return 1\n"
+    ]
+
+    assert _extract_explicit_requirements(code_cells) == [
+        "extra-runtime-only-pkg==2.0"
+    ]
+
+
+def test_extract_explicit_requirements_supports_a_vcs_or_extras_spec():
+
+    code_cells = [
+        "# notebook-to-api: requires my-private-pkg @ git+https://example.com/pkg.git\n"
+        "# notebook-to-api: requires somepkg[extra]==1.2.3\n"
+    ]
+
+    specs = _extract_explicit_requirements(code_cells)
+
+    assert "my-private-pkg @ git+https://example.com/pkg.git" in specs
+    assert "somepkg[extra]==1.2.3" in specs
+
+
+def test_extract_explicit_requirements_deduplicates_exact_matches_across_cells():
+
+    code_cells = [
+        "# notebook-to-api: requires somepkg==1.0\n",
+        "# notebook-to-api: requires somepkg==1.0\n",
+    ]
+
+    assert _extract_explicit_requirements(code_cells) == ["somepkg==1.0"]
+
+
+def test_extract_explicit_requirements_ignores_an_unrelated_comment():
+
+    code_cells = [
+        "# this notebook-to-api project requires careful review\n"
+        "import pandas\n"
+    ]
+
+    assert _extract_explicit_requirements(code_cells) == []
+
+
+def test_extract_explicit_requirements_returns_an_empty_list_with_no_directives():
+
+    code_cells = ["import pandas\n\ndef f() -> int:\n    return 1\n"]
+
+    assert _extract_explicit_requirements(code_cells) == []
+
+
+def test_compile_notebook_writes_an_explicit_requirement_directive_to_requirements_txt(
+    tmp_path
+):
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "# notebook-to-api: requires opencv-python-headless==4.9.0.80\n"
+            "\n"
+            "def f() -> int:\n    return 1\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    requirements = (output_dir / "requirements.txt").read_text(encoding="utf-8")
+    lines = set(requirements.split())
+
+    assert "opencv-python-headless==4.9.0.80" in lines
+
+
+def test_compile_notebook_explicit_requirement_coexists_with_auto_detected_ones(
+    tmp_path
+):
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "# notebook-to-api: requires my-private-pkg @ git+https://example.com/pkg.git\n"
+            "import pandas\n\n"
+            "def f() -> int:\n    return 1\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    requirements = (output_dir / "requirements.txt").read_text(encoding="utf-8")
+    lines = requirements.splitlines()
+
+    assert "my-private-pkg @ git+https://example.com/pkg.git" in lines
+    assert any(line.startswith("pandas==") for line in lines)
+    assert any(line.startswith("fastapi==") for line in lines)
+
+
+def test_compile_notebook_without_any_directive_behaves_as_before(tmp_path):
+    """Preserves the previous, still-default behavior -- a notebook with
+    no "# notebook-to-api: requires ..." comment compiles exactly as it
+    always has.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import pandas\n\ndef f() -> int:\n    return 1\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    requirements = (output_dir / "requirements.txt").read_text(encoding="utf-8")
+    lines = requirements.split()
+
+    assert any(line.startswith("pandas==") for line in lines)
+    assert any(line.startswith("fastapi==") for line in lines)

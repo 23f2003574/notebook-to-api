@@ -5,6 +5,7 @@ import importlib.metadata
 import json
 import keyword
 import os
+import re
 import shutil
 import sys
 import pathlib
@@ -345,7 +346,62 @@ def compiling_python_version():
     return f"{sys.version_info.major}.{sys.version_info.minor}"
 
 
-def write_requirements(imports, output_dir):
+# Recognizes a "# notebook-to-api: requires <spec>" comment directive
+# anywhere in a code cell's raw source -- see
+# _extract_explicit_requirements below for what it's for. Matched against
+# each cell's raw text directly (not via the AST, unlike every other
+# extraction step in this pipeline) since a comment carries no meaning
+# for `ast.parse` to preserve in the first place; it's gone from the tree
+# entirely. Requires the "#" to start the line (allowing leading
+# whitespace, so it's usable indented inside a function body too) so an
+# unrelated inline comment that merely happens to contain this phrase
+# elsewhere in a line of code isn't matched by accident.
+REQUIREMENT_DIRECTIVE_PATTERN = re.compile(
+    r"^\s*#\s*notebook-to-api:\s*requires\s+(?P<spec>\S.*)$",
+    re.MULTILINE,
+)
+
+
+def _extract_explicit_requirements(code_cells):
+    """Extra requirements.txt lines a notebook author declares explicitly
+    via a "# notebook-to-api: requires <spec>" comment directive, one per
+    line, anywhere in any code cell -- in the order first seen, with
+    exact-duplicate lines removed.
+
+    write_requirements (below) only ever pins whatever a notebook's own
+    `import` statements resolve to (see distribution_name_for_import) --
+    but that resolution depends entirely on what's importable in the
+    environment doing the compiling. A dependency the notebook actually
+    needs at runtime but that isn't importable there at all (one only
+    ever imported dynamically via importlib rather than a top-level
+    `import` a static scan can see, one that's only installed in the
+    deploy target's own image and never the compiling machine, or simply
+    a private package/VCS URL/extras spec this tool has no way to guess
+    on its own) had no way to be added to requirements.txt at all.
+
+    Each matched <spec> is written to requirements.txt exactly as given
+    -- not resolved via distribution_name_for_import or re-pinned via
+    _pinned_requirement, since a caller writing this directive is already
+    stating precisely what belongs there, the same as a hand-written
+    requirements.txt line would.
+    """
+    specs = []
+    seen = set()
+
+    for cell in code_cells:
+
+        for match in REQUIREMENT_DIRECTIVE_PATTERN.finditer(cell):
+
+            spec = match.group("spec").strip()
+
+            if spec and spec not in seen:
+                seen.add(spec)
+                specs.append(spec)
+
+    return specs
+
+
+def write_requirements(imports, output_dir, explicit_requirements=None):
 
     requirements_path = os.path.join(
         output_dir,
@@ -381,12 +437,23 @@ def write_requirements(imports, output_dir):
 
     pinned_deps = [_pinned_requirement(dep) for dep in distribution_names]
 
+    # Merged in alongside the auto-detected, pinned dependencies above --
+    # see _extract_explicit_requirements' own docstring for what these
+    # are and why a notebook author would need them. Deduplicated only by
+    # exact matching text, not by which PyPI distribution a line actually
+    # refers to: this can't tell that "opencv-python==4.9.0.80" and
+    # "opencv-python-headless==4.9.0.80" ultimately provide the same
+    # `cv2` import, so declaring one doesn't suppress the other if the
+    # notebook also imports it directly -- only an exact duplicate is
+    # removed.
+    all_deps = sorted(set(pinned_deps) | set(explicit_requirements or []))
+
     with open(requirements_path, "w", encoding="utf-8") as f:
-        for dep in pinned_deps:
+        for dep in all_deps:
             f.write(dep + "\n")
 
     print(
-        f"requirements.txt generated with dependencies: {pinned_deps}"
+        f"requirements.txt generated with dependencies: {all_deps}"
     )
 
 
@@ -706,7 +773,8 @@ def compile_notebook_to_api(
 
         write_requirements(
             filtered_imports,
-            output_dir
+            output_dir,
+            explicit_requirements=_extract_explicit_requirements(code_cells)
         )
 
         write_generated_api(
