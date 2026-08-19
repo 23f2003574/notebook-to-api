@@ -366,6 +366,61 @@ async def root():
     }
 
 
+# Build output directory for the bundled React frontend (see
+# frontend/package.json's own "build" script, `vite build`) -- not
+# checked into this repo, only ever produced by actually running that
+# build.
+FRONTEND_DIST_DIR = PROJECT_ROOT / "frontend" / "dist"
+
+
+def mount_frontend_static_files(app, dist_dir=FRONTEND_DIST_DIR):
+    """Mount a built frontend as static files served from "/", so this
+    dashboard can actually serve the React frontend its own module
+    docstring above already promises, not just the /api/* endpoints it
+    talks to.
+
+    `from fastapi.staticfiles import StaticFiles` was imported here and
+    never used at all: the local dev workflow (start-dashboard.sh) runs
+    the frontend as a completely separate `npm run dev` process on its
+    own port, CORS-linked to this one via allowed_origins() above -- but
+    there was no equivalent for an actual deployment. A production
+    deploy wanting a single process to run, with no second frontend
+    server to stand up and keep alive alongside it, had no way to get
+    that: visiting "/" only ever returned root()'s plain
+    {"status": "running", ...} JSON, and every other frontend route
+    (whatever client-side path the SPA itself defines) 404'd outright,
+    with no way to reach the frontend through this server at all.
+
+    A no-op if `dist_dir` doesn't exist -- frontend/dist is a build
+    artifact (`npm run build`), not something checked into this repo, so
+    a fresh checkout or a backend-only deployment that never runs the
+    frontend build has nothing to serve. StaticFiles itself raises
+    RuntimeError for a missing directory, which would otherwise crash
+    importing this entire module -- and every route it defines -- over a
+    frontend that simply hasn't been built, exactly the same
+    fail-safe-not-fail-crashing precedent every other optional,
+    environment-dependent piece of this dashboard already follows.
+
+    Mounted at "/" specifically (not a sub-path): frontend/vite.config.js
+    configures no "base", so Vite's own build assumes root-relative asset
+    paths ("/assets/..."); anything other than "/" would 404 on every one
+    of them. Safe alongside every route already registered above:
+    FastAPI/Starlette matches routes in registration order, and this is
+    always called last (after every app.include_router/@app.get in this
+    module), so each of those already matches its own exact path before
+    this catch-all mount is ever consulted -- confirmed live: GET / still
+    reaches root()'s own JSON response, not a file from `dist_dir`, even
+    with a frontend mounted.
+    """
+    if not dist_dir.is_dir():
+        return
+
+    app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="frontend")
+
+
+mount_frontend_static_files(app)
+
+
 def dashboard_host():
     """Host the dashboard API server binds to when run directly (`python
     -m backend.dashboard`).

@@ -3,9 +3,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.dashboard import app, dashboard_host, dashboard_port
+from backend.dashboard import (
+    app,
+    dashboard_host,
+    dashboard_port,
+    FRONTEND_DIST_DIR,
+    mount_frontend_static_files,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -149,3 +156,97 @@ print("DASHBOARD_MAIN_DEFAULT_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "DASHBOARD_MAIN_DEFAULT_OK" in proc.stdout
+
+
+def test_frontend_is_not_mounted_in_this_checked_out_repo():
+    """frontend/dist is a `npm run build` artifact, never checked into
+    this repo -- confirms the real, importable app reflects that: no
+    static frontend mount, and GET / still returns root()'s own JSON.
+    """
+
+    assert not FRONTEND_DIST_DIR.is_dir()
+    assert not any(getattr(route, "name", None) == "frontend" for route in app.routes)
+
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "running"
+
+
+def test_mount_frontend_static_files_is_a_no_op_for_a_missing_directory(tmp_path):
+
+    test_app = FastAPI()
+    missing_dir = tmp_path / "does_not_exist"
+
+    mount_frontend_static_files(test_app, dist_dir=missing_dir)
+
+    assert not any(getattr(route, "name", None) == "frontend" for route in test_app.routes)
+
+
+def test_mount_frontend_static_files_serves_the_built_frontend(tmp_path):
+
+    dist_dir = tmp_path / "dist"
+    dist_dir.mkdir()
+    (dist_dir / "index.html").write_text("<html><body>SPA root</body></html>", encoding="utf-8")
+    (dist_dir / "assets").mkdir()
+    (dist_dir / "assets" / "index.js").write_text("console.log('hi')", encoding="utf-8")
+
+    test_app = FastAPI()
+    mount_frontend_static_files(test_app, dist_dir=dist_dir)
+
+    test_client = TestClient(test_app)
+
+    index_resp = test_client.get("/")
+    assert index_resp.status_code == 200
+    assert "SPA root" in index_resp.text
+
+    asset_resp = test_client.get("/assets/index.js")
+    assert asset_resp.status_code == 200
+    assert "console.log" in asset_resp.text
+
+
+def test_mount_frontend_static_files_does_not_shadow_an_existing_root_route(tmp_path):
+    """Registration order matters: an app.get("/") route already defined
+    before the mount must keep winning at "/" -- confirmed against the
+    real dashboard app in test_frontend_is_not_mounted_in_this_checked_out_repo
+    above (where no frontend is mounted at all); this exercises the case
+    where one actually is.
+    """
+
+    dist_dir = tmp_path / "dist"
+    dist_dir.mkdir()
+    (dist_dir / "index.html").write_text("<html><body>SPA root</body></html>", encoding="utf-8")
+
+    test_app = FastAPI()
+
+    @test_app.get("/")
+    async def root():
+        return {"status": "running"}
+
+    mount_frontend_static_files(test_app, dist_dir=dist_dir)
+
+    test_client = TestClient(test_app)
+
+    resp = test_client.get("/")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "running"}
+
+
+def test_mount_frontend_static_files_does_not_shadow_existing_api_routes(tmp_path):
+
+    dist_dir = tmp_path / "dist"
+    dist_dir.mkdir()
+    (dist_dir / "index.html").write_text("<html></html>", encoding="utf-8")
+
+    test_app = FastAPI()
+
+    @test_app.get("/api/health")
+    async def health():
+        return {"status": "healthy"}
+
+    mount_frontend_static_files(test_app, dist_dir=dist_dir)
+
+    test_client = TestClient(test_app)
+
+    resp = test_client.get("/api/health")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "healthy"}
