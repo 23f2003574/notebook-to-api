@@ -445,3 +445,133 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
         )
         for skipped in data["skipped_functions"]:
             print(f"  {skipped['name']}: {skipped['reason']}")
+
+
+def _extract_notebook_functions(notebook_path):
+    """The same extract-every-cell/deduplicate pipeline inspect_notebook
+    and inspect_notebook_data (above) already run, on their way to their
+    own "functions" field -- factored out here for diff_notebook_functions
+    below, which only ever needs this half of what those two compute (no
+    dependencies, generated_files, or reserved_name_conflicts to diff two
+    notebooks' function signatures against each other).
+    """
+    notebook = load_notebook(notebook_path)
+
+    code_cells = extract_code_cells(notebook)
+
+    all_functions = []
+
+    for cell in code_cells:
+        all_functions.extend(extract_functions_from_code(cell))
+
+    return deduplicate_functions_by_name(all_functions)
+
+
+def _function_signature_key(func):
+    """Comparable signature summary for a function dict (as produced by
+    extract_functions_from_code) -- used by diff_notebook_functions below
+    to decide whether a function present in both notebooks actually
+    changed, or is merely present in both untouched.
+
+    Deliberately excludes "docstring", "example_payload", and
+    "example_response": those affect the endpoint's *documentation*, not
+    its actual request/response contract, so an edit to just a
+    function's docstring shouldn't be reported as a breaking change to
+    its signature.
+    """
+    return (
+        func.get("args", []),
+        func.get("return_type"),
+        func.get("is_async", False),
+    )
+
+
+def diff_notebook_functions(old_notebook_path, new_notebook_path):
+    """Compare the top-level functions two notebooks would each compile
+    into endpoints, without actually compiling either one.
+
+    Before this, the only way to tell whether editing a notebook changed
+    its compiled API's surface -- a new endpoint, a removed one, or an
+    existing one's request/response contract changing in a way that could
+    break an existing caller -- was to compile both versions and diff
+    app.py by eye. Generated code changes shape for plenty of reasons that
+    have nothing to do with the actual API contract (formatting, internal
+    ordering, ...), making a genuine "did this endpoint's request shape
+    change" question much harder to answer than it needs to be. This
+    compares just the extracted function signatures instead -- the same
+    per-function shape inspect_notebook_data's own "functions" field
+    already exposes for a single notebook -- so a CI check (or a
+    developer reviewing a notebook change before merging or deploying it)
+    can answer that directly, against two arbitrary notebook paths (an
+    old revision checked out at another path, a previous upload's
+    downloaded copy, ...), with no compile step involved at all.
+
+    Returns {"added", "removed", "changed", "unchanged"}:
+      - "added": full function entries present only in new_notebook_path.
+      - "removed": full function entries present only in
+        old_notebook_path.
+      - "changed": functions present in both, sorted by name, each as
+        {"name", "old", "new"} (that function's own full entry from each
+        notebook) wherever its args, return type, or sync/async-ness
+        differ (see _function_signature_key) -- a docstring-only edit
+        does not count as "changed".
+      - "unchanged": names present in both with an identical signature.
+    """
+    old_functions = {
+        func["name"]: func
+        for func in _extract_notebook_functions(old_notebook_path)
+    }
+    new_functions = {
+        func["name"]: func
+        for func in _extract_notebook_functions(new_notebook_path)
+    }
+
+    old_names = set(old_functions)
+    new_names = set(new_functions)
+
+    added_names = sorted(new_names - old_names)
+    removed_names = sorted(old_names - new_names)
+
+    changed = []
+    unchanged = []
+
+    for name in sorted(old_names & new_names):
+
+        old_func = old_functions[name]
+        new_func = new_functions[name]
+
+        if _function_signature_key(old_func) != _function_signature_key(new_func):
+            changed.append({"name": name, "old": old_func, "new": new_func})
+        else:
+            unchanged.append(name)
+
+    return {
+        "added": [new_functions[name] for name in added_names],
+        "removed": [old_functions[name] for name in removed_names],
+        "changed": changed,
+        "unchanged": unchanged,
+    }
+
+
+def print_notebook_diff(diff):
+    """Print diff_notebook_functions' own report in the same
+    human-readable style print_compile_summary/inspect_notebook already
+    use elsewhere in this file.
+    """
+    if diff["added"]:
+        print(f"\n+ Added {len(diff['added'])} endpoint(s):")
+        for func in diff["added"]:
+            print(f"  + POST /{func['name']}")
+
+    if diff["removed"]:
+        print(f"\n- Removed {len(diff['removed'])} endpoint(s):")
+        for func in diff["removed"]:
+            print(f"  - POST /{func['name']}")
+
+    if diff["changed"]:
+        print(f"\n~ Changed {len(diff['changed'])} endpoint(s):")
+        for entry in diff["changed"]:
+            print(f"  ~ POST /{entry['name']}")
+
+    if not (diff["added"] or diff["removed"] or diff["changed"]):
+        print("\nNo changes to the compiled API surface.")

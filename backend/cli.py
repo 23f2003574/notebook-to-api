@@ -19,9 +19,11 @@ from nbformat import ValidationError as NotebookValidationError
 from backend.compiler import compile_notebook, _filter_functions_by_name
 # Import inspector for analysis
 from backend.inspector import (
+    diff_notebook_functions,
     inspect_notebook,
     inspect_notebook_data,
     print_compile_summary,
+    print_notebook_diff,
 )
 from backend.serve import serve_notebook, watch_notebook
 from backend.observability.deployment_governance_doctor import (
@@ -330,10 +332,10 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 # The core notebook-to-API commands (as opposed to the `governance`
 # subcommand tree, which manages its own process exit codes and error
 # reporting entirely internally -- every governance branch ends in its own
-# sys.exit(exit_code)). Kept as a set so main() can route these six, and
-# only these six, through _dispatch_core_command's shared error handling.
+# sys.exit(exit_code)). Kept as a set so main() can route only these
+# commands through _dispatch_core_command's shared error handling.
 _CORE_COMMANDS = frozenset({
-    "compile", "inspect", "export-openapi", "export-sdk", "serve", "watch", "deploy",
+    "compile", "inspect", "export-openapi", "export-sdk", "serve", "watch", "deploy", "diff",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -774,6 +776,12 @@ def _dispatch_core_command(args):
                 print(f"Pushing Docker image '{tag}' …")
                 _run_deploy_docker_command(["docker", "push", tag], output_dir)
                 print(f"Docker image '{tag}' pushed successfully.")
+    elif args.command == "diff":
+        diff = diff_notebook_functions(args.old_notebook, args.new_notebook)
+        if args.json_output:
+            print(json.dumps(diff, indent=2))
+        else:
+            print_notebook_diff(diff)
 
 
 def main():
@@ -999,6 +1007,25 @@ def main():
         )
     )
     _add_function_selection_arguments(deploy_parser)
+
+    # diff command (compare two notebooks' compiled API surface)
+    diff_parser = subparsers.add_parser(
+        "diff",
+        help="Compare two notebooks' compiled API surface (added/removed/changed endpoints)."
+    )
+    diff_parser.add_argument("old_notebook", help="Path to the baseline notebook file.")
+    diff_parser.add_argument("new_notebook", help="Path to the notebook file to compare against it.")
+    diff_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit machine-readable JSON ({\"added\", \"removed\", "
+            "\"changed\", \"unchanged\"}) instead of the human-readable "
+            "report, for scripting/automation -- e.g. failing a CI check "
+            "when \"removed\" or \"changed\" is non-empty."
+        )
+    )
 
     # governance command group
     governance_parser = subparsers.add_parser(

@@ -2,9 +2,11 @@ import nbformat
 import pytest
 
 from backend.inspector import (
+    diff_notebook_functions,
     inspect_notebook,
     inspect_notebook_data,
     print_compile_summary,
+    print_notebook_diff,
     _aggregate_skipped_functions,
     _list_generated_files,
     _reserved_name_conflicts,
@@ -677,3 +679,156 @@ def test_print_compile_summary_omits_dependencies_line_when_there_are_none(
 
     output = capsys.readouterr().out
     assert "Dependencies:" not in output
+
+
+def test_diff_notebook_functions_reports_added_functions(tmp_path):
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(old_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _write_notebook(
+        new_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def multiply(a: int, b: int) -> int:\n    return a * b\n",
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+
+    assert [f["name"] for f in diff["added"]] == ["multiply"]
+    assert diff["removed"] == []
+    assert diff["changed"] == []
+    assert diff["unchanged"] == ["add"]
+
+
+def test_diff_notebook_functions_reports_removed_functions(tmp_path):
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(
+        old_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n",
+    )
+    _write_notebook(new_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+
+    assert diff["added"] == []
+    assert [f["name"] for f in diff["removed"]] == ["subtract"]
+    assert diff["changed"] == []
+    assert diff["unchanged"] == ["add"]
+
+
+def test_diff_notebook_functions_reports_a_changed_signature(tmp_path):
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(old_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _write_notebook(
+        new_path,
+        "def add(a: int, b: int, c: int = 0) -> int:\n    return a + b + c\n",
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+
+    assert diff["added"] == []
+    assert diff["removed"] == []
+    assert diff["unchanged"] == []
+    assert len(diff["changed"]) == 1
+    changed = diff["changed"][0]
+    assert changed["name"] == "add"
+    assert len(changed["old"]["args"]) == 2
+    assert len(changed["new"]["args"]) == 3
+
+
+def test_diff_notebook_functions_return_type_change_is_reported_as_changed(tmp_path):
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(old_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _write_notebook(new_path, "def add(a: int, b: int) -> str:\n    return str(a + b)\n")
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+
+    assert [c["name"] for c in diff["changed"]] == ["add"]
+
+
+def test_diff_notebook_functions_async_change_is_reported_as_changed(tmp_path):
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(old_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _write_notebook(
+        new_path, "async def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+
+    assert [c["name"] for c in diff["changed"]] == ["add"]
+
+
+def test_diff_notebook_functions_docstring_only_edit_is_not_a_change(tmp_path):
+    """A function's docstring becomes its endpoint's OpenAPI description,
+    not part of its actual request/response contract -- editing just that
+    must not be reported the same way a genuine signature change is.
+    """
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(
+        old_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    _write_notebook(
+        new_path,
+        'def add(a: int, b: int) -> int:\n    """Add two numbers."""\n    return a + b\n',
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+
+    assert diff["changed"] == []
+    assert diff["unchanged"] == ["add"]
+
+
+def test_diff_notebook_functions_identical_notebooks_report_no_changes(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n",
+    )
+
+    diff = diff_notebook_functions(str(notebook_path), str(notebook_path))
+
+    assert diff["added"] == []
+    assert diff["removed"] == []
+    assert diff["changed"] == []
+    assert sorted(diff["unchanged"]) == ["add", "subtract"]
+
+
+def test_print_notebook_diff_reports_no_changes(capsys):
+
+    print_notebook_diff(
+        {"added": [], "removed": [], "changed": [], "unchanged": ["add"]}
+    )
+
+    output = capsys.readouterr().out
+    assert "No changes to the compiled API surface." in output
+
+
+def test_print_notebook_diff_prints_added_removed_and_changed(capsys):
+
+    print_notebook_diff({
+        "added": [{"name": "multiply"}],
+        "removed": [{"name": "subtract"}],
+        "changed": [{"name": "add", "old": {}, "new": {}}],
+        "unchanged": [],
+    })
+
+    output = capsys.readouterr().out
+    assert "Added 1 endpoint(s):" in output
+    assert "POST /multiply" in output
+    assert "Removed 1 endpoint(s):" in output
+    assert "POST /subtract" in output
+    assert "Changed 1 endpoint(s):" in output
+    assert "POST /add" in output

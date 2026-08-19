@@ -1347,3 +1347,117 @@ def test_watch_command_requires_a_notebook_argument():
 
     assert proc.returncode != 0
     assert "notebook" in proc.stderr
+
+
+def test_diff_command_is_registered():
+    """Same subparser/dispatch-branch mismatch gap test_deploy_command_is_registered
+    (test_cli_deploy.py) and test_watch_command_is_registered (above)
+    already guard against for `deploy`/`watch`.
+    """
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "diff" in proc.stdout
+
+
+def test_diff_command_reports_added_removed_and_changed_functions(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+
+    _write_notebook_with_function(
+        old_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n",
+    )
+    _write_notebook_with_function(
+        new_path,
+        "def add(a: int, b: int, c: int = 0) -> int:\n    return a + b + c\n\n"
+        "def multiply(a: int, b: int) -> int:\n    return a * b\n",
+    )
+
+    proc = _run_cli(["diff", str(old_path), str(new_path)], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Added 1 endpoint(s):" in proc.stdout
+    assert "POST /multiply" in proc.stdout
+    assert "Removed 1 endpoint(s):" in proc.stdout
+    assert "POST /subtract" in proc.stdout
+    assert "Changed 1 endpoint(s):" in proc.stdout
+    assert "POST /add" in proc.stdout
+
+
+def test_diff_command_reports_no_changes_for_identical_notebooks(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["diff", str(notebook_path), str(notebook_path)], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No changes to the compiled API surface." in proc.stdout
+
+
+def test_diff_command_json_flag_emits_machine_readable_output(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+    _write_notebook_with_function(
+        old_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    _write_notebook_with_function(
+        new_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def multiply(a: int, b: int) -> int:\n    return a * b\n",
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--json"], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+
+    assert [f["name"] for f in data["added"]] == ["multiply"]
+    assert data["removed"] == []
+    assert data["changed"] == []
+    assert data["unchanged"] == ["add"]
+
+
+def test_diff_command_reports_a_clean_error_for_a_missing_notebook(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["diff", str(notebook_path), str(workdir / "does-not-exist.ipynb")],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_diff_command_requires_both_notebook_arguments(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(["diff", str(notebook_path)], cwd=workdir)
+
+    assert proc.returncode != 0
+    assert "new_notebook" in proc.stderr
