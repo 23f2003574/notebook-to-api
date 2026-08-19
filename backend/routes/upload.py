@@ -412,6 +412,115 @@ def _upload_lock_for(filename: str) -> asyncio.Lock:
     return _upload_locks_by_filename.setdefault(filename, asyncio.Lock())
 
 
+# Directory name (hidden, so it's invisible to list_notebooks' own
+# ".ipynb"-only iterdir() filter) under UPLOAD_DIR holding one subdirectory
+# per notebook filename, each containing that notebook's previous-version
+# snapshots (see _snapshot_current_notebook_version below).
+UPLOAD_VERSIONS_DIRNAME = ".versions"
+
+# Same NOTEBOOK_API_* env-var convention as MAX_UPLOAD_BYTES/
+# STALE_UPLOAD_TEMP_FILE_SECONDS above. Without a cap, a notebook
+# overwritten (or restored -- see restore_notebook_version below) many
+# times over a dashboard's lifetime would accumulate an unbounded number
+# of snapshots on disk forever, with no way to reclaim that space short of
+# an operator finding and deleting them by hand.
+MAX_NOTEBOOK_VERSIONS = int(
+    os.getenv("NOTEBOOK_API_MAX_VERSIONS_PER_NOTEBOOK", "20")
+)
+
+
+def _notebook_versions_dir(notebook_filename: str) -> Path:
+    """Directory holding `notebook_filename`'s previous-version snapshots.
+
+    `notebook_filename` is always a notebook's own already-validated
+    Path.name (from resolve_upload_path), never raw client input directly
+    -- same precondition _tags_sidecar_path already documents for the
+    identical reason.
+    """
+    return Path(UPLOAD_DIR) / UPLOAD_VERSIONS_DIRNAME / notebook_filename
+
+
+def _prune_notebook_versions(versions_dir: Path) -> None:
+    """Remove the oldest snapshots in `versions_dir` beyond
+    MAX_NOTEBOOK_VERSIONS, oldest first.
+
+    Snapshot filenames are timestamp-prefixed (see
+    _snapshot_current_notebook_version below), so sorting by name alone
+    already sorts oldest-to-newest -- no need to stat every file just to
+    order them.
+    """
+    if not versions_dir.is_dir():
+        return
+
+    version_files = sorted(
+        (entry for entry in versions_dir.iterdir() if entry.is_file()),
+        key=lambda entry: entry.name,
+    )
+
+    excess = len(version_files) - MAX_NOTEBOOK_VERSIONS
+
+    for stale in version_files[:max(excess, 0)]:
+        stale.unlink(missing_ok=True)
+
+
+def _snapshot_current_notebook_version(file_path: Path) -> None:
+    """Copy `file_path`'s current on-disk bytes into its version history
+    before they're about to be overwritten.
+
+    Before this, overwriting a notebook (POST /api/upload?overwrite=true
+    -- the only way to update a previously uploaded notebook's content)
+    destroyed its previous bytes permanently and unconditionally: an
+    accidental overwrite (the wrong file, a bad edit, ...) had no way to
+    be undone short of the uploader still having their own separate copy.
+    Snapshotting here, right before every overwrite, makes that
+    recoverable via GET/POST .../versions below.
+
+    A no-op if `file_path` doesn't exist yet -- nothing to snapshot for a
+    brand-new upload, which is the common, non-overwriting case.
+    """
+    if not file_path.is_file():
+        return
+
+    versions_dir = _notebook_versions_dir(file_path.name)
+    versions_dir.mkdir(parents=True, exist_ok=True)
+
+    # Zero-padded and fixed-width (this format never drops a leading
+    # digit) so plain lexicographic sort-by-filename -- see
+    # _prune_notebook_versions above and list_notebook_versions below --
+    # already sorts snapshots chronologically, with no need to stat each
+    # one just to order them. The trailing uuid4 suffix disambiguates two
+    # snapshots of the same notebook saved within the same microsecond.
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+    version_id = f"{timestamp}_{uuid.uuid4().hex[:8]}.ipynb"
+
+    shutil.copy2(file_path, versions_dir / version_id)
+
+    _prune_notebook_versions(versions_dir)
+
+
+_version_locks_by_filename = {}
+
+
+def _version_lock_for(filename: str) -> threading.Lock:
+    """threading.Lock scoped to a single notebook filename's version
+    history, guarding restore_notebook_version's own snapshot-then-copy
+    sequence below.
+
+    A plain threading.Lock, not an asyncio.Lock like upload_notebook's own
+    _upload_lock_for -- restore_notebook_version is a plain `def`, not
+    `async def` (see test_blocking_endpoints_are_declared_as_plain_def_not_async_def),
+    the same reason rename_notebook's own _rename_lock_for above is a
+    threading.Lock rather than reusing _upload_lock_for's asyncio.Lock.
+
+    A separate lock table from _rename_lock_for/_upload_lock_for, scoped
+    only to restore: this codebase doesn't attempt to serialize every
+    write endpoint against every other one for the same filename (rename
+    and upload don't cross-lock each other either) -- only concurrent
+    calls to the *same* operation.
+    """
+    return _version_locks_by_filename.setdefault(filename, threading.Lock())
+
+
 @router.post("/upload")
 async def upload_notebook(
     file: UploadFile = File(...),
@@ -437,6 +546,12 @@ async def upload_notebook(
     confirm the replacement -- mirroring the explicit opt-in `deploy
     --push` already uses elsewhere in this codebase for another
     action with real, hard-to-undo consequences.
+
+    An overwrite is no longer permanently destructive, either: the
+    previous content is snapshotted (see
+    _snapshot_current_notebook_version above) right before it's replaced,
+    recoverable afterward via GET/POST
+    /api/notebooks/{filename}/versions[/{version_id}[/restore]].
     """
 
     if not file.filename.endswith(".ipynb"):
@@ -557,6 +672,9 @@ async def upload_notebook(
                     "Pass ?overwrite=true to replace it."
                 )
             )
+
+        if overwritten:
+            _snapshot_current_notebook_version(file_path)
 
         os.replace(temp_path, file_path)
 
@@ -1024,11 +1142,12 @@ def delete_all_notebooks(confirm: bool = False):
     own hidden ".part" temp file (see _cleanup_stale_upload_temp_files
     above) is never touched by this.
 
-    Also removes each deleted notebook's tags sidecar file, if it has one
-    (see _tags_sidecar_path above) -- without this, a notebook re-uploaded
-    later under the same filename would silently inherit tags left behind
-    by a completely different, previously-deleted notebook that just
-    happened to share its name.
+    Also removes each deleted notebook's tags sidecar file and version
+    history directory, if it has either (see _tags_sidecar_path and
+    _notebook_versions_dir above) -- without this, a notebook re-uploaded
+    later under the same filename would silently inherit tags, or gain
+    "previous versions" to restore, left behind by a completely different,
+    previously-deleted notebook that just happened to share its name.
     """
 
     if not confirm:
@@ -1058,6 +1177,7 @@ def delete_all_notebooks(confirm: bool = False):
 
         os.remove(entry)
         _tags_sidecar_path(entry.name).unlink(missing_ok=True)
+        shutil.rmtree(_notebook_versions_dir(entry.name), ignore_errors=True)
         deleted_filenames.append(entry.name)
 
     return {
@@ -1088,10 +1208,10 @@ def delete_notebook(filename: str):
     Without this, a caller had no way to know that had just happened
     short of a separate GET /api/notebooks call beforehand to check.
 
-    Also removes this notebook's tags sidecar file, if it has one -- see
-    delete_all_notebooks' own identical cleanup above for why a stale one
-    left behind must not silently carry over to a future notebook
-    re-uploaded under the same filename.
+    Also removes this notebook's tags sidecar file and version history
+    directory, if it has either -- see delete_all_notebooks' own identical
+    cleanup above for why either one left behind must not silently carry
+    over to a future notebook re-uploaded under the same filename.
     """
 
     file_path = resolve_upload_path(filename)
@@ -1113,6 +1233,7 @@ def delete_notebook(filename: str):
 
         os.remove(file_path)
         _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
+        shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
 
     except Exception as e:
 
@@ -1245,6 +1366,15 @@ def rename_notebook(filename: str, data: dict):
     destination notebook, that destination's own previous tags are
     discarded along with the rest of the file it belonged to, rather than
     left to be silently inherited by the just-renamed notebook.
+
+    A notebook's version history (see PUT /api/upload?overwrite=true and
+    GET/POST /api/notebooks/{filename}/versions[/{version_id}[/restore]])
+    moves along with it for the identical reason -- otherwise a rename
+    would silently strand a notebook's own undo history under a filename
+    nothing points at anymore, while its new name reads back as never
+    having been overwritten at all. The same overwrite semantics apply:
+    the destination's own previous version history, if any, is discarded
+    rather than merged with the just-renamed notebook's.
     """
 
     new_filename = data.get("new_filename")
@@ -1326,6 +1456,15 @@ def rename_notebook(filename: str, data: dict):
             os.replace(old_tags_path, new_tags_path)
         else:
             new_tags_path.unlink(missing_ok=True)
+
+        old_versions_dir = _notebook_versions_dir(old_path.name)
+        new_versions_dir = _notebook_versions_dir(new_path.name)
+
+        if new_versions_dir.exists():
+            shutil.rmtree(new_versions_dir)
+
+        if old_versions_dir.is_dir():
+            shutil.move(str(old_versions_dir), str(new_versions_dir))
 
         if was_currently_compiled:
 
@@ -1425,6 +1564,153 @@ def set_notebook_tags(filename: str, data: dict):
         "status": "success",
         "filename": filename,
         "tags": tags,
+    }
+
+
+@router.get("/notebooks/{filename}/versions")
+def list_notebook_versions(filename: str):
+    """List a previously uploaded notebook's snapshotted previous
+    versions, newest first.
+
+    Every overwrite of `filename` (POST /api/upload?overwrite=true) now
+    snapshots the content it's about to replace (see
+    _snapshot_current_notebook_version above) rather than destroying it
+    outright -- but before this endpoint, there was no way to see what had
+    actually been captured, or with what version_id to pass to GET/POST
+    below.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    versions_dir = _notebook_versions_dir(file_path.name)
+
+    versions = []
+
+    if versions_dir.is_dir():
+
+        for entry in sorted(versions_dir.iterdir(), reverse=True):
+
+            if not entry.is_file():
+                continue
+
+            entry_stat = entry.stat()
+
+            versions.append({
+                "version_id": entry.name,
+                "size_bytes": entry_stat.st_size,
+                "saved_at": datetime.fromtimestamp(
+                    entry_stat.st_mtime, tz=timezone.utc
+                ).isoformat(),
+            })
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "versions": versions,
+    }
+
+
+@router.get("/notebooks/{filename}/versions/{version_id}")
+def get_notebook_version(filename: str, version_id: str):
+    """Download the raw content of one of a notebook's previously
+    snapshotted versions, by the "version_id" GET
+    /api/notebooks/{filename}/versions already lists.
+
+    Reuses _resolve_path_within for the same traversal protection
+    resolve_upload_path/resolve_generated_path already apply to their own
+    respective root directories -- `version_id` here is exactly as much
+    client input as an uploaded file's own name, just rooted at this one
+    notebook's own version directory instead of UPLOAD_DIR or
+    GENERATED_DIR directly.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    versions_dir = _notebook_versions_dir(file_path.name)
+
+    version_path = _resolve_path_within(
+        str(versions_dir), version_id, "notebook version"
+    )
+
+    if not version_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook version not found"
+        )
+
+    return FileResponse(
+        path=version_path,
+        media_type="application/x-ipynb+json",
+        filename=version_id,
+    )
+
+
+@router.post("/notebooks/{filename}/versions/{version_id}/restore")
+def restore_notebook_version(filename: str, version_id: str):
+    """Make a previously snapshotted version `filename`'s current content
+    again, undoing one or more overwrites (POST
+    /api/upload?overwrite=true).
+
+    The content currently in place is itself snapshotted first (via the
+    same _snapshot_current_notebook_version every overwrite already goes
+    through) before being replaced by the requested version -- so
+    restoring is itself undoable, exactly like the overwrite it's
+    reversing, rather than a one-way trip that could just as easily lose
+    work if the wrong version_id were picked.
+
+    Held under _version_lock_for(filename) for the same reason
+    rename_notebook's own check-then-write sequence is held under
+    _rename_lock_for: without it, two concurrent restores of the same
+    notebook could interleave their own snapshot-then-copy steps.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    versions_dir = _notebook_versions_dir(file_path.name)
+
+    version_path = _resolve_path_within(
+        str(versions_dir), version_id, "notebook version"
+    )
+
+    if not version_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook version not found"
+        )
+
+    with _version_lock_for(file_path.name):
+
+        _snapshot_current_notebook_version(file_path)
+
+        shutil.copy2(version_path, file_path)
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "restored_version_id": version_id,
     }
 
 
