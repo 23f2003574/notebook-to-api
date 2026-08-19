@@ -338,7 +338,7 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 # commands through _dispatch_core_command's shared error handling.
 _CORE_COMMANDS = frozenset({
     "compile", "inspect", "export-openapi", "export-sdk", "export-curl",
-    "serve", "watch", "deploy", "diff", "upload",
+    "serve", "watch", "deploy", "diff", "upload", "list", "download",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -514,11 +514,12 @@ def _parse_comma_separated_names(value):
 
 def _extract_dashboard_error_detail(response):
     """The most useful message extractable from a non-2xx `response` from
-    a dashboard's own POST /api/upload -- its own {"detail": "..."} body
-    (every HTTPException raised there already has this shape) if present,
-    else the raw response text as a fallback for a non-JSON response
-    (e.g. a reverse proxy's own HTML error page in front of a dashboard
-    that isn't actually reachable behind it).
+    any of this file's own dashboard-facing commands (upload, list,
+    download) -- the dashboard's own {"detail": "..."} body (every
+    HTTPException any of its routes raises already has this shape) if
+    present, else the raw response text as a fallback for a non-JSON
+    response (e.g. a reverse proxy's own HTML error page in front of a
+    dashboard that isn't actually reachable behind it).
     """
     try:
         body = response.json()
@@ -542,6 +543,33 @@ def _dashboard_connection_error(exc, dashboard_url):
     return RuntimeError(
         f"Could not reach the dashboard at {dashboard_url}: {exc}. Is it "
         "running? (see `python -m backend.dashboard`)"
+    )
+
+
+def _add_dashboard_url_and_timeout_arguments(parser, default_timeout=30.0):
+    """Add --dashboard-url and --timeout to `parser` -- shared by every
+    dashboard-facing subparser below (upload, list, download), so their
+    help text, defaults, and dest names can't drift apart from each
+    other.
+    """
+    parser.add_argument(
+        "--dashboard-url",
+        default="http://localhost:8001",
+        dest="dashboard_url",
+        help=(
+            "Base URL of the running dashboard API (default: "
+            "http://localhost:8001, matching dashboard_port()'s own "
+            "default in backend/dashboard.py)."
+        )
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=default_timeout,
+        help=(
+            "Seconds to wait for the dashboard to respond before giving "
+            f"up (default: {default_timeout:g})."
+        )
     )
 
 
@@ -897,6 +925,102 @@ def _dispatch_core_command(args):
             print(f"Uploaded '{data.get('filename', args.notebook)}' to {dashboard_url}")
             print(f"  path: {data.get('path')}")
             print(f"  overwritten: {data.get('overwritten')}")
+    elif args.command == "list":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        params = {}
+        if args.search:
+            params["search"] = args.search
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/notebooks", params=params, timeout=args.timeout
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            notebooks = data.get("notebooks", [])
+
+            if not notebooks:
+                print("No notebooks found.")
+            else:
+                for notebook in notebooks:
+
+                    markers = []
+
+                    if notebook.get("currently_compiled"):
+                        markers.append("currently compiled")
+
+                    if notebook.get("tags"):
+                        markers.append(f"tags: {', '.join(notebook['tags'])}")
+
+                    suffix = f"  [{'; '.join(markers)}]" if markers else ""
+
+                    print(
+                        f"{notebook['filename']}  "
+                        f"({notebook['size_bytes']} bytes){suffix}"
+                    )
+
+            print(f"\n{data.get('total_count', len(notebooks))} notebook(s) total.")
+    elif args.command == "download":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/notebooks/{args.filename}",
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        output_path = args.output or args.filename
+
+        with open(output_path, "wb") as f:
+            f.write(response.content)
+
+        if args.json_output:
+            print(json.dumps(
+                {
+                    "status": "success",
+                    "filename": args.filename,
+                    "path": output_path,
+                    "size_bytes": len(response.content),
+                },
+                indent=2,
+            ))
+        else:
+            print(
+                f"Downloaded '{args.filename}' from {dashboard_url} to "
+                f"{output_path} ({len(response.content)} bytes)"
+            )
 
 
 def main():
@@ -1192,16 +1316,7 @@ def main():
         help="Upload a notebook to a running dashboard instance's POST /api/upload."
     )
     upload_parser.add_argument("notebook", help="Path to the notebook file.")
-    upload_parser.add_argument(
-        "--dashboard-url",
-        default="http://localhost:8001",
-        dest="dashboard_url",
-        help=(
-            "Base URL of the running dashboard API (default: "
-            "http://localhost:8001, matching dashboard_port()'s own "
-            "default in backend/dashboard.py)."
-        )
-    )
+    _add_dashboard_url_and_timeout_arguments(upload_parser)
     upload_parser.add_argument(
         "--overwrite",
         action="store_true",
@@ -1214,18 +1329,59 @@ def main():
         )
     )
     upload_parser.add_argument(
-        "--timeout",
-        type=float,
-        default=30.0,
-        help="Seconds to wait for the dashboard to respond before giving up (default: 30)."
-    )
-    upload_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response "
             "({\"status\", \"filename\", \"path\", \"overwritten\"}) "
+            "instead of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    # list command (browse notebooks already on a running dashboard)
+    list_parser = subparsers.add_parser(
+        "list",
+        help="List notebooks already uploaded to a running dashboard instance's GET /api/notebooks."
+    )
+    _add_dashboard_url_and_timeout_arguments(list_parser)
+    list_parser.add_argument(
+        "--search",
+        default=None,
+        help="Case-insensitive filename substring filter, mirroring GET /api/notebooks' own ?search=."
+    )
+    list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"notebooks\", \"total_count\", ...}) instead "
+            "of a human-readable listing, for scripting/automation."
+        )
+    )
+
+    # download command (pull a notebook already on a running dashboard)
+    download_parser = subparsers.add_parser(
+        "download",
+        help="Download a notebook already on a running dashboard instance's GET /api/notebooks/{filename}."
+    )
+    download_parser.add_argument(
+        "filename", help="Filename of the notebook to download, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(download_parser)
+    download_parser.add_argument(
+        "--output",
+        default=None,
+        help="Path to save the downloaded notebook to. Default: the notebook's own filename, in the current directory."
+    )
+    download_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit a machine-readable JSON result "
+            "({\"status\", \"filename\", \"path\", \"size_bytes\"}) "
             "instead of a human-readable summary, for scripting/automation."
         )
     )

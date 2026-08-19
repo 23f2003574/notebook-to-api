@@ -1560,37 +1560,62 @@ def test_export_curl_command_reports_a_clean_error_for_a_missing_notebook(tmp_pa
     _assert_clean_cli_error(proc, "No such file or directory")
 
 
+def _json_response(status_code, body):
+    """Queue-entry helper for _FakeDashboardHandler.responses: a JSON
+    body, encoded and content-typed the way every real dashboard JSON
+    response already is.
+    """
+    return (status_code, json.dumps(body).encode("utf-8"), "application/json")
+
+
+def _raw_response(status_code, content, content_type="application/x-ipynb+json"):
+    """Queue-entry helper for _FakeDashboardHandler.responses: raw bytes,
+    the same shape GET /api/notebooks/{filename}'s own FileResponse
+    actually returns (a notebook's content, not a JSON envelope).
+    """
+    return (status_code, content, content_type)
+
+
 class _FakeDashboardHandler(http.server.BaseHTTPRequestHandler):
     """A minimal stand-in for a running dashboard, used only to exercise
-    the `upload` CLI command's own HTTP handling (request construction,
-    success/error response handling, connection-failure handling) --
-    not to re-verify the dashboard's own POST /api/upload behavior
-    (multipart parsing, validation, atomic writes, ...), which is
-    already exhaustively covered directly in tests/test_upload_routes.py.
+    the `upload`/`list`/`download` CLI commands' own HTTP handling
+    (request construction, success/error response handling,
+    connection-failure handling) -- not to re-verify the dashboard's own
+    route behavior (multipart parsing, validation, atomic writes, the
+    actual notebook listing/lookup, ...), which is already exhaustively
+    covered directly in tests/test_upload_routes.py.
 
-    `responses` is consumed FIFO, one entry (status_code, json_body) per
-    request received; `requests` records each request's raw path
-    (including its query string) so a test can confirm e.g. "overwrite"
-    was actually passed through.
+    `responses` is consumed FIFO, one (status_code, payload_bytes,
+    content_type) entry per request received (see _json_response/
+    _raw_response above); `requests` records each request's raw path
+    (including its query string) so a test can confirm e.g. "search" or
+    "overwrite" was actually passed through.
     """
 
     responses = []
     requests = []
 
-    def do_POST(self):
-        content_length = int(self.headers.get("Content-Length", 0))
-        self.rfile.read(content_length)
+    def _handle(self):
+
+        if self.command == "POST":
+            content_length = int(self.headers.get("Content-Length", 0))
+            self.rfile.read(content_length)
 
         type(self).requests.append(self.path)
 
-        status_code, body = type(self).responses.pop(0)
-        payload = json.dumps(body).encode("utf-8")
+        status_code, payload, content_type = type(self).responses.pop(0)
 
         self.send_response(status_code)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def do_POST(self):
+        self._handle()
+
+    def do_GET(self):
+        self._handle()
 
     def log_message(self, *args):
         pass
@@ -1625,7 +1650,7 @@ def test_upload_command_reports_success(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
     handler.responses = [
-        (200, {
+        _json_response(200, {
             "status": "success",
             "filename": "nb.ipynb",
             "path": "/srv/uploads/nb.ipynb",
@@ -1653,7 +1678,7 @@ def test_upload_command_passes_the_overwrite_flag_through(tmp_path, fake_dashboa
 
     dashboard_url, handler = fake_dashboard
     handler.responses = [
-        (200, {
+        _json_response(200, {
             "status": "success", "filename": "nb.ipynb",
             "path": "/srv/uploads/nb.ipynb", "overwritten": True,
         })
@@ -1682,7 +1707,7 @@ def test_upload_command_json_flag_emits_the_dashboards_own_response(
 
     dashboard_url, handler = fake_dashboard
     handler.responses = [
-        (200, {
+        _json_response(200, {
             "status": "success", "filename": "nb.ipynb",
             "path": "/srv/uploads/nb.ipynb", "overwritten": False,
         })
@@ -1717,7 +1742,7 @@ def test_upload_command_reports_a_clean_error_for_a_rejected_upload(
 
     dashboard_url, handler = fake_dashboard
     handler.responses = [
-        (409, {"detail": "A notebook named 'nb.ipynb' already exists."})
+        _json_response(409, {"detail": "A notebook named 'nb.ipynb' already exists."})
     ]
 
     workdir = tmp_path / "workdir"
@@ -1772,3 +1797,222 @@ def test_upload_command_reports_a_clean_error_for_a_missing_notebook(tmp_path):
     )
 
     _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_list_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "list" in proc.stdout
+
+
+def test_list_command_prints_notebooks_from_the_dashboard(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebooks": [
+                {
+                    "filename": "add.ipynb", "size_bytes": 123,
+                    "modified_at": "2026-01-01T00:00:00+00:00",
+                    "currently_compiled": True, "tags": ["prod"],
+                },
+                {
+                    "filename": "scratch.ipynb", "size_bytes": 45,
+                    "modified_at": "2026-01-02T00:00:00+00:00",
+                    "currently_compiled": False, "tags": [],
+                },
+            ],
+            "total_count": 2, "limit": None, "offset": 0,
+        })
+    ]
+
+    proc = _run_cli(["list", "--dashboard-url", dashboard_url], cwd=Path.cwd())
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "add.ipynb  (123 bytes)  [currently compiled; tags: prod]" in proc.stdout
+    assert "scratch.ipynb  (45 bytes)" in proc.stdout
+    assert "2 notebook(s) total." in proc.stdout
+    assert handler.requests == ["/api/notebooks"]
+
+
+def test_list_command_passes_the_search_flag_through(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebooks": [], "total_count": 0,
+            "limit": None, "offset": 0,
+        })
+    ]
+
+    proc = _run_cli(
+        ["list", "--dashboard-url", dashboard_url, "--search", "add"],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks?search=add"]
+
+
+def test_list_command_reports_no_notebooks_found(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebooks": [], "total_count": 0,
+            "limit": None, "offset": 0,
+        })
+    ]
+
+    proc = _run_cli(["list", "--dashboard-url", dashboard_url], cwd=Path.cwd())
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No notebooks found." in proc.stdout
+
+
+def test_list_command_json_flag_emits_the_dashboards_own_response(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "notebooks": [{
+            "filename": "add.ipynb", "size_bytes": 123,
+            "modified_at": "2026-01-01T00:00:00+00:00",
+            "currently_compiled": False, "tags": [],
+        }],
+        "total_count": 1, "limit": None, "offset": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["list", "--dashboard-url", dashboard_url, "--json"], cwd=Path.cwd()
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_list_command_reports_a_clean_error_when_the_dashboard_is_unreachable():
+
+    proc = _run_cli(
+        ["list", "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5"],
+        cwd=Path.cwd(),
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
+def test_download_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "download" in proc.stdout
+
+
+def test_download_command_saves_the_notebook_to_the_default_path(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    notebook_bytes = b'{"cells": [], "nbformat": 4, "nbformat_minor": 5, "metadata": {}}'
+    handler.responses = [_raw_response(200, notebook_bytes)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["download", "nb.ipynb", "--dashboard-url", dashboard_url], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"({len(notebook_bytes)} bytes)" in proc.stdout
+    assert (workdir / "nb.ipynb").read_bytes() == notebook_bytes
+    assert handler.requests == ["/api/notebooks/nb.ipynb"]
+
+
+def test_download_command_respects_a_custom_output_path(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    notebook_bytes = b'{"cells": [], "nbformat": 4, "nbformat_minor": 5, "metadata": {}}'
+    handler.responses = [_raw_response(200, notebook_bytes)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "download", "nb.ipynb", "--dashboard-url", dashboard_url,
+            "--output", "saved_here.ipynb",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "saved_here.ipynb").read_bytes() == notebook_bytes
+    assert not (workdir / "nb.ipynb").exists()
+
+
+def test_download_command_json_flag_emits_a_machine_readable_result(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    notebook_bytes = b'{"cells": []}'
+    handler.responses = [_raw_response(200, notebook_bytes)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["download", "nb.ipynb", "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == {
+        "status": "success",
+        "filename": "nb.ipynb",
+        "path": "nb.ipynb",
+        "size_bytes": len(notebook_bytes),
+    }
+
+
+def test_download_command_reports_a_clean_error_for_a_missing_notebook(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook file not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["download", "does-not-exist.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook file not found")
+    assert not (workdir / "does-not-exist.ipynb").exists()
+
+
+def test_download_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "download", "nb.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
