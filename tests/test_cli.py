@@ -3070,3 +3070,296 @@ def test_remote_build_command_reports_a_clean_error_when_the_dashboard_is_unreac
     )
 
     _assert_clean_cli_error(proc, "Is it running?")
+
+
+def test_versions_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "versions" in proc.stdout
+
+
+def test_versions_list_command_prints_the_notebooks_versions(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "versions": [
+                {
+                    "version_id": "20260101T000000Z-abcdef.ipynb",
+                    "size_bytes": 512,
+                    "saved_at": "2026-01-01T00:00:00+00:00",
+                },
+            ],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["versions", "list", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "20260101T000000Z-abcdef.ipynb" in proc.stdout
+    assert "512 bytes" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions"]
+
+
+def test_versions_list_command_reports_no_saved_versions(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "filename": "nb.ipynb", "versions": []})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["versions", "list", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No saved versions for 'nb.ipynb'." in proc.stdout
+
+
+def test_versions_list_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "versions": [
+                {"version_id": "v1.ipynb", "size_bytes": 10, "saved_at": "2026-01-01T00:00:00+00:00"}
+            ],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["versions", "list", "nb.ipynb", "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["versions"][0]["version_id"] == "v1.ipynb"
+
+
+def test_versions_list_command_reports_a_clean_error_for_a_missing_notebook(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook file not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["versions", "list", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook file not found")
+
+
+def test_versions_get_command_downloads_a_version_to_the_default_path(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(200, b'{"nbformat": 4, "cells": []}')
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "get", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "v1.ipynb").read_bytes() == b'{"nbformat": 4, "cells": []}'
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions/v1.ipynb"]
+
+
+def test_versions_get_command_respects_a_custom_output_path(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_raw_response(200, b"notebook-bytes")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "get", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url, "--output", "restored.ipynb",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "restored.ipynb").read_bytes() == b"notebook-bytes"
+    assert not (workdir / "v1.ipynb").exists()
+
+
+def test_versions_get_command_json_flag_emits_a_machine_readable_result(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_raw_response(200, b"notebook-bytes")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "get", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["version_id"] == "v1.ipynb"
+    assert data["size_bytes"] == len(b"notebook-bytes")
+
+
+def test_versions_get_command_reports_a_clean_error_for_a_missing_version(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook version not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "get", "nb.ipynb", "does-not-exist.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook version not found")
+
+
+def test_versions_restore_command_reports_success(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "restored_version_id": "v1.ipynb",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "restore", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Restored 'nb.ipynb' to version 'v1.ipynb'" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions/v1.ipynb/restore"]
+
+
+def test_versions_restore_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "restored_version_id": "v1.ipynb",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "restore", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["restored_version_id"] == "v1.ipynb"
+
+
+def test_versions_restore_command_reports_a_clean_error_for_a_missing_version(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook version not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "restore", "nb.ipynb", "does-not-exist.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook version not found")
+
+
+def test_versions_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "list", "nb.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")

@@ -340,6 +340,7 @@ _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
     "export-curl", "serve", "watch", "deploy", "diff", "upload", "list",
     "download", "delete", "rename", "tags", "remote-compile", "remote-build",
+    "versions",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -1416,6 +1417,115 @@ def _dispatch_core_command(args):
                 f"Downloaded the compiled app from {dashboard_url} to "
                 f"{output_path} ({len(response.content)} bytes)"
             )
+    elif args.command == "versions":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        if args.versions_command == "list":
+
+            try:
+                response = httpx.get(
+                    f"{dashboard_url}/api/notebooks/{args.filename}/versions",
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                versions = data.get("versions", [])
+
+                if not versions:
+                    print(f"No saved versions for '{args.filename}'.")
+                else:
+                    for version in versions:
+                        print(
+                            f"{version['version_id']}  "
+                            f"({version['size_bytes']} bytes, "
+                            f"saved {version['saved_at']})"
+                        )
+
+        elif args.versions_command == "get":
+
+            try:
+                response = httpx.get(
+                    f"{dashboard_url}/api/notebooks/{args.filename}/versions/{args.version_id}",
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            output_path = args.output or args.version_id
+
+            with open(output_path, "wb") as f:
+                f.write(response.content)
+
+            if args.json_output:
+                print(json.dumps(
+                    {
+                        "status": "success",
+                        "filename": args.filename,
+                        "version_id": args.version_id,
+                        "path": output_path,
+                        "size_bytes": len(response.content),
+                    },
+                    indent=2,
+                ))
+            else:
+                print(
+                    f"Downloaded version '{args.version_id}' of "
+                    f"'{args.filename}' from {dashboard_url} to "
+                    f"{output_path} ({len(response.content)} bytes)"
+                )
+
+        else:  # args.versions_command == "restore"
+
+            try:
+                response = httpx.post(
+                    f"{dashboard_url}/api/notebooks/{args.filename}/versions/{args.version_id}/restore",
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                print(
+                    f"Restored '{data.get('filename', args.filename)}' to "
+                    f"version '{data.get('restored_version_id', args.version_id)}' "
+                    f"on {dashboard_url}"
+                )
 
 
 def main():
@@ -1997,6 +2107,88 @@ def main():
             "Emit a machine-readable JSON result "
             "({\"status\", \"path\", \"size_bytes\"}) instead of a "
             "human-readable summary, for scripting/automation."
+        )
+    )
+
+    # versions command group (view/download/restore a notebook's
+    # snapshotted previous versions on a running dashboard, mirroring
+    # GET/GET/POST /api/notebooks/{filename}/versions[/{version_id}[/restore]])
+    versions_parser = subparsers.add_parser(
+        "versions",
+        help="View, download, or restore a notebook's snapshotted previous versions on a running dashboard instance."
+    )
+    versions_subparsers = versions_parser.add_subparsers(
+        dest="versions_command", required=True
+    )
+
+    versions_list_parser = versions_subparsers.add_parser(
+        "list",
+        help="List a notebook's snapshotted versions via GET /api/notebooks/{filename}/versions."
+    )
+    versions_list_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(versions_list_parser)
+    versions_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"filename\", \"versions\"}) instead of a "
+            "human-readable listing, for scripting/automation."
+        )
+    )
+
+    versions_get_parser = versions_subparsers.add_parser(
+        "get",
+        help="Download one of a notebook's snapshotted versions via GET /api/notebooks/{filename}/versions/{version_id}."
+    )
+    versions_get_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    versions_get_parser.add_argument(
+        "version_id",
+        help="Version id to download, as reported by `versions list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(versions_get_parser)
+    versions_get_parser.add_argument(
+        "--output",
+        default=None,
+        help="Path to save the downloaded version to. Default: the version_id itself, in the current directory."
+    )
+    versions_get_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit a machine-readable JSON result "
+            "({\"status\", \"filename\", \"version_id\", \"path\", "
+            "\"size_bytes\"}) instead of a human-readable summary, for "
+            "scripting/automation."
+        )
+    )
+
+    versions_restore_parser = versions_subparsers.add_parser(
+        "restore",
+        help="Restore a notebook to one of its snapshotted versions via POST /api/notebooks/{filename}/versions/{version_id}/restore."
+    )
+    versions_restore_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    versions_restore_parser.add_argument(
+        "version_id",
+        help="Version id to restore, as reported by `versions list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(versions_restore_parser)
+    versions_restore_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"filename\", \"restored_version_id\"}) "
+            "instead of a human-readable summary, for scripting/automation."
         )
     )
 
