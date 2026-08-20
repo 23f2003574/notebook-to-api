@@ -340,7 +340,7 @@ _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
     "export-curl", "serve", "watch", "deploy", "diff", "upload", "list",
     "download", "delete", "rename", "tags", "remote-compile", "remote-build",
-    "versions", "remote-files", "remote-diff",
+    "versions", "remote-files", "remote-diff", "remote-export",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -1766,6 +1766,92 @@ def _dispatch_core_command(args):
                 f"'{args.filename}' on {dashboard_url}"
             )
             print_notebook_diff(diff)
+    elif args.command == "remote-export":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        if args.remote_export_command == "openapi":
+
+            try:
+                response = httpx.post(
+                    f"{dashboard_url}/api/export-openapi",
+                    json={"format": args.format},
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            # POST /api/export-openapi (routes/upload.py) returns the
+            # parsed schema under "schema" for format=json, but the raw
+            # text under "content" for format=yaml -- json.dumps'ing the
+            # already-parsed "schema" reconstitutes an equivalent JSON
+            # document rather than requiring a caller to know which key
+            # holds it for which format.
+            content = (
+                json.dumps(data["schema"], indent=2) if args.format == "json"
+                else data.get("content", "")
+            )
+
+            if args.output:
+                with open(args.output, "w", encoding="utf-8") as f:
+                    f.write(content)
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            elif args.output:
+                print(
+                    f"Saved the OpenAPI {args.format} export from "
+                    f"{dashboard_url} to {args.output}"
+                )
+            else:
+                print(content)
+
+        else:  # args.remote_export_command == "sdk"
+
+            try:
+                response = httpx.post(
+                    f"{dashboard_url}/api/export-sdk",
+                    json={"language": args.language},
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+            code = data.get("code", "")
+
+            if args.output:
+                with open(args.output, "w", encoding="utf-8") as f:
+                    f.write(code)
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            elif args.output:
+                print(
+                    f"Saved the {args.language} SDK client from "
+                    f"{dashboard_url} to {args.output}"
+                )
+            else:
+                print(code)
 
 
 def main():
@@ -2577,6 +2663,74 @@ def main():
             "report, for scripting/automation -- e.g. refusing to "
             "`upload --overwrite` when \"removed\" or \"changed\" is "
             "non-empty and hasn't been reviewed."
+        )
+    )
+
+    # remote-export command group (export the OpenAPI schema or an SDK
+    # client from the app currently compiled on a running dashboard, via
+    # its own POST /api/export-openapi and POST /api/export-sdk --
+    # distinct from the CLI's own local `export-openapi`/`export-sdk`,
+    # which only ever read a local --app-dir, never a dashboard)
+    remote_export_parser = subparsers.add_parser(
+        "remote-export",
+        help="Export the OpenAPI schema or an SDK client from the app currently compiled on a running dashboard instance."
+    )
+    remote_export_subparsers = remote_export_parser.add_subparsers(
+        dest="remote_export_command", required=True
+    )
+
+    remote_export_openapi_parser = remote_export_subparsers.add_parser(
+        "openapi",
+        help="Export the OpenAPI schema via POST /api/export-openapi."
+    )
+    remote_export_openapi_parser.add_argument(
+        "--format",
+        choices=["json", "yaml"],
+        default="json",
+        help="Output format for the exported schema. Default: json."
+    )
+    _add_dashboard_url_and_timeout_arguments(remote_export_openapi_parser)
+    remote_export_openapi_parser.add_argument(
+        "--output",
+        default=None,
+        help="Path to save the exported schema to. Default: print it to stdout instead of writing a file."
+    )
+    remote_export_openapi_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"format\", \"path\", \"schema\"/\"content\"}) "
+            "instead of just the exported schema, for "
+            "scripting/automation."
+        )
+    )
+
+    remote_export_sdk_parser = remote_export_subparsers.add_parser(
+        "sdk",
+        help="Generate an SDK client from the exported OpenAPI schema via POST /api/export-sdk."
+    )
+    remote_export_sdk_parser.add_argument(
+        "--language",
+        choices=["python", "typescript"],
+        default="python",
+        help="Target language for the generated SDK client (default: python)."
+    )
+    _add_dashboard_url_and_timeout_arguments(remote_export_sdk_parser)
+    remote_export_sdk_parser.add_argument(
+        "--output",
+        default=None,
+        help="Path to save the generated SDK client to. Default: print it to stdout instead of writing a file."
+    )
+    remote_export_sdk_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"language\", \"path\", \"code\"}) instead of "
+            "just the generated client, for scripting/automation."
         )
     )
 

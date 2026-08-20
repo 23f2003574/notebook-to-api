@@ -4102,3 +4102,234 @@ def test_remote_diff_command_reports_a_clean_error_when_the_dashboard_is_unreach
     )
 
     _assert_clean_cli_error(proc, "Is it running?")
+
+
+def test_remote_export_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "remote-export" in proc.stdout
+
+
+def test_remote_export_openapi_command_prints_the_schema_to_stdout_by_default(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "format": "json",
+            "path": "/srv/generated/openapi.json",
+            "schema": {"openapi": "3.1.0", "info": {"title": "x"}},
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-export", "openapi", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    printed = json.loads(proc.stdout)
+    assert printed == {"openapi": "3.1.0", "info": {"title": "x"}}
+    assert handler.requests == ["/api/export-openapi"]
+    assert json.loads(handler.bodies[0]) == {"format": "json"}
+
+
+def test_remote_export_openapi_command_saves_to_output_when_given(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "format": "yaml",
+            "path": "/srv/generated/openapi.yaml",
+            "content": "openapi: 3.1.0\n",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-export", "openapi", "--format", "yaml",
+            "--dashboard-url", dashboard_url, "--output", "schema.yaml",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "schema.yaml").read_text() == "openapi: 3.1.0\n"
+    assert "Saved the OpenAPI yaml export" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {"format": "yaml"}
+
+
+def test_remote_export_openapi_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "format": "json",
+            "path": "/srv/generated/openapi.json",
+            "schema": {"openapi": "3.1.0"},
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-export", "openapi", "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["format"] == "json"
+    assert data["schema"] == {"openapi": "3.1.0"}
+
+
+def test_remote_export_openapi_command_reports_a_clean_error_when_nothing_is_compiled(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "No compiled app found. Run /api/compile first."})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-export", "openapi", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No compiled app found")
+
+
+def test_remote_export_sdk_command_prints_the_code_to_stdout_by_default(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "language": "python",
+            "path": "/srv/generated/sdk/python_client.py",
+            "code": "class Client:\n    pass\n",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-export", "sdk", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout == "class Client:\n    pass\n\n"
+    assert handler.requests == ["/api/export-sdk"]
+    assert json.loads(handler.bodies[0]) == {"language": "python"}
+
+
+def test_remote_export_sdk_command_saves_to_output_when_given(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "language": "typescript",
+            "path": "/srv/generated/sdk/typescript_client.ts",
+            "code": "export class Client {}\n",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-export", "sdk", "--language", "typescript",
+            "--dashboard-url", dashboard_url, "--output", "client.ts",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "client.ts").read_text() == "export class Client {}\n"
+    assert "Saved the typescript SDK client" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {"language": "typescript"}
+
+
+def test_remote_export_sdk_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "language": "python",
+            "path": "/srv/generated/sdk/python_client.py", "code": "x = 1\n",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-export", "sdk", "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["code"] == "x = 1\n"
+
+
+def test_remote_export_sdk_command_reports_a_clean_error_when_no_schema_exported(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "No exported OpenAPI schema found. Run /api/export-openapi first."})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-export", "sdk", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No exported OpenAPI schema found")
+
+
+def test_remote_export_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-export", "openapi",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
