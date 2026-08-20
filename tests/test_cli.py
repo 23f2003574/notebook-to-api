@@ -3363,3 +3363,332 @@ def test_versions_command_reports_a_clean_error_when_the_dashboard_is_unreachabl
     )
 
     _assert_clean_cli_error(proc, "Is it running?")
+
+
+def test_remote_files_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "remote-files" in proc.stdout
+
+
+def test_remote_files_list_command_prints_the_compiled_files(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "generated_files": ["app.py", "requirements.txt"],
+            "file_details": [
+                {"filename": "app.py", "size_bytes": 1024, "modified_at": "2026-01-01T00:00:00+00:00"},
+                {"filename": "requirements.txt", "size_bytes": 12, "modified_at": "2026-01-01T00:00:00+00:00"},
+            ],
+            "compiled_at": "2026-01-01T00:00:00+00:00",
+            "source_notebook_filename": "nb.ipynb",
+            "source_notebook_exists": True,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-files", "list", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "app.py  (1024 bytes, modified 2026-01-01T00:00:00+00:00)" in proc.stdout
+    assert "Compiled from: nb.ipynb" in proc.stdout
+    assert handler.requests == ["/api/generated"]
+
+
+def test_remote_files_list_command_flags_a_missing_source_notebook(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "generated_files": ["app.py"],
+            "file_details": [
+                {"filename": "app.py", "size_bytes": 1024, "modified_at": "2026-01-01T00:00:00+00:00"},
+            ],
+            "compiled_at": "2026-01-01T00:00:00+00:00",
+            "source_notebook_filename": "nb.ipynb",
+            "source_notebook_exists": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-files", "list", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Compiled from: nb.ipynb  [no longer uploaded]" in proc.stdout
+
+
+def test_remote_files_list_command_reports_no_compiled_app(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "generated_files": [], "file_details": [],
+            "compiled_at": None, "source_notebook_filename": None,
+            "source_notebook_exists": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-files", "list", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No compiled app found on the dashboard." in proc.stdout
+
+
+def test_remote_files_list_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "generated_files": ["app.py"],
+            "file_details": [
+                {"filename": "app.py", "size_bytes": 1, "modified_at": "2026-01-01T00:00:00+00:00"}
+            ],
+            "compiled_at": "2026-01-01T00:00:00+00:00",
+            "source_notebook_filename": None, "source_notebook_exists": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-files", "list", "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["generated_files"] == ["app.py"]
+
+
+def test_remote_files_get_command_prints_content_to_stdout_by_default(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "app.py",
+            "content": "from fastapi import FastAPI\n",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-files", "get", "app.py", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout == "from fastapi import FastAPI\n"
+    assert handler.requests == ["/api/generated/app.py"]
+
+
+def test_remote_files_get_command_saves_to_output_when_given(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "requirements.txt",
+            "content": "fastapi\n",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-files", "get", "requirements.txt",
+            "--dashboard-url", dashboard_url, "--output", "reqs.txt",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "reqs.txt").read_text() == "fastapi\n"
+    assert "Saved 'requirements.txt'" in proc.stdout
+
+
+def test_remote_files_get_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "app.py", "content": "x = 1\n",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-files", "get", "app.py",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["content"] == "x = 1\n"
+
+
+def test_remote_files_get_command_reports_a_clean_error_for_a_missing_file(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Generated file not found. Run /api/compile first."})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-files", "get", "missing.py", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Generated file not found")
+
+
+def test_remote_files_delete_command_reports_success_with_yes_flag(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "generated_dir": "/srv/generated"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-files", "delete", "--dashboard-url", dashboard_url, "--yes"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Deleted the compiled app" in proc.stdout
+    assert handler.requests == ["/api/generated"]
+
+
+def test_remote_files_delete_command_aborts_without_yes_when_declined(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = []
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli",
+            "remote-files", "delete", "--dashboard-url", dashboard_url,
+        ],
+        cwd=str(workdir),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        capture_output=True,
+        text=True,
+        input="n\n",
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Aborted." in proc.stdout
+    assert handler.requests == []
+
+
+def test_remote_files_delete_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "generated_dir": "/srv/generated"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-files", "delete",
+            "--dashboard-url", dashboard_url, "--yes", "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["generated_dir"] == "/srv/generated"
+
+
+def test_remote_files_delete_command_reports_a_clean_error_when_nothing_is_compiled(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "No compiled app found. Run /api/compile first."})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-files", "delete", "--dashboard-url", dashboard_url, "--yes"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No compiled app found")
+
+
+def test_remote_files_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-files", "list",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")

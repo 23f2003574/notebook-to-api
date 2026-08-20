@@ -340,7 +340,7 @@ _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
     "export-curl", "serve", "watch", "deploy", "diff", "upload", "list",
     "download", "delete", "rename", "tags", "remote-compile", "remote-build",
-    "versions",
+    "versions", "remote-files",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -1526,6 +1526,122 @@ def _dispatch_core_command(args):
                     f"version '{data.get('restored_version_id', args.version_id)}' "
                     f"on {dashboard_url}"
                 )
+    elif args.command == "remote-files":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        if args.remote_files_command == "list":
+
+            try:
+                response = httpx.get(
+                    f"{dashboard_url}/api/generated", timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                file_details = data.get("file_details", [])
+
+                if not file_details:
+                    print("No compiled app found on the dashboard.")
+                else:
+                    for entry in file_details:
+                        print(
+                            f"{entry['filename']}  "
+                            f"({entry['size_bytes']} bytes, "
+                            f"modified {entry['modified_at']})"
+                        )
+
+                    source = data.get("source_notebook_filename")
+
+                    if source:
+                        exists_note = (
+                            "" if data.get("source_notebook_exists")
+                            else "  [no longer uploaded]"
+                        )
+                        print(f"\nCompiled from: {source}{exists_note}")
+
+        elif args.remote_files_command == "get":
+
+            try:
+                response = httpx.get(
+                    f"{dashboard_url}/api/generated/{args.filename}",
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+            content = data.get("content", "")
+
+            if args.output:
+
+                with open(args.output, "w", encoding="utf-8") as f:
+                    f.write(content)
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            elif args.output:
+                print(f"Saved '{args.filename}' from {dashboard_url} to {args.output}")
+            else:
+                print(content, end="" if content.endswith("\n") else "\n")
+
+        else:  # args.remote_files_command == "delete"
+
+            if not args.yes:
+                # DELETE /api/generated (routes/upload.py) has no
+                # confirmation step of its own and is irreversible -- the
+                # same reasoning as `delete`'s own confirmation prompt for
+                # an uploaded notebook.
+                answer = input(
+                    f"Delete the compiled app on {dashboard_url}? [y/N] "
+                )
+                if answer.strip().lower() not in ("y", "yes"):
+                    print("Aborted.")
+                    return
+
+            try:
+                response = httpx.delete(
+                    f"{dashboard_url}/api/generated", timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                print(f"Deleted the compiled app on {dashboard_url}.")
 
 
 def main():
@@ -2189,6 +2305,92 @@ def main():
             "Emit the dashboard's own JSON response "
             "({\"status\", \"filename\", \"restored_version_id\"}) "
             "instead of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    # remote-files command group (list/preview/delete the compiled app's
+    # own files on a running dashboard, mirroring GET/GET/DELETE
+    # /api/generated[/{filename}]) -- distinct from `remote-build`, which
+    # fetches the whole compiled output as one zip, not a per-file
+    # listing or preview, and can't delete it
+    remote_files_parser = subparsers.add_parser(
+        "remote-files",
+        help="List, preview, or delete the compiled app's own files on a running dashboard instance."
+    )
+    remote_files_subparsers = remote_files_parser.add_subparsers(
+        dest="remote_files_command", required=True
+    )
+
+    remote_files_list_parser = remote_files_subparsers.add_parser(
+        "list",
+        help="List the compiled app's files via GET /api/generated."
+    )
+    _add_dashboard_url_and_timeout_arguments(remote_files_list_parser)
+    remote_files_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"generated_files\", \"file_details\", \"compiled_at\", "
+            "\"source_notebook_filename\", \"source_notebook_exists\"}) "
+            "instead of a human-readable listing, for scripting/automation."
+        )
+    )
+
+    remote_files_get_parser = remote_files_subparsers.add_parser(
+        "get",
+        help="Preview one compiled file's text content via GET /api/generated/{filename}."
+    )
+    remote_files_get_parser.add_argument(
+        "filename",
+        help=(
+            "Name of the compiled file to preview (e.g. \"app.py\", "
+            "\"requirements.txt\", \"runtime/notebook_module.py\"), as "
+            "reported by `remote-files list`."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(remote_files_get_parser)
+    remote_files_get_parser.add_argument(
+        "--output",
+        default=None,
+        help="Path to save the file's content to. Default: print it to stdout instead of writing a file."
+    )
+    remote_files_get_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"filename\", \"content\"}) instead of just "
+            "the raw content, for scripting/automation."
+        )
+    )
+
+    remote_files_delete_parser = remote_files_subparsers.add_parser(
+        "delete",
+        help="Delete the compiled app currently on a running dashboard instance via DELETE /api/generated."
+    )
+    _add_dashboard_url_and_timeout_arguments(remote_files_delete_parser)
+    remote_files_delete_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Confirm the deletion without an interactive prompt. Without "
+            "this, `remote-files delete` asks for a y/N confirmation on "
+            "the terminal before sending the request -- DELETE "
+            "/api/generated itself has no confirmation step of its own, "
+            "and is irreversible."
+        )
+    )
+    remote_files_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"generated_dir\"}) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 
