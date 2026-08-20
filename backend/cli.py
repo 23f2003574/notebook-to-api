@@ -340,7 +340,7 @@ _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
     "export-curl", "serve", "watch", "deploy", "diff", "upload", "list",
     "download", "delete", "rename", "tags", "remote-compile", "remote-build",
-    "versions", "remote-files",
+    "versions", "remote-files", "remote-diff",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -1642,6 +1642,61 @@ def _dispatch_core_command(args):
                 print(json.dumps(data, indent=2))
             else:
                 print(f"Deleted the compiled app on {dashboard_url}.")
+    elif args.command == "remote-diff":
+        # See `upload` above for why these are imported here rather than
+        # at module scope.
+        import httpx
+        import tempfile
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+        local_notebook_path = args.notebook or args.filename
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/notebooks/{args.filename}",
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        # Downloaded to a real temp file, not held in memory and parsed
+        # some other way, so diff_notebook_functions can reuse its own
+        # existing load_notebook(path)-based pipeline unchanged -- the
+        # same one `diff` itself already runs on two local paths -- with
+        # no separate "diff bytes in memory" code path to keep in sync
+        # with it.
+        remote_notebook_fd, remote_notebook_path = tempfile.mkstemp(suffix=".ipynb")
+
+        try:
+
+            with os.fdopen(remote_notebook_fd, "wb") as f:
+                f.write(response.content)
+
+            # The dashboard's own copy of `filename` is "old", the local
+            # file is "new" -- diff_notebook_functions' own "added"/
+            # "removed"/"changed" then read the same direction `upload
+            # --overwrite` would move the world in: what an overwrite is
+            # about to change on the dashboard, not the reverse.
+            diff = diff_notebook_functions(remote_notebook_path, local_notebook_path)
+
+        finally:
+            os.remove(remote_notebook_path)
+
+        if args.json_output:
+            print(json.dumps(diff, indent=2))
+        else:
+            print(
+                f"Comparing local '{local_notebook_path}' against "
+                f"'{args.filename}' on {dashboard_url}"
+            )
+            print_notebook_diff(diff)
 
 
 def main():
@@ -2391,6 +2446,42 @@ def main():
             "Emit the dashboard's own JSON response "
             "({\"status\", \"generated_dir\"}) instead of a "
             "human-readable summary, for scripting/automation."
+        )
+    )
+
+    # remote-diff command (compare a local notebook against a notebook
+    # already uploaded to a running dashboard, reusing `diff`'s own
+    # diff_notebook_functions/print_notebook_diff -- unlike `diff`
+    # itself, one side of the comparison is fetched from a running
+    # dashboard instead of both being local paths)
+    remote_diff_parser = subparsers.add_parser(
+        "remote-diff",
+        help="Compare a local notebook against a notebook already uploaded to a running dashboard instance's compiled API surface."
+    )
+    remote_diff_parser.add_argument(
+        "filename",
+        help="Filename of the notebook already uploaded to the dashboard, as reported by `list`."
+    )
+    remote_diff_parser.add_argument(
+        "notebook", nargs="?", default=None,
+        help=(
+            "Path to the local notebook to compare it against. Default: "
+            "a file named `filename` in the current directory -- the "
+            "same path `download filename` (no --output) would save it "
+            "to."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(remote_diff_parser)
+    remote_diff_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit machine-readable JSON ({\"added\", \"removed\", "
+            "\"changed\", \"unchanged\"}) instead of the human-readable "
+            "report, for scripting/automation -- e.g. refusing to "
+            "`upload --overwrite` when \"removed\" or \"changed\" is "
+            "non-empty and hasn't been reviewed."
         )
     )
 

@@ -3692,3 +3692,241 @@ def test_remote_files_command_reports_a_clean_error_when_the_dashboard_is_unreac
     )
 
     _assert_clean_cli_error(proc, "Is it running?")
+
+
+def _notebook_bytes_with_function(function_source):
+    """The exact bytes _write_notebook_with_function writes to disk,
+    without writing to disk -- for queuing as a fake dashboard's own GET
+    /api/notebooks/{filename} response body in the remote-diff tests
+    below, which need "the dashboard's copy" to exist only as response
+    bytes, never as a local file.
+    """
+    return json.dumps(
+        {
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [
+                {
+                    "cell_type": "code",
+                    "execution_count": None,
+                    "metadata": {},
+                    "outputs": [],
+                    "source": function_source,
+                }
+            ],
+        }
+    ).encode("utf-8")
+
+
+def test_remote_diff_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "remote-diff" in proc.stdout
+
+
+def test_remote_diff_command_reports_added_removed_and_changed_functions(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+                "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    local_path = workdir / "local.ipynb"
+    _write_notebook_with_function(
+        local_path,
+        "def add(a: int, b: int, c: int = 0) -> int:\n    return a + b + c\n\n"
+        "def multiply(a: int, b: int) -> int:\n    return a * b\n",
+    )
+
+    proc = _run_cli(
+        [
+            "remote-diff", "nb.ipynb", str(local_path),
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Comparing local" in proc.stdout
+    assert "Added 1 endpoint(s):" in proc.stdout
+    assert "POST /multiply" in proc.stdout
+    assert "Removed 1 endpoint(s):" in proc.stdout
+    assert "POST /subtract" in proc.stdout
+    assert "Changed 1 endpoint(s):" in proc.stdout
+    assert "POST /add" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb"]
+
+
+def test_remote_diff_command_reports_no_changes_for_identical_notebooks(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    function_source = "def add(a: int, b: int) -> int:\n    return a + b\n"
+    handler.responses = [
+        _raw_response(200, _notebook_bytes_with_function(function_source))
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    local_path = workdir / "local.ipynb"
+    _write_notebook_with_function(local_path, function_source)
+
+    proc = _run_cli(
+        [
+            "remote-diff", "nb.ipynb", str(local_path),
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No changes to the compiled API surface." in proc.stdout
+
+
+def test_remote_diff_command_defaults_the_local_path_to_the_filename(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    function_source = "def add(a: int, b: int) -> int:\n    return a + b\n"
+    handler.responses = [
+        _raw_response(200, _notebook_bytes_with_function(function_source))
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    # No explicit local path passed -- must default to "nb.ipynb" in cwd,
+    # matching the dashboard-side filename.
+    _write_notebook_with_function(workdir / "nb.ipynb", function_source)
+
+    proc = _run_cli(
+        ["remote-diff", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No changes to the compiled API surface." in proc.stdout
+
+
+def test_remote_diff_command_json_flag_emits_machine_readable_output(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    local_path = workdir / "local.ipynb"
+    _write_notebook_with_function(
+        local_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def multiply(a: int, b: int) -> int:\n    return a * b\n",
+    )
+
+    proc = _run_cli(
+        [
+            "remote-diff", "nb.ipynb", str(local_path),
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert [f["name"] for f in data["added"]] == ["multiply"]
+    assert data["removed"] == []
+
+
+def test_remote_diff_command_reports_a_clean_error_for_a_missing_local_notebook(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-diff", "nb.ipynb", str(workdir / "does-not-exist.ipynb"),
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_remote_diff_command_reports_a_clean_error_for_a_missing_remote_notebook(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook file not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    local_path = workdir / "local.ipynb"
+    _write_notebook(local_path)
+
+    proc = _run_cli(
+        [
+            "remote-diff", "nb.ipynb", str(local_path),
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook file not found")
+
+
+def test_remote_diff_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    local_path = workdir / "local.ipynb"
+    _write_notebook(local_path)
+
+    proc = _run_cli(
+        [
+            "remote-diff", "nb.ipynb", str(local_path),
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
