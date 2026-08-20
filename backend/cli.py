@@ -339,6 +339,7 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 _CORE_COMMANDS = frozenset({
     "compile", "inspect", "export-openapi", "export-sdk", "export-curl",
     "serve", "watch", "deploy", "diff", "upload", "list", "download",
+    "delete", "rename", "tags",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -1021,6 +1022,139 @@ def _dispatch_core_command(args):
                 f"Downloaded '{args.filename}' from {dashboard_url} to "
                 f"{output_path} ({len(response.content)} bytes)"
             )
+    elif args.command == "delete":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        if not args.yes:
+            # DELETE /api/notebooks/{filename} (routes/upload.py) has no
+            # confirmation step of its own and is irreversible -- unlike
+            # `upload --overwrite`/`rename --overwrite`, there's no
+            # non-destructive default to fall back to here, so this asks
+            # on the terminal instead. --yes skips the prompt for
+            # scripting/automation.
+            answer = input(f"Delete '{args.filename}' from {dashboard_url}? [y/N] ")
+            if answer.strip().lower() not in ("y", "yes"):
+                print("Aborted.")
+                return
+
+        try:
+            response = httpx.delete(
+                f"{dashboard_url}/api/notebooks/{args.filename}",
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"Deleted '{data.get('filename', args.filename)}' from {dashboard_url}")
+            if data.get("was_currently_compiled"):
+                print("  note: this was the notebook backing the currently compiled app.")
+    elif args.command == "rename":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.patch(
+                f"{dashboard_url}/api/notebooks/{args.filename}",
+                json={"new_filename": args.new_filename, "overwrite": args.overwrite},
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            print(
+                f"Renamed '{data.get('filename', args.filename)}' to "
+                f"'{data.get('new_filename', args.new_filename)}' on {dashboard_url}"
+            )
+            if data.get("was_currently_compiled"):
+                print("  note: this was the notebook backing the currently compiled app.")
+    elif args.command == "tags":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        if args.tags_command == "get":
+
+            try:
+                response = httpx.get(
+                    f"{dashboard_url}/api/notebooks/{args.filename}/tags",
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                tags = data.get("tags", [])
+                print(f"{args.filename}: {', '.join(tags) if tags else '(no tags)'}")
+
+        else:  # args.tags_command == "set"
+
+            try:
+                response = httpx.put(
+                    f"{dashboard_url}/api/notebooks/{args.filename}/tags",
+                    json={"tags": args.tag},
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                tags = data.get("tags", [])
+                print(f"{args.filename} tags set to: {', '.join(tags) if tags else '(none)'}")
 
 
 def main():
@@ -1383,6 +1517,127 @@ def main():
             "Emit a machine-readable JSON result "
             "({\"status\", \"filename\", \"path\", \"size_bytes\"}) "
             "instead of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    # delete command (remove a notebook already on a running dashboard)
+    delete_parser = subparsers.add_parser(
+        "delete",
+        help="Delete a notebook already on a running dashboard instance's DELETE /api/notebooks/{filename}."
+    )
+    delete_parser.add_argument(
+        "filename", help="Filename of the notebook to delete, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(delete_parser)
+    delete_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Confirm the deletion without an interactive prompt. Without "
+            "this, `delete` asks for a y/N confirmation on the terminal "
+            "before sending the request -- DELETE "
+            "/api/notebooks/{filename} itself has no confirmation step of "
+            "its own, and is irreversible."
+        )
+    )
+    delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"filename\", \"was_currently_compiled\"}) "
+            "instead of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    # rename command (rename a notebook already on a running dashboard)
+    rename_parser = subparsers.add_parser(
+        "rename",
+        help="Rename a notebook already on a running dashboard instance's PATCH /api/notebooks/{filename}."
+    )
+    rename_parser.add_argument(
+        "filename", help="Current filename of the notebook, as reported by `list`."
+    )
+    rename_parser.add_argument(
+        "new_filename",
+        help="New filename to rename the notebook to (must end in .ipynb)."
+    )
+    _add_dashboard_url_and_timeout_arguments(rename_parser)
+    rename_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Replace an existing notebook already at new_filename, "
+            "mirroring PATCH /api/notebooks/{filename}'s own "
+            "\"overwrite\": true -- without this, renaming onto an "
+            "existing filename is rejected with a 409, exactly as it "
+            "already is through that endpoint directly."
+        )
+    )
+    rename_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"filename\", \"new_filename\", "
+            "\"was_currently_compiled\"}) instead of a human-readable "
+            "summary, for scripting/automation."
+        )
+    )
+
+    # tags command group (view/replace a notebook's tags on a running
+    # dashboard, mirroring GET/PUT /api/notebooks/{filename}/tags)
+    tags_parser = subparsers.add_parser(
+        "tags",
+        help="View or replace the tags on a notebook already on a running dashboard instance."
+    )
+    tags_subparsers = tags_parser.add_subparsers(dest="tags_command", required=True)
+
+    tags_get_parser = tags_subparsers.add_parser(
+        "get", help="Show a notebook's tags via GET /api/notebooks/{filename}/tags."
+    )
+    tags_get_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(tags_get_parser)
+    tags_get_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"filename\", \"tags\"}) instead of a "
+            "human-readable listing, for scripting/automation."
+        )
+    )
+
+    tags_set_parser = tags_subparsers.add_parser(
+        "set",
+        help="Replace a notebook's full tag set via PUT /api/notebooks/{filename}/tags."
+    )
+    tags_set_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    tags_set_parser.add_argument(
+        "tag", nargs="*",
+        help=(
+            "Tags to set, replacing the notebook's entire existing tag "
+            "set -- the same replace-not-merge contract PUT "
+            "/api/notebooks/{filename}/tags itself has. Omit to clear "
+            "every tag."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(tags_set_parser)
+    tags_set_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"filename\", \"tags\"}) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 
