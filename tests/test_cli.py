@@ -2458,3 +2458,142 @@ def test_tags_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
     )
 
     _assert_clean_cli_error(proc, "Is it running?")
+
+
+def test_validate_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "validate" in proc.stdout
+
+
+def test_validate_command_passes_a_clean_notebook(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    proc = _run_cli(["validate", str(notebook_path)], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No issues found." in proc.stdout
+
+
+def test_validate_command_warns_but_does_not_fail_on_skipped_functions(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def unsupported(a, **kwargs):\n    return a\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    proc = _run_cli(["validate", str(notebook_path)], cwd=workdir)
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "Skipped functions" in proc.stdout
+    assert "unsupported" in proc.stdout
+    assert "still compile cleanly" in proc.stdout
+
+
+def test_validate_command_strict_flag_fails_on_skipped_functions(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path, "def unsupported(a, **kwargs):\n    return a\n"
+    )
+
+    proc = _run_cli(["validate", str(notebook_path), "--strict"], cwd=workdir)
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "Validation failed." in proc.stdout
+
+
+def test_validate_command_fails_on_a_reserved_name_conflict_even_without_strict(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path, "def health_check() -> dict:\n    return {}\n"
+    )
+
+    proc = _run_cli(["validate", str(notebook_path)], cwd=workdir)
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "Reserved name conflicts" in proc.stdout
+    assert "health_check" in proc.stdout
+    assert "Validation failed." in proc.stdout
+
+
+def test_validate_command_json_flag_emits_a_machine_readable_status(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path, "def health_check() -> dict:\n    return {}\n"
+    )
+
+    proc = _run_cli(["validate", str(notebook_path), "--json"], cwd=workdir)
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["status"] == "fail"
+    assert data["reserved_name_conflicts"] == ["health_check"]
+    assert data["skipped_functions"] == []
+
+
+def test_validate_command_json_flag_reports_pass_status_for_a_clean_notebook(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    proc = _run_cli(["validate", str(notebook_path), "--json"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["status"] == "pass"
+
+
+def test_validate_command_does_not_create_any_output_directory(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    proc = _run_cli(["validate", str(notebook_path)], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not (workdir / "generated").exists()
+
+
+def test_validate_command_reports_a_clean_error_for_a_missing_notebook(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["validate", str(workdir / "does-not-exist.ipynb")], cwd=workdir
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")

@@ -337,9 +337,9 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 # sys.exit(exit_code)). Kept as a set so main() can route only these
 # commands through _dispatch_core_command's shared error handling.
 _CORE_COMMANDS = frozenset({
-    "compile", "inspect", "export-openapi", "export-sdk", "export-curl",
-    "serve", "watch", "deploy", "diff", "upload", "list", "download",
-    "delete", "rename", "tags",
+    "compile", "inspect", "validate", "export-openapi", "export-sdk",
+    "export-curl", "serve", "watch", "deploy", "diff", "upload", "list",
+    "download", "delete", "rename", "tags",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -653,6 +653,66 @@ def _dispatch_core_command(args):
             print(json.dumps(data, indent=2))
         else:
             inspect_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
+    elif args.command == "validate":
+        # Reuses inspect_notebook_data's own reserved_name_conflicts/
+        # skipped_functions checks (backend/inspector.py) -- the tool
+        # already computes exactly what would go wrong at compile time,
+        # `inspect` just never turned that into a pass/fail verdict a CI
+        # step could act on. Unlike "compile" or "inspect --output", this
+        # never touches the filesystem: no output_dir is created or read,
+        # only the notebook itself.
+        data = inspect_notebook_data(notebook_path=args.notebook)
+
+        reserved_name_conflicts = data["reserved_name_conflicts"]
+        skipped_functions = data["skipped_functions"]
+
+        has_blocking_issues = bool(reserved_name_conflicts) or (
+            args.strict and bool(skipped_functions)
+        )
+        has_warnings = bool(skipped_functions) and not has_blocking_issues
+
+        if has_blocking_issues:
+            status = "fail"
+        elif has_warnings:
+            status = "warn"
+        else:
+            status = "pass"
+
+        if args.json_output:
+            print(json.dumps(
+                {
+                    "status": status,
+                    "notebook": args.notebook,
+                    "reserved_name_conflicts": reserved_name_conflicts,
+                    "skipped_functions": skipped_functions,
+                },
+                indent=2,
+            ))
+        else:
+            print(f"Validating {args.notebook}")
+
+            if reserved_name_conflicts:
+                print("\n✗ Reserved name conflicts (compilation will fail):")
+                for name in reserved_name_conflicts:
+                    print(f"  - {name}")
+
+            if skipped_functions:
+                marker = "✗" if args.strict else "⚠"
+                print(f"\n{marker} Skipped functions (no endpoint will be generated):")
+                for skipped in skipped_functions:
+                    print(f"  - {skipped['name']}: {skipped['reason']}")
+
+            if status == "pass":
+                print("\n✓ No issues found.")
+            elif status == "warn":
+                print("\nWarnings found, but this notebook would still compile cleanly.")
+            else:
+                print("\nValidation failed.")
+
+        if status == "fail":
+            sys.exit(2)
+        elif status == "warn":
+            sys.exit(1)
     elif args.command == "export-openapi":
         from backend.exporters.openapi_exporter import export_openapi_schema
         from backend.compiler import package_name_for_output_dir
@@ -1202,6 +1262,37 @@ def main():
             "Emit machine-readable JSON (functions, dependencies, "
             "generated_files) instead of the human-readable report, for "
             "scripting/automation."
+        )
+    )
+
+    # validate command (CI-friendly exit-code gate on inspect's own
+    # compile-time-issue checks, without writing any output)
+    validate_parser = subparsers.add_parser(
+        "validate",
+        help="Check whether a notebook would compile cleanly, without writing any output -- exits non-zero on issues, for CI."
+    )
+    validate_parser.add_argument("notebook", help="Path to the notebook file.")
+    validate_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Also fail (exit 2) when the notebook has skipped functions "
+            "(no endpoint will be generated for them). By default these "
+            "are reported as a non-fatal warning (exit 1): compiling "
+            "still succeeds for every other function, unlike a reserved "
+            "name conflict, which always fails compilation outright and "
+            "always exits 2."
+        )
+    )
+    validate_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit machine-readable JSON ({\"status\": \"pass\"|\"warn\"|"
+            "\"fail\", \"notebook\", \"reserved_name_conflicts\", "
+            "\"skipped_functions\"}) instead of the human-readable "
+            "report, for scripting/automation."
         )
     )
 
