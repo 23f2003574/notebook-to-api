@@ -339,7 +339,7 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
     "export-curl", "serve", "watch", "deploy", "diff", "upload", "list",
-    "download", "delete", "rename", "tags",
+    "download", "delete", "rename", "tags", "remote-compile", "remote-build",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -545,6 +545,35 @@ def _dashboard_connection_error(exc, dashboard_url):
         f"Could not reach the dashboard at {dashboard_url}: {exc}. Is it "
         "running? (see `python -m backend.dashboard`)"
     )
+
+
+def _filename_from_content_disposition(response, default):
+    """The filename GET /api/download's own Content-Disposition header
+    reports (routes/upload.py sets it to f'attachment; filename="{name}.zip"',
+    named after GENERATED_DIR's own basename), or `default` if the header
+    is missing/unparseable.
+
+    `remote-build`'s own --output default reuses whatever name the
+    dashboard itself considers this build to be (e.g. "generated.zip")
+    rather than a name this CLI invents independently, so a file saved
+    without --output still says what it actually is if ever looked at
+    again later, out of context.
+    """
+    header = response.headers.get("content-disposition", "")
+
+    marker = 'filename="'
+    start = header.find(marker)
+
+    if start == -1:
+        return default
+
+    start += len(marker)
+    end = header.find('"', start)
+
+    if end == -1:
+        return default
+
+    return header[start:end] or default
 
 
 def _add_dashboard_url_and_timeout_arguments(parser, default_timeout=30.0):
@@ -1296,6 +1325,97 @@ def _dispatch_core_command(args):
             else:
                 tags = data.get("tags", [])
                 print(f"{args.filename} tags set to: {', '.join(tags) if tags else '(none)'}")
+    elif args.command == "remote-compile":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.post(
+                f"{dashboard_url}/api/compile",
+                json={"notebook_path": args.filename},
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the compile ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"Compiled '{data.get('notebook', args.filename)}' on {dashboard_url}")
+
+            endpoints = data.get("endpoints", [])
+
+            if endpoints:
+                print(f"\n{len(endpoints)} endpoint(s):")
+                for endpoint in endpoints:
+                    marker = "  [background]" if endpoint.get("is_async") else ""
+                    print(f"  {endpoint['method']} {endpoint['path']}{marker}")
+
+            skipped_functions = data.get("skipped_functions", [])
+
+            if skipped_functions:
+                print(f"\n{len(skipped_functions)} skipped function(s):")
+                for skipped in skipped_functions:
+                    print(f"  - {skipped['name']}: {skipped['reason']}")
+
+            dependencies = data.get("dependencies", [])
+
+            if dependencies:
+                print(f"\nDependencies: {', '.join(dependencies)}")
+    elif args.command == "remote-build":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/download", timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        output_path = args.output or _filename_from_content_disposition(
+            response, "generated.zip"
+        )
+
+        with open(output_path, "wb") as f:
+            f.write(response.content)
+
+        if args.json_output:
+            print(json.dumps(
+                {
+                    "status": "success",
+                    "path": output_path,
+                    "size_bytes": len(response.content),
+                },
+                indent=2,
+            ))
+        else:
+            print(
+                f"Downloaded the compiled app from {dashboard_url} to "
+                f"{output_path} ({len(response.content)} bytes)"
+            )
 
 
 def main():
@@ -1824,6 +1944,58 @@ def main():
         help=(
             "Emit the dashboard's own JSON response "
             "({\"status\", \"filename\", \"tags\"}) instead of a "
+            "human-readable summary, for scripting/automation."
+        )
+    )
+
+    # remote-compile command (compile a notebook already on a running
+    # dashboard, via its own POST /api/compile -- not this CLI's own
+    # local `compile`, which never touches a dashboard at all)
+    remote_compile_parser = subparsers.add_parser(
+        "remote-compile",
+        help="Compile a notebook already uploaded to a running dashboard instance, via its POST /api/compile."
+    )
+    remote_compile_parser.add_argument(
+        "filename",
+        help="Filename of the notebook already uploaded to the dashboard, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(remote_compile_parser)
+    remote_compile_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"notebook\", \"functions\", \"endpoints\", "
+            "\"skipped_functions\", \"dependencies\", "
+            "\"generated_files\"}) instead of a human-readable summary, "
+            "for scripting/automation."
+        )
+    )
+
+    # remote-build command (download the app currently compiled on a
+    # running dashboard, via its own GET /api/download)
+    remote_build_parser = subparsers.add_parser(
+        "remote-build",
+        help="Download the app currently compiled on a running dashboard instance as a zip, via its GET /api/download."
+    )
+    _add_dashboard_url_and_timeout_arguments(remote_build_parser)
+    remote_build_parser.add_argument(
+        "--output",
+        default=None,
+        help=(
+            "Path to save the downloaded zip to. Default: the filename "
+            "GET /api/download itself reports via Content-Disposition "
+            "(e.g. \"generated.zip\"), in the current directory."
+        )
+    )
+    remote_build_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit a machine-readable JSON result "
+            "({\"status\", \"path\", \"size_bytes\"}) instead of a "
             "human-readable summary, for scripting/automation."
         )
     )

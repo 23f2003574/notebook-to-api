@@ -1590,11 +1590,21 @@ class _FakeDashboardHandler(http.server.BaseHTTPRequestHandler):
     _raw_response above); `requests` records each request's raw path
     (including its query string) so a test can confirm e.g. "search" or
     "overwrite" was actually passed through.
+
+    `response_headers` is an optional, separately-consumed FIFO queue of
+    extra {header_name: value} dicts, one per request, for tests that
+    need to control a response header `responses`' own (status_code,
+    payload, content_type) shape has no room for -- e.g. Content-
+    Disposition, which GET /api/download's own remote-build CLI command
+    reads to pick a default --output filename. A response with nothing
+    queued here just gets no extra headers, the same as before this
+    existed.
     """
 
     responses = []
     requests = []
     bodies = []
+    response_headers = []
 
     def _handle(self):
 
@@ -1608,9 +1618,16 @@ class _FakeDashboardHandler(http.server.BaseHTTPRequestHandler):
 
         status_code, payload, content_type = type(self).responses.pop(0)
 
+        extra_headers = (
+            type(self).response_headers.pop(0)
+            if type(self).response_headers else {}
+        )
+
         self.send_response(status_code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
+        for header_name, value in extra_headers.items():
+            self.send_header(header_name, value)
         self.end_headers()
         self.wfile.write(payload)
 
@@ -1638,6 +1655,7 @@ def fake_dashboard():
     _FakeDashboardHandler.responses = []
     _FakeDashboardHandler.requests = []
     _FakeDashboardHandler.bodies = []
+    _FakeDashboardHandler.response_headers = []
 
     server = http.server.HTTPServer(("127.0.0.1", 0), _FakeDashboardHandler)
     port = server.server_address[1]
@@ -2773,3 +2791,282 @@ def test_validate_command_reports_a_clean_error_for_a_missing_notebook(tmp_path)
     )
 
     _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_remote_compile_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "remote-compile" in proc.stdout
+
+
+def test_remote_compile_command_reports_success(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebook": "nb.ipynb",
+            "functions": [{"name": "add"}],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "skipped_functions": [],
+            "dependencies": ["fastapi"],
+            "generated_files": ["app.py"],
+            "message": "Notebook compiled successfully",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-compile", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Compiled 'nb.ipynb'" in proc.stdout
+    assert "POST /add" in proc.stdout
+    assert "Dependencies: fastapi" in proc.stdout
+    assert handler.requests == ["/api/compile"]
+    assert json.loads(handler.bodies[0]) == {"notebook_path": "nb.ipynb"}
+
+
+def test_remote_compile_command_flags_background_endpoints(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebook": "nb.ipynb",
+            "functions": [],
+            "endpoints": [{"path": "/train_model", "method": "POST", "is_async": True}],
+            "skipped_functions": [],
+            "dependencies": [],
+            "generated_files": [],
+            "message": "Notebook compiled successfully",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-compile", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "POST /train_model  [background]" in proc.stdout
+
+
+def test_remote_compile_command_reports_skipped_functions(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebook": "nb.ipynb",
+            "functions": [],
+            "endpoints": [],
+            "skipped_functions": [{"name": "unsupported", "reason": "uses **kwargs"}],
+            "dependencies": [],
+            "generated_files": [],
+            "message": "Notebook compiled successfully",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-compile", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "1 skipped function(s):" in proc.stdout
+    assert "unsupported: uses **kwargs" in proc.stdout
+
+
+def test_remote_compile_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebook": "nb.ipynb", "functions": [],
+            "endpoints": [], "skipped_functions": [], "dependencies": [],
+            "generated_files": [], "message": "Notebook compiled successfully",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-compile", "nb.ipynb", "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["notebook"] == "nb.ipynb"
+
+
+def test_remote_compile_command_reports_a_clean_error_for_a_missing_notebook(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook file not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-compile", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook file not found")
+
+
+def test_remote_compile_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-compile", "nb.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
+def test_remote_build_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "remote-build" in proc.stdout
+
+
+def test_remote_build_command_saves_the_zip_using_the_content_disposition_name(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x03\x04fake-zip-content"
+    handler.responses = [
+        (
+            200,
+            zip_bytes,
+            "application/zip",
+        )
+    ]
+    handler.response_headers = [{"Content-Disposition": 'attachment; filename="generated.zip"'}]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-build", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "generated.zip" in proc.stdout
+    assert (workdir / "generated.zip").read_bytes() == zip_bytes
+    assert handler.requests == ["/api/download"]
+
+
+def test_remote_build_command_respects_a_custom_output_path(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x03\x04fake-zip-content"
+    handler.responses = [(200, zip_bytes, "application/zip")]
+    handler.response_headers = [{"Content-Disposition": 'attachment; filename="generated.zip"'}]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-build", "--dashboard-url", dashboard_url,
+            "--output", "my-build.zip",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "my-build.zip").read_bytes() == zip_bytes
+    assert not (workdir / "generated.zip").exists()
+
+
+def test_remote_build_command_json_flag_emits_a_machine_readable_result(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x03\x04fake-zip-content"
+    handler.responses = [(200, zip_bytes, "application/zip")]
+    handler.response_headers = [{"Content-Disposition": 'attachment; filename="generated.zip"'}]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-build", "--dashboard-url", dashboard_url, "--json"], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["status"] == "success"
+    assert data["size_bytes"] == len(zip_bytes)
+
+
+def test_remote_build_command_reports_a_clean_error_when_no_app_is_compiled(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "No compiled app found. Run /api/compile first."})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-build", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No compiled app found")
+
+
+def test_remote_build_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-build",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
