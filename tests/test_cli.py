@@ -2042,7 +2042,7 @@ def test_list_command_prints_notebooks_from_the_dashboard(fake_dashboard):
     assert "add.ipynb  (123 bytes)  [currently compiled; tags: prod]" in proc.stdout
     assert "scratch.ipynb  (45 bytes)" in proc.stdout
     assert "2 notebook(s) total." in proc.stdout
-    assert handler.requests == ["/api/notebooks"]
+    assert handler.requests == ["/api/notebooks?sort=name&order=asc&offset=0"]
 
 
 def test_list_command_passes_the_search_flag_through(fake_dashboard):
@@ -2061,7 +2061,89 @@ def test_list_command_passes_the_search_flag_through(fake_dashboard):
     )
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert handler.requests == ["/api/notebooks?search=add"]
+    assert handler.requests == ["/api/notebooks?sort=name&order=asc&offset=0&search=add"]
+
+
+def test_list_command_passes_sort_order_tag_and_limit_through(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebooks": [], "total_count": 0,
+            "limit": 5, "offset": 0,
+        })
+    ]
+
+    proc = _run_cli(
+        [
+            "list", "--dashboard-url", dashboard_url,
+            "--sort", "modified", "--order", "desc", "--tag", "prod", "--limit", "5",
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks?sort=modified&order=desc&offset=0&tag=prod&limit=5"
+    ]
+
+
+def test_list_command_passes_offset_through(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebooks": [], "total_count": 0,
+            "limit": None, "offset": 10,
+        })
+    ]
+
+    proc = _run_cli(
+        ["list", "--dashboard-url", dashboard_url, "--offset", "10"],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks?sort=name&order=asc&offset=10"]
+
+
+def test_list_command_reports_a_partial_page_when_limited(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebooks": [
+                {
+                    "filename": "a.ipynb", "size_bytes": 1,
+                    "modified_at": "2026-01-01T00:00:00+00:00",
+                    "currently_compiled": False, "tags": [],
+                },
+            ],
+            "total_count": 5, "limit": 1, "offset": 0,
+        })
+    ]
+
+    proc = _run_cli(
+        ["list", "--dashboard-url", dashboard_url, "--limit", "1"],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Showing 1 of 5 notebook(s) (offset 0)." in proc.stdout
+
+
+def test_list_command_rejects_an_invalid_sort_value(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+
+    proc = _run_cli(
+        ["list", "--dashboard-url", dashboard_url, "--sort", "bogus"],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode != 0
+    assert "invalid choice" in proc.stderr
 
 
 def test_list_command_reports_no_notebooks_found(fake_dashboard):

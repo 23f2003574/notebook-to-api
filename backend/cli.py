@@ -1105,9 +1105,13 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        params = {}
+        params = {"sort": args.sort, "order": args.order, "offset": args.offset}
         if args.search:
             params["search"] = args.search
+        if args.tag:
+            params["tag"] = args.tag
+        if args.limit is not None:
+            params["limit"] = args.limit
 
         try:
             response = httpx.get(
@@ -1151,7 +1155,21 @@ def _dispatch_core_command(args):
                         f"({notebook['size_bytes']} bytes){suffix}"
                     )
 
-            print(f"\n{data.get('total_count', len(notebooks))} notebook(s) total.")
+            total_count = data.get("total_count", len(notebooks))
+
+            # "notebooks" can be a strict subset of "total_count" once
+            # --limit/--offset are in play -- without this, a caller
+            # paging through a large list had no way to tell "10
+            # notebook(s) total" apart from "here are all 10" vs. "here
+            # are 10 of many more", short of separately re-reading
+            # --limit/--offset back off the JSON response themselves.
+            if args.limit is not None and (args.offset + len(notebooks) < total_count):
+                print(
+                    f"\nShowing {len(notebooks)} of {total_count} "
+                    f"notebook(s) (offset {args.offset})."
+                )
+            else:
+                print(f"\n{total_count} notebook(s) total.")
     elif args.command == "download":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -2324,13 +2342,51 @@ def main():
         help="Case-insensitive filename substring filter, mirroring GET /api/notebooks' own ?search=."
     )
     list_parser.add_argument(
+        "--tag",
+        default=None,
+        help="Only list notebooks carrying this exact tag, mirroring GET /api/notebooks' own ?tag=."
+    )
+    list_parser.add_argument(
+        "--sort",
+        choices=["name", "size", "modified"],
+        default="name",
+        help="Field to sort by, mirroring GET /api/notebooks' own ?sort= (default: name)."
+    )
+    list_parser.add_argument(
+        "--order",
+        choices=["asc", "desc"],
+        default="asc",
+        help="Sort direction, mirroring GET /api/notebooks' own ?order= (default: asc)."
+    )
+    list_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help=(
+            "Maximum number of notebooks to return (after --search/--tag "
+            "filtering and --sort/--order), mirroring GET /api/notebooks' "
+            "own ?limit=. Default: no limit -- every matching notebook."
+        )
+    )
+    list_parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help=(
+            "Number of matching notebooks to skip before --limit is "
+            "applied, mirroring GET /api/notebooks' own ?offset= -- e.g. "
+            "for paging through a large list. Default: 0."
+        )
+    )
+    list_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response "
-            "({\"status\", \"notebooks\", \"total_count\", ...}) instead "
-            "of a human-readable listing, for scripting/automation."
+            "({\"status\", \"notebooks\", \"total_count\", \"limit\", "
+            "\"offset\"}) instead of a human-readable listing, for "
+            "scripting/automation."
         )
     )
 
