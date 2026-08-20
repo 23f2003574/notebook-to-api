@@ -98,7 +98,8 @@ def _reset_fakes():
 
 def _run_serve(
     monkeypatch, notebook_path, output_dir, port=None, host=None,
-    compiled_calls=None, summary_calls=None,
+    compiled_calls=None, summary_calls=None, only=None, exclude=None,
+    only_exclude_calls=None,
 ):
     """serve_notebook only returns because time.sleep is patched to raise
     KeyboardInterrupt on its first call inside the `while True` loop --
@@ -109,6 +110,13 @@ def _run_serve(
     than left to run for real) because it calls inspect_notebook_data,
     which would otherwise try to actually parse these tests' placeholder
     "{}" notebook content as a real notebook and raise.
+
+    compiled_calls/summary_calls keep recording plain (nb_path, out_dir)
+    tuples, unchanged from before serve_notebook accepted only/exclude at
+    all -- every existing assertion against them stays valid. A test that
+    also needs to confirm only/exclude actually reached compile_notebook/
+    print_compile_summary passes its own `only_exclude_calls` list
+    instead, appended to separately as (only, exclude) tuples.
     """
     if compiled_calls is None:
         compiled_calls = []
@@ -116,10 +124,14 @@ def _run_serve(
     if summary_calls is None:
         summary_calls = []
 
-    def fake_compile_notebook(nb_path, out_dir):
-        compiled_calls.append((nb_path, out_dir))
+    if only_exclude_calls is None:
+        only_exclude_calls = []
 
-    def fake_print_compile_summary(nb_path, out_dir):
+    def fake_compile_notebook(nb_path, out_dir, only=None, exclude=None):
+        compiled_calls.append((nb_path, out_dir))
+        only_exclude_calls.append((only, exclude))
+
+    def fake_print_compile_summary(nb_path, out_dir, only=None, exclude=None):
         summary_calls.append((nb_path, out_dir))
 
     monkeypatch.setattr(serve_module, "compile_notebook", fake_compile_notebook)
@@ -135,6 +147,10 @@ def _run_serve(
         kwargs["port"] = port
     if host is not None:
         kwargs["host"] = host
+    if only is not None:
+        kwargs["only"] = only
+    if exclude is not None:
+        kwargs["exclude"] = exclude
 
     serve_module.serve_notebook(str(notebook_path), str(output_dir), **kwargs)
 
@@ -336,6 +352,41 @@ def test_serve_notebook_compiles_before_starting_the_server(tmp_path, monkeypatc
     assert compiled_calls == [(str(notebook_path), str(output_dir))]
 
 
+def test_serve_notebook_passes_only_to_the_initial_compile(tmp_path, monkeypatch):
+    """Before this, `serve` (and `watch`, below) had no equivalent of
+    `compile`/`deploy`'s own --only/--exclude at all -- every function
+    always became an endpoint on every compile, with no way to iterate
+    on just a subset while running a live dev server.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    only_exclude_calls = []
+
+    _run_serve(
+        monkeypatch, notebook_path, output_dir,
+        only=["add"], only_exclude_calls=only_exclude_calls,
+    )
+
+    assert only_exclude_calls == [(["add"], None)]
+
+
+def test_serve_notebook_passes_exclude_to_the_initial_compile(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    only_exclude_calls = []
+
+    _run_serve(
+        monkeypatch, notebook_path, output_dir,
+        exclude=["helper"], only_exclude_calls=only_exclude_calls,
+    )
+
+    assert only_exclude_calls == [(None, ["helper"])]
+
+
 def test_serve_notebook_prints_a_compile_summary_after_the_initial_compile(tmp_path, monkeypatch):
     """Before this, `serve`'s initial compile gave no feedback at all
     about what had actually been generated -- just "Initial compilation
@@ -463,8 +514,8 @@ def test_serve_notebook_raises_when_the_server_process_exits_unexpectedly(tmp_pa
     notebook_path.write_text("{}", encoding="utf-8")
     output_dir = tmp_path / "generated"
 
-    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out: None)
-    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out: None)
+    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out, **kwargs: None)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
     monkeypatch.setattr(serve_module, "Observer", _FakeObserver)
     monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
     # time.sleep must never be reached on this path -- the crash is
@@ -486,8 +537,8 @@ def test_serve_notebook_reports_the_exit_code_and_port_when_the_server_dies(tmp_
     notebook_path.write_text("{}", encoding="utf-8")
     output_dir = tmp_path / "generated"
 
-    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out: None)
-    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out: None)
+    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out, **kwargs: None)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
     monkeypatch.setattr(serve_module, "Observer", _FakeObserver)
     monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
 
@@ -511,8 +562,8 @@ def test_serve_notebook_stops_and_joins_the_observer_when_the_server_dies(tmp_pa
     notebook_path.write_text("{}", encoding="utf-8")
     output_dir = tmp_path / "generated"
 
-    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out: None)
-    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out: None)
+    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out, **kwargs: None)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
     monkeypatch.setattr(serve_module, "Observer", _FakeObserver)
     monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
 
@@ -530,6 +581,7 @@ def test_serve_notebook_stops_and_joins_the_observer_when_the_server_dies(tmp_pa
 
 def _run_watch(
     monkeypatch, notebook_path, output_dir, compiled_calls=None, summary_calls=None,
+    only=None, exclude=None, only_exclude_calls=None,
 ):
     """watch_notebook only returns because time.sleep is patched to raise
     KeyboardInterrupt on its first call inside the `while True` loop,
@@ -537,6 +589,11 @@ def _run_watch(
     reuses the identical Observer/NotebookChangeHandler setup and
     KeyboardInterrupt-driven shutdown loop as serve_notebook, just with no
     uvicorn subprocess at all.
+
+    See _run_serve's own docstring for why compiled_calls/summary_calls
+    stay plain (nb_path, out_dir) tuples and only_exclude_calls is the
+    separate list a test passes to also confirm only/exclude reached
+    compile_notebook/print_compile_summary.
     """
     if compiled_calls is None:
         compiled_calls = []
@@ -544,10 +601,14 @@ def _run_watch(
     if summary_calls is None:
         summary_calls = []
 
-    def fake_compile_notebook(nb_path, out_dir):
-        compiled_calls.append((nb_path, out_dir))
+    if only_exclude_calls is None:
+        only_exclude_calls = []
 
-    def fake_print_compile_summary(nb_path, out_dir):
+    def fake_compile_notebook(nb_path, out_dir, only=None, exclude=None):
+        compiled_calls.append((nb_path, out_dir))
+        only_exclude_calls.append((only, exclude))
+
+    def fake_print_compile_summary(nb_path, out_dir, only=None, exclude=None):
         summary_calls.append((nb_path, out_dir))
 
     monkeypatch.setattr(serve_module, "compile_notebook", fake_compile_notebook)
@@ -558,7 +619,13 @@ def _run_watch(
     monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
     monkeypatch.setattr(serve_module.time, "sleep", _raise_keyboard_interrupt)
 
-    serve_module.watch_notebook(str(notebook_path), str(output_dir))
+    kwargs = {}
+    if only is not None:
+        kwargs["only"] = only
+    if exclude is not None:
+        kwargs["exclude"] = exclude
+
+    serve_module.watch_notebook(str(notebook_path), str(output_dir), **kwargs)
 
 
 def test_watch_notebook_compiles_before_watching(tmp_path, monkeypatch):
@@ -571,6 +638,36 @@ def test_watch_notebook_compiles_before_watching(tmp_path, monkeypatch):
     _run_watch(monkeypatch, notebook_path, output_dir, compiled_calls=compiled_calls)
 
     assert compiled_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_watch_notebook_passes_only_to_the_initial_compile(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    only_exclude_calls = []
+
+    _run_watch(
+        monkeypatch, notebook_path, output_dir,
+        only=["add"], only_exclude_calls=only_exclude_calls,
+    )
+
+    assert only_exclude_calls == [(["add"], None)]
+
+
+def test_watch_notebook_passes_exclude_to_the_initial_compile(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    only_exclude_calls = []
+
+    _run_watch(
+        monkeypatch, notebook_path, output_dir,
+        exclude=["helper"], only_exclude_calls=only_exclude_calls,
+    )
+
+    assert only_exclude_calls == [(None, ["helper"])]
 
 
 def test_watch_notebook_prints_a_compile_summary_after_the_initial_compile(
@@ -656,9 +753,9 @@ def test_notebook_change_handler_recompiles_on_matching_notebook_modification(tm
     compiled_calls = []
     monkeypatch.setattr(
         serve_module, "compile_notebook",
-        lambda nb, out: compiled_calls.append((nb, out))
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
     )
-    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out: None)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
 
     handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
     handler.last_compile_time = 0
@@ -667,6 +764,35 @@ def test_notebook_change_handler_recompiles_on_matching_notebook_modification(tm
     handler.on_modified(event)
 
     assert compiled_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_notebook_change_handler_recompiles_with_only_and_exclude(tmp_path, monkeypatch):
+    """A handler constructed with only/exclude must keep applying them on
+    every recompile a save triggers, not just whatever compile happened
+    to run when it was first constructed (see serve_notebook/
+    watch_notebook, which both pass only/exclude through here).
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    only_exclude_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, only=None, exclude=None: only_exclude_calls.append((only, exclude))
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    handler = serve_module.NotebookChangeHandler(
+        str(notebook_path), str(output_dir), only=["add"], exclude=None,
+    )
+    handler.last_compile_time = 0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_modified(event)
+
+    assert only_exclude_calls == [(["add"], None)]
 
 
 def test_notebook_change_handler_recompiles_on_notebook_created_at_the_watched_path(
@@ -685,9 +811,9 @@ def test_notebook_change_handler_recompiles_on_notebook_created_at_the_watched_p
     compiled_calls = []
     monkeypatch.setattr(
         serve_module, "compile_notebook",
-        lambda nb, out: compiled_calls.append((nb, out))
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
     )
-    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out: None)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
 
     handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
     handler.last_compile_time = 0
@@ -719,9 +845,9 @@ def test_notebook_change_handler_recompiles_on_notebook_moved_into_place(
     compiled_calls = []
     monkeypatch.setattr(
         serve_module, "compile_notebook",
-        lambda nb, out: compiled_calls.append((nb, out))
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
     )
-    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out: None)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
 
     handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
     handler.last_compile_time = 0
@@ -746,7 +872,7 @@ def test_notebook_change_handler_ignores_an_unrelated_file_moved_into_the_direct
     compiled_calls = []
     monkeypatch.setattr(
         serve_module, "compile_notebook",
-        lambda nb, out: compiled_calls.append((nb, out))
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
     )
 
     handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
@@ -779,7 +905,7 @@ def test_notebook_change_handler_warns_when_the_notebook_is_deleted(
     compiled_calls = []
     monkeypatch.setattr(
         serve_module, "compile_notebook",
-        lambda nb, out: compiled_calls.append((nb, out))
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
     )
 
     handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
@@ -836,7 +962,7 @@ def test_notebook_change_handler_warns_when_the_notebook_is_moved_away(
     compiled_calls = []
     monkeypatch.setattr(
         serve_module, "compile_notebook",
-        lambda nb, out: compiled_calls.append((nb, out))
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
     )
 
     handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
@@ -872,9 +998,9 @@ def test_notebook_change_handler_recovers_after_the_notebook_is_recreated(
     compiled_calls = []
     monkeypatch.setattr(
         serve_module, "compile_notebook",
-        lambda nb, out: compiled_calls.append((nb, out))
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
     )
-    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out: None)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
 
     handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
     handler.last_compile_time = 0
@@ -901,12 +1027,12 @@ def test_notebook_change_handler_prints_a_compile_summary_after_recompiling(tmp_
     notebook_path.write_text("{}", encoding="utf-8")
     output_dir = tmp_path / "generated"
 
-    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out: None)
+    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out, **kwargs: None)
 
     summary_calls = []
     monkeypatch.setattr(
         serve_module, "print_compile_summary",
-        lambda nb, out: summary_calls.append((nb, out))
+        lambda nb, out, **kwargs: summary_calls.append((nb, out))
     )
 
     handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
@@ -926,7 +1052,7 @@ def test_notebook_change_handler_does_not_print_a_summary_when_recompilation_fai
     notebook_path.write_text("{}", encoding="utf-8")
     output_dir = tmp_path / "generated"
 
-    def fake_compile_notebook(nb, out):
+    def fake_compile_notebook(nb, out, **kwargs):
         raise ValueError("boom")
 
     monkeypatch.setattr(serve_module, "compile_notebook", fake_compile_notebook)
@@ -934,7 +1060,7 @@ def test_notebook_change_handler_does_not_print_a_summary_when_recompilation_fai
     summary_calls = []
     monkeypatch.setattr(
         serve_module, "print_compile_summary",
-        lambda nb, out: summary_calls.append((nb, out))
+        lambda nb, out, **kwargs: summary_calls.append((nb, out))
     )
 
     handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
@@ -957,7 +1083,7 @@ def test_notebook_change_handler_ignores_a_different_notebook_file(tmp_path, mon
     compiled_calls = []
     monkeypatch.setattr(
         serve_module, "compile_notebook",
-        lambda nb, out: compiled_calls.append((nb, out))
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
     )
 
     handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
@@ -978,7 +1104,7 @@ def test_notebook_change_handler_ignores_non_ipynb_modification(tmp_path, monkey
     compiled_calls = []
     monkeypatch.setattr(
         serve_module, "compile_notebook",
-        lambda nb, out: compiled_calls.append((nb, out))
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
     )
 
     handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
@@ -999,9 +1125,9 @@ def test_notebook_change_handler_debounces_rapid_modifications(tmp_path, monkeyp
     compiled_calls = []
     monkeypatch.setattr(
         serve_module, "compile_notebook",
-        lambda nb, out: compiled_calls.append((nb, out))
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
     )
-    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out: None)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
 
     fake_now = [100.0]
     monkeypatch.setattr(serve_module.time, "time", lambda: fake_now[0])
@@ -1026,7 +1152,7 @@ def test_notebook_change_handler_reports_compilation_errors_without_raising(tmp_
     notebook_path.write_text("{}", encoding="utf-8")
     output_dir = tmp_path / "generated"
 
-    def fake_compile_notebook(nb, out):
+    def fake_compile_notebook(nb, out, **kwargs):
         raise ValueError("boom")
 
     monkeypatch.setattr(serve_module, "compile_notebook", fake_compile_notebook)

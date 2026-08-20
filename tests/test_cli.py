@@ -1353,6 +1353,78 @@ def test_watch_command_requires_a_notebook_argument():
     assert "notebook" in proc.stderr
 
 
+def test_serve_command_accepts_only_and_exclude_flags(tmp_path):
+    """`serve` (and `watch`, below) previously had no --only/--exclude at
+    all, unlike `compile`/`deploy` -- confirmed here by checking argparse
+    itself accepts the flags (reaching the missing-notebook error, not an
+    "unrecognized arguments" one), the same wiring-only check
+    test_watch_command_is_registered already applies to the subcommand
+    itself.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["serve", str(workdir / "does-not-exist.ipynb"), "--only", "add"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_serve_command_only_and_exclude_are_mutually_exclusive(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    proc = _run_cli(
+        [
+            "serve", str(notebook_path),
+            "--only", "add", "--exclude", "add", "--port", "0",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "only and exclude can't both be given")
+
+
+def test_watch_command_accepts_only_and_exclude_flags(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["watch", str(workdir / "does-not-exist.ipynb"), "--exclude", "helper"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_watch_command_only_and_exclude_are_mutually_exclusive(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    proc = _run_cli(
+        ["watch", str(notebook_path), "--only", "add", "--exclude", "add"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "only and exclude can't both be given")
+
+
 def test_diff_command_is_registered():
     """Same subparser/dispatch-branch mismatch gap test_deploy_command_is_registered
     (test_cli_deploy.py) and test_watch_command_is_registered (above)

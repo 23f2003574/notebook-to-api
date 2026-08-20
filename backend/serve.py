@@ -49,9 +49,11 @@ class NotebookChangeHandler(FileSystemEventHandler):
     ordinary change and recompiles from.
     """
 
-    def __init__(self, notebook_path, output_dir):
+    def __init__(self, notebook_path, output_dir, only=None, exclude=None):
         self.notebook_path = notebook_path
         self.output_dir = output_dir
+        self.only = only
+        self.exclude = exclude
         self.last_compile_time = time.time()
 
     def on_modified(self, event):
@@ -103,14 +105,23 @@ class NotebookChangeHandler(FileSystemEventHandler):
             print("\n🔄 Notebook changed. Recompiling API...")
 
             try:
-                compile_notebook(self.notebook_path, self.output_dir)
+                compile_notebook(
+                    self.notebook_path, self.output_dir,
+                    only=self.only, exclude=self.exclude,
+                )
                 print("✅ Recompilation complete.")
-                print_compile_summary(self.notebook_path, self.output_dir)
+                print_compile_summary(
+                    self.notebook_path, self.output_dir,
+                    only=self.only, exclude=self.exclude,
+                )
             except Exception as e:
                 print(f"❌ Compilation error: {e}\n")
 
 
-def serve_notebook(notebook_path, output_dir="generated", port=8000, host="0.0.0.0"):
+def serve_notebook(
+    notebook_path, output_dir="generated", port=8000, host="0.0.0.0",
+    only=None, exclude=None,
+):
     """
     Serve a notebook as a live API with hot recompilation.
 
@@ -134,17 +145,30 @@ def serve_notebook(notebook_path, output_dir="generated", port=8000, host="0.0.0
             reachable only from localhost (e.g. 127.0.0.1), not the whole
             LAN, without editing this file to find out that was even
             possible.
+        only: Comma-free list of function names to expose as endpoints,
+            excluding every other one -- the same --only compile_notebook
+            already accepts. Previously unavailable here at all: `compile`
+            and `deploy` could already restrict which functions become
+            endpoints, but `serve` (and `watch`, below) had no equivalent,
+            recompiling every function into an endpoint on every save
+            with no way to iterate on just a subset -- e.g. to keep a
+            slow or still-broken function's own endpoint out of a live
+            dev server without deleting it from the notebook outright.
+        exclude: The complementary --exclude compile_notebook already
+            accepts -- every function except the named ones. Mutually
+            exclusive with `only` (see _filter_functions_by_name,
+            backend/compiler.py).
     """
 
     # Initial compilation
     print("📝 Initial compilation...")
-    compile_notebook(notebook_path, output_dir)
+    compile_notebook(notebook_path, output_dir, only=only, exclude=exclude)
     print("✅ Initial compilation complete.")
-    print_compile_summary(notebook_path, output_dir)
+    print_compile_summary(notebook_path, output_dir, only=only, exclude=exclude)
 
     # Set up file watcher
     observer = Observer()
-    handler = NotebookChangeHandler(notebook_path, output_dir)
+    handler = NotebookChangeHandler(notebook_path, output_dir, only=only, exclude=exclude)
 
     # Watch the directory containing the notebook
     notebook_dir = Path(notebook_path).parent.resolve()
@@ -298,7 +322,7 @@ def serve_notebook(notebook_path, output_dir="generated", port=8000, host="0.0.0
     observer.join()
 
 
-def watch_notebook(notebook_path, output_dir="generated"):
+def watch_notebook(notebook_path, output_dir="generated", only=None, exclude=None):
     """Compile a notebook once, then keep recompiling it on every save --
     without also starting a live API server the way `serve` does.
 
@@ -319,15 +343,20 @@ def watch_notebook(notebook_path, output_dir="generated"):
         notebook_path: Path to the notebook file.
         output_dir: Output directory for the generated API (default:
             "generated"), same as compile_notebook/serve_notebook.
+        only: Same --only compile_notebook/serve_notebook already accept
+            -- see serve_notebook's own docstring for why this was
+            missing here too before now.
+        exclude: Same --exclude compile_notebook/serve_notebook already
+            accept. Mutually exclusive with `only`.
     """
 
     print("📝 Initial compilation...")
-    compile_notebook(notebook_path, output_dir)
+    compile_notebook(notebook_path, output_dir, only=only, exclude=exclude)
     print("✅ Initial compilation complete.")
-    print_compile_summary(notebook_path, output_dir)
+    print_compile_summary(notebook_path, output_dir, only=only, exclude=exclude)
 
     observer = Observer()
-    handler = NotebookChangeHandler(notebook_path, output_dir)
+    handler = NotebookChangeHandler(notebook_path, output_dir, only=only, exclude=exclude)
 
     notebook_dir = Path(notebook_path).parent.resolve()
     observer.schedule(handler, path=str(notebook_dir), recursive=False)

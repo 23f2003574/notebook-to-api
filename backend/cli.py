@@ -888,9 +888,16 @@ def _dispatch_core_command(args):
         else:
             print(f"\ncURL script written to: {output} ({len(commands)} request(s))")
     elif args.command == "serve":
-        serve_notebook(args.notebook, args.output, args.port, args.host)
+        only = _parse_comma_separated_names(args.only)
+        exclude = _parse_comma_separated_names(args.exclude)
+        serve_notebook(
+            args.notebook, args.output, args.port, args.host,
+            only=only, exclude=exclude,
+        )
     elif args.command == "watch":
-        watch_notebook(args.notebook, args.output)
+        only = _parse_comma_separated_names(args.only)
+        exclude = _parse_comma_separated_names(args.exclude)
+        watch_notebook(args.notebook, args.output, only=only, exclude=exclude)
     elif args.command == "deploy":
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -2203,6 +2210,7 @@ def main():
             "connections from this machine."
         )
     )
+    _add_function_selection_arguments(serve_parser)
 
     # watch command (recompile on save, no live API server)
     watch_parser = subparsers.add_parser(
@@ -2215,6 +2223,7 @@ def main():
         default="generated",
         help="Output directory where the FastAPI app and assets will be written."
     )
+    _add_function_selection_arguments(watch_parser)
 
     # deploy command (compile + build a Docker image)
     deploy_parser = subparsers.add_parser(
