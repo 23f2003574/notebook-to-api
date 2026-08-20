@@ -4333,3 +4333,163 @@ def test_remote_export_command_reports_a_clean_error_when_the_dashboard_is_unrea
     )
 
     _assert_clean_cli_error(proc, "Is it running?")
+
+
+def test_remote_deploy_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "remote-deploy" in proc.stdout
+
+
+def test_remote_deploy_command_reports_success(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "tag": "generated:latest", "pushed": False})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-deploy", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Built image 'generated:latest'" in proc.stdout
+    assert "Pushed to the registry." not in proc.stdout
+    assert handler.requests == ["/api/deploy"]
+    assert json.loads(handler.bodies[0]) == {"push": False, "force": False}
+
+
+def test_remote_deploy_command_passes_tag_push_platform_and_force_through(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "tag": "myapp:v1", "pushed": True})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-deploy", "--dashboard-url", dashboard_url,
+            "--tag", "myapp:v1", "--push", "--platform", "linux/amd64", "--force",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Built image 'myapp:v1'" in proc.stdout
+    assert "Pushed to the registry." in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "push": True, "force": True, "tag": "myapp:v1", "platform": "linux/amd64",
+    }
+
+
+def test_remote_deploy_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "tag": "generated:latest", "pushed": False})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-deploy", "--dashboard-url", dashboard_url, "--json"], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["tag"] == "generated:latest"
+
+
+def test_remote_deploy_command_reports_a_clean_error_when_stale_without_force(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(409, {
+            "detail": (
+                "The currently-compiled app no longer matches its source "
+                "notebook's current content -- it was edited since the "
+                'last compile. Run /api/compile again first, or pass '
+                '"force": true to deploy the stale build anyway.'
+            )
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-deploy", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "no longer matches its source notebook")
+
+
+def test_remote_deploy_command_reports_a_clean_error_when_nothing_is_compiled(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "No compiled app found. Run /api/compile first."})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-deploy", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No compiled app found")
+
+
+def test_remote_deploy_command_reports_a_clean_error_for_a_failed_build(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(500, {"detail": "Docker build failed: some error"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-deploy", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Docker build failed")
+
+
+def test_remote_deploy_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-deploy",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")

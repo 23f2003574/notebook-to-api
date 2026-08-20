@@ -340,7 +340,7 @@ _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
     "export-curl", "serve", "watch", "deploy", "diff", "upload", "list",
     "download", "delete", "rename", "tags", "remote-compile", "remote-build",
-    "versions", "remote-files", "remote-diff", "remote-export",
+    "versions", "remote-files", "remote-diff", "remote-export", "remote-deploy",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -1852,6 +1852,43 @@ def _dispatch_core_command(args):
                 )
             else:
                 print(code)
+    elif args.command == "remote-deploy":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        body = {"push": args.push, "force": args.force}
+
+        if args.tag:
+            body["tag"] = args.tag
+
+        if args.platform:
+            body["platform"] = args.platform
+
+        try:
+            response = httpx.post(
+                f"{dashboard_url}/api/deploy", json=body, timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the deploy ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"Built image '{data.get('tag')}' on {dashboard_url}")
+            if data.get("pushed"):
+                print("Pushed to the registry.")
 
 
 def main():
@@ -2731,6 +2768,73 @@ def main():
             "Emit the dashboard's own JSON response "
             "({\"status\", \"language\", \"path\", \"code\"}) instead of "
             "just the generated client, for scripting/automation."
+        )
+    )
+
+    # remote-deploy command (build, and optionally push, a Docker image
+    # from the app currently compiled on a running dashboard, via its
+    # own POST /api/deploy -- distinct from the CLI's own local `deploy`,
+    # which always recompiles from a local notebook path first and runs
+    # `docker build`/`docker push` on *this* machine, not the dashboard's)
+    remote_deploy_parser = subparsers.add_parser(
+        "remote-deploy",
+        help="Build (and optionally push) a Docker image from the app currently compiled on a running dashboard instance, via its POST /api/deploy."
+    )
+    remote_deploy_parser.add_argument(
+        "--tag",
+        default=None,
+        help=(
+            "Docker image tag to build (default: the dashboard's own "
+            "<generated-dir-basename>:latest, the same default POST "
+            "/api/deploy itself falls back to when \"tag\" is omitted)."
+        )
+    )
+    remote_deploy_parser.add_argument(
+        "--push",
+        action="store_true",
+        help=(
+            "Push the built image with `docker push <tag>` after a "
+            "successful build -- run on the dashboard's own host, not "
+            "this machine, so the tag must reference a registry that "
+            "host can already push to (`docker login` already done "
+            "there), the same requirement the CLI's own local `deploy "
+            "--push` has for this machine instead."
+        )
+    )
+    remote_deploy_parser.add_argument(
+        "--platform",
+        default=None,
+        help=(
+            "Target platform to pass to `docker build --platform` on the "
+            "dashboard's own host (e.g. linux/amd64, linux/arm64). "
+            "Defaults to that host's own Docker daemon default."
+        )
+    )
+    remote_deploy_parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Deploy even if the currently-compiled app no longer matches "
+            "its source notebook's current content -- POST /api/deploy "
+            "rejects a stale build with 409 unless this is set, the same "
+            "staleness check `remote-compile` (run again) already clears."
+        )
+    )
+    # Docker builds routinely run well past this file's other commands'
+    # own 30s default (see _add_dashboard_url_and_timeout_arguments) --
+    # matched here to DEPLOY_SUBPROCESS_TIMEOUT_SECONDS's own 600s
+    # default, the limit the dashboard's own `docker build`/`docker push`
+    # subprocess is already bounded by server-side, so this command's
+    # own --timeout isn't the first thing to time out a slow build.
+    _add_dashboard_url_and_timeout_arguments(remote_deploy_parser, default_timeout=600.0)
+    remote_deploy_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"tag\", \"pushed\"}) instead of "
+            "human-readable progress output, for scripting/automation."
         )
     )
 
