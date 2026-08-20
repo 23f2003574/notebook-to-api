@@ -4493,3 +4493,118 @@ def test_remote_deploy_command_reports_a_clean_error_when_the_dashboard_is_unrea
     )
 
     _assert_clean_cli_error(proc, "Is it running?")
+
+
+def test_status_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "status" in proc.stdout
+
+
+def test_status_command_prints_health_and_config(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "healthy", "service": "notebook-to-api",
+            "compiled_app_present": True, "compiled_at": "2026-01-01T00:00:00+00:00",
+        }),
+        _json_response(200, {
+            "status": "success",
+            "max_upload_bytes": 10485760,
+            "max_batch_upload_files": 50,
+            "max_notebook_versions": 20,
+            "max_tag_length": 40,
+            "max_tags_per_notebook": 20,
+            "deploy_subprocess_timeout_seconds": 600,
+            "notebook_sort_keys": ["name", "size", "uploaded_at"],
+            "notebook_sort_orders": ["asc", "desc"],
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["status", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"Dashboard at {dashboard_url}: healthy" in proc.stdout
+    assert "compiled app present, last compiled at 2026-01-01T00:00:00+00:00" in proc.stdout
+    assert "max upload size: 10485760 bytes" in proc.stdout
+    assert "max batch upload files: 50" in proc.stdout
+    assert "notebook sort keys: name, size, uploaded_at" in proc.stdout
+    assert handler.requests == ["/api/health", "/api/config"]
+
+
+def test_status_command_reports_no_compiled_app(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "healthy", "service": "notebook-to-api",
+            "compiled_app_present": False, "compiled_at": None,
+        }),
+        _json_response(200, {
+            "status": "success", "max_upload_bytes": 1, "max_batch_upload_files": 1,
+            "max_notebook_versions": 1, "max_tag_length": 1, "max_tags_per_notebook": 1,
+            "deploy_subprocess_timeout_seconds": 1,
+            "notebook_sort_keys": [], "notebook_sort_orders": [],
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["status", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "no compiled app yet" in proc.stdout
+
+
+def test_status_command_json_flag_emits_a_combined_result(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "healthy", "service": "notebook-to-api",
+            "compiled_app_present": False, "compiled_at": None,
+        }),
+        _json_response(200, {
+            "status": "success", "max_upload_bytes": 1, "max_batch_upload_files": 1,
+            "max_notebook_versions": 1, "max_tag_length": 1, "max_tags_per_notebook": 1,
+            "deploy_subprocess_timeout_seconds": 1,
+            "notebook_sort_keys": [], "notebook_sort_orders": [],
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["status", "--dashboard-url", dashboard_url, "--json"], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["health"]["status"] == "healthy"
+    assert data["config"]["max_upload_bytes"] == 1
+
+
+def test_status_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "status",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")

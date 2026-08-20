@@ -341,6 +341,7 @@ _CORE_COMMANDS = frozenset({
     "export-curl", "serve", "watch", "deploy", "diff", "upload", "list",
     "download", "delete", "rename", "tags", "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "remote-export", "remote-deploy",
+    "status",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -1889,6 +1890,64 @@ def _dispatch_core_command(args):
             print(f"Built image '{data.get('tag')}' on {dashboard_url}")
             if data.get("pushed"):
                 print("Pushed to the registry.")
+    elif args.command == "status":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            health_response = httpx.get(
+                f"{dashboard_url}/api/health", timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if health_response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({health_response.status_code}): "
+                f"{_extract_dashboard_error_detail(health_response)}"
+            )
+
+        try:
+            config_response = httpx.get(
+                f"{dashboard_url}/api/config", timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if config_response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({config_response.status_code}): "
+                f"{_extract_dashboard_error_detail(config_response)}"
+            )
+
+        health = health_response.json()
+        config = config_response.json()
+
+        if args.json_output:
+            print(json.dumps({"health": health, "config": config}, indent=2))
+        else:
+
+            print(f"Dashboard at {dashboard_url}: {health.get('status')}")
+
+            if health.get("compiled_app_present"):
+                print(f"  compiled app present, last compiled at {health.get('compiled_at')}")
+            else:
+                print("  no compiled app yet")
+
+            print("\nConfigured limits:")
+            print(f"  max upload size: {config.get('max_upload_bytes')} bytes")
+            print(f"  max batch upload files: {config.get('max_batch_upload_files')}")
+            print(f"  max notebook versions kept: {config.get('max_notebook_versions')}")
+            print(f"  max tag length: {config.get('max_tag_length')}")
+            print(f"  max tags per notebook: {config.get('max_tags_per_notebook')}")
+            print(f"  deploy subprocess timeout: {config.get('deploy_subprocess_timeout_seconds')}s")
+            print(f"  notebook sort keys: {', '.join(config.get('notebook_sort_keys', []))}")
+            print(f"  notebook sort orders: {', '.join(config.get('notebook_sort_orders', []))}")
 
 
 def main():
@@ -2835,6 +2894,29 @@ def main():
             "Emit the dashboard's own JSON response "
             "({\"status\", \"tag\", \"pushed\"}) instead of "
             "human-readable progress output, for scripting/automation."
+        )
+    )
+
+    # status command (a running dashboard's own health and configured
+    # limits, in one call, via its GET /api/health and GET /api/config --
+    # every other `remote-*`/notebook-management command already assumes
+    # a dashboard is reachable and configured a certain way; this is the
+    # one command whose whole job is finding that out first, before
+    # scripting a sequence of them against it)
+    status_parser = subparsers.add_parser(
+        "status",
+        help="Show a running dashboard instance's health and configured limits, via its GET /api/health and GET /api/config."
+    )
+    _add_dashboard_url_and_timeout_arguments(status_parser)
+    status_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit a combined machine-readable JSON result "
+            "({\"health\": <GET /api/health response>, \"config\": <GET "
+            "/api/config response>}) instead of a human-readable "
+            "summary, for scripting/automation."
         )
     )
 
