@@ -1200,41 +1200,110 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        if not args.yes:
-            # DELETE /api/notebooks/{filename} (routes/upload.py) has no
-            # confirmation step of its own and is irreversible -- unlike
-            # `upload --overwrite`/`rename --overwrite`, there's no
-            # non-destructive default to fall back to here, so this asks
-            # on the terminal instead. --yes skips the prompt for
-            # scripting/automation.
-            answer = input(f"Delete '{args.filename}' from {dashboard_url}? [y/N] ")
-            if answer.strip().lower() not in ("y", "yes"):
-                print("Aborted.")
-                return
+        if args.all and args.filename:
+            raise RuntimeError("Pass either a filename or --all, not both.")
 
-        try:
-            response = httpx.delete(
-                f"{dashboard_url}/api/notebooks/{args.filename}",
-                timeout=args.timeout,
-            )
-        except httpx.HTTPError as exc:
-            raise _dashboard_connection_error(exc, dashboard_url)
-
-        if response.status_code >= 400:
-
+        if not args.all and not args.filename:
             raise RuntimeError(
-                f"Dashboard rejected the request ({response.status_code}): "
-                f"{_extract_dashboard_error_detail(response)}"
+                "Pass a filename to delete, or --all to delete every "
+                "uploaded notebook."
             )
 
-        data = response.json()
+        if args.all:
+            # DELETE /api/notebooks requires its own ?confirm=true before
+            # it does anything (routes/upload.py) -- always passed here
+            # once this prompt (or --yes) has already confirmed the same
+            # thing on this side, so the two confirmation steps never
+            # double-prompt a caller who already said yes once.
+            if not args.yes:
+                answer = input(
+                    f"Delete ALL uploaded notebooks on {dashboard_url}? [y/N] "
+                )
+                if answer.strip().lower() not in ("y", "yes"):
+                    print("Aborted.")
+                    return
 
-        if args.json_output:
-            print(json.dumps(data, indent=2))
+            try:
+                response = httpx.delete(
+                    f"{dashboard_url}/api/notebooks",
+                    params={"confirm": "true"},
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                deleted_filenames = data.get("deleted_filenames", [])
+
+                if not deleted_filenames:
+                    print(f"No notebooks to delete on {dashboard_url}.")
+                else:
+
+                    for filename in deleted_filenames:
+                        print(f"Deleted '{filename}'")
+
+                    print(
+                        f"\n{data.get('deleted_count', len(deleted_filenames))} "
+                        f"notebook(s) deleted from {dashboard_url}"
+                    )
+
+                if data.get("currently_compiled_notebook_deleted"):
+                    print("  note: this included the notebook backing the currently compiled app.")
+
         else:
-            print(f"Deleted '{data.get('filename', args.filename)}' from {dashboard_url}")
-            if data.get("was_currently_compiled"):
-                print("  note: this was the notebook backing the currently compiled app.")
+            # Single-filename path, unchanged from before `delete`
+            # accepted --all: still hits DELETE
+            # /api/notebooks/{filename} directly, not DELETE
+            # /api/notebooks, so a script relying on this command's
+            # original single-file output/exit-code shape keeps working
+            # exactly as it did.
+            if not args.yes:
+                # DELETE /api/notebooks/{filename} (routes/upload.py) has
+                # no confirmation step of its own and is irreversible --
+                # unlike `upload --overwrite`/`rename --overwrite`,
+                # there's no non-destructive default to fall back to
+                # here, so this asks on the terminal instead. --yes skips
+                # the prompt for scripting/automation.
+                answer = input(f"Delete '{args.filename}' from {dashboard_url}? [y/N] ")
+                if answer.strip().lower() not in ("y", "yes"):
+                    print("Aborted.")
+                    return
+
+            try:
+                response = httpx.delete(
+                    f"{dashboard_url}/api/notebooks/{args.filename}",
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                print(f"Deleted '{data.get('filename', args.filename)}' from {dashboard_url}")
+                if data.get("was_currently_compiled"):
+                    print("  note: this was the notebook backing the currently compiled app.")
     elif args.command == "rename":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -2111,21 +2180,44 @@ def main():
     # delete command (remove a notebook already on a running dashboard)
     delete_parser = subparsers.add_parser(
         "delete",
-        help="Delete a notebook already on a running dashboard instance's DELETE /api/notebooks/{filename}."
+        help=(
+            "Delete a notebook (or, with --all, every notebook) already "
+            "on a running dashboard instance, via its DELETE "
+            "/api/notebooks/{filename} or DELETE /api/notebooks."
+        )
     )
     delete_parser.add_argument(
-        "filename", help="Filename of the notebook to delete, as reported by `list`."
+        "filename", nargs="?", default=None,
+        help=(
+            "Filename of the notebook to delete, as reported by `list`. "
+            "Omit when passing --all."
+        )
     )
     _add_dashboard_url_and_timeout_arguments(delete_parser)
+    delete_parser.add_argument(
+        "--all",
+        action="store_true",
+        help=(
+            "Delete every notebook currently uploaded to the dashboard, "
+            "via DELETE /api/notebooks?confirm=true, instead of one "
+            "filename via DELETE /api/notebooks/{filename} -- e.g. to "
+            "reset the uploads directory before a demo or between CI "
+            "runs, without discovering and deleting each filename one at "
+            "a time. Mutually exclusive with passing a filename."
+        )
+    )
     delete_parser.add_argument(
         "--yes",
         action="store_true",
         help=(
             "Confirm the deletion without an interactive prompt. Without "
             "this, `delete` asks for a y/N confirmation on the terminal "
-            "before sending the request -- DELETE "
-            "/api/notebooks/{filename} itself has no confirmation step of "
-            "its own, and is irreversible."
+            "before sending the request -- neither DELETE "
+            "/api/notebooks/{filename} nor DELETE /api/notebooks has a "
+            "confirmation step of its own (beyond that endpoint's own "
+            "required ?confirm=true, which this always passes for --all "
+            "once the terminal prompt -- or --yes -- has already "
+            "confirmed it), and both are irreversible."
         )
     )
     delete_parser.add_argument(
@@ -2133,9 +2225,12 @@ def main():
         action="store_true",
         dest="json_output",
         help=(
-            "Emit the dashboard's own JSON response "
-            "({\"status\", \"filename\", \"was_currently_compiled\"}) "
-            "instead of a human-readable summary, for scripting/automation."
+            "Emit the dashboard's own JSON response -- "
+            "{\"status\", \"filename\", \"was_currently_compiled\"} for a "
+            "single filename, or {\"status\", \"deleted_count\", "
+            "\"deleted_filenames\", \"currently_compiled_notebook_deleted\"} "
+            "for --all -- instead of a human-readable summary, for "
+            "scripting/automation."
         )
     )
 

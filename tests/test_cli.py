@@ -2372,6 +2372,178 @@ def test_delete_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_delete_command_all_flag_reports_success_with_yes_flag(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "deleted_count": 2,
+            "deleted_filenames": ["a.ipynb", "b.ipynb"],
+            "currently_compiled_notebook_deleted": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["delete", "--all", "--dashboard-url", dashboard_url, "--yes"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Deleted 'a.ipynb'" in proc.stdout
+    assert "Deleted 'b.ipynb'" in proc.stdout
+    assert "2 notebook(s) deleted" in proc.stdout
+    assert handler.requests == ["/api/notebooks?confirm=true"]
+
+
+def test_delete_command_all_flag_reports_nothing_to_delete(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "deleted_count": 0,
+            "deleted_filenames": [], "currently_compiled_notebook_deleted": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["delete", "--all", "--dashboard-url", dashboard_url, "--yes"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No notebooks to delete" in proc.stdout
+
+
+def test_delete_command_all_flag_flags_the_currently_compiled_notebook(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "deleted_count": 1,
+            "deleted_filenames": ["a.ipynb"],
+            "currently_compiled_notebook_deleted": True,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["delete", "--all", "--dashboard-url", dashboard_url, "--yes"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "currently compiled app" in proc.stdout
+
+
+def test_delete_command_all_flag_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "deleted_count": 1,
+            "deleted_filenames": ["a.ipynb"],
+            "currently_compiled_notebook_deleted": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["delete", "--all", "--dashboard-url", dashboard_url, "--yes", "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["deleted_count"] == 1
+
+
+def test_delete_command_all_flag_aborts_without_yes_when_declined(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = []
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli",
+            "delete", "--all", "--dashboard-url", dashboard_url,
+        ],
+        cwd=str(workdir),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        capture_output=True,
+        text=True,
+        input="n\n",
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Aborted." in proc.stdout
+    assert handler.requests == []
+
+
+def test_delete_command_rejects_both_filename_and_all(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["delete", "nb.ipynb", "--all", "--dashboard-url", "http://127.0.0.1:1", "--yes"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Pass either a filename or --all, not both.")
+
+
+def test_delete_command_rejects_neither_filename_nor_all(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["delete", "--dashboard-url", "http://127.0.0.1:1", "--yes"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Pass a filename to delete, or --all")
+
+
+def test_delete_command_all_flag_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "delete", "--all",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5", "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_rename_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())
