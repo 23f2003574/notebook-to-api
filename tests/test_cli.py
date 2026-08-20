@@ -1812,6 +1812,182 @@ def test_upload_command_reports_a_clean_error_for_a_missing_notebook(tmp_path):
     _assert_clean_cli_error(proc, "No such file or directory")
 
 
+def test_upload_command_with_multiple_notebooks_hits_the_batch_endpoint(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {
+                    "status": "success", "filename": "a.ipynb",
+                    "path": "/srv/uploads/a.ipynb", "overwritten": False,
+                },
+                {
+                    "status": "success", "filename": "b.ipynb",
+                    "path": "/srv/uploads/b.ipynb", "overwritten": False,
+                },
+            ],
+            "succeeded_count": 2,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_a = workdir / "a.ipynb"
+    notebook_b = workdir / "b.ipynb"
+    _write_notebook(notebook_a)
+    _write_notebook(notebook_b)
+
+    proc = _run_cli(
+        [
+            "upload", str(notebook_a), str(notebook_b),
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Uploaded 'a.ipynb'" in proc.stdout
+    assert "Uploaded 'b.ipynb'" in proc.stdout
+    assert "2 succeeded, 0 failed." in proc.stdout
+    assert handler.requests == ["/api/upload/batch?overwrite=false"]
+
+
+def test_upload_command_with_multiple_notebooks_reports_per_file_failures(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {
+                    "status": "success", "filename": "a.ipynb",
+                    "path": "/srv/uploads/a.ipynb", "overwritten": False,
+                },
+                {
+                    "status": "error", "filename": "b.ipynb",
+                    "detail": "A notebook named 'b.ipynb' already exists.",
+                },
+            ],
+            "succeeded_count": 1,
+            "failed_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_a = workdir / "a.ipynb"
+    notebook_b = workdir / "b.ipynb"
+    _write_notebook(notebook_a)
+    _write_notebook(notebook_b)
+
+    proc = _run_cli(
+        [
+            "upload", str(notebook_a), str(notebook_b),
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "Uploaded 'a.ipynb'" in proc.stdout
+    assert "Failed 'b.ipynb': A notebook named 'b.ipynb' already exists." in proc.stdout
+    assert "1 succeeded, 1 failed." in proc.stdout
+
+
+def test_upload_command_with_multiple_notebooks_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {
+                    "status": "success", "filename": "a.ipynb",
+                    "path": "/srv/uploads/a.ipynb", "overwritten": False,
+                },
+            ],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_a = workdir / "a.ipynb"
+    _write_notebook(notebook_a)
+
+    proc = _run_cli(
+        [
+            "upload", str(notebook_a),
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["succeeded_count"] == 1
+
+
+def test_upload_command_with_multiple_notebooks_passes_the_overwrite_flag_through(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "results": [], "succeeded_count": 0, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_a = workdir / "a.ipynb"
+    notebook_b = workdir / "b.ipynb"
+    _write_notebook(notebook_a)
+    _write_notebook(notebook_b)
+
+    proc = _run_cli(
+        [
+            "upload", str(notebook_a), str(notebook_b),
+            "--dashboard-url", dashboard_url, "--overwrite",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/upload/batch?overwrite=true"]
+
+
+def test_upload_command_with_multiple_notebooks_reports_a_clean_error_for_a_missing_notebook(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_a = workdir / "a.ipynb"
+    _write_notebook(notebook_a)
+
+    proc = _run_cli(
+        [
+            "upload", str(notebook_a), str(workdir / "does-not-exist.ipynb"),
+            "--dashboard-url", "http://127.0.0.1:1",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
 def test_list_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

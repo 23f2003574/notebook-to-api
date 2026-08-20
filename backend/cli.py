@@ -952,40 +952,121 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        try:
+        if len(args.notebook) == 1:
+            # Single-file path, unchanged from before `upload` accepted
+            # more than one notebook: still hits POST /api/upload
+            # directly, not /api/upload/batch, so a script relying on
+            # this command's original single-file output/exit-code shape
+            # keeps working exactly as it did.
+            notebook_path = args.notebook[0]
 
-            with open(args.notebook, "rb") as f:
+            try:
 
-                response = httpx.post(
-                    f"{dashboard_url}/api/upload",
-                    params={"overwrite": args.overwrite},
-                    files={
-                        "file": (
-                            os.path.basename(args.notebook), f,
-                            "application/json",
-                        )
-                    },
-                    timeout=args.timeout,
+                with open(notebook_path, "rb") as f:
+
+                    response = httpx.post(
+                        f"{dashboard_url}/api/upload",
+                        params={"overwrite": args.overwrite},
+                        files={
+                            "file": (
+                                os.path.basename(notebook_path), f,
+                                "application/json",
+                            )
+                        },
+                        timeout=args.timeout,
+                    )
+
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the upload ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
                 )
 
-        except httpx.HTTPError as exc:
-            raise _dashboard_connection_error(exc, dashboard_url)
+            data = response.json()
 
-        if response.status_code >= 400:
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                print(f"Uploaded '{data.get('filename', notebook_path)}' to {dashboard_url}")
+                print(f"  path: {data.get('path')}")
+                print(f"  overwritten: {data.get('overwritten')}")
 
-            raise RuntimeError(
-                f"Dashboard rejected the upload ({response.status_code}): "
-                f"{_extract_dashboard_error_detail(response)}"
-            )
-
-        data = response.json()
-
-        if args.json_output:
-            print(json.dumps(data, indent=2))
         else:
-            print(f"Uploaded '{data.get('filename', args.notebook)}' to {dashboard_url}")
-            print(f"  path: {data.get('path')}")
-            print(f"  overwritten: {data.get('overwritten')}")
+            # Multiple notebooks: POST /api/upload/batch instead of one
+            # POST /api/upload per file -- besides the round-trip saving,
+            # it means one bad file (invalid content, a 409 collision, an
+            # oversized file, ...) doesn't stop the rest from uploading,
+            # unlike a plain shell loop over single-file `upload` calls,
+            # which stops at the first non-zero exit.
+            opened_files = []
+
+            try:
+
+                for notebook_path in args.notebook:
+                    f = open(notebook_path, "rb")
+                    opened_files.append(f)
+
+                files_payload = [
+                    (
+                        "files",
+                        (os.path.basename(notebook_path), f, "application/json"),
+                    )
+                    for notebook_path, f in zip(args.notebook, opened_files)
+                ]
+
+                try:
+                    response = httpx.post(
+                        f"{dashboard_url}/api/upload/batch",
+                        params={"overwrite": args.overwrite},
+                        files=files_payload,
+                        timeout=args.timeout,
+                    )
+                except httpx.HTTPError as exc:
+                    raise _dashboard_connection_error(exc, dashboard_url)
+
+            finally:
+                for f in opened_files:
+                    f.close()
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the batch upload ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                for result in data.get("results", []):
+
+                    if result.get("status") == "success":
+                        print(
+                            f"Uploaded '{result.get('filename')}' "
+                            f"(overwritten: {result.get('overwritten')})"
+                        )
+                    else:
+                        print(f"Failed '{result.get('filename')}': {result.get('detail')}")
+
+                print(
+                    f"\n{data.get('succeeded_count', 0)} succeeded, "
+                    f"{data.get('failed_count', 0)} failed."
+                )
+
+            # A non-zero failed_count is a real, actionable outcome for a
+            # script driving this command -- e.g. a CI step seeding
+            # several notebooks that needs to know at least one didn't
+            # land, not just that the batch request itself was handled
+            # (which POST /api/upload/batch always reports as HTTP 200,
+            # per-file failures included).
+            if data.get("failed_count", 0) > 0:
+                sys.exit(1)
     elif args.command == "list":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -1538,9 +1619,22 @@ def main():
     # upload command (push a local notebook to a running dashboard)
     upload_parser = subparsers.add_parser(
         "upload",
-        help="Upload a notebook to a running dashboard instance's POST /api/upload."
+        help=(
+            "Upload one or more notebooks to a running dashboard "
+            "instance's POST /api/upload (single file) or POST "
+            "/api/upload/batch (multiple files)."
+        )
     )
-    upload_parser.add_argument("notebook", help="Path to the notebook file.")
+    upload_parser.add_argument(
+        "notebook", nargs="+",
+        help=(
+            "Path to the notebook file to upload. Multiple paths use "
+            "POST /api/upload/batch instead, so one bad file doesn't "
+            "abort the rest -- unlike a plain shell loop of single-file "
+            "`upload` invocations, which stops at the first non-zero "
+            "exit."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(upload_parser)
     upload_parser.add_argument(
         "--overwrite",
@@ -1558,8 +1652,10 @@ def main():
         action="store_true",
         dest="json_output",
         help=(
-            "Emit the dashboard's own JSON response "
-            "({\"status\", \"filename\", \"path\", \"overwritten\"}) "
+            "Emit the dashboard's own JSON response -- "
+            "{\"status\", \"filename\", \"path\", \"overwritten\"} for a "
+            "single file, or {\"status\", \"results\", "
+            "\"succeeded_count\", \"failed_count\"} for multiple -- "
             "instead of a human-readable summary, for scripting/automation."
         )
     )
