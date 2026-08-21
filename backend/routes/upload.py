@@ -26,6 +26,7 @@ from nbformat import ValidationError as NotebookValidationError
 from backend.compiler import (
     COMPILE_LOCK,
     COMPILE_METADATA_FILENAME,
+    _filter_functions_by_name,
     compile_notebook,
     hash_notebook_file,
     package_name_for_output_dir,
@@ -1919,7 +1920,18 @@ def inspect_notebook_endpoint(
 def compile_notebook_endpoint(
     data: dict
 ):
-    """Compile notebook to API."""
+    """Compile notebook to API.
+
+    "only"/"exclude" (each an optional list of function names) restrict
+    which functions become endpoints, the same --only/--exclude the CLI's
+    own local `compile`, `deploy`, `serve`, and `watch` commands already
+    accept (see _filter_functions_by_name, backend/compiler.py) -- before
+    this, a notebook uploaded to a running dashboard and compiled via this
+    endpoint (or the CLI's `remote-compile`, which calls it) always
+    exposed every function as its own endpoint, with no way to keep a
+    slow or still-broken function's endpoint out of the compiled app
+    short of deleting it from the notebook outright, then re-uploading.
+    """
 
     notebook_path = data.get(
         "notebook_path"
@@ -1930,6 +1942,33 @@ def compile_notebook_endpoint(
         raise HTTPException(
             status_code=400,
             detail="notebook_path is required"
+        )
+
+    only = data.get("only")
+    exclude = data.get("exclude")
+
+    # Mirrors the "tag"/"platform" string-type checks POST /api/deploy
+    # already makes on its own client-supplied fields: `only`/`exclude`
+    # flow straight into set(...) inside _filter_functions_by_name below,
+    # so a non-list value (a bare string, a number, ...) would otherwise
+    # either misbehave silently (a string iterates character-by-character)
+    # or crash with an unhandled TypeError, instead of a clean 400.
+    for field_name, field_value in (("only", only), ("exclude", exclude)):
+
+        if field_value is not None and (
+            not isinstance(field_value, list)
+            or not all(isinstance(item, str) for item in field_value)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name} must be a list of strings"
+            )
+
+    if only and exclude:
+
+        raise HTTPException(
+            status_code=400,
+            detail="only and exclude can't both be given -- choose one."
         )
 
     full_path = resolve_upload_path(notebook_path)
@@ -1962,7 +2001,9 @@ def compile_notebook_endpoint(
 
         compile_notebook(
             str(full_path),
-            GENERATED_DIR
+            GENERATED_DIR,
+            only=only,
+            exclude=exclude,
         )
 
         # inspect_notebook_data (backend/inspector.py) already computes
@@ -1998,6 +2039,28 @@ def compile_notebook_endpoint(
                 str(full_path),
                 GENERATED_DIR
             )
+
+        # inspect_notebook_data re-parses the notebook fresh, with no idea
+        # only/exclude just restricted which functions the compile above
+        # actually turned into endpoints -- the same fix-up the CLI's own
+        # `compile --json --only ...` already applies to its identical
+        # inspect_notebook_data call (see _dispatch_core_command in
+        # cli.py). Without it, this response's "functions"/"endpoints"
+        # would list every *other* function the notebook defines too,
+        # claiming endpoints exist for functions the compiled app doesn't
+        # actually have.
+        if only or exclude:
+
+            data["functions"] = _filter_functions_by_name(
+                data["functions"], only, exclude
+            )
+
+            kept_names = {func["name"] for func in data["functions"]}
+
+            data["endpoints"] = [
+                endpoint for endpoint in data["endpoints"]
+                if endpoint["path"].lstrip("/") in kept_names
+            ]
 
         return {
             "status": "success",
@@ -2035,6 +2098,25 @@ def compile_notebook_endpoint(
         raise HTTPException(
             status_code=400,
             detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+        )
+
+    except ValueError as e:
+
+        # _filter_functions_by_name (backend/compiler.py) raises this for
+        # an only/exclude name this notebook doesn't actually define --
+        # the request's own fault, not this server's, so this is a 400
+        # the caller can act on (fix the typo'd name and recompile), not
+        # a 500. Also covers compile_notebook_to_api's own "only and
+        # exclude can't both be given" ValueError, as a defense-in-depth
+        # backstop behind the identical check already made above, before
+        # the compile even starts. Ordered after ReservedFunctionNameError
+        # and MALFORMED_NOTEBOOK_ERRORS -- both include ValueError
+        # subclasses of their own (see their definitions) -- so this only
+        # ever catches a "plain" ValueError neither of those already
+        # handled with its own, more specific message.
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
         )
 
     except Exception as e:

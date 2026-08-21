@@ -1428,10 +1428,24 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        only = _parse_comma_separated_names(args.only)
+        exclude = _parse_comma_separated_names(args.exclude)
+
+        request_body = {"notebook_path": args.filename}
+
+        # Omitted entirely (rather than sent as null) when unset, so a
+        # dashboard's POST /api/compile sees exactly the same request
+        # shape it did before only/exclude existed for callers that never
+        # pass either.
+        if only:
+            request_body["only"] = only
+        if exclude:
+            request_body["exclude"] = exclude
+
         try:
             response = httpx.post(
                 f"{dashboard_url}/api/compile",
-                json={"notebook_path": args.filename},
+                json=request_body,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -2583,6 +2597,7 @@ def main():
         help="Filename of the notebook already uploaded to the dashboard, as reported by `list`."
     )
     _add_dashboard_url_and_timeout_arguments(remote_compile_parser)
+    _add_function_selection_arguments(remote_compile_parser)
     remote_compile_parser.add_argument(
         "--json",
         action="store_true",

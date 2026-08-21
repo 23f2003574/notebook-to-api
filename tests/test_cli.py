@@ -3159,6 +3159,104 @@ def test_remote_compile_command_reports_success(tmp_path, fake_dashboard):
     assert json.loads(handler.bodies[0]) == {"notebook_path": "nb.ipynb"}
 
 
+def test_remote_compile_command_passes_only_through_to_the_dashboard(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebook": "nb.ipynb",
+            "functions": [{"name": "add"}],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "skipped_functions": [],
+            "dependencies": [],
+            "generated_files": [],
+            "message": "Notebook compiled successfully",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-compile", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--only", "add, subtract",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "only": ["add", "subtract"],
+    }
+
+
+def test_remote_compile_command_passes_exclude_through_to_the_dashboard(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebook": "nb.ipynb",
+            "functions": [{"name": "add"}],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "skipped_functions": [],
+            "dependencies": [],
+            "generated_files": [],
+            "message": "Notebook compiled successfully",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-compile", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--exclude", "subtract",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "exclude": ["subtract"],
+    }
+
+
+def test_remote_compile_command_reports_the_dashboards_error_for_conflicting_only_and_exclude(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(
+            400,
+            {"detail": "only and exclude can't both be given -- choose one."},
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-compile", "nb.ipynb",
+            "--dashboard-url", dashboard_url,
+            "--only", "add", "--exclude", "subtract",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode != 0
+    assert "only and exclude" in proc.stdout + proc.stderr
+
+
 def test_remote_compile_command_flags_background_endpoints(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

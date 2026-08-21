@@ -2936,6 +2936,150 @@ def test_compile_endpoints_flag_background_functions_as_async():
     }
 
 
+def test_compile_only_restricts_endpoints_to_the_named_functions():
+    """POST /api/compile's "only" field mirrors the CLI's own local
+    --only: only the named function(s) should become endpoints, and the
+    response's "functions"/"endpoints" should reflect that restriction --
+    not just the compiled app on disk.
+    """
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "compile_only_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile",
+        json={"notebook_path": "compile_only_test.ipynb", "only": ["add"]},
+    )
+    assert compile_resp.status_code == 200
+
+    body = compile_resp.json()
+    assert [f["name"] for f in body["functions"]] == ["add"]
+    assert [e["path"] for e in body["endpoints"]] == ["/add"]
+
+    generated_app_source = (Path("generated") / "app.py").read_text()
+    assert "def add(" in generated_app_source
+    assert "def subtract(" not in generated_app_source
+
+
+def test_compile_exclude_removes_the_named_functions_endpoints():
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "compile_exclude_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile",
+        json={"notebook_path": "compile_exclude_test.ipynb", "exclude": ["subtract"]},
+    )
+    assert compile_resp.status_code == 200
+
+    body = compile_resp.json()
+    assert [f["name"] for f in body["functions"]] == ["add"]
+    assert [e["path"] for e in body["endpoints"]] == ["/add"]
+
+
+def test_compile_rejects_both_only_and_exclude():
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "compile_only_and_exclude_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile",
+        json={
+            "notebook_path": "compile_only_and_exclude_test.ipynb",
+            "only": ["add"],
+            "exclude": ["add"],
+        },
+    )
+    assert compile_resp.status_code == 400
+    assert "only and exclude" in compile_resp.json()["detail"]
+
+
+def test_compile_only_names_an_unknown_function():
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "compile_only_unknown_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile",
+        json={
+            "notebook_path": "compile_only_unknown_test.ipynb",
+            "only": ["does_not_exist"],
+        },
+    )
+    assert compile_resp.status_code == 400
+    assert "does_not_exist" in compile_resp.json()["detail"]
+
+
+def test_compile_rejects_a_non_list_only_field():
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "compile_bad_only_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile",
+        json={"notebook_path": "compile_bad_only_test.ipynb", "only": "add"},
+    )
+    assert compile_resp.status_code == 400
+    assert "only" in compile_resp.json()["detail"]
+
+
 def test_compile_response_reports_the_dependencies_actually_pinned_in_requirements_txt():
     """Before this, /api/compile's response had no "dependencies" field
     at all -- a dashboard frontend showing "here's what your notebook
