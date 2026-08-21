@@ -3789,6 +3789,166 @@ def test_versions_command_reports_a_clean_error_when_the_dashboard_is_unreachabl
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def _versions_diff_notebook_bytes(function_source):
+    return json.dumps(
+        {
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [
+                {
+                    "cell_type": "code",
+                    "execution_count": None,
+                    "metadata": {},
+                    "outputs": [],
+                    "source": function_source,
+                }
+            ],
+        }
+    ).encode("utf-8")
+
+
+def test_versions_diff_command_is_registered():
+
+    proc = _run_cli(["versions", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "diff" in proc.stdout
+
+
+def test_versions_diff_command_compares_a_version_against_the_current_notebook(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        # First request: the "old" side (the version itself).
+        _raw_response(
+            200,
+            _versions_diff_notebook_bytes(
+                "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+                "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+            ),
+        ),
+        # Second request: the "new" side -- no --against, so the
+        # notebook's current live content via GET /api/notebooks/{filename}.
+        _raw_response(
+            200,
+            _versions_diff_notebook_bytes(
+                "def add(a: int, b: int, c: int = 0) -> int:\n    return a + b + c\n\n"
+                "def multiply(a: int, b: int) -> int:\n    return a * b\n"
+            ),
+        ),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "diff", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Comparing version 'v1.ipynb'" in proc.stdout
+    assert "current live content" in proc.stdout
+    assert "Added 1 endpoint(s):" in proc.stdout
+    assert "POST /multiply" in proc.stdout
+    assert "Removed 1 endpoint(s):" in proc.stdout
+    assert "POST /subtract" in proc.stdout
+    assert "Changed 1 endpoint(s):" in proc.stdout
+    assert "POST /add" in proc.stdout
+    assert handler.requests == [
+        "/api/notebooks/nb.ipynb/versions/v1.ipynb",
+        "/api/notebooks/nb.ipynb",
+    ]
+
+
+def test_versions_diff_command_compares_two_versions_via_against(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    function_source = "def add(a: int, b: int) -> int:\n    return a + b\n"
+    handler.responses = [
+        _raw_response(200, _versions_diff_notebook_bytes(function_source)),
+        _raw_response(200, _versions_diff_notebook_bytes(function_source)),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "diff", "nb.ipynb", "v1.ipynb",
+            "--against", "v2.ipynb", "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Comparing version 'v1.ipynb'" in proc.stdout
+    assert "against version 'v2.ipynb'" in proc.stdout
+    assert "No changes to the compiled API surface." in proc.stdout
+    assert handler.requests == [
+        "/api/notebooks/nb.ipynb/versions/v1.ipynb",
+        "/api/notebooks/nb.ipynb/versions/v2.ipynb",
+    ]
+
+
+def test_versions_diff_command_json_flag_emits_machine_readable_output(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    function_source = "def add(a: int, b: int) -> int:\n    return a + b\n"
+    handler.responses = [
+        _raw_response(200, _versions_diff_notebook_bytes(function_source)),
+        _raw_response(200, _versions_diff_notebook_bytes(function_source)),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "diff", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data == {"added": [], "removed": [], "changed": [], "unchanged": ["add"]}
+
+
+def test_versions_diff_command_reports_a_clean_error_for_a_missing_version(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook version not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "diff", "nb.ipynb", "does-not-exist.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook version not found")
+
+
 def test_remote_files_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

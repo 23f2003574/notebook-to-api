@@ -1608,7 +1608,7 @@ def _dispatch_core_command(args):
                     f"{output_path} ({len(response.content)} bytes)"
                 )
 
-        else:  # args.versions_command == "restore"
+        elif args.versions_command == "restore":
 
             try:
                 response = httpx.post(
@@ -1635,6 +1635,79 @@ def _dispatch_core_command(args):
                     f"version '{data.get('restored_version_id', args.version_id)}' "
                     f"on {dashboard_url}"
                 )
+
+        else:  # args.versions_command == "diff"
+            # See `remote-diff` above for why these are imported here
+            # rather than at module scope.
+            import tempfile
+
+            def _fetch_version_content(version_id):
+                """GET one version_id's raw content (or, for version_id
+                None, the notebook's own current live content) --
+                shared so the "old" and "against"/current sides below go
+                through identical request/error handling.
+                """
+                url = (
+                    f"{dashboard_url}/api/notebooks/{args.filename}"
+                    if version_id is None
+                    else f"{dashboard_url}/api/notebooks/{args.filename}/versions/{version_id}"
+                )
+
+                try:
+                    fetch_response = httpx.get(url, timeout=args.timeout)
+                except httpx.HTTPError as exc:
+                    raise _dashboard_connection_error(exc, dashboard_url)
+
+                if fetch_response.status_code >= 400:
+
+                    raise RuntimeError(
+                        f"Dashboard rejected the request "
+                        f"({fetch_response.status_code}): "
+                        f"{_extract_dashboard_error_detail(fetch_response)}"
+                    )
+
+                return fetch_response.content
+
+            old_content = _fetch_version_content(args.version_id)
+            new_content = _fetch_version_content(args.against)
+
+            # Both sides downloaded to real temp files, not held in memory
+            # and parsed some other way, so diff_notebook_functions can
+            # reuse its own existing load_notebook(path)-based pipeline
+            # unchanged -- the same reasoning `remote-diff` above already
+            # applies to its own single downloaded side.
+            old_fd, old_path = tempfile.mkstemp(suffix=".ipynb")
+            new_fd, new_path = tempfile.mkstemp(suffix=".ipynb")
+
+            try:
+
+                with os.fdopen(old_fd, "wb") as f:
+                    f.write(old_content)
+
+                with os.fdopen(new_fd, "wb") as f:
+                    f.write(new_content)
+
+                diff = diff_notebook_functions(old_path, new_path)
+
+            finally:
+                os.remove(old_path)
+                os.remove(new_path)
+
+            if args.json_output:
+                print(json.dumps(diff, indent=2))
+            else:
+
+                against_label = (
+                    f"version '{args.against}'" if args.against
+                    else f"'{args.filename}''s current live content"
+                )
+
+                print(
+                    f"Comparing version '{args.version_id}' of "
+                    f"'{args.filename}' against {against_label} on "
+                    f"{dashboard_url}"
+                )
+                print_notebook_diff(diff)
     elif args.command == "remote-files":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -2717,6 +2790,55 @@ def main():
             "Emit the dashboard's own JSON response "
             "({\"status\", \"filename\", \"restored_version_id\"}) "
             "instead of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    # versions diff (compare a snapshotted version's compiled API surface
+    # against the notebook's current live content -- or another
+    # snapshotted version -- before deciding whether to `versions
+    # restore` it. Reuses `diff`'s own diff_notebook_functions/
+    # print_notebook_diff exactly as `remote-diff` already does, just
+    # with both sides potentially coming from GET
+    # /api/notebooks/{filename}/versions/{version_id} instead of one side
+    # always being a local file)
+    versions_diff_parser = versions_subparsers.add_parser(
+        "diff",
+        help=(
+            "Compare a notebook's snapshotted version against its current "
+            "live content (or another snapshotted version), via GET "
+            "/api/notebooks/{filename}/versions/{version_id}."
+        )
+    )
+    versions_diff_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    versions_diff_parser.add_argument(
+        "version_id",
+        help=(
+            "The (older) version id to use as the baseline, as reported "
+            "by `versions list`."
+        )
+    )
+    versions_diff_parser.add_argument(
+        "--against",
+        default=None,
+        metavar="VERSION_ID",
+        help=(
+            "Another version id to compare `version_id` against, instead "
+            "of the notebook's current live content (the default) -- "
+            "e.g. to see what changed between two older snapshots without "
+            "restoring either one first."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(versions_diff_parser)
+    versions_diff_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit machine-readable JSON ({\"added\", \"removed\", "
+            "\"changed\", \"unchanged\"}) instead of the human-readable "
+            "report, for scripting/automation."
         )
     )
 
