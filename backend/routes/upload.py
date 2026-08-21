@@ -1643,6 +1643,132 @@ def rename_notebook(filename: str, data: dict):
         }
 
 
+@router.post("/notebooks/{filename}/copy")
+def copy_notebook(filename: str, data: dict):
+    """Duplicate a previously uploaded notebook under a new filename,
+    leaving the source notebook (and whatever it currently backs in
+    GENERATED_DIR) completely untouched.
+
+    Before this, the only way to get an independent, editable variant of
+    an uploaded notebook -- e.g. to try a risky change without touching a
+    known-good "production" copy, or to start a new notebook from an
+    existing one as a template -- was to download it and re-upload it
+    under a new name by hand. PATCH /api/notebooks/{filename} (rename)
+    doesn't help here: it moves the one notebook it operates on, it
+    doesn't leave a second copy behind.
+
+    Same "new_filename ends in .ipynb"/"reject a same-named collision
+    unless 'overwrite': true is passed" validation as rename_notebook
+    above, and reuses its own _rename_lock_for for the identical
+    destination-filename check-then-write race that closes -- copying
+    onto a destination is exactly the same kind of check-then-write as
+    renaming onto one, just via shutil.copy2 instead of os.replace, and
+    with the source left behind afterward instead of gone.
+
+    Unlike a rename, copying `filename` onto itself is never a
+    meaningful no-op -- there's no "new" copy to speak of -- so it's
+    rejected with 400 rather than silently succeeding.
+
+    A notebook's tags (see PUT /api/notebooks/{filename}/tags) are copied
+    along with it: they describe the notebook's *content* (e.g.
+    "production", "v2"), and the copy starts out as an identical copy of
+    that content, so inheriting them is more useful than the copy
+    silently reading back as untagged. Its version history (see GET/POST
+    /api/notebooks/{filename}/versions[/{version_id}[/restore]]) is
+    deliberately NOT copied, though -- that history belongs to
+    `filename`'s own past overwrites, not to content in the abstract, and
+    the new copy has no overwrites of its own yet to have a history of.
+    If "overwrite": true replaces an existing destination notebook, that
+    destination's own previous tags and version history are discarded
+    along with the rest of the file it belonged to, the same overwrite
+    semantics rename_notebook already applies.
+
+    Never touches .compile_metadata.json: the source notebook's own
+    identity (and whatever it currently backs in GENERATED_DIR, if
+    anything) doesn't change at all just because a copy of it now exists
+    elsewhere. If "overwrite": true happens to replace the notebook
+    currently backing GENERATED_DIR with a copy of a *different*
+    notebook's content, GET /api/notebooks' own existing
+    "notebook_changed_since_compile" staleness check (a content-hash
+    comparison, not an identity one) already reports that correctly with
+    no special-casing needed here -- the same way it already reports
+    staleness for a currently-compiled notebook edited via POST
+    /api/upload?overwrite=true.
+    """
+
+    new_filename = data.get("new_filename")
+
+    if not isinstance(new_filename, str) or not new_filename:
+
+        raise HTTPException(
+            status_code=400,
+            detail="new_filename is required"
+        )
+
+    if not new_filename.endswith(".ipynb"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="new_filename must be a .ipynb notebook"
+        )
+
+    overwrite = bool(data.get("overwrite", False))
+
+    source_path = resolve_upload_path(filename)
+
+    if not source_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    dest_path = resolve_upload_path(new_filename)
+
+    if dest_path == source_path:
+
+        raise HTTPException(
+            status_code=400,
+            detail="new_filename must be different from filename"
+        )
+
+    with _rename_lock_for(dest_path.name):
+
+        if dest_path.exists() and not overwrite:
+
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"A notebook named '{new_filename}' already exists. "
+                    'Pass "overwrite": true to replace it.'
+                )
+            )
+
+        try:
+
+            shutil.copy2(source_path, dest_path)
+
+        except OSError as e:
+
+            raise HTTPException(
+                status_code=500,
+                detail=str(e)
+            )
+
+        dest_versions_dir = _notebook_versions_dir(dest_path.name)
+
+        if dest_versions_dir.exists():
+            shutil.rmtree(dest_versions_dir)
+
+        _write_notebook_tags(dest_path.name, _read_notebook_tags(source_path.name))
+
+        return {
+            "status": "success",
+            "filename": filename,
+            "new_filename": new_filename,
+        }
+
+
 @router.get("/notebooks/{filename}/tags")
 def get_notebook_tags(filename: str):
     """Return the tags currently recorded for a previously uploaded

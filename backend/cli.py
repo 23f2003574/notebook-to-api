@@ -339,7 +339,7 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
     "export-curl", "serve", "watch", "deploy", "diff", "upload", "list",
-    "download", "delete", "rename", "tags", "remote-compile", "remote-build",
+    "download", "delete", "rename", "copy", "tags", "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "remote-export", "remote-deploy",
     "status", "remote-validate", "remote-curl",
 })
@@ -1364,6 +1364,38 @@ def _dispatch_core_command(args):
             )
             if data.get("was_currently_compiled"):
                 print("  note: this was the notebook backing the currently compiled app.")
+    elif args.command == "copy":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.post(
+                f"{dashboard_url}/api/notebooks/{args.filename}/copy",
+                json={"new_filename": args.new_filename, "overwrite": args.overwrite},
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            print(
+                f"Copied '{data.get('filename', args.filename)}' to "
+                f"'{data.get('new_filename', args.new_filename)}' on {dashboard_url}"
+            )
     elif args.command == "tags":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -2771,6 +2803,43 @@ def main():
             "({\"status\", \"filename\", \"new_filename\", "
             "\"was_currently_compiled\"}) instead of a human-readable "
             "summary, for scripting/automation."
+        )
+    )
+
+    # copy command (duplicate a notebook already on a running dashboard,
+    # leaving the source notebook untouched -- unlike `rename`, which
+    # moves the one notebook it operates on)
+    copy_parser = subparsers.add_parser(
+        "copy",
+        help="Duplicate a notebook already on a running dashboard instance's POST /api/notebooks/{filename}/copy."
+    )
+    copy_parser.add_argument(
+        "filename", help="Filename of the notebook to duplicate, as reported by `list`."
+    )
+    copy_parser.add_argument(
+        "new_filename",
+        help="Filename for the new copy (must end in .ipynb)."
+    )
+    _add_dashboard_url_and_timeout_arguments(copy_parser)
+    copy_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Replace an existing notebook already at new_filename, "
+            "mirroring POST /api/notebooks/{filename}/copy's own "
+            "\"overwrite\": true -- without this, copying onto an "
+            "existing filename is rejected with a 409, exactly as it "
+            "already is through that endpoint directly."
+        )
+    )
+    copy_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"filename\", \"new_filename\"}) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 
