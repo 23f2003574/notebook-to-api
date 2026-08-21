@@ -38,6 +38,7 @@ from backend.generator.api_generator import (
 from backend.inspector import (
     EXCLUDED_GENERATED_DIR_NAMES,
     EXCLUDED_GENERATED_FILE_NAMES,
+    _extract_notebook_functions,
     inspect_notebook_data,
     list_generated_files,
 )
@@ -1122,6 +1123,86 @@ def delete_tag(tag: str):
         "tag": tag,
         "affected_notebooks": affected_notebooks,
         "notebook_count": len(affected_notebooks),
+    }
+
+
+@router.get("/functions")
+def search_functions(search: str = None):
+    """Find which uploaded notebooks define a function whose name
+    contains `search` (case-insensitive), across every notebook in
+    UPLOAD_DIR at once.
+
+    GET /api/notebooks?search=<text> already matches a substring of a
+    notebook's own *filename* -- but a notebook's filename tells a caller
+    nothing about what functions it actually defines. Before this,
+    answering "which of my uploaded notebooks already has a function
+    called `train_model`" (before writing a duplicate under a different
+    notebook, or auditing which notebooks would expose a `/train_model`
+    endpoint once compiled) meant downloading and inspecting every
+    uploaded notebook one at a time -- POST /api/inspect works on exactly
+    one notebook_path per call, with nothing to search across the whole
+    UPLOAD_DIR at once.
+
+    Reuses inspector._extract_notebook_functions -- the same
+    extract-every-cell/deduplicate pipeline inspect_notebook_data's own
+    "functions" field already runs on a single notebook -- so a match
+    here reports the exact same function shape (name, args, return_type,
+    is_async, ...) that endpoint already would for the same notebook,
+    with nothing about what counts as a "function" redefined for this
+    endpoint. Only ever reads notebooks, never GENERATED_DIR or
+    UPLOAD_DIR's tag sidecars -- no COMPILE_LOCK needed, unlike routes
+    that walk GENERATED_DIR while a concurrent compile could be rewriting
+    it.
+
+    A notebook that fails to parse (MALFORMED_NOTEBOOK_ERRORS -- e.g. one
+    tampered with directly on disk, outside of POST /api/upload's own
+    validation) is silently skipped rather than failing this entire
+    bulk scan over one unrelated notebook's own bad content -- the same
+    "one bad entry doesn't sink a bulk listing" precedent
+    _read_notebook_tags already sets for a corrupt tags sidecar file.
+    """
+
+    if not search:
+
+        raise HTTPException(
+            status_code=400,
+            detail="search is required"
+        )
+
+    upload_root = Path(UPLOAD_DIR)
+
+    search_lower = search.lower()
+
+    matches = []
+
+    for entry in sorted(upload_root.iterdir()):
+
+        if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        try:
+
+            functions = _extract_notebook_functions(str(entry))
+
+        except MALFORMED_NOTEBOOK_ERRORS:
+            continue
+
+        matching_functions = [
+            func for func in functions
+            if search_lower in func["name"].lower()
+        ]
+
+        if matching_functions:
+            matches.append({
+                "filename": entry.name,
+                "functions": matching_functions,
+            })
+
+    return {
+        "status": "success",
+        "search": search,
+        "matches": matches,
+        "notebook_count": len(matches),
     }
 
 

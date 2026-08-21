@@ -2817,6 +2817,96 @@ def test_delete_tag_removes_the_sidecar_file_when_it_was_the_only_tag():
     assert not _tags_sidecar_path("tags_bulk_delete_only_tag.ipynb").is_file()
 
 
+def test_search_functions_finds_notebooks_with_a_matching_function_name():
+
+    content_a = _notebook_bytes(
+        "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+    content_b = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={"file": ("search_functions_a.ipynb", io.BytesIO(content_a), "application/json")},
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("search_functions_b.ipynb", io.BytesIO(content_b), "application/json")},
+    )
+
+    resp = client.get("/api/functions?search=train")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["search"] == "train"
+    assert body["notebook_count"] == 1
+    assert body["matches"][0]["filename"] == "search_functions_a.ipynb"
+    assert [f["name"] for f in body["matches"][0]["functions"]] == ["train_model"]
+
+
+def test_search_functions_is_case_insensitive():
+
+    content = _notebook_bytes(
+        "def TrainModel(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={"file": ("search_functions_case.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get("/api/functions?search=trainmodel")
+
+    assert resp.status_code == 200
+    assert [m["filename"] for m in resp.json()["matches"]] == ["search_functions_case.ipynb"]
+
+
+def test_search_functions_reports_no_matches():
+
+    resp = client.get("/api/functions?search=this_function_name_does_not_exist_anywhere")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "success",
+        "search": "this_function_name_does_not_exist_anywhere",
+        "matches": [],
+        "notebook_count": 0,
+    }
+
+
+def test_search_functions_requires_a_search_value():
+
+    resp = client.get("/api/functions")
+
+    assert resp.status_code == 400
+
+
+def test_search_functions_skips_a_malformed_notebook_file():
+
+    filename = "search_functions_malformed.ipynb"
+    file_path = os.path.join(UPLOAD_DIR, filename)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("not valid json at all")
+
+    content = _notebook_bytes(
+        "def search_functions_clean_marker_fn(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("search_functions_clean.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get("/api/functions?search=search_functions_clean_marker_fn")
+
+    assert resp.status_code == 200
+    assert [m["filename"] for m in resp.json()["matches"]] == ["search_functions_clean.ipynb"]
+
+    os.remove(file_path)
+
+
 def test_list_notebooks_reports_tags_for_each_entry():
 
     _upload_sample_notebook("tags_in_list.ipynb")

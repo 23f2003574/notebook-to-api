@@ -2464,6 +2464,118 @@ def test_info_command_reports_a_clean_error_when_the_dashboard_is_unreachable():
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_search_functions_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "search-functions" in proc.stdout
+
+
+def test_search_functions_command_prints_matching_notebooks(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "search": "train",
+        "matches": [
+            {
+                "filename": "a.ipynb",
+                "functions": [{"name": "train_model"}],
+            },
+            {
+                "filename": "b.ipynb",
+                "functions": [{"name": "retrain"}],
+            },
+        ],
+        "notebook_count": 2,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["search-functions", "train", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "a.ipynb: train_model" in proc.stdout
+    assert "b.ipynb: retrain" in proc.stdout
+    assert "2 notebook(s) matched." in proc.stdout
+    assert handler.requests == ["/api/functions?search=train"]
+
+
+def test_search_functions_command_reports_no_matches(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "search": "nonexistent",
+        "matches": [],
+        "notebook_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["search-functions", "nonexistent", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No notebooks define a function matching 'nonexistent'." in proc.stdout
+
+
+def test_search_functions_command_json_flag_emits_the_dashboards_own_response(
+    fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "search": "train",
+        "matches": [{"filename": "a.ipynb", "functions": [{"name": "train_model"}]}],
+        "notebook_count": 1,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["search-functions", "train", "--dashboard-url", dashboard_url, "--json"],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_search_functions_command_reports_a_clean_error_for_an_empty_search(
+    fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(400, {"detail": "search is required"})
+    ]
+
+    proc = _run_cli(
+        ["search-functions", "", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    _assert_clean_cli_error(proc, "search is required")
+
+
+def test_search_functions_command_reports_a_clean_error_when_the_dashboard_is_unreachable():
+
+    proc = _run_cli(
+        [
+            "search-functions", "train",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=Path.cwd(),
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_download_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

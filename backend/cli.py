@@ -339,6 +339,7 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
     "export-curl", "serve", "watch", "deploy", "diff", "upload", "list", "info",
+    "search-functions",
     "download", "delete", "rename", "copy", "tags", "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "remote-export", "remote-deploy",
     "status", "remote-validate", "remote-curl",
@@ -1244,6 +1245,47 @@ def _dispatch_core_command(args):
                     "  changed since compile: "
                     f"{data.get('notebook_changed_since_compile')}"
                 )
+    elif args.command == "search-functions":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/functions",
+                params={"search": args.search},
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            matches = data.get("matches", [])
+
+            if not matches:
+                print(f"No notebooks define a function matching '{args.search}'.")
+            else:
+                for match in matches:
+                    function_names = ", ".join(
+                        func["name"] for func in match["functions"]
+                    )
+                    print(f"{match['filename']}: {function_names}")
+
+                print(f"\n{len(matches)} notebook(s) matched.")
     elif args.command == "download":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -2867,6 +2909,29 @@ def main():
             "\"filename\", \"size_bytes\", \"modified_at\", "
             "\"currently_compiled\", \"tags\", ...}) instead of a "
             "human-readable summary, for scripting/automation."
+        )
+    )
+
+    # search-functions command (find which uploaded notebooks define a
+    # matching function, across every notebook on the dashboard at once)
+    search_functions_parser = subparsers.add_parser(
+        "search-functions",
+        help="Find which notebooks already on a running dashboard instance define a matching function, via its GET /api/functions."
+    )
+    search_functions_parser.add_argument(
+        "search",
+        help="Case-insensitive substring to match against every uploaded notebook's own function names."
+    )
+    _add_dashboard_url_and_timeout_arguments(search_functions_parser)
+    search_functions_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"search\", \"matches\": [{\"filename\", \"functions\"}, ...], "
+            "\"notebook_count\"}) instead of a human-readable summary, "
+            "for scripting/automation."
         )
     )
 
