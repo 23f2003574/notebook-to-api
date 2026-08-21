@@ -1759,7 +1759,7 @@ def _dispatch_core_command(args):
                     f"on {dashboard_url}"
                 )
 
-        else:  # args.versions_command == "diff"
+        elif args.versions_command == "diff":
             # See `remote-diff` above for why these are imported here
             # rather than at module scope.
             import tempfile
@@ -1831,6 +1831,47 @@ def _dispatch_core_command(args):
                     f"{dashboard_url}"
                 )
                 print_notebook_diff(diff)
+
+        else:  # args.versions_command == "delete"
+
+            if not args.yes:
+                # DELETE /api/notebooks/{filename}/versions/{version_id}
+                # (routes/upload.py) has no confirmation step of its own
+                # and is irreversible -- the same reasoning `delete`'s own
+                # single-filename path above already applies.
+                answer = input(
+                    f"Permanently delete version '{args.version_id}' of "
+                    f"'{args.filename}' from {dashboard_url}? [y/N] "
+                )
+                if answer.strip().lower() not in ("y", "yes"):
+                    print("Aborted.")
+                    return
+
+            try:
+                response = httpx.delete(
+                    f"{dashboard_url}/api/notebooks/{args.filename}/versions/{args.version_id}",
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                print(
+                    f"Deleted version "
+                    f"'{data.get('deleted_version_id', args.version_id)}' of "
+                    f"'{data.get('filename', args.filename)}' on {dashboard_url}"
+                )
     elif args.command == "remote-files":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -3085,6 +3126,40 @@ def main():
             "Emit the dashboard's own JSON response "
             "({\"status\", \"filename\", \"restored_version_id\"}) "
             "instead of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    versions_delete_parser = versions_subparsers.add_parser(
+        "delete",
+        help="Permanently discard one of a notebook's snapshotted versions via DELETE /api/notebooks/{filename}/versions/{version_id}."
+    )
+    versions_delete_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    versions_delete_parser.add_argument(
+        "version_id",
+        help="Version id to permanently discard, as reported by `versions list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(versions_delete_parser)
+    versions_delete_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Confirm the deletion without an interactive prompt. Without "
+            "this, `versions delete` asks for a y/N confirmation on the "
+            "terminal before sending the request -- DELETE "
+            "/api/notebooks/{filename}/versions/{version_id} itself has "
+            "no confirmation step of its own, and is irreversible."
+        )
+    )
+    versions_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"filename\", \"deleted_version_id\"}) instead "
+            "of a human-readable summary, for scripting/automation."
         )
     )
 

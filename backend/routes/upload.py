@@ -1994,6 +1994,70 @@ def restore_notebook_version(filename: str, version_id: str):
     }
 
 
+@router.delete("/notebooks/{filename}/versions/{version_id}")
+def delete_notebook_version(filename: str, version_id: str):
+    """Permanently discard one of a notebook's snapshotted previous
+    versions, by the "version_id" GET
+    /api/notebooks/{filename}/versions already lists.
+
+    _prune_notebook_versions (above) already discards a notebook's
+    *oldest* snapshots once it accumulates more than MAX_NOTEBOOK_VERSIONS
+    -- but that's an automatic, age-based eviction with no way for a
+    caller to act sooner or more selectively: purging a specific
+    snapshot immediately (e.g. one that turns out to contain something
+    sensitive, without waiting for MAX_NOTEBOOK_VERSIONS more overwrites
+    to age it out) or discarding a handful of known-bad snapshots to keep
+    `versions list` legible had no way to happen at all short of waiting.
+
+    Reuses _resolve_path_within for the same traversal protection
+    GET/POST .../versions/{version_id} already apply to `version_id`, and
+    _version_lock_for for the same reason restore_notebook_version's own
+    write to this notebook's version history is already held under it --
+    without it, this could race restore_notebook_version's own
+    snapshot-then-copy sequence, deleting the very version_id it's in the
+    middle of copying from.
+
+    Deliberately narrower than DELETE /api/notebooks (which removes a
+    notebook's version history *as a side effect* of removing the
+    notebook itself): this only ever removes one snapshot, never the
+    notebook it belongs to, and has no bulk/"delete every version"
+    equivalent -- an operator wanting that already has it, via `versions
+    list` piped into one call per version_id.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    versions_dir = _notebook_versions_dir(file_path.name)
+
+    version_path = _resolve_path_within(
+        str(versions_dir), version_id, "notebook version"
+    )
+
+    if not version_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook version not found"
+        )
+
+    with _version_lock_for(file_path.name):
+
+        version_path.unlink()
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "deleted_version_id": version_id,
+    }
+
+
 @router.post("/inspect")
 def inspect_notebook_endpoint(
     data: dict

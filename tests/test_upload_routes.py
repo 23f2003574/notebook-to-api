@@ -2970,6 +2970,97 @@ def test_restore_notebook_version_returns_404_for_an_unknown_version_id():
     assert resp.status_code == 404
 
 
+def test_delete_notebook_version_removes_only_that_snapshot():
+
+    filename = "versions_delete.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(versions) == 2
+    version_id_to_delete = versions[0]["version_id"]
+    version_id_to_keep = versions[1]["version_id"]
+
+    delete_resp = client.delete(
+        f"/api/notebooks/{filename}/versions/{version_id_to_delete}"
+    )
+
+    assert delete_resp.status_code == 200
+    assert delete_resp.json() == {
+        "status": "success",
+        "filename": filename,
+        "deleted_version_id": version_id_to_delete,
+    }
+
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert [v["version_id"] for v in remaining] == [version_id_to_keep]
+
+    assert client.get(
+        f"/api/notebooks/{filename}/versions/{version_id_to_delete}"
+    ).status_code == 404
+
+
+def test_delete_notebook_version_returns_404_for_missing_notebook():
+
+    resp = client.delete(
+        "/api/notebooks/versions_delete_missing_notebook.ipynb/versions/whatever.ipynb"
+    )
+
+    assert resp.status_code == 404
+
+
+def test_delete_notebook_version_returns_404_for_an_unknown_version_id():
+
+    _upload_sample_notebook("versions_delete_unknown_id.ipynb")
+
+    resp = client.delete(
+        "/api/notebooks/versions_delete_unknown_id.ipynb/versions/nope.ipynb"
+    )
+
+    assert resp.status_code == 404
+
+
+def test_delete_notebook_version_rejects_an_absolute_version_id():
+
+    _upload_sample_notebook("versions_delete_traversal.ipynb")
+
+    resp = client.delete(
+        "/api/notebooks/versions_delete_traversal.ipynb/versions/%2Fetc%2Fpasswd"
+    )
+
+    assert resp.status_code in (400, 404)
+    assert "root:" not in resp.text
+
+
 def test_notebook_versions_are_pruned_beyond_the_configured_maximum():
 
     filename = "versions_pruned.ipynb"
