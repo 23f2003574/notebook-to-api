@@ -338,7 +338,7 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 # commands through _dispatch_core_command's shared error handling.
 _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
-    "export-curl", "serve", "watch", "deploy", "diff", "upload", "list",
+    "export-curl", "serve", "watch", "deploy", "diff", "upload", "list", "info",
     "download", "delete", "rename", "copy", "tags", "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "remote-export", "remote-deploy",
     "status", "remote-validate", "remote-curl",
@@ -1206,6 +1206,44 @@ def _dispatch_core_command(args):
                 )
             else:
                 print(f"\n{total_count} notebook(s) total.")
+    elif args.command == "info":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/notebooks/{args.filename}/info",
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"{data['filename']}  ({data['size_bytes']} bytes)")
+            print(f"  modified: {data['modified_at']}")
+            print(f"  tags: {', '.join(data['tags']) if data['tags'] else '(none)'}")
+            print(f"  currently compiled: {data['currently_compiled']}")
+
+            if data['currently_compiled']:
+                print(f"  compiled at: {data.get('compiled_at')}")
+                print(
+                    "  changed since compile: "
+                    f"{data.get('notebook_changed_since_compile')}"
+                )
     elif args.command == "download":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -2757,6 +2795,28 @@ def main():
             "({\"status\", \"notebooks\", \"total_count\", \"limit\", "
             "\"offset\"}) instead of a human-readable listing, for "
             "scripting/automation."
+        )
+    )
+
+    # info command (a single notebook's own metadata, without listing/
+    # filtering every notebook on the dashboard just to find it)
+    info_parser = subparsers.add_parser(
+        "info",
+        help="Show one notebook's own metadata via a running dashboard instance's GET /api/notebooks/{filename}/info."
+    )
+    info_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(info_parser)
+    info_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"filename\", \"size_bytes\", \"modified_at\", "
+            "\"currently_compiled\", \"tags\", ...}) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 

@@ -1662,6 +1662,78 @@ def test_get_notebook_rejects_a_filename_with_an_embedded_null_byte():
     assert resp.status_code == 400
 
 
+def test_get_notebook_info_matches_the_notebooks_own_entry_in_the_list():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={"file": ("info_test.ipynb", io.BytesIO(content), "application/json")},
+    )
+    assert upload_resp.status_code == 200
+    client.put("/api/notebooks/info_test.ipynb/tags", json={"tags": ["scratch"]})
+
+    info_resp = client.get("/api/notebooks/info_test.ipynb/info")
+    assert info_resp.status_code == 200
+
+    info_body = info_resp.json()
+    assert info_body["status"] == "success"
+    assert info_body["filename"] == "info_test.ipynb"
+    assert info_body["tags"] == ["scratch"]
+    assert info_body["currently_compiled"] is False
+    assert "notebook_changed_since_compile" not in info_body
+    assert "compiled_at" not in info_body
+
+    list_entry = next(
+        nb for nb in client.get("/api/notebooks").json()["notebooks"]
+        if nb["filename"] == "info_test.ipynb"
+    )
+    assert {k: v for k, v in info_body.items() if k != "status"} == list_entry
+
+
+def test_get_notebook_info_reports_currently_compiled_fields():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={"file": ("info_compiled_test.ipynb", io.BytesIO(content), "application/json")},
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "info_compiled_test.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    info_resp = client.get("/api/notebooks/info_compiled_test.ipynb/info")
+    assert info_resp.status_code == 200
+
+    info_body = info_resp.json()
+    assert info_body["currently_compiled"] is True
+    assert info_body["notebook_changed_since_compile"] is False
+    assert info_body["compiled_at"] is not None
+
+
+def test_get_notebook_info_returns_404_for_missing_file():
+
+    resp = client.get("/api/notebooks/does_not_exist_at_all.ipynb/info")
+
+    assert resp.status_code == 404
+
+
+def test_get_notebook_info_rejects_absolute_filename():
+
+    resp = client.get("/api/notebooks/%2Fetc%2Fpasswd/info")
+
+    assert resp.status_code in (400, 404)
+    assert "root:" not in resp.text
+
+
 def test_delete_notebook_rejects_a_filename_with_an_embedded_null_byte():
 
     resp = client.delete("/api/notebooks/nb%00.ipynb")

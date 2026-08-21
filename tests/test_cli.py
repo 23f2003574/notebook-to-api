@@ -2336,6 +2336,134 @@ def test_list_command_reports_a_clean_error_when_the_dashboard_is_unreachable():
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_info_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "info" in proc.stdout
+
+
+def test_info_command_prints_a_notebooks_metadata(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "filename": "add.ipynb",
+        "size_bytes": 123,
+        "modified_at": "2026-01-01T00:00:00+00:00",
+        "currently_compiled": False,
+        "tags": ["production", "v2"],
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["info", "add.ipynb", "--dashboard-url", dashboard_url], cwd=Path.cwd()
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "add.ipynb  (123 bytes)" in proc.stdout
+    assert "tags: production, v2" in proc.stdout
+    assert "currently compiled: False" in proc.stdout
+    assert handler.requests == ["/api/notebooks/add.ipynb/info"]
+
+
+def test_info_command_reports_no_tags(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "filename": "add.ipynb",
+        "size_bytes": 123,
+        "modified_at": "2026-01-01T00:00:00+00:00",
+        "currently_compiled": False,
+        "tags": [],
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["info", "add.ipynb", "--dashboard-url", dashboard_url], cwd=Path.cwd()
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "tags: (none)" in proc.stdout
+
+
+def test_info_command_reports_currently_compiled_fields(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "filename": "add.ipynb",
+        "size_bytes": 123,
+        "modified_at": "2026-01-01T00:00:00+00:00",
+        "currently_compiled": True,
+        "tags": [],
+        "notebook_changed_since_compile": False,
+        "compiled_at": "2026-01-01T00:05:00+00:00",
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["info", "add.ipynb", "--dashboard-url", dashboard_url], cwd=Path.cwd()
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "currently compiled: True" in proc.stdout
+    assert "compiled at: 2026-01-01T00:05:00+00:00" in proc.stdout
+    assert "changed since compile: False" in proc.stdout
+
+
+def test_info_command_json_flag_emits_the_dashboards_own_response(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "filename": "add.ipynb",
+        "size_bytes": 123,
+        "modified_at": "2026-01-01T00:00:00+00:00",
+        "currently_compiled": False,
+        "tags": [],
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["info", "add.ipynb", "--dashboard-url", dashboard_url, "--json"],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_info_command_reports_a_clean_error_for_a_missing_notebook(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook file not found"})
+    ]
+
+    proc = _run_cli(
+        ["info", "does-not-exist.ipynb", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    _assert_clean_cli_error(proc, "Notebook file not found")
+
+
+def test_info_command_reports_a_clean_error_when_the_dashboard_is_unreachable():
+
+    proc = _run_cli(
+        [
+            "info", "add.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=Path.cwd(),
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_download_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

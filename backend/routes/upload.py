@@ -1066,6 +1066,41 @@ def list_tags():
     }
 
 
+def _notebook_metadata_entry(entry, compiled_path, compiled_sha256, compiled_at):
+    """Build one notebook's own metadata dict -- the exact shape GET
+    /api/notebooks' own "notebooks" list already returns per entry (see
+    its own docstring for what each field means and why it exists).
+    Shared with GET /api/notebooks/{filename}/info below, so a
+    single-notebook metadata fetch can never drift from the identical
+    entry already embedded in the full list for the same notebook.
+    """
+
+    entry_stat = entry.stat()
+
+    is_currently_compiled = (
+        compiled_path is not None and entry.resolve() == compiled_path
+    )
+
+    notebook_entry = {
+        "filename": entry.name,
+        "size_bytes": entry_stat.st_size,
+        "modified_at": datetime.fromtimestamp(
+            entry_stat.st_mtime, tz=timezone.utc
+        ).isoformat(),
+        "currently_compiled": is_currently_compiled,
+        "tags": _read_notebook_tags(entry.name),
+    }
+
+    if is_currently_compiled:
+        notebook_entry["notebook_changed_since_compile"] = (
+            compiled_sha256 is not None
+            and hash_notebook_file(entry) != compiled_sha256
+        )
+        notebook_entry["compiled_at"] = compiled_at
+
+    return notebook_entry
+
+
 @router.get("/notebooks")
 def list_notebooks(
     search: str = None,
@@ -1210,26 +1245,9 @@ def list_notebooks(
 
         entry_stat = entry.stat()
 
-        is_currently_compiled = (
-            compiled_path is not None and entry.resolve() == compiled_path
+        notebook_entry = _notebook_metadata_entry(
+            entry, compiled_path, compiled_sha256, compiled_at
         )
-
-        notebook_entry = {
-            "filename": entry.name,
-            "size_bytes": entry_stat.st_size,
-            "modified_at": datetime.fromtimestamp(
-                entry_stat.st_mtime, tz=timezone.utc
-            ).isoformat(),
-            "currently_compiled": is_currently_compiled,
-            "tags": notebook_tags,
-        }
-
-        if is_currently_compiled:
-            notebook_entry["notebook_changed_since_compile"] = (
-                compiled_sha256 is not None
-                and hash_notebook_file(entry) != compiled_sha256
-            )
-            notebook_entry["compiled_at"] = compiled_at
 
         entries.append((entry.name, entry_stat.st_size, entry_stat.st_mtime, notebook_entry))
 
@@ -1428,6 +1446,49 @@ def get_notebook(filename: str):
         media_type="application/x-ipynb+json",
         filename=filename,
     )
+
+
+@router.get("/notebooks/{filename}/info")
+def get_notebook_info(filename: str):
+    """Return one previously uploaded notebook's own metadata -- the
+    exact entry GET /api/notebooks' own "notebooks" list already returns
+    for it (filename, size_bytes, modified_at, currently_compiled, tags,
+    and, only when it's the currently-compiled notebook,
+    notebook_changed_since_compile/compiled_at) -- without fetching or
+    filtering the entire list just to find one notebook's own record.
+
+    GET /api/notebooks/{filename} already exists, but returns the
+    notebook's raw *content* (a file download), not its metadata -- the
+    same distinction GET /api/notebooks/{filename}/tags already draws
+    for tags specifically. A caller wanting to know, say, whether one
+    particular notebook is the one currently backing GENERATED_DIR (and
+    whether it's since drifted from that compile) had to fetch every
+    uploaded notebook via an unfiltered GET /api/notebooks and search the
+    response for a matching "filename" itself -- wasteful, and requiring
+    the exact same "search" trick GET /api/notebooks/{filename}/tags'
+    own docstring already rejected for a single notebook's tags, applied
+    here for its metadata as a whole instead.
+
+    Reuses _notebook_metadata_entry -- the same helper list_notebooks
+    itself now calls -- so this can never drift from what the identical
+    notebook's own entry in that list already reports.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    compiled_path, compiled_sha256, compiled_at = _currently_compiled_notebook_metadata()
+
+    return {
+        "status": "success",
+        **_notebook_metadata_entry(file_path, compiled_path, compiled_sha256, compiled_at),
+    }
 
 
 # Serializes rename_notebook's own check-then-write critical section per
