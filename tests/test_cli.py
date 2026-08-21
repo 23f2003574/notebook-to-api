@@ -4775,6 +4775,150 @@ def test_remote_diff_command_reports_a_clean_error_when_the_dashboard_is_unreach
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_remote_curl_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "remote-curl" in proc.stdout
+
+
+def test_remote_curl_command_writes_a_script_with_a_command_per_function(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+                "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-curl", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "cURL script for 'nb.ipynb'" in proc.stdout
+    assert "written to: requests.sh (2 request(s))" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb"]
+
+    script = (workdir / "requests.sh").read_text(encoding="utf-8")
+    assert "curl -X POST http://localhost:8000/add" in script
+    assert "curl -X POST http://localhost:8000/subtract" in script
+    assert "X-API-Key: notebook-to-api-dev-key" in script
+
+
+def test_remote_curl_command_respects_host_port_api_key_and_output(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-curl", "nb.ipynb", "--dashboard-url", dashboard_url,
+            "--host", "api.example.com", "--port", "9000",
+            "--api-key", "mykey123", "--output", "custom.sh",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    script = (workdir / "custom.sh").read_text(encoding="utf-8")
+    assert "curl -X POST http://api.example.com:9000/add" in script
+    assert "X-API-Key: mykey123" in script
+    assert not (workdir / "requests.sh").exists()
+
+
+def test_remote_curl_command_json_flag_emits_machine_readable_output(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-curl", "nb.ipynb", "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+
+    assert data["status"] == "success"
+    assert data["path"] == "requests.sh"
+    assert len(data["commands"]) == 1
+    assert "curl -X POST http://localhost:8000/add" in data["commands"][0]
+
+
+def test_remote_curl_command_reports_a_clean_error_for_a_missing_notebook(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook file not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-curl", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook file not found")
+
+
+def test_remote_curl_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-curl", "nb.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_remote_export_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())
