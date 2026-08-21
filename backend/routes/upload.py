@@ -3117,6 +3117,20 @@ def download_generated_app():
     field is the source notebook's absolute filesystem path on the
     compiling server -- not something a "download the compiled app" caller
     has any business receiving.
+
+    Unlike POST /api/deploy, this never refuses a stale build outright
+    (there's no "force" escape hatch to speak of, and a zip download --
+    unlike a Docker build -- doesn't ship the stale build anywhere on its
+    own): a caller downloading the zip to poke around locally,
+    intentionally re-fetching a known-good previous compile, or simply
+    not caring yet has no reason to be blocked. The
+    "X-Notebook-Changed-Since-Compile" response header instead reports
+    the identical _currently_compiled_notebook_is_stale() check
+    POST /api/deploy already makes before building, as "true"/"false", so
+    a caller who *does* care (like this CLI's own `remote-build`, which
+    warns on it) can act on it without a separate, redundant GET
+    /api/notebooks call just to read back the currently-compiled entry's
+    own "notebook_changed_since_compile" field.
     """
 
     generated_path = Path(GENERATED_DIR)
@@ -3124,7 +3138,11 @@ def download_generated_app():
     # Held while reading generated_path (see COMPILE_LOCK in
     # backend/compiler.py) so a concurrent POST /api/compile can't
     # rewrite it mid-walk, which could zip up a torn mix of files from
-    # the old and new compile instead of one consistent output.
+    # the old and new compile instead of one consistent output. Also
+    # covers the staleness check just below, for the same reason: without
+    # it, a concurrent recompile could race between the zip being built
+    # and the staleness check running, reporting a header that no longer
+    # matches the bytes just zipped.
     with COMPILE_LOCK:
 
         if not (generated_path / "app.py").is_file():
@@ -3133,6 +3151,8 @@ def download_generated_app():
                 status_code=404,
                 detail="No compiled app found. Run /api/compile first."
             )
+
+        is_stale = _currently_compiled_notebook_is_stale()
 
         buffer = io.BytesIO()
 
@@ -3161,7 +3181,8 @@ def download_generated_app():
         headers={
             "Content-Disposition": (
                 f'attachment; filename="{generated_path.name}.zip"'
-            )
+            ),
+            "X-Notebook-Changed-Since-Compile": "true" if is_stale else "false",
         }
     )
 

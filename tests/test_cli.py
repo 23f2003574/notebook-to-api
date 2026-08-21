@@ -4280,6 +4280,73 @@ def test_remote_build_command_json_flag_emits_a_machine_readable_result(
     data = json.loads(proc.stdout)
     assert data["status"] == "success"
     assert data["size_bytes"] == len(zip_bytes)
+    assert data["notebook_changed_since_compile"] is False
+
+
+def test_remote_build_command_warns_when_the_notebook_changed_since_compile(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x03\x04fake-zip-content"
+    handler.responses = [(200, zip_bytes, "application/zip")]
+    handler.response_headers = [{
+        "Content-Disposition": 'attachment; filename="generated.zip"',
+        "X-Notebook-Changed-Since-Compile": "true",
+    }]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-build", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "warning" in proc.stdout.lower()
+    assert "changed since" in proc.stdout
+
+
+def test_remote_build_command_json_flag_reports_staleness(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x03\x04fake-zip-content"
+    handler.responses = [(200, zip_bytes, "application/zip")]
+    handler.response_headers = [{
+        "Content-Disposition": 'attachment; filename="generated.zip"',
+        "X-Notebook-Changed-Since-Compile": "true",
+    }]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-build", "--dashboard-url", dashboard_url, "--json"], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout)["notebook_changed_since_compile"] is True
+
+
+def test_remote_build_command_does_not_warn_when_not_stale(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x03\x04fake-zip-content"
+    handler.responses = [(200, zip_bytes, "application/zip")]
+    handler.response_headers = [{
+        "Content-Disposition": 'attachment; filename="generated.zip"',
+        "X-Notebook-Changed-Since-Compile": "false",
+    }]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-build", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "warning" not in proc.stdout.lower()
 
 
 def test_remote_build_command_reports_a_clean_error_when_no_app_is_compiled(

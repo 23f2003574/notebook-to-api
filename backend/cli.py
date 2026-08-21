@@ -1794,12 +1794,23 @@ def _dispatch_core_command(args):
         with open(output_path, "wb") as f:
             f.write(response.content)
 
+        # "X-Notebook-Changed-Since-Compile" (added alongside this same
+        # warning, not a separate change) reports the identical staleness
+        # POST /api/deploy already checks before building -- without
+        # reading it back here, a caller had no way to tell the zip they
+        # just downloaded no longer matches the source notebook's current
+        # content short of a separate GET /api/notebooks call to check
+        # the currently-compiled entry's own "notebook_changed_since_compile"
+        # field themselves.
+        is_stale = response.headers.get("X-Notebook-Changed-Since-Compile") == "true"
+
         if args.json_output:
             print(json.dumps(
                 {
                     "status": "success",
                     "path": output_path,
                     "size_bytes": len(response.content),
+                    "notebook_changed_since_compile": is_stale,
                 },
                 indent=2,
             ))
@@ -1808,6 +1819,12 @@ def _dispatch_core_command(args):
                 f"Downloaded the compiled app from {dashboard_url} to "
                 f"{output_path} ({len(response.content)} bytes)"
             )
+            if is_stale:
+                print(
+                    "  warning: the source notebook has changed since "
+                    "this app was compiled -- run `remote-compile` again "
+                    "to refresh it."
+                )
     elif args.command == "versions":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -3281,7 +3298,8 @@ def main():
         dest="json_output",
         help=(
             "Emit a machine-readable JSON result "
-            "({\"status\", \"path\", \"size_bytes\"}) instead of a "
+            "({\"status\", \"path\", \"size_bytes\", "
+            "\"notebook_changed_since_compile\"}) instead of a "
             "human-readable summary, for scripting/automation."
         )
     )

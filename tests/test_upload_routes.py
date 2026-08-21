@@ -5175,6 +5175,49 @@ def test_download_returns_a_zip_of_the_compiled_app():
     assert "def add(" in app_source
 
 
+def test_download_reports_not_stale_right_after_compile():
+
+    filename = "download_not_stale_test.ipynb"
+    _compile_a_notebook(filename)
+
+    resp = client.get("/api/download")
+
+    assert resp.status_code == 200
+    assert resp.headers["x-notebook-changed-since-compile"] == "false"
+
+
+def test_download_reports_stale_after_the_source_notebook_changes():
+    """Unlike POST /api/deploy, GET /api/download never refuses a stale
+    build outright -- it has no "force" escape hatch, and downloading a
+    zip doesn't ship it anywhere the way a Docker build/push would -- but
+    a caller who does care about staleness (e.g. this CLI's own
+    `remote-build`, which warns on it) needs a way to find out without a
+    separate GET /api/notebooks call.
+    """
+
+    filename = "download_stale_test.ipynb"
+    _compile_a_notebook(filename)
+
+    changed_content = _notebook_bytes(
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+    overwrite_resp = client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(changed_content), "application/json")},
+    )
+    assert overwrite_resp.status_code == 200
+
+    resp = client.get("/api/download")
+
+    assert resp.status_code == 200
+    assert resp.headers["x-notebook-changed-since-compile"] == "true"
+
+    # Still returns the (now-stale) zip itself -- unlike /api/deploy, this
+    # never turns into a 409.
+    archive = zipfile.ZipFile(io.BytesIO(resp.content))
+    assert "app.py" in archive.namelist()
+
+
 def test_download_excludes_pycache_from_the_zip():
     """__pycache__ is created by Python itself the first time the compiled
     app or its runtime module gets imported (e.g. by a prior
