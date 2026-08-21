@@ -2899,6 +2899,77 @@ def test_tags_get_command_json_flag_emits_the_dashboards_own_response(
     assert json.loads(proc.stdout)["tags"] == ["prod"]
 
 
+def test_tags_list_command_prints_the_tag_catalog(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "tags": [
+                {"tag": "bug", "notebook_count": 1},
+                {"tag": "production", "notebook_count": 2},
+            ],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["tags", "list", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "bug  (1 notebook)" in proc.stdout
+    assert "production  (2 notebooks)" in proc.stdout
+    assert handler.requests == ["/api/tags"]
+
+
+def test_tags_list_command_reports_no_tags(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "tags": []})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["tags", "list", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No tags in use on any notebook." in proc.stdout
+
+
+def test_tags_list_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "tags": [{"tag": "prod", "notebook_count": 3}],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["tags", "list", "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["tags"] == [{"tag": "prod", "notebook_count": 3}]
+
+
 def test_tags_set_command_replaces_the_notebooks_tags(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

@@ -2303,6 +2303,84 @@ def test_set_notebook_tags_rejects_more_than_the_max_distinct_tags():
     assert resp.status_code == 400
 
 
+def test_list_tags_response_has_the_expected_shape():
+
+    resp = client.get("/api/tags")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert isinstance(body["tags"], list)
+    for entry in body["tags"]:
+        assert set(entry) == {"tag", "notebook_count"}
+
+
+def test_list_tags_reports_distinct_tags_with_notebook_counts():
+
+    _upload_sample_notebook("tags_catalog_one.ipynb")
+    _upload_sample_notebook("tags_catalog_two.ipynb")
+    _upload_sample_notebook("tags_catalog_three.ipynb")
+
+    client.put(
+        "/api/notebooks/tags_catalog_one.ipynb/tags",
+        json={"tags": ["production", "bug"]},
+    )
+    client.put(
+        "/api/notebooks/tags_catalog_two.ipynb/tags",
+        json={"tags": ["production"]},
+    )
+    # tags_catalog_three.ipynb is left untagged -- it should contribute
+    # nothing to the catalog.
+
+    resp = client.get("/api/tags")
+
+    assert resp.status_code == 200
+
+    by_tag = {entry["tag"]: entry["notebook_count"] for entry in resp.json()["tags"]}
+
+    assert by_tag["production"] == 2
+    assert by_tag["bug"] == 1
+
+
+def test_list_tags_reflects_a_tag_set_being_cleared():
+
+    _upload_sample_notebook("tags_catalog_cleared.ipynb")
+
+    client.put(
+        "/api/notebooks/tags_catalog_cleared.ipynb/tags",
+        json={"tags": ["scratch"]},
+    )
+    assert "scratch" in {
+        entry["tag"] for entry in client.get("/api/tags").json()["tags"]
+    }
+
+    client.put(
+        "/api/notebooks/tags_catalog_cleared.ipynb/tags",
+        json={"tags": []},
+    )
+
+    assert "scratch" not in {
+        entry["tag"] for entry in client.get("/api/tags").json()["tags"]
+    }
+
+
+def test_list_tags_are_sorted_alphabetically():
+
+    _upload_sample_notebook("tags_catalog_sort.ipynb")
+
+    client.put(
+        "/api/notebooks/tags_catalog_sort.ipynb/tags",
+        json={"tags": ["zeta", "alpha", "mu"]},
+    )
+
+    resp = client.get("/api/tags")
+
+    tag_names = [entry["tag"] for entry in resp.json()["tags"]]
+
+    assert tag_names == sorted(tag_names)
+    assert {"zeta", "alpha", "mu"}.issubset(set(tag_names))
+
+
 def test_list_notebooks_reports_tags_for_each_entry():
 
     _upload_sample_notebook("tags_in_list.ipynb")

@@ -1396,6 +1396,41 @@ def _dispatch_core_command(args):
                 tags = data.get("tags", [])
                 print(f"{args.filename}: {', '.join(tags) if tags else '(no tags)'}")
 
+        elif args.tags_command == "list":
+
+            try:
+                response = httpx.get(
+                    f"{dashboard_url}/api/tags",
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                tags = data.get("tags", [])
+
+                if not tags:
+                    print("No tags in use on any notebook.")
+                else:
+                    for tag_entry in tags:
+                        plural = "" if tag_entry["notebook_count"] == 1 else "s"
+                        print(
+                            f"{tag_entry['tag']}  "
+                            f"({tag_entry['notebook_count']} notebook{plural})"
+                        )
+
         else:  # args.tags_command == "set"
 
             try:
@@ -2627,6 +2662,25 @@ def main():
             "Emit the dashboard's own JSON response "
             "({\"status\", \"filename\", \"tags\"}) instead of a "
             "human-readable listing, for scripting/automation."
+        )
+    )
+
+    tags_list_parser = tags_subparsers.add_parser(
+        "list",
+        help=(
+            "List every distinct tag in use across all notebooks on a "
+            "running dashboard instance, via GET /api/tags."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(tags_list_parser)
+    tags_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"tags\": [{\"tag\", \"notebook_count\"}, ...]}) "
+            "instead of a human-readable listing, for scripting/automation."
         )
     )
 

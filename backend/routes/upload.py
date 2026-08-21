@@ -1017,6 +1017,55 @@ def _validate_and_normalize_tags(raw_tags) -> list:
     return sorted(normalized)
 
 
+@router.get("/tags")
+def list_tags():
+    """The distinct tags currently in use across every uploaded notebook,
+    each with how many notebooks currently carry it, sorted alphabetically.
+
+    GET /api/notebooks?tag=<tag> already filters by an exact tag, and each
+    of its own entries already lists that notebook's own tags -- but
+    there was previously no way to discover what tags actually *exist*
+    across UPLOAD_DIR without first fetching every notebook and
+    collecting their "tags" fields client-side. A dashboard frontend
+    building a tag-filter dropdown (or a caller scripting `list --tag`)
+    had no single call to populate it from, and had to either hardcode a
+    guessed set of tags or pay the cost of an unfiltered, unpaginated GET
+    /api/notebooks just to enumerate them.
+
+    Reuses _read_notebook_tags -- the exact same per-notebook tag read
+    list_notebooks already performs for its own "tags" field -- so a
+    notebook's tags are counted identically here and there; nothing about
+    what counts as "tagged" is redefined for this endpoint.
+
+    Untagged notebooks (no sidecar file, see _read_notebook_tags) simply
+    contribute nothing here, the same way they already contribute an
+    empty "tags": [] to their own GET /api/notebooks entry rather than
+    raising or being skipped.
+    """
+
+    upload_root = Path(UPLOAD_DIR)
+
+    counts = {}
+
+    for entry in upload_root.iterdir():
+
+        if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        for tag in _read_notebook_tags(entry.name):
+            counts[tag] = counts.get(tag, 0) + 1
+
+    tags = [
+        {"tag": tag, "notebook_count": count}
+        for tag, count in sorted(counts.items())
+    ]
+
+    return {
+        "status": "success",
+        "tags": tags,
+    }
+
+
 @router.get("/notebooks")
 def list_notebooks(
     search: str = None,
