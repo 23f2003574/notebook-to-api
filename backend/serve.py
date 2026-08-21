@@ -49,11 +49,27 @@ class NotebookChangeHandler(FileSystemEventHandler):
     ordinary change and recompiles from.
     """
 
-    def __init__(self, notebook_path, output_dir, only=None, exclude=None):
+    def __init__(
+        self, notebook_path, output_dir, only=None, exclude=None,
+        debounce_seconds=1.0,
+    ):
+        """debounce_seconds (default 1.0, previously hardcoded to exactly
+        this value with no way to change it) is how long
+        _handle_possible_notebook_change (below) waits after the last
+        recompile before it will trigger another one. Too short a window
+        for an editor that touches a notebook's file more than once per
+        logical save (a temp-file-then-rename, followed by a separate
+        metadata write, ...) previously had no way to be widened without
+        editing this file; too long a window for a fast, direct
+        os.replace-style save (the common case this default already
+        covers) can now be shortened instead of paying the fixed 1s tax
+        on every edit-recompile cycle.
+        """
         self.notebook_path = notebook_path
         self.output_dir = output_dir
         self.only = only
         self.exclude = exclude
+        self.debounce_seconds = debounce_seconds
         self.last_compile_time = time.time()
 
     def on_modified(self, event):
@@ -97,7 +113,7 @@ class NotebookChangeHandler(FileSystemEventHandler):
         if event_path.endswith(".ipynb") and Path(event_path).resolve() == Path(self.notebook_path).resolve():
             # Debounce: avoid multiple rapid recompiles
             current_time = time.time()
-            if current_time - self.last_compile_time < 1:
+            if current_time - self.last_compile_time < self.debounce_seconds:
                 return
 
             self.last_compile_time = current_time
@@ -120,7 +136,7 @@ class NotebookChangeHandler(FileSystemEventHandler):
 
 def serve_notebook(
     notebook_path, output_dir="generated", port=8000, host="0.0.0.0",
-    only=None, exclude=None,
+    only=None, exclude=None, debounce_seconds=1.0,
 ):
     """
     Serve a notebook as a live API with hot recompilation.
@@ -158,6 +174,9 @@ def serve_notebook(
             accepts -- every function except the named ones. Mutually
             exclusive with `only` (see _filter_functions_by_name,
             backend/compiler.py).
+        debounce_seconds: How long NotebookChangeHandler waits after the
+            last recompile before triggering another one (default 1.0)
+            -- see its own docstring for why this is configurable.
     """
 
     # Initial compilation
@@ -168,7 +187,10 @@ def serve_notebook(
 
     # Set up file watcher
     observer = Observer()
-    handler = NotebookChangeHandler(notebook_path, output_dir, only=only, exclude=exclude)
+    handler = NotebookChangeHandler(
+        notebook_path, output_dir, only=only, exclude=exclude,
+        debounce_seconds=debounce_seconds,
+    )
 
     # Watch the directory containing the notebook
     notebook_dir = Path(notebook_path).parent.resolve()
@@ -322,7 +344,10 @@ def serve_notebook(
     observer.join()
 
 
-def watch_notebook(notebook_path, output_dir="generated", only=None, exclude=None):
+def watch_notebook(
+    notebook_path, output_dir="generated", only=None, exclude=None,
+    debounce_seconds=1.0,
+):
     """Compile a notebook once, then keep recompiling it on every save --
     without also starting a live API server the way `serve` does.
 
@@ -348,6 +373,8 @@ def watch_notebook(notebook_path, output_dir="generated", only=None, exclude=Non
             missing here too before now.
         exclude: Same --exclude compile_notebook/serve_notebook already
             accept. Mutually exclusive with `only`.
+        debounce_seconds: Same debounce_seconds serve_notebook already
+            accepts -- see NotebookChangeHandler's own docstring.
     """
 
     print("📝 Initial compilation...")
@@ -356,7 +383,10 @@ def watch_notebook(notebook_path, output_dir="generated", only=None, exclude=Non
     print_compile_summary(notebook_path, output_dir, only=only, exclude=exclude)
 
     observer = Observer()
-    handler = NotebookChangeHandler(notebook_path, output_dir, only=only, exclude=exclude)
+    handler = NotebookChangeHandler(
+        notebook_path, output_dir, only=only, exclude=exclude,
+        debounce_seconds=debounce_seconds,
+    )
 
     notebook_dir = Path(notebook_path).parent.resolve()
     observer.schedule(handler, path=str(notebook_dir), recursive=False)

@@ -1425,6 +1425,76 @@ def test_watch_command_only_and_exclude_are_mutually_exclusive(tmp_path):
     _assert_clean_cli_error(proc, "only and exclude can't both be given")
 
 
+def test_serve_command_accepts_debounce_flag(tmp_path):
+    """Before this, the debounce window between recompiles was hardcoded
+    in NotebookChangeHandler (backend/serve.py) with no CLI flag at all --
+    confirmed here by checking argparse itself accepts --debounce
+    (reaching the missing-notebook error, not an "unrecognized
+    arguments" one), the same wiring-only check
+    test_serve_command_accepts_only_and_exclude_flags already applies to
+    --only/--exclude.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["serve", str(workdir / "does-not-exist.ipynb"), "--debounce", "2.5"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_serve_command_rejects_a_negative_debounce(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    proc = _run_cli(
+        ["serve", str(notebook_path), "--debounce", "-1"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "--debounce must be zero or positive")
+
+
+def test_watch_command_accepts_debounce_flag(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["watch", str(workdir / "does-not-exist.ipynb"), "--debounce", "0.1"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_watch_command_rejects_a_negative_debounce(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    proc = _run_cli(
+        ["watch", str(notebook_path), "--debounce", "-0.5"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "--debounce must be zero or positive")
+
+
 def test_diff_command_is_registered():
     """Same subparser/dispatch-branch mismatch gap test_deploy_command_is_registered
     (test_cli_deploy.py) and test_watch_command_is_registered (above)

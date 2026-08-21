@@ -99,7 +99,7 @@ def _reset_fakes():
 def _run_serve(
     monkeypatch, notebook_path, output_dir, port=None, host=None,
     compiled_calls=None, summary_calls=None, only=None, exclude=None,
-    only_exclude_calls=None,
+    only_exclude_calls=None, debounce_seconds=None,
 ):
     """serve_notebook only returns because time.sleep is patched to raise
     KeyboardInterrupt on its first call inside the `while True` loop --
@@ -151,6 +151,8 @@ def _run_serve(
         kwargs["only"] = only
     if exclude is not None:
         kwargs["exclude"] = exclude
+    if debounce_seconds is not None:
+        kwargs["debounce_seconds"] = debounce_seconds
 
     serve_module.serve_notebook(str(notebook_path), str(output_dir), **kwargs)
 
@@ -387,6 +389,41 @@ def test_serve_notebook_passes_exclude_to_the_initial_compile(tmp_path, monkeypa
     assert only_exclude_calls == [(None, ["helper"])]
 
 
+def test_serve_notebook_defaults_the_change_handlers_debounce_to_one_second(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    handler, _path, _recursive = _FakeObserver.instances[0].scheduled[0]
+    assert handler.debounce_seconds == 1.0
+
+
+def test_serve_notebook_passes_debounce_seconds_to_the_change_handler(
+    tmp_path, monkeypatch
+):
+    """Before this, the 1-second debounce window
+    NotebookChangeHandler._handle_possible_notebook_change applies
+    between recompiles was hardcoded, with no way to widen it (for an
+    editor whose save touches the notebook's file more than once) or
+    narrow it (to get feedback faster on a plain, single-write save)
+    without editing backend/serve.py directly.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir, debounce_seconds=5.0)
+
+    handler, _path, _recursive = _FakeObserver.instances[0].scheduled[0]
+    assert handler.debounce_seconds == 5.0
+
+
 def test_serve_notebook_prints_a_compile_summary_after_the_initial_compile(tmp_path, monkeypatch):
     """Before this, `serve`'s initial compile gave no feedback at all
     about what had actually been generated -- just "Initial compilation
@@ -581,7 +618,7 @@ def test_serve_notebook_stops_and_joins_the_observer_when_the_server_dies(tmp_pa
 
 def _run_watch(
     monkeypatch, notebook_path, output_dir, compiled_calls=None, summary_calls=None,
-    only=None, exclude=None, only_exclude_calls=None,
+    only=None, exclude=None, only_exclude_calls=None, debounce_seconds=None,
 ):
     """watch_notebook only returns because time.sleep is patched to raise
     KeyboardInterrupt on its first call inside the `while True` loop,
@@ -624,6 +661,8 @@ def _run_watch(
         kwargs["only"] = only
     if exclude is not None:
         kwargs["exclude"] = exclude
+    if debounce_seconds is not None:
+        kwargs["debounce_seconds"] = debounce_seconds
 
     serve_module.watch_notebook(str(notebook_path), str(output_dir), **kwargs)
 
@@ -668,6 +707,34 @@ def test_watch_notebook_passes_exclude_to_the_initial_compile(tmp_path, monkeypa
     )
 
     assert only_exclude_calls == [(None, ["helper"])]
+
+
+def test_watch_notebook_defaults_the_change_handlers_debounce_to_one_second(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_watch(monkeypatch, notebook_path, output_dir)
+
+    handler, _path, _recursive = _FakeObserver.instances[0].scheduled[0]
+    assert handler.debounce_seconds == 1.0
+
+
+def test_watch_notebook_passes_debounce_seconds_to_the_change_handler(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_watch(monkeypatch, notebook_path, output_dir, debounce_seconds=0.2)
+
+    handler, _path, _recursive = _FakeObserver.instances[0].scheduled[0]
+    assert handler.debounce_seconds == 0.2
 
 
 def test_watch_notebook_prints_a_compile_summary_after_the_initial_compile(
@@ -1142,6 +1209,38 @@ def test_notebook_change_handler_debounces_rapid_modifications(tmp_path, monkeyp
     assert compiled_calls == []
 
     fake_now[0] = 101.5  # past the debounce window
+    handler.on_modified(event)
+    assert compiled_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_notebook_change_handler_respects_a_custom_debounce_window(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    fake_now = [100.0]
+    monkeypatch.setattr(serve_module.time, "time", lambda: fake_now[0])
+
+    handler = serve_module.NotebookChangeHandler(
+        str(notebook_path), str(output_dir), debounce_seconds=5.0,
+    )
+    handler.last_compile_time = 100.0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+
+    fake_now[0] = 104.9  # within the wider 5-second debounce window
+    handler.on_modified(event)
+    assert compiled_calls == []
+
+    fake_now[0] = 105.1  # past the wider debounce window
     handler.on_modified(event)
     assert compiled_calls == [(str(notebook_path), str(output_dir))]
 

@@ -498,6 +498,28 @@ def _add_function_selection_arguments(parser):
     )
 
 
+def _add_debounce_argument(parser):
+    """Add --debounce to `parser` -- shared by the `serve` and `watch`
+    subparsers below, so their help text and dest names can't drift apart
+    from each other, the same way _add_function_selection_arguments
+    already shares --only/--exclude between them.
+    """
+    parser.add_argument(
+        "--debounce",
+        type=float,
+        default=1.0,
+        dest="debounce_seconds",
+        metavar="SECONDS",
+        help=(
+            "Seconds to wait after the last recompile before triggering "
+            "another one (default: 1.0), passed straight through to "
+            "NotebookChangeHandler (backend/serve.py) -- see its own "
+            "docstring for why this is configurable. Must be zero or "
+            "positive."
+        )
+    )
+
+
 def _parse_comma_separated_names(value):
     """Parse a `--only`/`--exclude` argparse value ("add,subtract", or
     None) into a list of names, or None if nothing was given.
@@ -888,16 +910,23 @@ def _dispatch_core_command(args):
         else:
             print(f"\ncURL script written to: {output} ({len(commands)} request(s))")
     elif args.command == "serve":
+        if args.debounce_seconds < 0:
+            raise ValueError("--debounce must be zero or positive")
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
         serve_notebook(
             args.notebook, args.output, args.port, args.host,
-            only=only, exclude=exclude,
+            only=only, exclude=exclude, debounce_seconds=args.debounce_seconds,
         )
     elif args.command == "watch":
+        if args.debounce_seconds < 0:
+            raise ValueError("--debounce must be zero or positive")
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
-        watch_notebook(args.notebook, args.output, only=only, exclude=exclude)
+        watch_notebook(
+            args.notebook, args.output, only=only, exclude=exclude,
+            debounce_seconds=args.debounce_seconds,
+        )
     elif args.command == "deploy":
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -2541,6 +2570,7 @@ def main():
         )
     )
     _add_function_selection_arguments(serve_parser)
+    _add_debounce_argument(serve_parser)
 
     # watch command (recompile on save, no live API server)
     watch_parser = subparsers.add_parser(
@@ -2554,6 +2584,7 @@ def main():
         help="Output directory where the FastAPI app and assets will be written."
     )
     _add_function_selection_arguments(watch_parser)
+    _add_debounce_argument(watch_parser)
 
     # deploy command (compile + build a Docker image)
     deploy_parser = subparsers.add_parser(
