@@ -2817,6 +2817,105 @@ def test_delete_tag_removes_the_sidecar_file_when_it_was_the_only_tag():
     assert not _tags_sidecar_path("tags_bulk_delete_only_tag.ipynb").is_file()
 
 
+def test_apply_tag_adds_it_to_every_named_notebook_preserving_existing_tags():
+
+    _upload_sample_notebook("tags_apply_a.ipynb")
+    _upload_sample_notebook("tags_apply_b.ipynb")
+    client.put(
+        "/api/notebooks/tags_apply_a.ipynb/tags", json={"tags": ["bug"]}
+    )
+
+    resp = client.post(
+        "/api/tags/production/apply",
+        json={"filenames": ["tags_apply_a.ipynb", "tags_apply_b.ipynb"]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["tag"] == "production"
+    assert body["succeeded_count"] == 2
+    assert body["failed_count"] == 0
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["tags_apply_a.ipynb"]["status"] == "success"
+    assert results_by_filename["tags_apply_a.ipynb"]["tags"] == ["bug", "production"]
+    assert results_by_filename["tags_apply_b.ipynb"]["tags"] == ["production"]
+
+    # Existing tags weren't clobbered -- "bug" survives alongside the newly
+    # applied "production".
+    assert client.get(
+        "/api/notebooks/tags_apply_a.ipynb/tags"
+    ).json()["tags"] == ["bug", "production"]
+
+
+def test_apply_tag_reports_a_missing_filename_without_aborting_the_rest():
+
+    _upload_sample_notebook("tags_apply_partial.ipynb")
+
+    resp = client.post(
+        "/api/tags/urgent/apply",
+        json={"filenames": ["tags_apply_partial.ipynb", "does_not_exist.ipynb"]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["tags_apply_partial.ipynb"]["status"] == "success"
+    assert results_by_filename["does_not_exist.ipynb"]["status"] == "error"
+    assert "not found" in results_by_filename["does_not_exist.ipynb"]["detail"]
+
+    assert client.get(
+        "/api/notebooks/tags_apply_partial.ipynb/tags"
+    ).json()["tags"] == ["urgent"]
+
+
+def test_apply_tag_is_idempotent_for_a_notebook_that_already_has_it():
+
+    _upload_sample_notebook("tags_apply_idempotent.ipynb")
+    client.put(
+        "/api/notebooks/tags_apply_idempotent.ipynb/tags",
+        json={"tags": ["production"]},
+    )
+
+    resp = client.post(
+        "/api/tags/production/apply",
+        json={"filenames": ["tags_apply_idempotent.ipynb"]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["results"][0]["tags"] == ["production"]
+
+
+def test_apply_tag_rejects_a_non_list_filenames_value():
+
+    resp = client.post("/api/tags/production/apply", json={"filenames": "not-a-list"})
+
+    assert resp.status_code == 400
+
+
+def test_apply_tag_rejects_an_empty_filenames_list():
+
+    resp = client.post("/api/tags/production/apply", json={"filenames": []})
+
+    assert resp.status_code == 400
+
+
+def test_apply_tag_rejects_an_empty_tag():
+
+    _upload_sample_notebook("tags_apply_empty_tag.ipynb")
+
+    resp = client.post(
+        "/api/tags/%20/apply",
+        json={"filenames": ["tags_apply_empty_tag.ipynb"]},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_search_functions_finds_notebooks_with_a_matching_function_name():
 
     content_a = _notebook_bytes(

@@ -3534,6 +3534,149 @@ def test_tags_delete_command_reports_a_clean_error_when_the_dashboard_is_unreach
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_tags_apply_command_reports_success(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "tag": "production",
+            "results": [
+                {"filename": "a.ipynb", "status": "success", "tags": ["production"]},
+                {"filename": "b.ipynb", "status": "success", "tags": ["bug", "production"]},
+            ],
+            "succeeded_count": 2,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "tags", "apply", "production", "a.ipynb", "b.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Tagged a.ipynb with 'production'" in proc.stdout
+    assert "Tagged b.ipynb with 'production'" in proc.stdout
+    assert "2 succeeded, 0 failed" in proc.stdout
+    assert handler.requests == ["/api/tags/production/apply"]
+    assert json.loads(handler.bodies[0]) == {
+        "filenames": ["a.ipynb", "b.ipynb"],
+    }
+
+
+def test_tags_apply_command_reports_a_partial_failure(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "tag": "urgent",
+            "results": [
+                {"filename": "a.ipynb", "status": "success", "tags": ["urgent"]},
+                {
+                    "filename": "missing.ipynb", "status": "error",
+                    "detail": "Notebook file not found",
+                },
+            ],
+            "succeeded_count": 1,
+            "failed_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "tags", "apply", "urgent", "a.ipynb", "missing.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Tagged a.ipynb with 'urgent'" in proc.stdout
+    assert "Failed to tag missing.ipynb: Notebook file not found" in proc.stdout
+    assert "1 succeeded, 1 failed" in proc.stdout
+
+
+def test_tags_apply_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "tag": "production",
+            "results": [{"filename": "a.ipynb", "status": "success", "tags": ["production"]}],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "tags", "apply", "production", "a.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout)["succeeded_count"] == 1
+
+
+def test_tags_apply_command_reports_a_clean_error_for_an_invalid_tag(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(400, {
+            "detail": "tags must not be empty or whitespace-only strings"
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["tags", "apply", " ", "a.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "empty or whitespace-only")
+
+
+def test_tags_apply_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "tags", "apply", "production", "a.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_tags_set_command_replaces_the_notebooks_tags(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

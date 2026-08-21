@@ -1622,6 +1622,42 @@ def _dispatch_core_command(args):
                         f"notebook(s) updated on {dashboard_url}"
                     )
 
+        elif args.tags_command == "apply":
+
+            try:
+                response = httpx.post(
+                    f"{dashboard_url}/api/tags/{args.tag}/apply",
+                    json={"filenames": args.filename},
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                for result in data.get("results", []):
+
+                    if result["status"] == "success":
+                        print(f"Tagged {result['filename']} with '{args.tag}'")
+                    else:
+                        print(f"Failed to tag {result['filename']}: {result['detail']}")
+
+                print(
+                    f"\n{data.get('succeeded_count', 0)} succeeded, "
+                    f"{data.get('failed_count', 0)} failed"
+                )
+
         else:  # args.tags_command == "set"
 
             try:
@@ -3182,6 +3218,33 @@ def main():
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"tag\", \"affected_notebooks\", \"notebook_count\"}) instead "
             "of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    tags_apply_parser = tags_subparsers.add_parser(
+        "apply",
+        help=(
+            "Add a tag to several notebooks at once, merging it into each "
+            "one's existing tags, via POST /api/tags/{tag}/apply."
+        )
+    )
+    tags_apply_parser.add_argument(
+        "tag", help="Tag to add to every named notebook."
+    )
+    tags_apply_parser.add_argument(
+        "filename", nargs="+",
+        help="Filenames of the notebooks to tag, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(tags_apply_parser)
+    tags_apply_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"tag\", \"results\": [{\"filename\", \"status\", ...}, ...], "
+            "\"succeeded_count\", \"failed_count\"}) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 

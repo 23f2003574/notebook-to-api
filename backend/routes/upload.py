@@ -1126,6 +1126,116 @@ def delete_tag(tag: str):
     }
 
 
+@router.post("/tags/{tag}/apply")
+def apply_tag(tag: str, data: dict):
+    """Add `tag` to a caller-chosen set of already-uploaded notebooks in
+    one call, merging it into each one's own existing tags rather than
+    replacing them.
+
+    PUT /api/notebooks/{filename}/tags is deliberately a full-replace,
+    not a per-tag add/remove (see its own docstring) -- exactly right
+    for one notebook at a time, but it makes tagging *several* notebooks
+    with a shared label (e.g. "production" after a review pass) an
+    error-prone, multi-round-trip chore: a caller has to GET each
+    notebook's current tags first, merge the new one in client-side, then
+    PUT the merged set back -- one round trip per notebook, and silently
+    destructive (PUT's own replace semantics) if a caller forgets to
+    include a notebook's existing tags in that merge. This does the same
+    fetch-merge-write per notebook server-side, in one request.
+
+    Deliberately takes an explicit "filenames" list rather than a
+    search/tag filter the way GET /api/notebooks and DELETE
+    /api/tags/{tag} already accept -- the caller already knows exactly
+    which notebooks to tag, typically from a preceding GET
+    /api/notebooks?search=... of its own, and an explicit list keeps this
+    endpoint's effect fully predictable from its own request body alone,
+    without re-deriving GET /api/notebooks' filtering rules a second time
+    here for a "tag everything currently matching X" semantics that could
+    silently pick up notebooks uploaded *after* the caller last checked.
+
+    Reuses the exact per-file "one bad entry doesn't abort the batch"
+    contract POST /api/upload/batch already established: each filename is
+    processed independently, and "results" reports one {"filename",
+    "status", ...} entry per filename -- "success" (with that notebook's
+    resulting full tag set) or "error" (with the HTTPException detail
+    that filename's own application would have raised on its own, e.g. a
+    404 for a filename that doesn't exist, or the same 400
+    _validate_and_normalize_tags already raises if merging `tag` in would
+    push that one notebook over _MAX_TAGS_PER_NOTEBOOK). The response is
+    always 200 -- the batch request itself was handled, even if every
+    filename in it failed -- with "succeeded_count"/"failed_count"
+    summarizing "results" the same way POST /api/upload/batch's own
+    identical fields already do.
+    """
+
+    filenames = data.get("filenames")
+
+    if (
+        not isinstance(filenames, list)
+        or not filenames
+        or not all(isinstance(f, str) for f in filenames)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="filenames must be a non-empty list of strings"
+        )
+
+    # Validate/normalize the tag itself once, up front, reusing the exact
+    # same per-tag rules PUT .../tags already enforces (strip whitespace,
+    # reject empty, reject over-length) -- a single-element list in, one
+    # cleaned tag out. Deliberately outside the per-filename try/except
+    # below: an invalid `tag` is this whole request's fault, not any one
+    # filename's, so it's rejected once for the entire batch rather than
+    # repeated as the same "error" entry for every filename in it.
+    tag = _validate_and_normalize_tags([tag])[0]
+
+    results = []
+    succeeded_count = 0
+    failed_count = 0
+
+    for filename in filenames:
+
+        try:
+
+            file_path = resolve_upload_path(filename)
+
+            if not file_path.is_file():
+
+                raise HTTPException(
+                    status_code=404,
+                    detail="Notebook file not found"
+                )
+
+            existing_tags = _read_notebook_tags(file_path.name)
+            merged_tags = _validate_and_normalize_tags(existing_tags + [tag])
+
+            _write_notebook_tags(file_path.name, merged_tags)
+
+            results.append({
+                "filename": filename,
+                "status": "success",
+                "tags": merged_tags,
+            })
+            succeeded_count += 1
+
+        except HTTPException as exc:
+
+            results.append({
+                "filename": filename,
+                "status": "error",
+                "detail": exc.detail,
+            })
+            failed_count += 1
+
+    return {
+        "status": "success",
+        "tag": tag,
+        "results": results,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
+    }
+
+
 @router.get("/functions")
 def search_functions(search: str = None):
     """Find which uploaded notebooks define a function whose name
