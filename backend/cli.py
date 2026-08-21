@@ -1530,6 +1530,56 @@ def _dispatch_core_command(args):
                             f"({tag_entry['notebook_count']} notebook{plural})"
                         )
 
+        elif args.tags_command == "delete":
+
+            if not args.yes:
+                # DELETE /api/tags/{tag} (routes/upload.py) has no
+                # confirmation step of its own and affects every notebook
+                # carrying the tag at once -- the same reasoning
+                # `delete`'s own single-filename path and `versions
+                # delete` already prompt for.
+                answer = input(
+                    f"Remove tag '{args.tag}' from every notebook on "
+                    f"{dashboard_url}? [y/N] "
+                )
+                if answer.strip().lower() not in ("y", "yes"):
+                    print("Aborted.")
+                    return
+
+            try:
+                response = httpx.delete(
+                    f"{dashboard_url}/api/tags/{args.tag}",
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                affected_notebooks = data.get("affected_notebooks", [])
+
+                if not affected_notebooks:
+                    print(f"No notebooks on {dashboard_url} carry tag '{args.tag}'.")
+                else:
+                    for filename in affected_notebooks:
+                        print(f"Removed '{args.tag}' from {filename}")
+
+                    print(
+                        f"\n{data.get('notebook_count', len(affected_notebooks))} "
+                        f"notebook(s) updated on {dashboard_url}"
+                    )
+
         else:  # args.tags_command == "set"
 
             try:
@@ -3017,6 +3067,39 @@ def main():
             "Emit the dashboard's own JSON response "
             "({\"status\", \"tags\": [{\"tag\", \"notebook_count\"}, ...]}) "
             "instead of a human-readable listing, for scripting/automation."
+        )
+    )
+
+    tags_delete_parser = tags_subparsers.add_parser(
+        "delete",
+        help=(
+            "Remove a tag from every notebook that currently carries it, "
+            "via DELETE /api/tags/{tag}."
+        )
+    )
+    tags_delete_parser.add_argument(
+        "tag", help="Tag to remove from every notebook that has it, as reported by `tags list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(tags_delete_parser)
+    tags_delete_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Confirm the removal without an interactive prompt. Without "
+            "this, `tags delete` asks for a y/N confirmation on the "
+            "terminal before sending the request -- DELETE /api/tags/{tag} "
+            "itself has no confirmation step of its own, and affects "
+            "every notebook carrying the tag at once."
+        )
+    )
+    tags_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"tag\", \"affected_notebooks\", \"notebook_count\"}) instead "
+            "of a human-readable summary, for scripting/automation."
         )
     )
 

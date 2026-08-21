@@ -2740,6 +2740,83 @@ def test_list_tags_are_sorted_alphabetically():
     assert {"zeta", "alpha", "mu"}.issubset(set(tag_names))
 
 
+def test_delete_tag_removes_it_from_every_notebook_that_has_it():
+
+    _upload_sample_notebook("tags_bulk_delete_a.ipynb")
+    _upload_sample_notebook("tags_bulk_delete_b.ipynb")
+    _upload_sample_notebook("tags_bulk_delete_c.ipynb")
+
+    client.put(
+        "/api/notebooks/tags_bulk_delete_a.ipynb/tags",
+        json={"tags": ["scratch", "bug"]},
+    )
+    client.put(
+        "/api/notebooks/tags_bulk_delete_b.ipynb/tags",
+        json={"tags": ["scratch"]},
+    )
+    client.put(
+        "/api/notebooks/tags_bulk_delete_c.ipynb/tags",
+        json={"tags": ["production"]},
+    )
+
+    delete_resp = client.delete("/api/tags/scratch")
+
+    assert delete_resp.status_code == 200
+    body = delete_resp.json()
+    assert body["status"] == "success"
+    assert body["tag"] == "scratch"
+    assert sorted(body["affected_notebooks"]) == [
+        "tags_bulk_delete_a.ipynb", "tags_bulk_delete_b.ipynb",
+    ]
+    assert body["notebook_count"] == 2
+
+    assert client.get(
+        "/api/notebooks/tags_bulk_delete_a.ipynb/tags"
+    ).json()["tags"] == ["bug"]
+    assert client.get(
+        "/api/notebooks/tags_bulk_delete_b.ipynb/tags"
+    ).json()["tags"] == []
+    # Untouched -- never carried "scratch" at all.
+    assert client.get(
+        "/api/notebooks/tags_bulk_delete_c.ipynb/tags"
+    ).json()["tags"] == ["production"]
+
+    assert "scratch" not in {
+        entry["tag"] for entry in client.get("/api/tags").json()["tags"]
+    }
+
+
+def test_delete_tag_is_a_no_op_success_when_nothing_carries_it():
+
+    resp = client.delete("/api/tags/this-tag-does-not-exist-anywhere")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "success",
+        "tag": "this-tag-does-not-exist-anywhere",
+        "affected_notebooks": [],
+        "notebook_count": 0,
+    }
+
+
+def test_delete_tag_removes_the_sidecar_file_when_it_was_the_only_tag():
+
+    _upload_sample_notebook("tags_bulk_delete_only_tag.ipynb")
+    client.put(
+        "/api/notebooks/tags_bulk_delete_only_tag.ipynb/tags",
+        json={"tags": ["temporary"]},
+    )
+    assert _tags_sidecar_path("tags_bulk_delete_only_tag.ipynb").is_file()
+
+    delete_resp = client.delete("/api/tags/temporary")
+
+    assert delete_resp.status_code == 200
+    assert delete_resp.json()["affected_notebooks"] == [
+        "tags_bulk_delete_only_tag.ipynb"
+    ]
+    assert not _tags_sidecar_path("tags_bulk_delete_only_tag.ipynb").is_file()
+
+
 def test_list_notebooks_reports_tags_for_each_entry():
 
     _upload_sample_notebook("tags_in_list.ipynb")

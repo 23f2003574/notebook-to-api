@@ -1066,6 +1066,65 @@ def list_tags():
     }
 
 
+@router.delete("/tags/{tag}")
+def delete_tag(tag: str):
+    """Remove `tag` from every notebook that currently carries it, in one
+    call.
+
+    PUT /api/notebooks/{filename}/tags is deliberately a full-replace,
+    not a per-tag add/remove, for a single notebook (see its own
+    docstring) -- but that decision was about the *shape* of one
+    notebook's own tag set, not about retiring a tag across the whole
+    catalog GET /api/tags now exposes. Before this, discarding a
+    mistyped or retired tag from every notebook that had it meant
+    fetching each one's own tags (GET /api/notebooks?tag=<tag> to find
+    them, then GET .../tags per notebook to get its full current set),
+    removing the one tag client-side, and PUTting the reduced set back --
+    one round trip per affected notebook, with no single call to do it in.
+
+    Every other notebook's tags -- including ones that never carried
+    `tag` at all -- are left completely untouched: this only ever removes
+    `tag` itself from whichever notebooks' own tag sets already contain
+    it, never anything else in those sets.
+
+    A 404 for a `tag` no notebook currently carries would only tell a
+    caller what GET /api/tags already lets them check first -- and
+    "nothing to remove" is a completely valid outcome of a bulk operation
+    like this, not an error, the same reasoning DELETE /api/notebooks'
+    own "deleted_count": 0 (routes/upload.py) already applies when
+    nothing matched. "affected_notebooks" being empty already says so
+    just as clearly as a 404 would, without forcing a caller to special-
+    case a status code for what is, structurally, still a successful
+    request.
+    """
+
+    upload_root = Path(UPLOAD_DIR)
+
+    affected_notebooks = []
+
+    for entry in sorted(upload_root.iterdir()):
+
+        if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        notebook_tags = _read_notebook_tags(entry.name)
+
+        if tag not in notebook_tags:
+            continue
+
+        _write_notebook_tags(
+            entry.name, [t for t in notebook_tags if t != tag]
+        )
+        affected_notebooks.append(entry.name)
+
+    return {
+        "status": "success",
+        "tag": tag,
+        "affected_notebooks": affected_notebooks,
+        "notebook_count": len(affected_notebooks),
+    }
+
+
 def _notebook_metadata_entry(entry, compiled_path, compiled_sha256, compiled_at):
     """Build one notebook's own metadata dict -- the exact shape GET
     /api/notebooks' own "notebooks" list already returns per entry (see
