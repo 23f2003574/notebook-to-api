@@ -1965,6 +1965,108 @@ def inspect_notebook_endpoint(
         )
 
 
+@router.post("/validate")
+def validate_notebook_endpoint(
+    data: dict
+):
+    """CI-friendly pass/warn/fail verdict on whether a notebook already
+    uploaded to this dashboard would compile cleanly -- without actually
+    compiling it, or touching GENERATED_DIR at all.
+
+    The CLI's own local `validate` already does exactly this (see
+    _dispatch_core_command in cli.py) for a notebook on the caller's own
+    filesystem, reusing inspect_notebook_data's existing
+    "reserved_name_conflicts"/"skipped_functions" checks rather than a
+    separate pass -- but there was no equivalent for a notebook already
+    living on a running dashboard: a CI pipeline (or any other caller)
+    that uploads a notebook here first had to either run `remote-compile`
+    just to find out whether it would fail (mutating GENERATED_DIR, and
+    the currently-compiled app along with it, just to ask a yes/no
+    question), or download the notebook back down to disk purely to run
+    the local `validate` against that downloaded copy.
+
+    "status" is "fail" when the notebook has a reserved-name conflict
+    (compilation would fail outright), "warn" when it has skipped
+    functions but "strict" wasn't passed (compilation would still
+    succeed for every other function), or "pass" otherwise -- identical
+    to the CLI's own local verdict logic, so a caller sees the same
+    answer regardless of which one it asks. Unlike sys.exit(1)/
+    sys.exit(2) there, a "warn"/"fail" verdict here is still a normal 200
+    response: the notebook itself failing this check is an expected,
+    valid outcome of asking the question, not a server error -- the same
+    reasoning GET /api/notebooks' own "currently_compiled" already
+    follows for reporting a fact about a notebook's state rather than
+    raising over it.
+    """
+
+    notebook_path = data.get(
+        "notebook_path"
+    )
+
+    if not notebook_path:
+
+        raise HTTPException(
+            status_code=400,
+            detail="notebook_path is required"
+        )
+
+    strict = bool(data.get("strict", False))
+
+    full_path = resolve_upload_path(notebook_path)
+
+    if not full_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    try:
+
+        load_notebook(str(full_path))
+
+    except MALFORMED_NOTEBOOK_ERRORS as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+        )
+
+    # Held for the same reason POST /api/inspect's identical
+    # inspect_notebook_data call already is -- see its own docstring: a
+    # concurrent POST /api/compile's clear_stale_export_artifacts can
+    # rmtree the sdk/ subdirectory this call's own "generated_files"
+    # field walks, mid-walk.
+    with COMPILE_LOCK:
+
+        inspection = inspect_notebook_data(
+            str(full_path),
+            GENERATED_DIR
+        )
+
+    reserved_name_conflicts = inspection["reserved_name_conflicts"]
+    skipped_functions = inspection["skipped_functions"]
+
+    has_blocking_issues = bool(reserved_name_conflicts) or (
+        strict and bool(skipped_functions)
+    )
+    has_warnings = bool(skipped_functions) and not has_blocking_issues
+
+    if has_blocking_issues:
+        status = "fail"
+    elif has_warnings:
+        status = "warn"
+    else:
+        status = "pass"
+
+    return {
+        "status": status,
+        "notebook": notebook_path,
+        "reserved_name_conflicts": reserved_name_conflicts,
+        "skipped_functions": skipped_functions,
+    }
+
+
 @router.post("/compile")
 def compile_notebook_endpoint(
     data: dict

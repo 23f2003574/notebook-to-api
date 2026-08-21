@@ -341,7 +341,7 @@ _CORE_COMMANDS = frozenset({
     "export-curl", "serve", "watch", "deploy", "diff", "upload", "list",
     "download", "delete", "rename", "tags", "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "remote-export", "remote-deploy",
-    "status",
+    "status", "remote-validate",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -1519,6 +1519,62 @@ def _dispatch_core_command(args):
 
             if dependencies:
                 print(f"\nDependencies: {', '.join(dependencies)}")
+    elif args.command == "remote-validate":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.post(
+                f"{dashboard_url}/api/validate",
+                json={"notebook_path": args.filename, "strict": args.strict},
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        status = data.get("status")
+        reserved_name_conflicts = data.get("reserved_name_conflicts", [])
+        skipped_functions = data.get("skipped_functions", [])
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"Validating '{args.filename}' on {dashboard_url}")
+
+            if reserved_name_conflicts:
+                print("\n✗ Reserved name conflicts (compilation will fail):")
+                for name in reserved_name_conflicts:
+                    print(f"  - {name}")
+
+            if skipped_functions:
+                marker = "✗" if args.strict else "⚠"
+                print(f"\n{marker} Skipped functions (no endpoint will be generated):")
+                for skipped in skipped_functions:
+                    print(f"  - {skipped['name']}: {skipped['reason']}")
+
+            if status == "pass":
+                print("\n✓ No issues found.")
+            elif status == "warn":
+                print("\nWarnings found, but this notebook would still compile cleanly.")
+            else:
+                print("\nValidation failed.")
+
+        if status == "fail":
+            sys.exit(2)
+        elif status == "warn":
+            sys.exit(1)
     elif args.command == "remote-build":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -2735,6 +2791,43 @@ def main():
             "\"skipped_functions\", \"dependencies\", "
             "\"generated_files\"}) instead of a human-readable summary, "
             "for scripting/automation."
+        )
+    )
+
+    # remote-validate command (CI-friendly exit-code gate on a notebook
+    # already uploaded to a running dashboard, via its own POST
+    # /api/validate -- not this CLI's own local `validate`, which never
+    # touches a dashboard, and unlike `remote-compile` never mutates
+    # GENERATED_DIR or the currently-compiled app just to ask a yes/no
+    # question)
+    remote_validate_parser = subparsers.add_parser(
+        "remote-validate",
+        help="Check whether a notebook already uploaded to a running dashboard instance would compile cleanly, via its POST /api/validate."
+    )
+    remote_validate_parser.add_argument(
+        "filename",
+        help="Filename of the notebook already uploaded to the dashboard, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(remote_validate_parser)
+    remote_validate_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Also fail (exit 2) when the notebook has skipped functions "
+            "(no endpoint will be generated for them) -- the same "
+            "--strict `validate` itself already accepts. By default "
+            "these are reported as a non-fatal warning (exit 1)."
+        )
+    )
+    remote_validate_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\": "
+            "\"pass\"|\"warn\"|\"fail\", \"notebook\", "
+            "\"reserved_name_conflicts\", \"skipped_functions\"}) instead "
+            "of the human-readable report, for scripting/automation."
         )
     )
 

@@ -3517,6 +3517,167 @@ def test_inspect_reports_no_reserved_name_conflicts_for_a_clean_notebook():
     assert inspect_resp.json()["reserved_name_conflicts"] == []
 
 
+def test_validate_reports_pass_for_a_clean_notebook():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "validate_clean.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post("/api/validate", json={"notebook_path": "validate_clean.ipynb"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "pass",
+        "notebook": "validate_clean.ipynb",
+        "reserved_name_conflicts": [],
+        "skipped_functions": [],
+    }
+
+
+def test_validate_reports_warn_for_skipped_functions_without_strict():
+
+    content = _notebook_bytes(
+        "def unsupported(a, **kwargs):\n    return a\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "validate_warn.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post("/api/validate", json={"notebook_path": "validate_warn.ipynb"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "warn"
+    assert body["reserved_name_conflicts"] == []
+    assert [f["name"] for f in body["skipped_functions"]] == ["unsupported"]
+
+
+def test_validate_reports_fail_for_skipped_functions_with_strict():
+
+    content = _notebook_bytes(
+        "def unsupported(a, **kwargs):\n    return a\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "validate_strict_fail.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post(
+        "/api/validate",
+        json={"notebook_path": "validate_strict_fail.ipynb", "strict": True},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "fail"
+
+
+def test_validate_reports_fail_for_a_reserved_name_conflict_even_without_strict():
+
+    content = _notebook_bytes(
+        "def health_check() -> dict:\n    return {}\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "validate_reserved.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post("/api/validate", json={"notebook_path": "validate_reserved.ipynb"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "fail"
+    assert body["reserved_name_conflicts"] == ["health_check"]
+
+
+def test_validate_does_not_touch_generated_dir(monkeypatch, tmp_path):
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "validate_no_side_effects.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    generated_dir = tmp_path / "validate_generated"
+    monkeypatch.setattr("backend.routes.upload.GENERATED_DIR", str(generated_dir))
+
+    resp = client.post(
+        "/api/validate", json={"notebook_path": "validate_no_side_effects.ipynb"}
+    )
+
+    assert resp.status_code == 200
+    assert not generated_dir.exists()
+
+
+def test_validate_returns_404_for_a_missing_notebook():
+
+    resp = client.post(
+        "/api/validate", json={"notebook_path": "does_not_exist.ipynb"}
+    )
+
+    assert resp.status_code == 404
+
+
+def test_validate_returns_400_for_a_malformed_notebook_file():
+
+    filename = "validate_malformed.ipynb"
+    file_path = os.path.join(UPLOAD_DIR, filename)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("not valid json at all")
+
+    resp = client.post("/api/validate", json={"notebook_path": filename})
+
+    assert resp.status_code == 400
+
+
 def test_inspect_reports_endpoints_and_flags_background_ones_before_compiling():
     """Mirrors test_compile_endpoints_flag_background_functions_as_async
     above, but for /api/inspect: before this fix, that classification was

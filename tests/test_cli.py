@@ -3449,6 +3449,194 @@ def test_remote_compile_command_reports_a_clean_error_when_the_dashboard_is_unre
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_remote_validate_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "remote-validate" in proc.stdout
+
+
+def test_remote_validate_command_passes_a_clean_notebook(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "pass",
+            "notebook": "nb.ipynb",
+            "reserved_name_conflicts": [],
+            "skipped_functions": [],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-validate", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No issues found." in proc.stdout
+    assert handler.requests == ["/api/validate"]
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "strict": False,
+    }
+
+
+def test_remote_validate_command_warns_but_does_not_fail_on_skipped_functions(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "warn",
+            "notebook": "nb.ipynb",
+            "reserved_name_conflicts": [],
+            "skipped_functions": [{"name": "unsupported", "reason": "**kwargs"}],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-validate", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "Skipped functions" in proc.stdout
+    assert "unsupported" in proc.stdout
+    assert "still compile cleanly" in proc.stdout
+
+
+def test_remote_validate_command_strict_flag_fails_on_skipped_functions(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "fail",
+            "notebook": "nb.ipynb",
+            "reserved_name_conflicts": [],
+            "skipped_functions": [{"name": "unsupported", "reason": "**kwargs"}],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-validate", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--strict",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "Validation failed." in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "strict": True,
+    }
+
+
+def test_remote_validate_command_fails_on_a_reserved_name_conflict(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "fail",
+            "notebook": "nb.ipynb",
+            "reserved_name_conflicts": ["health_check"],
+            "skipped_functions": [],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-validate", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "Reserved name conflicts" in proc.stdout
+    assert "health_check" in proc.stdout
+    assert "Validation failed." in proc.stdout
+
+
+def test_remote_validate_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "pass",
+            "notebook": "nb.ipynb",
+            "reserved_name_conflicts": [],
+            "skipped_functions": [],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-validate", "nb.ipynb", "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout)["status"] == "pass"
+
+
+def test_remote_validate_command_reports_a_clean_error_for_a_missing_notebook(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook file not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-validate", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook file not found")
+
+
+def test_remote_validate_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-validate", "nb.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_remote_build_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())
