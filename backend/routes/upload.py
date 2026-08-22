@@ -42,6 +42,7 @@ from backend.inspector import (
     EXCLUDED_GENERATED_DIR_NAMES,
     EXCLUDED_GENERATED_FILE_NAMES,
     _extract_notebook_functions,
+    generate_curl_commands,
     inspect_notebook_data,
     list_generated_files,
 )
@@ -3397,6 +3398,113 @@ def requirements_preview_endpoint(data: dict):
         "status": "success",
         "notebook": notebook_path,
         "requirements": requirements,
+    }
+
+
+@router.post("/curl-preview")
+def curl_preview_endpoint(data: dict):
+    """A ready-to-run `curl` command for every function an already-
+    uploaded notebook would compile into an endpoint -- without
+    compiling it, or a caller needing to first download its raw bytes.
+
+    The CLI's own `remote-curl` already gets this same result for a
+    notebook already on a dashboard, but only by downloading the whole
+    notebook first (GET /api/notebooks/{filename}), writing it to a local
+    temp file, and running generate_curl_commands (backend/inspector.py)
+    against that local copy -- a caller that just wants a quick preview
+    (a web frontend showing "try it" snippets for an uploaded notebook,
+    for instance) had no way to get the same list without also fetching
+    and locally re-parsing the entire notebook itself. This runs
+    generate_curl_commands server-side instead, against the notebook
+    already sitting in UPLOAD_DIR, and returns just its own "commands"
+    list -- no notebook bytes, no local temp file, no script written to
+    disk (unlike `remote-curl`, which always writes one).
+
+    "host"/"port"/"api_key" mirror generate_curl_commands' own identical
+    keyword arguments -- see its docstring for their defaults ("localhost",
+    8000, and the generated app's own DEFAULT_DEV_API_KEY respectively)
+    and why a caller would override any of them (a non-default `serve`
+    host/port, or a NOTEBOOK_API_KEY already configured to something other
+    than the default dev key).
+
+    generate_curl_commands internally calls inspect_notebook_data with
+    its own default output_dir ("generated") rather than this dashboard's
+    own configured GENERATED_DIR -- harmless in practice since it never
+    reads inspect_notebook_data's "generated_files" field at all, only
+    "functions" and "reserved_name_conflicts" -- but held under
+    COMPILE_LOCK regardless, the same protection POST /api/inspect's own
+    identical inspect_notebook_data call already needs against a
+    concurrent recompile: under this dashboard's *default* configuration,
+    "generated" (the relative default both GENERATED_DIR and
+    inspect_notebook_data's own output_dir default to) are the exact same
+    directory, so a concurrent POST /api/compile really can clear it
+    mid-walk unless this holds the same lock that endpoint already does.
+    """
+
+    notebook_path = data.get("notebook_path")
+
+    if not notebook_path:
+
+        raise HTTPException(
+            status_code=400,
+            detail="notebook_path is required"
+        )
+
+    full_path = resolve_upload_path(notebook_path)
+
+    if not full_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    try:
+
+        load_notebook(str(full_path))
+
+    except MALFORMED_NOTEBOOK_ERRORS as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+        )
+
+    host = data.get("host", "localhost")
+    port = data.get("port", 8000)
+    api_key = data.get("api_key")
+
+    if not isinstance(host, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="host must be a string"
+        )
+
+    if not isinstance(port, int) or isinstance(port, bool):
+
+        raise HTTPException(
+            status_code=400,
+            detail="port must be an integer"
+        )
+
+    if api_key is not None and not isinstance(api_key, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="api_key must be a string"
+        )
+
+    with COMPILE_LOCK:
+
+        commands = generate_curl_commands(
+            str(full_path), host=host, port=port, api_key=api_key
+        )
+
+    return {
+        "status": "success",
+        "notebook": notebook_path,
+        "commands": commands,
     }
 
 

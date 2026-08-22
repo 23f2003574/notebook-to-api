@@ -5494,6 +5494,172 @@ def test_requirements_preview_requires_a_notebook_path():
     assert resp.status_code == 400
 
 
+def test_curl_preview_returns_one_command_per_function():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "curl_preview_basic.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post(
+        "/api/curl-preview",
+        json={"notebook_path": "curl_preview_basic.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["notebook"] == "curl_preview_basic.ipynb"
+    assert len(body["commands"]) == 2
+    assert "curl -X POST http://localhost:8000/add" in body["commands"][0]
+    assert "X-API-Key: notebook-to-api-dev-key" in body["commands"][0]
+    assert "curl -X POST http://localhost:8000/subtract" in body["commands"][1]
+
+
+def test_curl_preview_respects_custom_host_port_and_api_key():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "curl_preview_custom.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post(
+        "/api/curl-preview",
+        json={
+            "notebook_path": "curl_preview_custom.ipynb",
+            "host": "api.example.com",
+            "port": 9000,
+            "api_key": "mykey123",
+        },
+    )
+
+    assert resp.status_code == 200
+    command = resp.json()["commands"][0]
+    assert "curl -X POST http://api.example.com:9000/add" in command
+    assert "X-API-Key: mykey123" in command
+
+
+def test_curl_preview_excludes_a_reserved_name_conflict():
+
+    content = _notebook_bytes(
+        "def health_check() -> dict:\n    return {}\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "curl_preview_reserved.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post(
+        "/api/curl-preview",
+        json={"notebook_path": "curl_preview_reserved.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["commands"] == []
+
+
+def test_curl_preview_does_not_touch_generated_dir(monkeypatch, tmp_path):
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "curl_preview_no_side_effects.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    generated_dir = tmp_path / "curl_preview_generated"
+    monkeypatch.setattr("backend.routes.upload.GENERATED_DIR", str(generated_dir))
+
+    resp = client.post(
+        "/api/curl-preview",
+        json={"notebook_path": "curl_preview_no_side_effects.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    assert not generated_dir.exists()
+
+
+def test_curl_preview_returns_404_for_a_missing_notebook():
+
+    resp = client.post(
+        "/api/curl-preview", json={"notebook_path": "does_not_exist.ipynb"}
+    )
+
+    assert resp.status_code == 404
+
+
+def test_curl_preview_returns_400_for_a_malformed_notebook_file():
+
+    filename = "curl_preview_malformed.ipynb"
+    file_path = os.path.join(UPLOAD_DIR, filename)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("not valid json at all")
+
+    resp = client.post("/api/curl-preview", json={"notebook_path": filename})
+
+    assert resp.status_code == 400
+
+
+def test_curl_preview_requires_a_notebook_path():
+
+    resp = client.post("/api/curl-preview", json={})
+
+    assert resp.status_code == 400
+
+
+def test_curl_preview_rejects_a_non_integer_port():
+
+    _upload_sample_notebook("curl_preview_bad_port.ipynb")
+
+    resp = client.post(
+        "/api/curl-preview",
+        json={"notebook_path": "curl_preview_bad_port.ipynb", "port": "not-a-number"},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_inspect_reports_endpoints_and_flags_background_ones_before_compiling():
     """Mirrors test_compile_endpoints_flag_background_functions_as_async
     above, but for /api/inspect: before this fix, that classification was

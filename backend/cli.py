@@ -344,7 +344,8 @@ _CORE_COMMANDS = frozenset({
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy", "tags",
     "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "remote-export", "remote-deploy",
-    "status", "remote-validate", "validate-all", "requirements-preview", "remote-curl",
+    "status", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
+    "remote-curl",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -2184,6 +2185,48 @@ def _dispatch_core_command(args):
 
             for dep in requirements:
                 print(f"  {dep}")
+    elif args.command == "curl-preview":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.post(
+                f"{dashboard_url}/api/curl-preview",
+                json={
+                    "notebook_path": args.filename,
+                    "host": args.host,
+                    "port": args.port,
+                    "api_key": args.api_key,
+                },
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            commands = data.get("commands", [])
+
+            print(f"curl preview for '{args.filename}' on {dashboard_url}:\n")
+
+            if not commands:
+                print("No endpoints would be generated for this notebook.")
+            else:
+                print("\n\n".join(commands))
     elif args.command == "remote-build":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -4029,6 +4072,57 @@ def main():
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"notebook\", \"requirements\"}) instead of a "
             "human-readable listing, for scripting/automation."
+        )
+    )
+
+    # curl-preview command (preview curl commands for a notebook already
+    # uploaded to a running dashboard, via its own POST /api/curl-preview
+    # -- distinct from `remote-curl`, which downloads the notebook first
+    # and always writes a shell script to disk; this only ever prints the
+    # commands, no download and no file written)
+    curl_preview_parser = subparsers.add_parser(
+        "curl-preview",
+        help=(
+            "Preview curl commands for a notebook already uploaded to a "
+            "running dashboard instance, via its POST /api/curl-preview "
+            "-- no download, no script file written."
+        )
+    )
+    curl_preview_parser.add_argument(
+        "filename",
+        help="Filename of the notebook already uploaded to the dashboard, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(curl_preview_parser)
+    curl_preview_parser.add_argument(
+        "--host",
+        default="localhost",
+        help="Host the generated commands target (default: localhost)."
+    )
+    curl_preview_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port the generated commands target (default: 8000, matching `serve`'s own default)."
+    )
+    curl_preview_parser.add_argument(
+        "--api-key",
+        default=DEFAULT_DEV_API_KEY,
+        dest="api_key",
+        help=(
+            "Value sent as the X-API-Key header (default: the generated "
+            "app's own default dev key, used when NOTEBOOK_API_KEY isn't "
+            "set on the server). Pass the same value configured via "
+            "NOTEBOOK_API_KEY if it's been changed."
+        )
+    )
+    curl_preview_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"notebook\", \"commands\"}) instead of a human-readable "
+            "listing, for scripting/automation."
         )
     )
 

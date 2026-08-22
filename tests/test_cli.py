@@ -5415,6 +5415,162 @@ def test_requirements_preview_command_reports_a_clean_error_when_the_dashboard_i
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_curl_preview_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "curl-preview" in proc.stdout
+
+
+def test_curl_preview_command_prints_the_commands(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebook": "nb.ipynb",
+            "commands": [
+                "# add\ncurl -X POST http://localhost:8000/add \\\n"
+                '  -H "Content-Type: application/json" \\\n'
+                '  -H "X-API-Key: notebook-to-api-dev-key" \\\n'
+                "  -d '{}'",
+            ],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["curl-preview", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "curl -X POST http://localhost:8000/add" in proc.stdout
+    assert handler.requests == ["/api/curl-preview"]
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb",
+        "host": "localhost",
+        "port": 8000,
+        "api_key": "notebook-to-api-dev-key",
+    }
+
+
+def test_curl_preview_command_passes_host_port_and_api_key_through(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebook": "nb.ipynb", "commands": [],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "curl-preview", "nb.ipynb", "--dashboard-url", dashboard_url,
+            "--host", "api.example.com", "--port", "9000", "--api-key", "mykey123",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb",
+        "host": "api.example.com",
+        "port": 9000,
+        "api_key": "mykey123",
+    }
+
+
+def test_curl_preview_command_reports_no_endpoints(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebook": "nb.ipynb", "commands": [],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["curl-preview", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No endpoints would be generated" in proc.stdout
+
+
+def test_curl_preview_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "notebook": "nb.ipynb",
+        "commands": ["curl -X POST http://localhost:8000/add"],
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["curl-preview", "nb.ipynb", "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_curl_preview_command_reports_a_clean_error_for_a_missing_notebook(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook file not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["curl-preview", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook file not found")
+
+
+def test_curl_preview_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "curl-preview", "nb.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_remote_build_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())
