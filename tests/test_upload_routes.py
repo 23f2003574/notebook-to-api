@@ -5092,6 +5092,164 @@ def test_validate_all_reports_zero_when_nothing_uploaded():
     }
 
 
+def test_requirements_preview_matches_what_an_actual_compile_writes():
+
+    content = _notebook_bytes(
+        "import pandas\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "requirements_preview_match.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    preview_resp = client.post(
+        "/api/requirements-preview",
+        json={"notebook_path": "requirements_preview_match.ipynb"},
+    )
+    assert preview_resp.status_code == 200
+    preview_body = preview_resp.json()
+    assert preview_body["status"] == "success"
+    assert preview_body["notebook"] == "requirements_preview_match.ipynb"
+
+    compile_resp = client.post(
+        "/api/compile",
+        json={"notebook_path": "requirements_preview_match.ipynb"},
+    )
+    assert compile_resp.status_code == 200
+
+    actual_requirements = client.get(
+        "/api/generated/requirements.txt"
+    ).json()["content"].split()
+
+    assert sorted(preview_body["requirements"]) == sorted(actual_requirements)
+    assert any(dep.startswith("fastapi") for dep in preview_body["requirements"])
+    assert any(dep.startswith("pandas") for dep in preview_body["requirements"])
+
+
+def test_requirements_preview_includes_an_explicit_requirement_directive():
+
+    content = _notebook_bytes(
+        "# notebook-to-api: requires definitely-not-a-real-pkg==1.2.3\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "requirements_preview_directive.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post(
+        "/api/requirements-preview",
+        json={"notebook_path": "requirements_preview_directive.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    assert "definitely-not-a-real-pkg==1.2.3" in resp.json()["requirements"]
+
+
+def test_requirements_preview_falls_back_to_a_bare_name_for_an_uninstalled_dependency():
+
+    content = _notebook_bytes(
+        "import definitely_not_installed_pkg_hopefully\n\n"
+        "def noop() -> int:\n    return 1\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "requirements_preview_uninstalled.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post(
+        "/api/requirements-preview",
+        json={"notebook_path": "requirements_preview_uninstalled.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    assert "definitely_not_installed_pkg_hopefully" in resp.json()["requirements"]
+
+
+def test_requirements_preview_does_not_touch_generated_dir(monkeypatch, tmp_path):
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "requirements_preview_no_side_effects.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    generated_dir = tmp_path / "requirements_preview_generated"
+    monkeypatch.setattr("backend.routes.upload.GENERATED_DIR", str(generated_dir))
+
+    resp = client.post(
+        "/api/requirements-preview",
+        json={"notebook_path": "requirements_preview_no_side_effects.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    assert not generated_dir.exists()
+
+
+def test_requirements_preview_returns_404_for_a_missing_notebook():
+
+    resp = client.post(
+        "/api/requirements-preview", json={"notebook_path": "does_not_exist.ipynb"}
+    )
+
+    assert resp.status_code == 404
+
+
+def test_requirements_preview_returns_400_for_a_malformed_notebook_file():
+
+    filename = "requirements_preview_malformed.ipynb"
+    file_path = os.path.join(UPLOAD_DIR, filename)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("not valid json at all")
+
+    resp = client.post("/api/requirements-preview", json={"notebook_path": filename})
+
+    assert resp.status_code == 400
+
+
+def test_requirements_preview_requires_a_notebook_path():
+
+    resp = client.post("/api/requirements-preview", json={})
+
+    assert resp.status_code == 400
+
+
 def test_inspect_reports_endpoints_and_flags_background_ones_before_compiling():
     """Mirrors test_compile_endpoints_flag_background_functions_as_async
     above, but for /api/inspect: before this fix, that classification was

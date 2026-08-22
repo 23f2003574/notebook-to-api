@@ -344,7 +344,7 @@ _CORE_COMMANDS = frozenset({
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy", "tags",
     "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "remote-export", "remote-deploy",
-    "status", "remote-validate", "validate-all", "remote-curl",
+    "status", "remote-validate", "validate-all", "requirements-preview", "remote-curl",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -2109,6 +2109,41 @@ def _dispatch_core_command(args):
             sys.exit(2)
         elif data.get("warn_count", 0) > 0:
             sys.exit(1)
+    elif args.command == "requirements-preview":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.post(
+                f"{dashboard_url}/api/requirements-preview",
+                json={"notebook_path": args.filename},
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            requirements = data.get("requirements", [])
+
+            print(f"requirements.txt preview for '{args.filename}' on {dashboard_url}:\n")
+
+            for dep in requirements:
+                print(f"  {dep}")
     elif args.command == "remote-build":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -3855,6 +3890,33 @@ def main():
             "\"results\": [{\"filename\", \"status\", ...}, ...], "
             "\"pass_count\", \"warn_count\", \"fail_count\"}) instead of "
             "the human-readable report, for scripting/automation."
+        )
+    )
+
+    # requirements-preview command (preview requirements.txt for a
+    # notebook already uploaded to a running dashboard, via its own POST
+    # /api/requirements-preview -- without actually compiling it)
+    requirements_preview_parser = subparsers.add_parser(
+        "requirements-preview",
+        help=(
+            "Preview the exact requirements.txt a compile of an "
+            "already-uploaded notebook would produce, via its POST "
+            "/api/requirements-preview -- without actually compiling it."
+        )
+    )
+    requirements_preview_parser.add_argument(
+        "filename",
+        help="Filename of the notebook already uploaded to the dashboard, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(requirements_preview_parser)
+    requirements_preview_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"notebook\", \"requirements\"}) instead of a "
+            "human-readable listing, for scripting/automation."
         )
     )
 

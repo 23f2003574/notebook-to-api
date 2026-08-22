@@ -401,12 +401,44 @@ def _extract_explicit_requirements(code_cells):
     return specs
 
 
-def write_requirements(imports, output_dir, explicit_requirements=None):
+def extract_third_party_imports(code_cells):
+    """The raw, STANDARD_LIBS-filtered import names `code_cells` (already
+    filtered to parseable cells, as compile_notebook_to_api's own
+    `code_cells` already is) collect -- before any distribution-name
+    resolution or version pinning, exactly the shape resolve_requirements
+    (below) itself expects as its own "imports" argument.
 
-    requirements_path = os.path.join(
-        output_dir,
-        "requirements.txt"
-    )
+    Factored out of compile_notebook_to_api, which used to assemble this
+    same set/filter pass inline just before calling write_requirements --
+    routes/upload.py's requirements-preview endpoint needs the identical
+    "what does this notebook actually import" step to build a preview
+    without writing anything to disk, and duplicating it inline a second
+    time there would risk the exact kind of two-copies-silently-drift
+    problem _third_party_dependencies' own docstring (backend/inspector.py)
+    already describes happening once before, for a related but distinct
+    computation.
+    """
+    imports = set()
+
+    for cell in code_cells:
+        imports.update(extract_imports_from_code(cell))
+
+    return [imp for imp in imports if imp not in STANDARD_LIBS]
+
+
+def resolve_requirements(imports, explicit_requirements=None):
+    """The exact, sorted requirements.txt lines write_requirements (below)
+    would write for `imports` (a notebook's own third-party imports, e.g.
+    from extract_third_party_imports above) and `explicit_requirements`
+    (see _extract_explicit_requirements) -- computed without writing
+    anything to disk, so a caller can preview what a compile would
+    produce there without actually running one.
+
+    Factored out of write_requirements, which used to compute this same
+    value immediately before writing it out; write_requirements below now
+    just calls this and writes the result, so a preview built from this
+    function can never drift from what an actual compile would produce.
+    """
 
     # watchdog is a dependency of this tool's own `serve` command (it
     # watches the notebook file for changes to trigger a hot recompile --
@@ -446,7 +478,17 @@ def write_requirements(imports, output_dir, explicit_requirements=None):
     # `cv2` import, so declaring one doesn't suppress the other if the
     # notebook also imports it directly -- only an exact duplicate is
     # removed.
-    all_deps = sorted(set(pinned_deps) | set(explicit_requirements or []))
+    return sorted(set(pinned_deps) | set(explicit_requirements or []))
+
+
+def write_requirements(imports, output_dir, explicit_requirements=None):
+
+    requirements_path = os.path.join(
+        output_dir,
+        "requirements.txt"
+    )
+
+    all_deps = resolve_requirements(imports, explicit_requirements)
 
     with open(requirements_path, "w", encoding="utf-8") as f:
         for dep in all_deps:
@@ -760,19 +802,8 @@ def compile_notebook_to_api(
 
         write_runtime_module(code_cells, output_dir)
 
-        imports = set()
-
-        for cell in code_cells:
-
-            imports.update(extract_imports_from_code(cell))
-
-        filtered_imports = [
-            imp for imp in imports
-            if imp not in STANDARD_LIBS
-        ]
-
         write_requirements(
-            filtered_imports,
+            extract_third_party_imports(code_cells),
             output_dir,
             explicit_requirements=_extract_explicit_requirements(code_cells)
         )

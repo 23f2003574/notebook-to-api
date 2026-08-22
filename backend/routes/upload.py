@@ -26,10 +26,13 @@ from nbformat import ValidationError as NotebookValidationError
 from backend.compiler import (
     COMPILE_LOCK,
     COMPILE_METADATA_FILENAME,
+    _extract_explicit_requirements,
     _filter_functions_by_name,
     compile_notebook,
+    extract_third_party_imports,
     hash_notebook_file,
     package_name_for_output_dir,
+    resolve_requirements,
     update_compile_metadata_source_notebook,
 )
 from backend.generator.api_generator import (
@@ -42,7 +45,11 @@ from backend.inspector import (
     inspect_notebook_data,
     list_generated_files,
 )
+from backend.parser.ast_parser import (
+    is_parseable_python,
+)
 from backend.parser.notebook_parser import (
+    extract_code_cells,
     load_notebook,
 )
 
@@ -3157,6 +3164,84 @@ def validate_all_notebooks(strict: bool = False):
         "pass_count": pass_count,
         "warn_count": warn_count,
         "fail_count": fail_count,
+    }
+
+
+@router.post("/requirements-preview")
+def requirements_preview_endpoint(data: dict):
+    """The exact, sorted requirements.txt lines POST /api/compile would
+    write for an already-uploaded notebook -- without actually compiling
+    it, or touching GENERATED_DIR at all.
+
+    POST /api/inspect's own "dependencies" field already lists a
+    notebook's third-party imports, resolved to their real PyPI
+    distribution names (see _third_party_dependencies, backend/
+    inspector.py) -- but that's deliberately not the same thing as
+    requirements.txt: it's missing every one of write_requirements' own
+    unconditional core_dependencies (fastapi/uvicorn/pydantic, shipped in
+    every compiled app whether or not the notebook itself imports them),
+    isn't version-pinned, and doesn't include anything a notebook author
+    declared via a "# notebook-to-api: requires <spec>" directive (see
+    _extract_explicit_requirements). A caller wanting to know exactly
+    what `pip install -r requirements.txt` -- and from there `deploy`'s
+    own Docker build -- would actually install for this notebook had no
+    way to ask that short of actually compiling it first and then
+    reading GENERATED_DIR/requirements.txt back, mutating GENERATED_DIR
+    (and whatever it currently backs) just to answer a question that
+    doesn't require compiling anything at all.
+
+    Reuses extract_third_party_imports and resolve_requirements (backend/
+    compiler.py) -- the exact same import-collection and pinning logic
+    compile_notebook_to_api itself now calls before writing
+    requirements.txt -- so this can never drift from what an actual
+    compile of the same notebook would produce, the same "can't drift
+    from the real thing" guarantee POST /api/validate's own reuse of
+    inspect_notebook_data already provides for compile-success/failure.
+    """
+
+    notebook_path = data.get("notebook_path")
+
+    if not notebook_path:
+
+        raise HTTPException(
+            status_code=400,
+            detail="notebook_path is required"
+        )
+
+    full_path = resolve_upload_path(notebook_path)
+
+    if not full_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    try:
+
+        notebook = load_notebook(str(full_path))
+
+    except MALFORMED_NOTEBOOK_ERRORS as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+        )
+
+    code_cells = [
+        cell for cell in extract_code_cells(notebook)
+        if is_parseable_python(cell)
+    ]
+
+    requirements = resolve_requirements(
+        extract_third_party_imports(code_cells),
+        explicit_requirements=_extract_explicit_requirements(code_cells),
+    )
+
+    return {
+        "status": "success",
+        "notebook": notebook_path,
+        "requirements": requirements,
     }
 
 
