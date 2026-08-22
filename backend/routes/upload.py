@@ -2772,7 +2772,49 @@ def copy_notebook(filename: str, data: dict):
     /api/upload?overwrite=true.
     """
 
-    new_filename = data.get("new_filename")
+    overwrite = bool(data.get("overwrite", False))
+
+    source_path = resolve_upload_path(filename)
+
+    if not source_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    new_filename = _copy_notebook_to(source_path, data.get("new_filename"), overwrite)
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "new_filename": new_filename,
+    }
+
+
+def _copy_notebook_to(source_path: Path, new_filename, overwrite: bool) -> str:
+    """Copy `source_path` (an already-verified existing notebook file) to
+    `new_filename` within UPLOAD_DIR, applying the exact same validation,
+    overwrite semantics, and tag inheritance copy_notebook's own
+    docstring above documents.
+
+    Factored out of copy_notebook so POST
+    /api/notebooks/{filename}/copy-batch (below) can reuse it once per
+    destination instead of a second, inevitably-drifting copy of this
+    logic -- copy_notebook itself now just calls this once, unchanged
+    behavior for its own single-destination caller except that a request
+    combining a missing source *and* an invalid new_filename now reports
+    the 404 (checked by copy_notebook before calling this) rather than
+    the 400 this raises -- not otherwise observable, since no caller
+    depends on which of two independently-wrong things about the same
+    request gets reported first.
+
+    Raises the identical HTTPException copy_notebook always raised for
+    each failure mode. copy_notebook_batch instead catches that
+    HTTPException per destination, so one bad destination in a batch
+    doesn't abort every other copy. Returns the validated new_filename on
+    success.
+    """
 
     if not isinstance(new_filename, str) or not new_filename:
 
@@ -2786,17 +2828,6 @@ def copy_notebook(filename: str, data: dict):
         raise HTTPException(
             status_code=400,
             detail="new_filename must be a .ipynb notebook"
-        )
-
-    overwrite = bool(data.get("overwrite", False))
-
-    source_path = resolve_upload_path(filename)
-
-    if not source_path.is_file():
-
-        raise HTTPException(
-            status_code=404,
-            detail="Notebook file not found"
         )
 
     dest_path = resolve_upload_path(new_filename)
@@ -2838,11 +2869,105 @@ def copy_notebook(filename: str, data: dict):
 
         _write_notebook_tags(dest_path.name, _read_notebook_tags(source_path.name))
 
-        return {
-            "status": "success",
-            "filename": filename,
-            "new_filename": new_filename,
-        }
+    return new_filename
+
+
+@router.post("/notebooks/{filename}/copy-batch")
+def copy_notebook_batch(filename: str, data: dict):
+    """Duplicate a previously uploaded notebook under several new
+    filenames in one call, leaving the source notebook (and whatever it
+    currently backs in GENERATED_DIR) completely untouched.
+
+    POST /api/notebooks/{filename}/copy already duplicates a notebook
+    under one new name -- exactly right for that, but seeding several
+    variants from the same known-good template at once (e.g. a handful
+    of per-customer demo notebooks from one template, or a batch of
+    named starting points for a workshop) meant calling it once per
+    desired name, each a separate round trip. Unlike POST
+    /api/notebooks/delete-batch, POST /api/tags/{tag}/apply, and POST
+    /api/notebooks/info-batch -- each of which fan a request out across
+    several *source* notebooks named in its own "filenames" list -- this
+    is the mirror shape: one fixed source (`filename`, from the URL path,
+    same as the single-destination POST /api/notebooks/{filename}/copy
+    already uses) fanned out across several *destinations* named in
+    "new_filenames" instead.
+
+    Reuses _copy_notebook_to (above) -- the exact same validation,
+    overwrite semantics, and tag inheritance the single-destination
+    POST /api/notebooks/{filename}/copy itself now calls too -- once per
+    destination, so a notebook copied this way is indistinguishable from
+    one copied individually. Follows the identical per-entry "one bad
+    entry doesn't abort the batch" contract those three endpoints already
+    established: each destination is attempted independently, and
+    "results" reports one {"new_filename", "status", ...} entry per
+    destination -- "success" or "error" (the HTTPException detail that
+    destination's own single-copy call would have raised on its own,
+    e.g. 409 for a same-name collision without "overwrite": true). The
+    response is always 200 -- the batch request itself was handled, even
+    if every destination in it failed -- with "succeeded_count"/
+    "failed_count" summarizing "results" the same way those endpoints'
+    own identical fields already do.
+
+    "overwrite" applies uniformly to every destination, the same single
+    flag POST /api/notebooks/{filename}/copy itself takes -- there's no
+    per-destination override.
+    """
+
+    new_filenames = data.get("new_filenames")
+
+    if (
+        not isinstance(new_filenames, list)
+        or not new_filenames
+        or not all(isinstance(f, str) for f in new_filenames)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="new_filenames must be a non-empty list of strings"
+        )
+
+    overwrite = bool(data.get("overwrite", False))
+
+    source_path = resolve_upload_path(filename)
+
+    if not source_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    results = []
+    succeeded_count = 0
+    failed_count = 0
+
+    for new_filename in new_filenames:
+
+        try:
+
+            _copy_notebook_to(source_path, new_filename, overwrite)
+
+            results.append({
+                "new_filename": new_filename,
+                "status": "success",
+            })
+            succeeded_count += 1
+
+        except HTTPException as exc:
+
+            results.append({
+                "new_filename": new_filename,
+                "status": "error",
+                "detail": exc.detail,
+            })
+            failed_count += 1
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "results": results,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
+    }
 
 
 @router.get("/notebooks/{filename}/tags")

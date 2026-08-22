@@ -341,7 +341,8 @@ _CORE_COMMANDS = frozenset({
     "export-curl", "serve", "watch", "deploy", "diff", "upload", "import-notebooks",
     "list", "info", "info-batch",
     "search-functions", "search-content", "find-duplicates",
-    "download", "export-notebooks", "delete", "delete-batch", "rename", "copy", "tags",
+    "download", "export-notebooks", "delete", "delete-batch", "rename", "copy",
+    "copy-batch", "tags",
     "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
     "status", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
@@ -1789,6 +1790,49 @@ def _dispatch_core_command(args):
             print(
                 f"Copied '{data.get('filename', args.filename)}' to "
                 f"'{data.get('new_filename', args.new_filename)}' on {dashboard_url}"
+            )
+    elif args.command == "copy-batch":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.post(
+                f"{dashboard_url}/api/notebooks/{args.filename}/copy-batch",
+                json={
+                    "new_filenames": args.new_filename,
+                    "overwrite": args.overwrite,
+                },
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            for result in data.get("results", []):
+
+                if result["status"] == "success":
+                    print(f"Copied '{args.filename}' to '{result['new_filename']}'")
+                else:
+                    print(f"Failed to copy to '{result['new_filename']}': {result['detail']}")
+
+            print(
+                f"\n{data.get('succeeded_count', 0)} succeeded, "
+                f"{data.get('failed_count', 0)} failed"
             )
     elif args.command == "tags":
         # See `upload` above for why this is imported here rather than at
@@ -3881,6 +3925,49 @@ def main():
             "Emit the dashboard's own JSON response "
             "({\"status\", \"filename\", \"new_filename\"}) instead of a "
             "human-readable summary, for scripting/automation."
+        )
+    )
+
+    # copy-batch command (duplicate a notebook already on a running
+    # dashboard under several new names at once, via its own POST
+    # /api/notebooks/{filename}/copy-batch -- distinct from `copy` above,
+    # which only ever creates one new copy per call)
+    copy_batch_parser = subparsers.add_parser(
+        "copy-batch",
+        help=(
+            "Duplicate a notebook already on a running dashboard instance "
+            "under several new names at once, via its POST "
+            "/api/notebooks/{filename}/copy-batch."
+        )
+    )
+    copy_batch_parser.add_argument(
+        "filename", help="Filename of the notebook to duplicate, as reported by `list`."
+    )
+    copy_batch_parser.add_argument(
+        "new_filename", nargs="+",
+        help="Filenames for the new copies (each must end in .ipynb)."
+    )
+    _add_dashboard_url_and_timeout_arguments(copy_batch_parser)
+    copy_batch_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Replace an existing notebook at any new_filename that "
+            "already exists, mirroring POST "
+            "/api/notebooks/{filename}/copy-batch's own \"overwrite\": "
+            "true -- applies uniformly to every destination, the same "
+            "single flag `copy` itself takes for its own one destination."
+        )
+    )
+    copy_batch_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"filename\", \"results\": [{\"new_filename\", \"status\", "
+            "...}, ...], \"succeeded_count\", \"failed_count\"}) instead "
+            "of a human-readable summary, for scripting/automation."
         )
     )
 

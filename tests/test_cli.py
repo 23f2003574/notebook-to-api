@@ -4053,6 +4053,180 @@ def test_copy_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_copy_batch_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "copy-batch" in proc.stdout
+
+
+def test_copy_batch_command_reports_success(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "results": [
+                {"new_filename": "a.ipynb", "status": "success"},
+                {"new_filename": "b.ipynb", "status": "success"},
+            ],
+            "succeeded_count": 2,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "copy-batch", "nb.ipynb", "a.ipynb", "b.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Copied 'nb.ipynb' to 'a.ipynb'" in proc.stdout
+    assert "Copied 'nb.ipynb' to 'b.ipynb'" in proc.stdout
+    assert "2 succeeded, 0 failed" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/copy-batch"]
+    assert json.loads(handler.bodies[0]) == {
+        "new_filenames": ["a.ipynb", "b.ipynb"], "overwrite": False,
+    }
+
+
+def test_copy_batch_command_reports_a_partial_failure(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "results": [
+                {"new_filename": "a.ipynb", "status": "success"},
+                {"new_filename": "existing.ipynb", "status": "error", "detail": "already exists"},
+            ],
+            "succeeded_count": 1,
+            "failed_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "copy-batch", "nb.ipynb", "a.ipynb", "existing.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Copied 'nb.ipynb' to 'a.ipynb'" in proc.stdout
+    assert "Failed to copy to 'existing.ipynb': already exists" in proc.stdout
+    assert "1 succeeded, 1 failed" in proc.stdout
+
+
+def test_copy_batch_command_passes_the_overwrite_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "results": [{"new_filename": "a.ipynb", "status": "success"}],
+            "succeeded_count": 1, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "copy-batch", "nb.ipynb", "a.ipynb",
+            "--dashboard-url", dashboard_url, "--overwrite",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "new_filenames": ["a.ipynb"], "overwrite": True,
+    }
+
+
+def test_copy_batch_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "filename": "nb.ipynb",
+        "results": [{"new_filename": "a.ipynb", "status": "success"}],
+        "succeeded_count": 1, "failed_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "copy-batch", "nb.ipynb", "a.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_copy_batch_command_reports_a_clean_error_for_a_missing_source(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook file not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "copy-batch", "nb.ipynb", "a.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook file not found")
+
+
+def test_copy_batch_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "copy-batch", "nb.ipynb", "a.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_tags_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())
