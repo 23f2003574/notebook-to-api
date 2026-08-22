@@ -2247,6 +2247,96 @@ def test_search_notebook_content_reports_multiple_matching_cells_in_one_notebook
     assert [m["cell_index"] for m in body["matches"][0]["matches"]] == [0, 1]
 
 
+def test_diff_notebooks_reports_added_removed_changed_and_unchanged():
+
+    old_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def remove_me() -> int:\n    return 0\n\n"
+        "def unchanged_fn() -> int:\n    return 1\n"
+    )
+    new_content = _notebook_bytes(
+        "def add(a: int, b: int, c: int) -> int:\n    return a + b + c\n\n"
+        "def add_me() -> int:\n    return 2\n\n"
+        "def unchanged_fn() -> int:\n    return 1\n"
+    )
+
+    for filename, content in (
+        ("diff_old.ipynb", old_content),
+        ("diff_new.ipynb", new_content),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    resp = client.get(
+        "/api/notebooks/diff", params={"old": "diff_old.ipynb", "new": "diff_new.ipynb"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["old"] == "diff_old.ipynb"
+    assert body["new"] == "diff_new.ipynb"
+    assert [f["name"] for f in body["added"]] == ["add_me"]
+    assert [f["name"] for f in body["removed"]] == ["remove_me"]
+    assert [c["name"] for c in body["changed"]] == ["add"]
+    assert body["unchanged"] == ["unchanged_fn"]
+
+
+def test_diff_notebooks_requires_both_filenames():
+
+    resp = client.get("/api/notebooks/diff", params={"old": "a.ipynb"})
+
+    assert resp.status_code == 400
+
+
+def test_diff_notebooks_returns_404_naming_the_missing_old_notebook():
+
+    _upload_sample_notebook("diff_missing_new_target.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/diff",
+        params={"old": "does_not_exist.ipynb", "new": "diff_missing_new_target.ipynb"},
+    )
+
+    assert resp.status_code == 404
+    assert "does_not_exist.ipynb" in resp.json()["detail"]
+
+
+def test_diff_notebooks_returns_404_naming_the_missing_new_notebook():
+
+    _upload_sample_notebook("diff_missing_old_target.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/diff",
+        params={"old": "diff_missing_old_target.ipynb", "new": "does_not_exist.ipynb"},
+    )
+
+    assert resp.status_code == 404
+    assert "does_not_exist.ipynb" in resp.json()["detail"]
+
+
+def test_diff_notebooks_returns_400_for_a_malformed_notebook():
+
+    _upload_sample_notebook("diff_malformed_valid_side.ipynb")
+
+    filename = "diff_malformed_bad_side.ipynb"
+    file_path = os.path.join(UPLOAD_DIR, filename)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("not valid json at all")
+
+    resp = client.get(
+        "/api/notebooks/diff",
+        params={"old": "diff_malformed_valid_side.ipynb", "new": filename},
+    )
+
+    assert resp.status_code == 400
+    assert "'new' notebook" in resp.json()["detail"]
+
+
 def test_delete_notebook_rejects_a_filename_with_an_embedded_null_byte():
 
     resp = client.delete("/api/notebooks/nb%00.ipynb")

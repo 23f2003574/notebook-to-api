@@ -343,7 +343,7 @@ _CORE_COMMANDS = frozenset({
     "search-functions", "search-content", "find-duplicates",
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy", "tags",
     "remote-compile", "remote-build",
-    "versions", "remote-files", "remote-diff", "remote-export", "remote-deploy",
+    "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
     "status", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
     "remote-curl",
 })
@@ -2725,6 +2725,38 @@ def _dispatch_core_command(args):
                 f"'{args.filename}' on {dashboard_url}"
             )
             print_notebook_diff(diff)
+    elif args.command == "diff-notebooks":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/notebooks/diff",
+                params={"old": args.old, "new": args.new},
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            print(
+                f"Comparing '{args.old}' against '{args.new}' on {dashboard_url}"
+            )
+            print_notebook_diff(data)
     elif args.command == "remote-curl":
         # See `upload` above for why these are imported here rather than
         # at module scope.
@@ -4476,6 +4508,38 @@ def main():
             "report, for scripting/automation -- e.g. refusing to "
             "`upload --overwrite` when \"removed\" or \"changed\" is "
             "non-empty and hasn't been reviewed."
+        )
+    )
+
+    # diff-notebooks command (compare two notebooks that are BOTH already
+    # uploaded to a running dashboard, via its own GET /api/notebooks/diff
+    # -- distinct from `diff` (two local files) and `remote-diff` (one
+    # local file against one already-uploaded notebook): neither compares
+    # two independently-uploaded notebooks without a caller downloading
+    # both first)
+    diff_notebooks_parser = subparsers.add_parser(
+        "diff-notebooks",
+        help=(
+            "Compare two notebooks that are both already uploaded to a "
+            "running dashboard instance's compiled API surface, via its "
+            "GET /api/notebooks/diff -- no download of either one."
+        )
+    )
+    diff_notebooks_parser.add_argument(
+        "old", help="Filename of the baseline notebook, as reported by `list`."
+    )
+    diff_notebooks_parser.add_argument(
+        "new", help="Filename of the notebook to compare it against, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(diff_notebooks_parser)
+    diff_notebooks_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit machine-readable JSON ({\"status\", \"old\", \"new\", "
+            "\"added\", \"removed\", \"changed\", \"unchanged\"}) instead "
+            "of the human-readable report, for scripting/automation."
         )
     )
 

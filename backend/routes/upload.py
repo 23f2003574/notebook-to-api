@@ -42,6 +42,7 @@ from backend.inspector import (
     EXCLUDED_GENERATED_DIR_NAMES,
     EXCLUDED_GENERATED_FILE_NAMES,
     _extract_notebook_functions,
+    diff_notebook_functions,
     generate_curl_commands,
     inspect_notebook_data,
     list_generated_files,
@@ -2007,6 +2008,86 @@ def search_notebook_content(search: str = None):
         "search": search,
         "matches": matches,
         "notebook_count": len(matches),
+    }
+
+
+@router.get("/notebooks/diff")
+def diff_notebooks(old: str = None, new: str = None):
+    """Compare the top-level functions two already-uploaded notebooks
+    would each compile into endpoints -- entirely server-side, without
+    downloading either one, and without compiling either one.
+
+    The CLI's own `diff` already does this for two local files, and
+    `remote-diff` for one local file against one already-uploaded
+    notebook -- but comparing two notebooks that are *both* already on
+    this dashboard (e.g. a "staging"-tagged notebook against a
+    "production"-tagged one, or a notebook against a copy POST
+    /api/notebooks/{filename}/copy made of it earlier) had no way to
+    happen without a caller downloading both first and diffing the local
+    copies itself, the same round trip GET /api/notebooks/{filename}
+    /versions/{version_id}'s own client-side `versions diff` CLI command
+    already accepts for comparing a notebook against its own past
+    version, just not for two independently-uploaded notebooks.
+
+    Reuses diff_notebook_functions (backend/inspector.py) unchanged --
+    the exact same {"added", "removed", "changed", "unchanged"} report
+    `diff`/`remote-diff` already produce -- so this can't drift from
+    what either of those already report for the same two notebooks.
+
+    "old" and "new" are both required filenames of notebooks already in
+    UPLOAD_DIR; each is validated (existence, then parseability) before
+    diffing, so a 404 or 400 names exactly which of the two is the
+    problem rather than a single ambiguous error.
+    """
+
+    if not old or not new:
+
+        raise HTTPException(
+            status_code=400,
+            detail="old and new are both required"
+        )
+
+    old_path = resolve_upload_path(old)
+
+    if not old_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail=f"Notebook file not found: {old}"
+        )
+
+    new_path = resolve_upload_path(new)
+
+    if not new_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail=f"Notebook file not found: {new}"
+        )
+
+    for label, path in (("old", old_path), ("new", new_path)):
+
+        try:
+
+            load_notebook(str(path))
+
+        except MALFORMED_NOTEBOOK_ERRORS as e:
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"'{label}' notebook is not a valid Jupyter "
+                    f"notebook: {e}"
+                )
+            )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+
+    return {
+        "status": "success",
+        "old": old,
+        "new": new,
+        **diff,
     }
 
 

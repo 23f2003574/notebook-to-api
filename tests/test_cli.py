@@ -7018,6 +7018,138 @@ def test_remote_diff_command_reports_a_clean_error_when_the_dashboard_is_unreach
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_diff_notebooks_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "diff-notebooks" in proc.stdout
+
+
+def test_diff_notebooks_command_reports_added_removed_and_changed_functions(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "old": "a.ipynb",
+            "new": "b.ipynb",
+            "added": [{"name": "multiply"}],
+            "removed": [{"name": "subtract"}],
+            "changed": [{"name": "add", "old": {}, "new": {}}],
+            "unchanged": ["noop"],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["diff-notebooks", "a.ipynb", "b.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Comparing 'a.ipynb' against 'b.ipynb'" in proc.stdout
+    assert "Added 1 endpoint(s):" in proc.stdout
+    assert "POST /multiply" in proc.stdout
+    assert "Removed 1 endpoint(s):" in proc.stdout
+    assert "POST /subtract" in proc.stdout
+    assert "Changed 1 endpoint(s):" in proc.stdout
+    assert "POST /add" in proc.stdout
+    assert handler.requests == ["/api/notebooks/diff?old=a.ipynb&new=b.ipynb"]
+
+
+def test_diff_notebooks_command_reports_no_changes_for_identical_notebooks(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "old": "a.ipynb", "new": "b.ipynb",
+            "added": [], "removed": [], "changed": [], "unchanged": ["add"],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["diff-notebooks", "a.ipynb", "b.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No changes to the compiled API surface." in proc.stdout
+
+
+def test_diff_notebooks_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "old": "a.ipynb", "new": "b.ipynb",
+        "added": [], "removed": [], "changed": [], "unchanged": [],
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "diff-notebooks", "a.ipynb", "b.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_diff_notebooks_command_reports_a_clean_error_for_a_missing_notebook(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook file not found: b.ipynb"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["diff-notebooks", "a.ipynb", "b.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook file not found: b.ipynb")
+
+
+def test_diff_notebooks_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "diff-notebooks", "a.ipynb", "b.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_remote_curl_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())
