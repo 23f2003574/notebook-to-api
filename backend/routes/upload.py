@@ -1700,6 +1700,75 @@ def export_notebooks(filenames: str = None):
     )
 
 
+@router.get("/notebooks/duplicates")
+def find_duplicate_notebooks():
+    """Group every uploaded notebook by its raw content, reporting only
+    the groups with more than one filename -- byte-identical uploads
+    sitting in UPLOAD_DIR under different names.
+
+    Nothing in this file previously had any notion of "these two uploads
+    are actually the same notebook" -- `copy` (POST
+    /api/notebooks/{filename}/copy) deliberately *creates* one of these
+    (see its own docstring), and a notebook re-uploaded under a new name
+    instead of overwritten (POST /api/upload's own "overwrite" flag) is
+    another common way one shows up organically. Before this, spotting
+    them meant downloading every uploaded notebook and diffing their
+    bytes by hand, or trusting filenames alone, which two independently
+    uploaded, unrelated notebooks can share nothing in common with beyond
+    a coincidental name.
+
+    Reuses hash_notebook_file (backend/compiler.py) -- the exact same
+    SHA-256-of-raw-bytes check GET /api/notebooks' own
+    "notebook_changed_since_compile" field already uses to detect whether
+    a notebook's content actually changed, not just its mtime -- so two
+    notebooks are only ever grouped here because their bytes are actually
+    identical, never because they merely look similar.
+
+    Each group's "filenames" is sorted for a deterministic response, and
+    groups themselves are sorted by their own "sha256" for the same
+    reason -- this endpoint has no natural ordering of its own (unlike GET
+    /api/notebooks' filename/size/modified sort) since a duplicate group
+    isn't tied to any one notebook's own timestamp or name.
+    """
+
+    upload_root = Path(UPLOAD_DIR)
+
+    entries_by_hash = {}
+
+    for entry in sorted(upload_root.iterdir()):
+
+        if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        digest = hash_notebook_file(entry)
+
+        entries_by_hash.setdefault(digest, []).append(entry)
+
+    duplicate_groups = []
+
+    for digest, entries in sorted(entries_by_hash.items()):
+
+        if len(entries) < 2:
+            continue
+
+        duplicate_groups.append({
+            "sha256": digest,
+            "filenames": sorted(entry.name for entry in entries),
+            "size_bytes": entries[0].stat().st_size,
+        })
+
+    duplicate_notebook_count = sum(
+        len(group["filenames"]) for group in duplicate_groups
+    )
+
+    return {
+        "status": "success",
+        "duplicate_groups": duplicate_groups,
+        "group_count": len(duplicate_groups),
+        "duplicate_notebook_count": duplicate_notebook_count,
+    }
+
+
 @router.delete("/notebooks")
 def delete_all_notebooks(confirm: bool = False):
     """Remove every uploaded notebook in UPLOAD_DIR at once.

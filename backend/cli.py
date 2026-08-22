@@ -339,7 +339,7 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
     "export-curl", "serve", "watch", "deploy", "diff", "upload", "list", "info",
-    "search-functions",
+    "search-functions", "find-duplicates",
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy", "tags",
     "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "remote-export", "remote-deploy",
@@ -1287,6 +1287,47 @@ def _dispatch_core_command(args):
                     print(f"{match['filename']}: {function_names}")
 
                 print(f"\n{len(matches)} notebook(s) matched.")
+    elif args.command == "find-duplicates":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/notebooks/duplicates",
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            duplicate_groups = data.get("duplicate_groups", [])
+
+            if not duplicate_groups:
+                print(f"No duplicate notebooks found on {dashboard_url}.")
+            else:
+                for group in duplicate_groups:
+                    print(f"{group['sha256']}: {', '.join(group['filenames'])}")
+
+                print(
+                    f"\n{data.get('group_count', len(duplicate_groups))} "
+                    f"duplicate group(s), "
+                    f"{data.get('duplicate_notebook_count', 0)} notebook(s) total"
+                )
     elif args.command == "download":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -3139,6 +3180,30 @@ def main():
             "\"search\", \"matches\": [{\"filename\", \"functions\"}, ...], "
             "\"notebook_count\"}) instead of a human-readable summary, "
             "for scripting/automation."
+        )
+    )
+
+    # find-duplicates command (group already-uploaded notebooks that are
+    # byte-identical, across every notebook on the dashboard at once)
+    find_duplicates_parser = subparsers.add_parser(
+        "find-duplicates",
+        help=(
+            "Group already-uploaded notebooks on a running dashboard "
+            "instance that are byte-identical, via GET "
+            "/api/notebooks/duplicates."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(find_duplicates_parser)
+    find_duplicates_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"duplicate_groups\": [{\"sha256\", \"filenames\", "
+            "\"size_bytes\"}, ...], \"group_count\", "
+            "\"duplicate_notebook_count\"}) instead of a human-readable "
+            "summary, for scripting/automation."
         )
     )
 

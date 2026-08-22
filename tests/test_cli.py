@@ -2576,6 +2576,97 @@ def test_search_functions_command_reports_a_clean_error_when_the_dashboard_is_un
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_find_duplicates_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "find-duplicates" in proc.stdout
+
+
+def test_find_duplicates_command_prints_duplicate_groups(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "duplicate_groups": [
+            {
+                "sha256": "abc123",
+                "filenames": ["a.ipynb", "b.ipynb"],
+                "size_bytes": 512,
+            },
+        ],
+        "group_count": 1,
+        "duplicate_notebook_count": 2,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["find-duplicates", "--dashboard-url", dashboard_url], cwd=Path.cwd()
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "abc123: a.ipynb, b.ipynb" in proc.stdout
+    assert "1 duplicate group(s), 2 notebook(s) total" in proc.stdout
+    assert handler.requests == ["/api/notebooks/duplicates"]
+
+
+def test_find_duplicates_command_reports_no_duplicates(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "duplicate_groups": [],
+        "group_count": 0,
+        "duplicate_notebook_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["find-duplicates", "--dashboard-url", dashboard_url], cwd=Path.cwd()
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No duplicate notebooks found" in proc.stdout
+
+
+def test_find_duplicates_command_json_flag_emits_the_dashboards_own_response(
+    fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "duplicate_groups": [
+            {"sha256": "abc123", "filenames": ["a.ipynb", "b.ipynb"], "size_bytes": 512},
+        ],
+        "group_count": 1,
+        "duplicate_notebook_count": 2,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["find-duplicates", "--dashboard-url", dashboard_url, "--json"],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_find_duplicates_command_reports_a_clean_error_when_the_dashboard_is_unreachable():
+
+    proc = _run_cli(
+        [
+            "find-duplicates",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=Path.cwd(),
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_download_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

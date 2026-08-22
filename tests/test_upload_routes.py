@@ -1819,6 +1819,92 @@ def test_export_notebooks_rejects_a_blank_filenames_value():
     assert resp.status_code == 400
 
 
+def test_find_duplicate_notebooks_groups_byte_identical_uploads():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    content_b = _notebook_bytes(
+        "def sub(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    for filename, content in (
+        ("dup_a1.ipynb", content_a),
+        ("dup_a2.ipynb", content_a),
+        ("dup_a3.ipynb", content_a),
+        ("dup_b1.ipynb", content_b),
+        ("dup_unique.ipynb", content_b + b" "),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    resp = client.get("/api/notebooks/duplicates")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["group_count"] == 1
+    assert body["duplicate_notebook_count"] == 3
+
+    group = body["duplicate_groups"][0]
+    assert group["filenames"] == ["dup_a1.ipynb", "dup_a2.ipynb", "dup_a3.ipynb"]
+    assert group["size_bytes"] == len(content_a)
+    assert len(group["sha256"]) == 64
+
+
+def test_find_duplicate_notebooks_reports_no_groups_when_nothing_duplicated():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    _upload_sample_notebook("dup_none_a.ipynb")
+
+    resp = client.get("/api/notebooks/duplicates")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "success",
+        "duplicate_groups": [],
+        "group_count": 0,
+        "duplicate_notebook_count": 0,
+    }
+
+
+def test_find_duplicate_notebooks_reports_multiple_independent_groups():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    content_b = _notebook_bytes(
+        "def sub(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    for filename, content in (
+        ("dup_group1_a.ipynb", content_a),
+        ("dup_group1_b.ipynb", content_a),
+        ("dup_group2_a.ipynb", content_b),
+        ("dup_group2_b.ipynb", content_b),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    resp = client.get("/api/notebooks/duplicates")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["group_count"] == 2
+    assert body["duplicate_notebook_count"] == 4
+
+
 def test_delete_notebook_rejects_a_filename_with_an_embedded_null_byte():
 
     resp = client.delete("/api/notebooks/nb%00.ipynb")
