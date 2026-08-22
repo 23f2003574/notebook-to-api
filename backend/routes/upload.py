@@ -1602,6 +1602,104 @@ def list_notebooks(
     }
 
 
+@router.get("/notebooks/export")
+def export_notebooks(filenames: str = None):
+    """Download a caller-chosen set of already-uploaded notebooks -- or,
+    with "filenames" omitted, every uploaded notebook -- bundled into one
+    .zip.
+
+    GET /api/notebooks/{filename} already downloads a single notebook's
+    raw content, but retrieving several (e.g. to back up a set of
+    notebooks before a POST /api/notebooks/delete-batch, or everything
+    before DELETE /api/notebooks) meant one request per file with no way
+    to get them back as a single, coherent bundle -- unlike GET
+    /api/download, which already zips up the *compiled* output in
+    GENERATED_DIR in one call, UPLOAD_DIR's own originals had no
+    equivalent.
+
+    "filenames" is a comma-separated list, the same format --only/--exclude
+    already use on the CLI side (see _parse_comma_separated_names in
+    backend/cli.py) -- deliberately not a JSON body, so this stays a plain
+    GET a browser tab or curl -O can hit directly, the same reason GET
+    /api/download and GET /api/notebooks/{filename} are both GETs rather
+    than POSTs despite returning a caller-shaped result.
+
+    Unlike POST /api/tags/{tag}/apply and POST /api/notebooks/delete-batch,
+    this is all-or-nothing rather than "one bad entry doesn't abort the
+    batch": a caller asking for a specific set of filenames is trying to
+    get exactly those notebooks back, and a zip silently missing one of
+    them (because it was already deleted, or typo'd) is a worse failure
+    mode here than in a delete/tag batch -- there's no per-entry "result"
+    list a caller could inspect after the fact, since the response body
+    *is* the zip. A 404 up front, naming every filename that doesn't
+    exist, lets a caller fix its request before getting nothing back.
+    """
+
+    upload_root = Path(UPLOAD_DIR)
+
+    if filenames:
+
+        requested = [name.strip() for name in filenames.split(",") if name.strip()]
+
+        if not requested:
+
+            raise HTTPException(
+                status_code=400,
+                detail="filenames must not be empty"
+            )
+
+        missing = []
+        notebooks_to_export = []
+
+        for name in requested:
+
+            file_path = resolve_upload_path(name)
+
+            if not file_path.is_file():
+                missing.append(name)
+            else:
+                notebooks_to_export.append((name, file_path))
+
+        if missing:
+
+            raise HTTPException(
+                status_code=404,
+                detail=f"Notebook file(s) not found: {', '.join(missing)}"
+            )
+
+    else:
+
+        notebooks_to_export = [
+            (entry.name, entry)
+            for entry in sorted(upload_root.iterdir())
+            if entry.is_file() and entry.suffix == ".ipynb"
+        ]
+
+    if not notebooks_to_export:
+
+        raise HTTPException(
+            status_code=404,
+            detail="No notebooks to export"
+        )
+
+    buffer = io.BytesIO()
+
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+
+        for name, file_path in notebooks_to_export:
+            archive.write(file_path, name)
+
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="notebooks_export.zip"',
+        },
+    )
+
+
 @router.delete("/notebooks")
 def delete_all_notebooks(confirm: bool = False):
     """Remove every uploaded notebook in UPLOAD_DIR at once.

@@ -1734,6 +1734,91 @@ def test_get_notebook_info_rejects_absolute_filename():
     assert "root:" not in resp.text
 
 
+def test_export_notebooks_zips_the_named_filenames():
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    content_b = _notebook_bytes(
+        "def sub(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    for filename, content in (
+        ("export_a.ipynb", content_a),
+        ("export_b.ipynb", content_b),
+        ("export_c.ipynb", content_a),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    export_resp = client.get(
+        "/api/notebooks/export", params={"filenames": "export_a.ipynb,export_b.ipynb"}
+    )
+
+    assert export_resp.status_code == 200
+    assert export_resp.headers["content-type"] == "application/zip"
+
+    with zipfile.ZipFile(io.BytesIO(export_resp.content)) as archive:
+        assert sorted(archive.namelist()) == ["export_a.ipynb", "export_b.ipynb"]
+        assert json.loads(archive.read("export_a.ipynb")) == json.loads(content_a)
+        assert json.loads(archive.read("export_b.ipynb")) == json.loads(content_b)
+
+
+def test_export_notebooks_without_filenames_exports_every_uploaded_notebook():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in ("export_all_a.ipynb", "export_all_b.ipynb"):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    export_resp = client.get("/api/notebooks/export")
+
+    assert export_resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(export_resp.content)) as archive:
+        assert sorted(archive.namelist()) == ["export_all_a.ipynb", "export_all_b.ipynb"]
+
+
+def test_export_notebooks_returns_404_naming_every_missing_filename():
+
+    _upload_sample_notebook("export_missing_present.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/export",
+        params={"filenames": "export_missing_present.ipynb,does_not_exist.ipynb"},
+    )
+
+    assert resp.status_code == 404
+    assert "does_not_exist.ipynb" in resp.json()["detail"]
+
+
+def test_export_notebooks_returns_404_when_nothing_uploaded():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    resp = client.get("/api/notebooks/export")
+
+    assert resp.status_code == 404
+
+
+def test_export_notebooks_rejects_a_blank_filenames_value():
+
+    resp = client.get("/api/notebooks/export", params={"filenames": " , , "})
+
+    assert resp.status_code == 400
+
+
 def test_delete_notebook_rejects_a_filename_with_an_embedded_null_byte():
 
     resp = client.delete("/api/notebooks/nb%00.ipynb")

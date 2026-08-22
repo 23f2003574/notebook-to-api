@@ -2689,6 +2689,143 @@ def test_download_command_reports_a_clean_error_when_the_dashboard_is_unreachabl
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_export_notebooks_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "export-notebooks" in proc.stdout
+
+
+def test_export_notebooks_command_passes_filenames_through_and_saves_the_zip(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18  # minimal empty-zip end-of-central-directory
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "export-notebooks", "a.ipynb", "b.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"({len(zip_bytes)} bytes)" in proc.stdout
+    assert (workdir / "notebooks_export.zip").read_bytes() == zip_bytes
+    assert handler.requests == ["/api/notebooks/export?filenames=a.ipynb%2Cb.ipynb"]
+
+
+def test_export_notebooks_command_with_no_filenames_omits_the_query_param(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["export-notebooks", "--dashboard-url", dashboard_url], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/export"]
+
+
+def test_export_notebooks_command_respects_a_custom_output_path(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "export-notebooks", "--dashboard-url", dashboard_url,
+            "--output", "backup.zip",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "backup.zip").read_bytes() == zip_bytes
+    assert not (workdir / "notebooks_export.zip").exists()
+
+
+def test_export_notebooks_command_json_flag_emits_a_machine_readable_result(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["export-notebooks", "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == {
+        "status": "success",
+        "path": "notebooks_export.zip",
+        "size_bytes": len(zip_bytes),
+    }
+
+
+def test_export_notebooks_command_reports_a_clean_error_for_a_missing_filename(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook file(s) not found: missing.ipynb"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["export-notebooks", "missing.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook file(s) not found: missing.ipynb")
+    assert not (workdir / "notebooks_export.zip").exists()
+
+
+def test_export_notebooks_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "export-notebooks",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_delete_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

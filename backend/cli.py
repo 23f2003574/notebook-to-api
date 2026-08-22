@@ -340,7 +340,8 @@ _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
     "export-curl", "serve", "watch", "deploy", "diff", "upload", "list", "info",
     "search-functions",
-    "download", "delete", "delete-batch", "rename", "copy", "tags", "remote-compile", "remote-build",
+    "download", "export-notebooks", "delete", "delete-batch", "rename", "copy", "tags",
+    "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "remote-export", "remote-deploy",
     "status", "remote-validate", "remote-curl",
 })
@@ -1326,6 +1327,54 @@ def _dispatch_core_command(args):
         else:
             print(
                 f"Downloaded '{args.filename}' from {dashboard_url} to "
+                f"{output_path} ({len(response.content)} bytes)"
+            )
+    elif args.command == "export-notebooks":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        params = {}
+        if args.filename:
+            params["filenames"] = ",".join(args.filename)
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/notebooks/export",
+                params=params,
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        output_path = args.output or _filename_from_content_disposition(
+            response, "notebooks_export.zip"
+        )
+
+        with open(output_path, "wb") as f:
+            f.write(response.content)
+
+        if args.json_output:
+            print(json.dumps(
+                {
+                    "status": "success",
+                    "path": output_path,
+                    "size_bytes": len(response.content),
+                },
+                indent=2,
+            ))
+        else:
+            print(
+                f"Exported notebooks from {dashboard_url} to "
                 f"{output_path} ({len(response.content)} bytes)"
             )
     elif args.command == "delete":
@@ -3115,6 +3164,42 @@ def main():
             "Emit a machine-readable JSON result "
             "({\"status\", \"filename\", \"path\", \"size_bytes\"}) "
             "instead of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    # export-notebooks command (download several uploaded notebooks --
+    # or, with no filenames given, every one of them -- as a single zip,
+    # via GET /api/notebooks/export -- distinct from `download`'s own
+    # single-notebook GET /api/notebooks/{filename})
+    export_notebooks_parser = subparsers.add_parser(
+        "export-notebooks",
+        help=(
+            "Download several already-uploaded notebooks (or, with no "
+            "filenames given, every one of them) as a single zip, via "
+            "GET /api/notebooks/export."
+        )
+    )
+    export_notebooks_parser.add_argument(
+        "filename", nargs="*",
+        help=(
+            "Filenames of the notebooks to export, as reported by `list`. "
+            "Omit to export every uploaded notebook."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(export_notebooks_parser)
+    export_notebooks_parser.add_argument(
+        "--output",
+        default=None,
+        help="Path to save the downloaded zip to. Default: notebooks_export.zip."
+    )
+    export_notebooks_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit a machine-readable JSON result "
+            "({\"status\", \"path\", \"size_bytes\"}) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 
