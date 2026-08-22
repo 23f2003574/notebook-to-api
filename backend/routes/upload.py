@@ -3055,6 +3055,111 @@ def validate_notebook_endpoint(
     }
 
 
+@router.get("/validate-all")
+def validate_all_notebooks(strict: bool = False):
+    """Run the identical pass/warn/fail check POST /api/validate already
+    performs for one notebook, across every notebook already uploaded to
+    this dashboard at once.
+
+    POST /api/validate answers "would this one notebook compile cleanly"
+    without a caller needing to already suspect which notebook to ask
+    about -- but a CI job wanting to catch a reserved-name conflict or a
+    newly-broken function *anywhere* in the catalog before it's compiled
+    and deployed had no way to ask that in one call: it would have to
+    already know every uploaded filename (a separate GET /api/notebooks)
+    and then issue one POST /api/validate per name, aborting its own loop
+    early only by choice, and stitching the per-notebook verdicts back
+    together itself.
+
+    Deliberately does NOT silently skip a notebook that fails to parse at
+    all, the way GET /api/functions' own search across every notebook
+    already does for a malformed one -- that precedent exists there
+    because a parse failure is incidental to what that endpoint is
+    answering (which notebooks define a matching function); here, a
+    notebook that can't even be parsed is exactly the kind of problem
+    this endpoint exists to surface, so it's reported as its own "fail"
+    result (with a "detail" explaining why) rather than dropped from the
+    report entirely.
+
+    "strict" applies uniformly to every notebook, the same single flag
+    POST /api/validate itself takes -- there's no per-notebook override.
+    """
+
+    upload_root = Path(UPLOAD_DIR)
+
+    results = []
+    pass_count = 0
+    warn_count = 0
+    fail_count = 0
+
+    for entry in sorted(upload_root.iterdir()):
+
+        if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        try:
+
+            load_notebook(str(entry))
+
+        except MALFORMED_NOTEBOOK_ERRORS as e:
+
+            results.append({
+                "filename": entry.name,
+                "status": "fail",
+                "reserved_name_conflicts": [],
+                "skipped_functions": [],
+                "detail": f"Uploaded file is not a valid Jupyter notebook: {e}",
+            })
+            fail_count += 1
+            continue
+
+        # Held per-notebook, not once around this whole loop, for the
+        # same reason POST /api/validate's identical inspect_notebook_data
+        # call already holds it (see that endpoint's own comment): a
+        # concurrent POST /api/compile's clear_stale_export_artifacts can
+        # rmtree the sdk/ subdirectory this walks, mid-walk. Scoping it
+        # per notebook instead of around the whole loop lets a concurrent
+        # compile still interleave between notebooks rather than blocking
+        # on this endpoint for as long as the entire catalog takes to walk.
+        with COMPILE_LOCK:
+
+            inspection = inspect_notebook_data(str(entry), GENERATED_DIR)
+
+        reserved_name_conflicts = inspection["reserved_name_conflicts"]
+        skipped_functions = inspection["skipped_functions"]
+
+        has_blocking_issues = bool(reserved_name_conflicts) or (
+            strict and bool(skipped_functions)
+        )
+        has_warnings = bool(skipped_functions) and not has_blocking_issues
+
+        if has_blocking_issues:
+            status = "fail"
+            fail_count += 1
+        elif has_warnings:
+            status = "warn"
+            warn_count += 1
+        else:
+            status = "pass"
+            pass_count += 1
+
+        results.append({
+            "filename": entry.name,
+            "status": status,
+            "reserved_name_conflicts": reserved_name_conflicts,
+            "skipped_functions": skipped_functions,
+            "detail": None,
+        })
+
+    return {
+        "status": "success",
+        "results": results,
+        "pass_count": pass_count,
+        "warn_count": warn_count,
+        "fail_count": fail_count,
+    }
+
+
 @router.post("/compile")
 def compile_notebook_endpoint(
     data: dict

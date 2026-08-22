@@ -4984,6 +4984,114 @@ def test_validate_returns_400_for_a_malformed_notebook_file():
     assert resp.status_code == 400
 
 
+def test_validate_all_reports_pass_warn_and_fail_across_the_catalog():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    clean_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    warn_content = _notebook_bytes(
+        "def unsupported(a, **kwargs):\n    return a\n\n"
+        "def sub(a: int, b: int) -> int:\n    return a - b\n"
+    )
+    fail_content = _notebook_bytes(
+        "def health_check() -> dict:\n    return {}\n"
+    )
+
+    for filename, content in (
+        ("validate_all_pass.ipynb", clean_content),
+        ("validate_all_warn.ipynb", warn_content),
+        ("validate_all_fail.ipynb", fail_content),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    resp = client.get("/api/validate-all")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["pass_count"] == 1
+    assert body["warn_count"] == 1
+    assert body["fail_count"] == 1
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["validate_all_pass.ipynb"]["status"] == "pass"
+    assert results_by_filename["validate_all_warn.ipynb"]["status"] == "warn"
+    assert results_by_filename["validate_all_fail.ipynb"]["status"] == "fail"
+    assert results_by_filename["validate_all_fail.ipynb"]["reserved_name_conflicts"] == [
+        "health_check"
+    ]
+
+
+def test_validate_all_strict_turns_skipped_functions_into_a_failure():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    warn_content = _notebook_bytes(
+        "def unsupported(a, **kwargs):\n    return a\n"
+    )
+
+    resp = client.post(
+        "/api/upload",
+        files={"file": ("validate_all_strict.ipynb", io.BytesIO(warn_content), "application/json")},
+    )
+    assert resp.status_code == 200
+
+    resp = client.get("/api/validate-all", params={"strict": "true"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["fail_count"] == 1
+    assert body["warn_count"] == 0
+    assert body["results"][0]["status"] == "fail"
+
+
+def test_validate_all_reports_a_malformed_notebook_as_fail_instead_of_skipping_it():
+    """Deliberately different from GET /api/functions' own bulk search,
+    which silently skips a notebook it can't parse -- here, a parse
+    failure is exactly the kind of problem this endpoint exists to
+    surface, not incidental to a different question.
+    """
+
+    client.delete("/api/notebooks?confirm=true")
+
+    filename = "validate_all_malformed.ipynb"
+    file_path = os.path.join(UPLOAD_DIR, filename)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("not valid json at all")
+
+    resp = client.get("/api/validate-all")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["fail_count"] == 1
+    assert body["results"][0]["filename"] == filename
+    assert body["results"][0]["status"] == "fail"
+    assert "not a valid Jupyter notebook" in body["results"][0]["detail"]
+
+
+def test_validate_all_reports_zero_when_nothing_uploaded():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    resp = client.get("/api/validate-all")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "success",
+        "results": [],
+        "pass_count": 0,
+        "warn_count": 0,
+        "fail_count": 0,
+    }
+
+
 def test_inspect_reports_endpoints_and_flags_background_ones_before_compiling():
     """Mirrors test_compile_endpoints_flag_background_functions_as_async
     above, but for /api/inspect: before this fix, that classification was

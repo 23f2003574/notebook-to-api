@@ -344,7 +344,7 @@ _CORE_COMMANDS = frozenset({
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy", "tags",
     "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "remote-export", "remote-deploy",
-    "status", "remote-validate", "remote-curl",
+    "status", "remote-validate", "validate-all", "remote-curl",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -2051,6 +2051,63 @@ def _dispatch_core_command(args):
         if status == "fail":
             sys.exit(2)
         elif status == "warn":
+            sys.exit(1)
+    elif args.command == "validate-all":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/validate-all",
+                params={"strict": args.strict},
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+        results = data.get("results", [])
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            if not results:
+                print(f"No notebooks to validate on {dashboard_url}.")
+            else:
+                for result in results:
+
+                    marker = {"pass": "✓", "warn": "⚠", "fail": "✗"}[result["status"]]
+                    print(f"{marker} {result['filename']}: {result['status']}")
+
+                    if result.get("detail"):
+                        print(f"    {result['detail']}")
+
+                    for name in result.get("reserved_name_conflicts", []):
+                        print(f"    reserved name conflict: {name}")
+
+                    for skipped in result.get("skipped_functions", []):
+                        print(f"    skipped: {skipped['name']}: {skipped['reason']}")
+
+                print(
+                    f"\n{data.get('pass_count', 0)} passed, "
+                    f"{data.get('warn_count', 0)} warned, "
+                    f"{data.get('fail_count', 0)} failed"
+                )
+
+        if data.get("fail_count", 0) > 0:
+            sys.exit(2)
+        elif data.get("warn_count", 0) > 0:
             sys.exit(1)
     elif args.command == "remote-build":
         # See `upload` above for why this is imported here rather than at
@@ -3763,6 +3820,41 @@ def main():
             "\"pass\"|\"warn\"|\"fail\", \"notebook\", "
             "\"reserved_name_conflicts\", \"skipped_functions\"}) instead "
             "of the human-readable report, for scripting/automation."
+        )
+    )
+
+    # validate-all command (check every notebook already uploaded to a
+    # running dashboard at once, via its own GET /api/validate-all --
+    # distinct from `remote-validate`, which only ever checks one
+    # already-uploaded notebook named on the command line)
+    validate_all_parser = subparsers.add_parser(
+        "validate-all",
+        help=(
+            "Check whether every notebook already uploaded to a running "
+            "dashboard instance would compile cleanly, via its GET "
+            "/api/validate-all."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(validate_all_parser)
+    validate_all_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Also fail a notebook (and this command's own exit code) when "
+            "it has skipped functions -- the same --strict "
+            "`validate`/`remote-validate` already accept. By default "
+            "these are reported as a non-fatal warning."
+        )
+    )
+    validate_all_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"results\": [{\"filename\", \"status\", ...}, ...], "
+            "\"pass_count\", \"warn_count\", \"fail_count\"}) instead of "
+            "the human-readable report, for scripting/automation."
         )
     )
 
