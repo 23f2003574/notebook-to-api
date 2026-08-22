@@ -792,6 +792,144 @@ async def upload_notebooks_batch(
     }
 
 
+@router.post("/notebooks/import")
+async def import_notebooks(
+    file: UploadFile = File(...),
+    overwrite: bool = False,
+):
+    """Upload every .ipynb file bundled inside a single .zip archive --
+    the counterpart to GET /api/notebooks/export, which produces exactly
+    this kind of archive from a set of already-uploaded notebooks.
+
+    POST /api/upload/batch already accepts several notebooks in one
+    request, but only as separate multipart file parts a caller has to
+    construct itself, one per notebook -- restoring an export produced by
+    GET /api/notebooks/export (or any other .zip a caller already has,
+    e.g. downloaded from a teammate or pulled from a backup) meant
+    unzipping it locally first and re-uploading each extracted .ipynb
+    individually or via /upload/batch, rather than handing the archive
+    itself to this API directly.
+
+    Each entry's filename is taken from its own basename within the
+    archive -- "subdir/a.ipynb" is imported as "a.ipynb", exactly like
+    the flat, non-nested namespace GET /api/notebooks and every other
+    endpoint in this file already assume for UPLOAD_DIR -- so a zip
+    that happens to bundle its notebooks inside a folder (as most zip
+    tools do by default when archiving a directory) still imports
+    cleanly, and no entry can use ".." or an absolute path segment to
+    escape UPLOAD_DIR: only the basename is ever used to build the
+    resulting filename, exactly as if that name had been typed directly
+    into upload_notebook's own "file.filename" field. Non-".ipynb"
+    entries (a README, a directory entry, ...) are silently skipped
+    rather than rejecting the whole archive over content this endpoint
+    never claimed to import anyway.
+
+    Reuses _save_uploaded_notebook -- the exact same validation, atomic
+    write, and pre-overwrite versioning upload_notebook and
+    upload_notebooks_batch already apply per file -- by wrapping each
+    entry's bytes in its own in-memory UploadFile, so a notebook imported
+    this way is indistinguishable on disk from one uploaded any other way.
+    Follows upload_notebooks_batch's own "one bad entry doesn't abort the
+    batch" contract identically: a malformed notebook, an oversized entry,
+    or a same-name collision without "?overwrite=true" is reported as its
+    own {"filename", "status": "error", "detail"} result rather than
+    failing every other entry in the archive.
+
+    Bounded by the same MAX_BATCH_UPLOAD_FILES POST /api/upload/batch
+    already enforces, for the identical reason: an archive can bundle far
+    more entries than a multipart request practically would, and without
+    a cap this could try to validate and write an unbounded number of
+    notebooks from a single small .zip.
+    """
+
+    if not file.filename.endswith(".zip"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="File must be a .zip archive"
+        )
+
+    try:
+
+        zip_bytes = await file.read()
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+    try:
+
+        archive = zipfile.ZipFile(io.BytesIO(zip_bytes))
+
+    except zipfile.BadZipFile:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file is not a valid zip archive"
+        )
+
+    notebook_entries = [
+        name for name in archive.namelist()
+        if name.endswith(".ipynb") and not name.endswith("/")
+    ]
+
+    if not notebook_entries:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Zip archive contains no .ipynb files"
+        )
+
+    if len(notebook_entries) > MAX_BATCH_UPLOAD_FILES:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"A zip import accepts at most {MAX_BATCH_UPLOAD_FILES} "
+                f".ipynb files at once (got {len(notebook_entries)})."
+            )
+        )
+
+    results = []
+    succeeded_count = 0
+    failed_count = 0
+
+    for entry_name in notebook_entries:
+
+        filename = os.path.basename(entry_name)
+
+        try:
+
+            entry_bytes = archive.read(entry_name)
+
+            upload_file = UploadFile(
+                file=io.BytesIO(entry_bytes), filename=filename
+            )
+
+            result = await _save_uploaded_notebook(upload_file, overwrite)
+            results.append(result)
+            succeeded_count += 1
+
+        except HTTPException as exc:
+
+            results.append({
+                "filename": filename,
+                "status": "error",
+                "detail": exc.detail,
+            })
+            failed_count += 1
+
+    return {
+        "status": "success",
+        "results": results,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
+    }
+
+
 def _currently_compiled_notebook_metadata():
     """(resolved path, content sha256, compiled_at) of the notebook that
     produced the app currently in GENERATED_DIR, if any -- read from the

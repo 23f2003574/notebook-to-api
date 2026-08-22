@@ -338,7 +338,8 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 # commands through _dispatch_core_command's shared error handling.
 _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
-    "export-curl", "serve", "watch", "deploy", "diff", "upload", "list", "info",
+    "export-curl", "serve", "watch", "deploy", "diff", "upload", "import-notebooks",
+    "list", "info",
     "search-functions", "find-duplicates",
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy", "tags",
     "remote-compile", "remote-build",
@@ -1136,6 +1137,60 @@ def _dispatch_core_command(args):
             # per-file failures included).
             if data.get("failed_count", 0) > 0:
                 sys.exit(1)
+    elif args.command == "import-notebooks":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+
+            with open(args.zip_path, "rb") as f:
+
+                response = httpx.post(
+                    f"{dashboard_url}/api/notebooks/import",
+                    params={"overwrite": args.overwrite},
+                    files={
+                        "file": (
+                            os.path.basename(args.zip_path), f, "application/zip",
+                        )
+                    },
+                    timeout=args.timeout,
+                )
+
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the import ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            for result in data.get("results", []):
+
+                if result.get("status") == "success":
+                    print(
+                        f"Imported '{result.get('filename')}' "
+                        f"(overwritten: {result.get('overwritten')})"
+                    )
+                else:
+                    print(f"Failed '{result.get('filename')}': {result.get('detail')}")
+
+            print(
+                f"\n{data.get('succeeded_count', 0)} succeeded, "
+                f"{data.get('failed_count', 0)} failed."
+            )
+
+        if data.get("failed_count", 0) > 0:
+            sys.exit(1)
     elif args.command == "list":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -3075,6 +3130,45 @@ def main():
             "single file, or {\"status\", \"results\", "
             "\"succeeded_count\", \"failed_count\"} for multiple -- "
             "instead of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    # import-notebooks command (upload every .ipynb bundled inside a
+    # single .zip archive, via POST /api/notebooks/import -- the
+    # counterpart to `export-notebooks`' own GET /api/notebooks/export)
+    import_notebooks_parser = subparsers.add_parser(
+        "import-notebooks",
+        help=(
+            "Upload every .ipynb file bundled inside a single .zip "
+            "archive to a running dashboard instance, via POST "
+            "/api/notebooks/import."
+        )
+    )
+    import_notebooks_parser.add_argument(
+        "zip_path", help="Path to the local .zip archive to import."
+    )
+    _add_dashboard_url_and_timeout_arguments(import_notebooks_parser)
+    import_notebooks_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Replace an existing notebook of the same name on the "
+            "dashboard, mirroring POST /api/notebooks/import's own "
+            "?overwrite=true -- without this, an entry whose name "
+            "collides with an already-uploaded notebook is reported as "
+            "its own failed result rather than aborting the rest of the "
+            "import."
+        )
+    )
+    import_notebooks_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"results\": [{\"filename\", \"status\", ...}, ...], "
+            "\"succeeded_count\", \"failed_count\"}) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 

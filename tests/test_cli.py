@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import threading
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -2146,6 +2147,200 @@ def test_upload_command_with_multiple_notebooks_reports_a_clean_error_for_a_miss
     )
 
     _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def _write_zip(path, entries):
+    """Write a local .zip archive at `path` from {entry_name: content_bytes}."""
+
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for entry_name, content in entries.items():
+            archive.writestr(entry_name, content)
+
+
+def test_import_notebooks_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "import-notebooks" in proc.stdout
+
+
+def test_import_notebooks_command_reports_success(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {"status": "success", "filename": "a.ipynb", "path": "/srv/a.ipynb", "overwritten": False},
+                {"status": "success", "filename": "b.ipynb", "path": "/srv/b.ipynb", "overwritten": False},
+            ],
+            "succeeded_count": 2,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "bundle.zip"
+    _write_zip(zip_path, {"a.ipynb": b"{}", "b.ipynb": b"{}"})
+
+    proc = _run_cli(
+        ["import-notebooks", str(zip_path), "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Imported 'a.ipynb' (overwritten: False)" in proc.stdout
+    assert "Imported 'b.ipynb' (overwritten: False)" in proc.stdout
+    assert "2 succeeded, 0 failed." in proc.stdout
+    assert handler.requests == ["/api/notebooks/import?overwrite=false"]
+
+
+def test_import_notebooks_command_passes_the_overwrite_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "results": [], "succeeded_count": 0, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "bundle.zip"
+    _write_zip(zip_path, {"a.ipynb": b"{}"})
+
+    proc = _run_cli(
+        [
+            "import-notebooks", str(zip_path),
+            "--dashboard-url", dashboard_url, "--overwrite",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/import?overwrite=true"]
+
+
+def test_import_notebooks_command_reports_per_file_failures_and_exits_nonzero(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {"status": "success", "filename": "a.ipynb", "path": "/srv/a.ipynb", "overwritten": False},
+                {"status": "error", "filename": "bad.ipynb", "detail": "Uploaded file is not a valid Jupyter notebook"},
+            ],
+            "succeeded_count": 1,
+            "failed_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "bundle.zip"
+    _write_zip(zip_path, {"a.ipynb": b"{}", "bad.ipynb": b"not a notebook"})
+
+    proc = _run_cli(
+        ["import-notebooks", str(zip_path), "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "Imported 'a.ipynb'" in proc.stdout
+    assert "Failed 'bad.ipynb': Uploaded file is not a valid Jupyter notebook" in proc.stdout
+    assert "1 succeeded, 1 failed." in proc.stdout
+
+
+def test_import_notebooks_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "results": [
+            {"status": "success", "filename": "a.ipynb", "path": "/srv/a.ipynb", "overwritten": False},
+        ],
+        "succeeded_count": 1,
+        "failed_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "bundle.zip"
+    _write_zip(zip_path, {"a.ipynb": b"{}"})
+
+    proc = _run_cli(
+        ["import-notebooks", str(zip_path), "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_import_notebooks_command_reports_a_clean_error_for_a_rejected_import(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(400, {"detail": "Zip archive contains no .ipynb files"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "bundle.zip"
+    _write_zip(zip_path, {"README.md": b"nothing here"})
+
+    proc = _run_cli(
+        ["import-notebooks", str(zip_path), "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Zip archive contains no .ipynb files")
+
+
+def test_import_notebooks_command_reports_a_clean_error_for_a_missing_zip(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "import-notebooks", str(workdir / "does-not-exist.zip"),
+            "--dashboard-url", "http://127.0.0.1:1",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_import_notebooks_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "bundle.zip"
+    _write_zip(zip_path, {"a.ipynb": b"{}"})
+
+    proc = _run_cli(
+        [
+            "import-notebooks", str(zip_path),
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
 
 
 def test_list_command_is_registered():

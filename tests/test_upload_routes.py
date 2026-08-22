@@ -856,6 +856,219 @@ def test_upload_batch_rejects_more_files_than_the_configured_maximum(monkeypatch
     assert not (Path(UPLOAD_DIR) / "batch_max_b.ipynb").exists()
 
 
+def _zip_bytes(entries):
+    """Build an in-memory .zip archive from {entry_name: content_bytes}."""
+
+    buffer = io.BytesIO()
+
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for entry_name, content in entries.items():
+            archive.writestr(entry_name, content)
+
+    return buffer.getvalue()
+
+
+def test_import_notebooks_uploads_every_ipynb_entry_in_the_zip():
+
+    content_a = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+    content_b = _notebook_bytes("def sub(a: int, b: int) -> int:\n    return a - b\n")
+
+    archive_bytes = _zip_bytes({
+        "import_a.ipynb": content_a,
+        "import_b.ipynb": content_b,
+    })
+
+    resp = client.post(
+        "/api/notebooks/import",
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 2
+    assert body["failed_count"] == 0
+    assert [r["filename"] for r in body["results"]] == ["import_a.ipynb", "import_b.ipynb"]
+    assert all(r["status"] == "success" for r in body["results"])
+
+    assert (Path(UPLOAD_DIR) / "import_a.ipynb").read_bytes() == content_a
+    assert (Path(UPLOAD_DIR) / "import_b.ipynb").read_bytes() == content_b
+
+
+def test_import_notebooks_flattens_nested_paths_to_their_basename():
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    archive_bytes = _zip_bytes({"nested/dir/import_nested.ipynb": content})
+
+    resp = client.post(
+        "/api/notebooks/import",
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["results"][0]["filename"] == "import_nested.ipynb"
+    assert (Path(UPLOAD_DIR) / "import_nested.ipynb").read_bytes() == content
+
+
+def test_import_notebooks_skips_non_ipynb_entries():
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    archive_bytes = _zip_bytes({
+        "import_readme.ipynb": content,
+        "README.md": b"not a notebook",
+    })
+
+    resp = client.post(
+        "/api/notebooks/import",
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert [r["filename"] for r in body["results"]] == ["import_readme.ipynb"]
+
+
+def test_import_notebooks_continues_past_a_single_invalid_entry():
+
+    good_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    archive_bytes = _zip_bytes({
+        "import_good.ipynb": good_content,
+        "import_bad.ipynb": b"not a notebook",
+    })
+
+    resp = client.post(
+        "/api/notebooks/import",
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    good_result, bad_result = body["results"]
+    assert good_result["status"] == "success"
+    assert bad_result["filename"] == "import_bad.ipynb"
+    assert bad_result["status"] == "error"
+    assert "not a valid Jupyter notebook" in bad_result["detail"]
+
+    assert (Path(UPLOAD_DIR) / "import_good.ipynb").is_file()
+    assert not (Path(UPLOAD_DIR) / "import_bad.ipynb").exists()
+
+
+def test_import_notebooks_reports_a_collision_error_without_overwrite():
+
+    original_content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("import_collide.ipynb", io.BytesIO(original_content), "application/json")},
+    )
+
+    archive_bytes = _zip_bytes({
+        "import_collide.ipynb": _notebook_bytes("def f() -> int:\n    return 1\n"),
+    })
+
+    resp = client.post(
+        "/api/notebooks/import",
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["failed_count"] == 1
+    assert "already exists" in body["results"][0]["detail"]
+
+    assert (Path(UPLOAD_DIR) / "import_collide.ipynb").read_bytes() == original_content
+
+
+def test_import_notebooks_overwrite_applies_to_every_entry():
+
+    original_content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("import_overwrite.ipynb", io.BytesIO(original_content), "application/json")},
+    )
+
+    replacement_content = _notebook_bytes("def sub(a: int, b: int) -> int:\n    return a - b\n")
+
+    archive_bytes = _zip_bytes({"import_overwrite.ipynb": replacement_content})
+
+    resp = client.post(
+        "/api/notebooks/import?overwrite=true",
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["results"][0]["overwritten"] is True
+    assert (Path(UPLOAD_DIR) / "import_overwrite.ipynb").read_bytes() == replacement_content
+
+
+def test_import_notebooks_rejects_a_non_zip_file():
+
+    resp = client.post(
+        "/api/notebooks/import",
+        files={"file": ("notes.ipynb", io.BytesIO(b"{}"), "application/json")},
+    )
+
+    assert resp.status_code == 400
+    assert "must be a .zip archive" in resp.json()["detail"]
+
+
+def test_import_notebooks_rejects_a_corrupt_zip_file():
+
+    resp = client.post(
+        "/api/notebooks/import",
+        files={"file": ("bundle.zip", io.BytesIO(b"not a real zip"), "application/zip")},
+    )
+
+    assert resp.status_code == 400
+    assert "not a valid zip archive" in resp.json()["detail"]
+
+
+def test_import_notebooks_rejects_a_zip_with_no_ipynb_files():
+
+    archive_bytes = _zip_bytes({"README.md": b"nothing to import here"})
+
+    resp = client.post(
+        "/api/notebooks/import",
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 400
+    assert "no .ipynb files" in resp.json()["detail"]
+
+
+def test_import_notebooks_rejects_more_entries_than_the_configured_maximum(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 1)
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    archive_bytes = _zip_bytes({
+        "import_max_a.ipynb": content,
+        "import_max_b.ipynb": content,
+    })
+
+    resp = client.post(
+        "/api/notebooks/import",
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 400
+    assert "at most 1" in resp.json()["detail"]
+    assert not (Path(UPLOAD_DIR) / "import_max_a.ipynb").exists()
+    assert not (Path(UPLOAD_DIR) / "import_max_b.ipynb").exists()
+
+
 def test_upload_lock_for_returns_the_same_lock_for_the_same_filename():
     """_upload_lock_for must hand back the *same* Lock instance for the
     same filename across separate calls (separate requests, in practice)
