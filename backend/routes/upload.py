@@ -1914,6 +1914,101 @@ def find_duplicate_notebooks():
     }
 
 
+@router.get("/notebooks/search-content")
+def search_notebook_content(search: str = None):
+    """Find every uploaded notebook with a code cell whose raw source
+    contains `search` (case-insensitive), across the whole catalog at
+    once.
+
+    GET /api/functions already searches every uploaded notebook's own
+    function *names* in one call, and GET /api/notebooks?search= matches
+    a substring of a notebook's own *filename* -- but neither looks at a
+    cell's actual code. Answering "which of my uploaded notebooks still
+    call this deprecated function", "where did I use pd.read_csv instead
+    of pd.read_parquet", or just "which notebook had that TODO comment"
+    meant downloading and grepping every uploaded notebook by hand, since
+    POST /api/inspect only ever works on one notebook_path per call and
+    reports function/dependency metadata, not raw source text.
+
+    Each match reports the matching cell's own 0-indexed position within
+    the notebook (as GET /api/notebooks/{filename}/versions' own ordering
+    conventions elsewhere in this file already number things, 0-based)
+    and a single-line "snippet" -- the first line within that cell that
+    actually contains `search` -- rather than the cell's full source, so
+    a caller can tell *where* a match is without this response ballooning
+    to the size of every matching notebook's own full content combined.
+
+    A notebook that fails to parse at all is silently skipped rather than
+    failing the whole search, the same "one bad entry doesn't sink a bulk
+    listing" precedent GET /api/functions' own identical bulk search
+    already sets -- unlike GET /api/validate-all, which deliberately
+    reports a parse failure as its own result instead: a malformed
+    notebook is incidental to what *this* endpoint is answering (does any
+    cell contain a substring), the identical reasoning GET /api/functions'
+    own docstring already gives for skipping one here too.
+    """
+
+    if not search:
+
+        raise HTTPException(
+            status_code=400,
+            detail="search is required"
+        )
+
+    upload_root = Path(UPLOAD_DIR)
+
+    search_lower = search.lower()
+
+    matches = []
+
+    for entry in sorted(upload_root.iterdir()):
+
+        if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        try:
+
+            notebook = load_notebook(str(entry))
+
+        except MALFORMED_NOTEBOOK_ERRORS:
+            continue
+
+        code_cells = extract_code_cells(notebook)
+
+        cell_matches = []
+
+        for cell_index, cell in enumerate(code_cells):
+
+            if search_lower not in cell.lower():
+                continue
+
+            snippet = next(
+                (
+                    line.strip() for line in cell.splitlines()
+                    if search_lower in line.lower()
+                ),
+                "",
+            )
+
+            cell_matches.append({
+                "cell_index": cell_index,
+                "snippet": snippet,
+            })
+
+        if cell_matches:
+            matches.append({
+                "filename": entry.name,
+                "matches": cell_matches,
+            })
+
+    return {
+        "status": "success",
+        "search": search,
+        "matches": matches,
+        "notebook_count": len(matches),
+    }
+
+
 @router.delete("/notebooks")
 def delete_all_notebooks(confirm: bool = False):
     """Remove every uploaded notebook in UPLOAD_DIR at once.

@@ -2118,6 +2118,135 @@ def test_find_duplicate_notebooks_reports_multiple_independent_groups():
     assert body["duplicate_notebook_count"] == 4
 
 
+def test_search_notebook_content_finds_notebooks_with_a_matching_cell():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes(
+        "import pandas as pd\n\n"
+        "def load() -> str:\n    df = pd.read_csv('data.csv')\n    return 'done'\n"
+    )
+    content_b = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename, content in (
+        ("search_content_a.ipynb", content_a),
+        ("search_content_b.ipynb", content_b),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    resp = client.get(
+        "/api/notebooks/search-content", params={"search": "read_csv"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["search"] == "read_csv"
+    assert body["notebook_count"] == 1
+    assert body["matches"][0]["filename"] == "search_content_a.ipynb"
+
+    cell_match = body["matches"][0]["matches"][0]
+    assert cell_match["cell_index"] == 0
+    assert "read_csv" in cell_match["snippet"]
+
+
+def test_search_notebook_content_is_case_insensitive():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "def f() -> int:\n    # TODO: fix this\n    return 1\n"
+    )
+
+    resp = client.post(
+        "/api/upload",
+        files={"file": ("search_content_case.ipynb", io.BytesIO(content), "application/json")},
+    )
+    assert resp.status_code == 200
+
+    resp = client.get(
+        "/api/notebooks/search-content", params={"search": "todo"}
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["notebook_count"] == 1
+
+
+def test_search_notebook_content_reports_no_matches():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    resp = client.get(
+        "/api/notebooks/search-content", params={"search": "nonexistent_xyz"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["matches"] == []
+    assert body["notebook_count"] == 0
+
+
+def test_search_notebook_content_requires_a_search_value():
+
+    resp = client.get("/api/notebooks/search-content")
+
+    assert resp.status_code == 400
+
+
+def test_search_notebook_content_skips_a_malformed_notebook_file():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    filename = "search_content_malformed.ipynb"
+    file_path = os.path.join(UPLOAD_DIR, filename)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("not valid json at all")
+
+    resp = client.get(
+        "/api/notebooks/search-content", params={"search": "anything"}
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["matches"] == []
+
+
+def test_search_notebook_content_reports_multiple_matching_cells_in_one_notebook():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(nbformat.v4.new_code_cell("MARKER = 1\n"))
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def f() -> int:\n    MARKER_VALUE = 2\n    return MARKER_VALUE\n"
+        )
+    )
+    content = nbformat.writes(notebook).encode("utf-8")
+
+    resp = client.post(
+        "/api/upload",
+        files={"file": ("search_content_multi.ipynb", io.BytesIO(content), "application/json")},
+    )
+    assert resp.status_code == 200
+
+    resp = client.get(
+        "/api/notebooks/search-content", params={"search": "MARKER"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["notebook_count"] == 1
+    assert len(body["matches"][0]["matches"]) == 2
+    assert [m["cell_index"] for m in body["matches"][0]["matches"]] == [0, 1]
+
+
 def test_delete_notebook_rejects_a_filename_with_an_embedded_null_byte():
 
     resp = client.delete("/api/notebooks/nb%00.ipynb")

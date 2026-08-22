@@ -340,7 +340,7 @@ _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
     "export-curl", "serve", "watch", "deploy", "diff", "upload", "import-notebooks",
     "list", "info",
-    "search-functions", "find-duplicates",
+    "search-functions", "search-content", "find-duplicates",
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy", "tags",
     "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "remote-export", "remote-deploy",
@@ -1340,6 +1340,46 @@ def _dispatch_core_command(args):
                         func["name"] for func in match["functions"]
                     )
                     print(f"{match['filename']}: {function_names}")
+
+                print(f"\n{len(matches)} notebook(s) matched.")
+    elif args.command == "search-content":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/notebooks/search-content",
+                params={"search": args.search},
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            matches = data.get("matches", [])
+
+            if not matches:
+                print(f"No notebooks have a code cell matching '{args.search}'.")
+            else:
+                for match in matches:
+                    print(f"{match['filename']}:")
+                    for cell_match in match["matches"]:
+                        print(f"  [{cell_match['cell_index']}] {cell_match['snippet']}")
 
                 print(f"\n{len(matches)} notebook(s) matched.")
     elif args.command == "find-duplicates":
@@ -3364,6 +3404,33 @@ def main():
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"search\", \"matches\": [{\"filename\", \"functions\"}, ...], "
+            "\"notebook_count\"}) instead of a human-readable summary, "
+            "for scripting/automation."
+        )
+    )
+
+    # search-content command (find which uploaded notebooks have a code
+    # cell whose raw source contains a matching substring, across every
+    # notebook on the dashboard at once -- distinct from
+    # `search-functions`, which only ever matches a function's own name,
+    # not a cell's actual code)
+    search_content_parser = subparsers.add_parser(
+        "search-content",
+        help="Find which notebooks already on a running dashboard instance have a matching code cell, via its GET /api/notebooks/search-content."
+    )
+    search_content_parser.add_argument(
+        "search",
+        help="Case-insensitive substring to match against every uploaded notebook's own code cell source."
+    )
+    _add_dashboard_url_and_timeout_arguments(search_content_parser)
+    search_content_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"search\", \"matches\": [{\"filename\", \"matches\": "
+            "[{\"cell_index\", \"snippet\"}, ...]}, ...], "
             "\"notebook_count\"}) instead of a human-readable summary, "
             "for scripting/automation."
         )

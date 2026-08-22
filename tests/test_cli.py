@@ -2771,6 +2771,113 @@ def test_search_functions_command_reports_a_clean_error_when_the_dashboard_is_un
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_search_content_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "search-content" in proc.stdout
+
+
+def test_search_content_command_prints_matching_notebooks(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "search": "read_csv",
+        "matches": [
+            {
+                "filename": "a.ipynb",
+                "matches": [{"cell_index": 0, "snippet": "df = pd.read_csv('x.csv')"}],
+            },
+        ],
+        "notebook_count": 1,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["search-content", "read_csv", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "a.ipynb:" in proc.stdout
+    assert "[0] df = pd.read_csv('x.csv')" in proc.stdout
+    assert "1 notebook(s) matched." in proc.stdout
+    assert handler.requests == ["/api/notebooks/search-content?search=read_csv"]
+
+
+def test_search_content_command_reports_no_matches(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "search": "nonexistent",
+        "matches": [], "notebook_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["search-content", "nonexistent", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No notebooks have a code cell matching 'nonexistent'." in proc.stdout
+
+
+def test_search_content_command_json_flag_emits_the_dashboards_own_response(
+    fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "search": "read_csv",
+        "matches": [
+            {"filename": "a.ipynb", "matches": [{"cell_index": 0, "snippet": "x"}]},
+        ],
+        "notebook_count": 1,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["search-content", "read_csv", "--dashboard-url", dashboard_url, "--json"],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_search_content_command_reports_a_clean_error_for_an_empty_search(
+    fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(400, {"detail": "search is required"})
+    ]
+
+    proc = _run_cli(
+        ["search-content", "", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    _assert_clean_cli_error(proc, "search is required")
+
+
+def test_search_content_command_reports_a_clean_error_when_the_dashboard_is_unreachable():
+
+    proc = _run_cli(
+        [
+            "search-content", "read_csv",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=Path.cwd(),
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_find_duplicates_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())
