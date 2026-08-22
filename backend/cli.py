@@ -1658,6 +1658,56 @@ def _dispatch_core_command(args):
                     f"{data.get('failed_count', 0)} failed"
                 )
 
+        elif args.tags_command == "rename":
+
+            if not args.yes:
+                # PATCH /api/tags/{tag} (routes/upload.py) has no
+                # confirmation step of its own and affects every notebook
+                # carrying the tag at once -- the same reasoning `tags
+                # delete` already prompts for.
+                answer = input(
+                    f"Rename tag '{args.tag}' to '{args.new_tag}' on every "
+                    f"notebook on {dashboard_url}? [y/N] "
+                )
+                if answer.strip().lower() not in ("y", "yes"):
+                    print("Aborted.")
+                    return
+
+            try:
+                response = httpx.patch(
+                    f"{dashboard_url}/api/tags/{args.tag}",
+                    json={"new_tag": args.new_tag},
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                affected_notebooks = data.get("affected_notebooks", [])
+
+                if not affected_notebooks:
+                    print(f"No notebooks on {dashboard_url} carry tag '{args.tag}'.")
+                else:
+                    for filename in affected_notebooks:
+                        print(f"Renamed '{args.tag}' to '{args.new_tag}' on {filename}")
+
+                    print(
+                        f"\n{data.get('notebook_count', len(affected_notebooks))} "
+                        f"notebook(s) updated on {dashboard_url}"
+                    )
+
         else:  # args.tags_command == "set"
 
             try:
@@ -3245,6 +3295,43 @@ def main():
             "\"tag\", \"results\": [{\"filename\", \"status\", ...}, ...], "
             "\"succeeded_count\", \"failed_count\"}) instead of a "
             "human-readable summary, for scripting/automation."
+        )
+    )
+
+    tags_rename_parser = tags_subparsers.add_parser(
+        "rename",
+        help=(
+            "Rename a tag on every notebook that currently carries it, "
+            "via PATCH /api/tags/{tag}."
+        )
+    )
+    tags_rename_parser.add_argument(
+        "tag", help="Tag to rename, as reported by `tags list`."
+    )
+    tags_rename_parser.add_argument(
+        "new_tag", help="New name for the tag."
+    )
+    _add_dashboard_url_and_timeout_arguments(tags_rename_parser)
+    tags_rename_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Confirm the rename without an interactive prompt. Without "
+            "this, `tags rename` asks for a y/N confirmation on the "
+            "terminal before sending the request -- PATCH /api/tags/{tag} "
+            "itself has no confirmation step of its own and affects "
+            "every notebook carrying the tag at once."
+        )
+    )
+    tags_rename_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"tag\", \"new_tag\", \"affected_notebooks\", "
+            "\"notebook_count\"}) instead of a human-readable summary, "
+            "for scripting/automation."
         )
     )
 

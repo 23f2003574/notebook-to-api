@@ -2916,6 +2916,111 @@ def test_apply_tag_rejects_an_empty_tag():
     assert resp.status_code == 400
 
 
+def test_rename_tag_renames_it_on_every_notebook_that_has_it():
+
+    _upload_sample_notebook("tags_rename_a.ipynb")
+    _upload_sample_notebook("tags_rename_b.ipynb")
+    _upload_sample_notebook("tags_rename_c.ipynb")
+
+    client.put(
+        "/api/notebooks/tags_rename_a.ipynb/tags",
+        json={"tags": ["prod", "bug"]},
+    )
+    client.put(
+        "/api/notebooks/tags_rename_b.ipynb/tags",
+        json={"tags": ["prod"]},
+    )
+    client.put(
+        "/api/notebooks/tags_rename_c.ipynb/tags",
+        json={"tags": ["staging"]},
+    )
+
+    rename_resp = client.patch(
+        "/api/tags/prod", json={"new_tag": "production"}
+    )
+
+    assert rename_resp.status_code == 200
+    body = rename_resp.json()
+    assert body["status"] == "success"
+    assert body["tag"] == "prod"
+    assert body["new_tag"] == "production"
+    assert sorted(body["affected_notebooks"]) == [
+        "tags_rename_a.ipynb", "tags_rename_b.ipynb",
+    ]
+    assert body["notebook_count"] == 2
+
+    assert client.get(
+        "/api/notebooks/tags_rename_a.ipynb/tags"
+    ).json()["tags"] == ["bug", "production"]
+    assert client.get(
+        "/api/notebooks/tags_rename_b.ipynb/tags"
+    ).json()["tags"] == ["production"]
+    # Untouched -- never carried "prod" at all.
+    assert client.get(
+        "/api/notebooks/tags_rename_c.ipynb/tags"
+    ).json()["tags"] == ["staging"]
+
+    tag_names = {entry["tag"] for entry in client.get("/api/tags").json()["tags"]}
+    assert "prod" not in tag_names
+    assert "production" in tag_names
+
+
+def test_rename_tag_is_a_no_op_success_when_nothing_carries_it():
+
+    resp = client.patch(
+        "/api/tags/this-tag-does-not-exist-anywhere",
+        json={"new_tag": "something-else"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "success",
+        "tag": "this-tag-does-not-exist-anywhere",
+        "new_tag": "something-else",
+        "affected_notebooks": [],
+        "notebook_count": 0,
+    }
+
+
+def test_rename_tag_merges_into_an_existing_new_tag_without_duplicating():
+
+    _upload_sample_notebook("tags_rename_merge.ipynb")
+    client.put(
+        "/api/notebooks/tags_rename_merge.ipynb/tags",
+        json={"tags": ["prod", "production"]},
+    )
+
+    resp = client.patch("/api/tags/prod", json={"new_tag": "production"})
+
+    assert resp.status_code == 200
+    assert resp.json()["affected_notebooks"] == ["tags_rename_merge.ipynb"]
+
+    assert client.get(
+        "/api/notebooks/tags_rename_merge.ipynb/tags"
+    ).json()["tags"] == ["production"]
+
+
+def test_rename_tag_rejects_a_missing_new_tag():
+
+    resp = client.patch("/api/tags/prod", json={})
+
+    assert resp.status_code == 400
+
+
+def test_rename_tag_rejects_an_empty_new_tag():
+
+    resp = client.patch("/api/tags/prod", json={"new_tag": "   "})
+
+    assert resp.status_code == 400
+
+
+def test_rename_tag_rejects_renaming_a_tag_to_itself():
+
+    resp = client.patch("/api/tags/prod", json={"new_tag": "prod"})
+
+    assert resp.status_code == 400
+
+
 def test_search_functions_finds_notebooks_with_a_matching_function_name():
 
     content_a = _notebook_bytes(

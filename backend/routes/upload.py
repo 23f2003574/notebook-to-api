@@ -1236,6 +1236,83 @@ def apply_tag(tag: str, data: dict):
     }
 
 
+@router.patch("/tags/{tag}")
+def rename_tag(tag: str, data: dict):
+    """Rename `tag` to `data["new_tag"]` on every notebook that currently
+    carries it, in one call.
+
+    DELETE /api/tags/{tag} and POST /api/tags/{tag}/apply already cover
+    retiring a tag everywhere and adding one to a caller-chosen set of
+    notebooks, but neither covers the much more common "I typo'd a tag"
+    or "we're renaming 'prod' to 'production'" case -- before this, fixing
+    a tag's spelling across the whole catalog meant DELETE-ing the old tag
+    and then POST .../apply-ing the new one, two separate round trips with
+    no atomicity between them (a crash in between leaves every affected
+    notebook missing the tag entirely, since the delete already
+    committed), and no way to tell, from the two calls alone, that they
+    were meant as one rename rather than an unrelated delete followed by
+    an unrelated apply.
+
+    Every notebook that already has `new_tag` before the rename simply
+    keeps it -- `tag` is dropped and `new_tag` was already present, so
+    nothing changes for that notebook's resulting set beyond `tag` being
+    gone, the same "one tag in, deduplicated set out" contract
+    _validate_and_normalize_tags already guarantees for
+    PUT /api/notebooks/{filename}/tags.
+
+    Every other notebook's tags -- including ones that never carried `tag`
+    at all -- are left completely untouched, the same guarantee DELETE
+    /api/tags/{tag} already makes.
+    """
+
+    new_tag = data.get("new_tag")
+
+    if not isinstance(new_tag, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="new_tag must be a string"
+        )
+
+    new_tag = _validate_and_normalize_tags([new_tag])[0]
+
+    if new_tag == tag:
+
+        raise HTTPException(
+            status_code=400,
+            detail="new_tag must be different from the current tag"
+        )
+
+    upload_root = Path(UPLOAD_DIR)
+
+    affected_notebooks = []
+
+    for entry in sorted(upload_root.iterdir()):
+
+        if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        notebook_tags = _read_notebook_tags(entry.name)
+
+        if tag not in notebook_tags:
+            continue
+
+        renamed_tags = _validate_and_normalize_tags(
+            [t for t in notebook_tags if t != tag] + [new_tag]
+        )
+
+        _write_notebook_tags(entry.name, renamed_tags)
+        affected_notebooks.append(entry.name)
+
+    return {
+        "status": "success",
+        "tag": tag,
+        "new_tag": new_tag,
+        "affected_notebooks": affected_notebooks,
+        "notebook_count": len(affected_notebooks),
+    }
+
+
 @router.get("/functions")
 def search_functions(search: str = None):
     """Find which uploaded notebooks define a function whose name
