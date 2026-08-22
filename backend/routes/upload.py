@@ -2412,6 +2412,100 @@ def get_notebook_info(filename: str):
     }
 
 
+@router.post("/notebooks/info-batch")
+def get_notebooks_info_batch(data: dict):
+    """Return several previously uploaded notebooks' own metadata --
+    each the exact entry GET /api/notebooks/{filename}/info already
+    returns for it -- in one call.
+
+    GET /api/notebooks/{filename}/info already avoids fetching or
+    filtering the *entire* catalog just to find one notebook's own
+    record, but a caller that already has a specific *set* of filenames
+    in hand -- e.g. from a preceding GET /api/functions or GET
+    /api/notebooks/search-content match, or GET /api/notebooks/duplicates'
+    own "filenames" for one group -- had no way to fetch all of their
+    metadata in one round trip either: it was back to one GET
+    .../{filename}/info call per name, or falling back to the same
+    unfiltered GET /api/notebooks that single-notebook endpoint's own
+    docstring already calls wasteful for exactly one name.
+
+    Deliberately takes an explicit "filenames" list rather than a
+    search/tag filter, the same reasoning POST /api/tags/{tag}/apply's
+    own docstring already gives for its identical "filenames" body field:
+    the caller already knows exactly which notebooks it wants, and an
+    explicit list keeps this endpoint's own result fully predictable from
+    its own request body alone.
+
+    Reuses the exact per-file "one bad entry doesn't abort the batch"
+    contract POST /api/upload/batch and POST /api/tags/{tag}/apply already
+    established: each filename is looked up independently, and "results"
+    reports one {"filename", "status", ...} entry per filename --
+    "success" (with that notebook's own full metadata entry, from the
+    same _notebook_metadata_entry helper GET /api/notebooks and GET
+    /api/notebooks/{filename}/info themselves already share, so this can
+    never drift from either) or "error" (a 404-equivalent detail for a
+    filename that doesn't exist). The response is always 200 -- the batch
+    request itself was handled, even if every filename in it failed --
+    with "succeeded_count"/"failed_count" summarizing "results" the same
+    way those two endpoints' own identical fields already do.
+    """
+
+    filenames = data.get("filenames")
+
+    if (
+        not isinstance(filenames, list)
+        or not filenames
+        or not all(isinstance(f, str) for f in filenames)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="filenames must be a non-empty list of strings"
+        )
+
+    compiled_path, compiled_sha256, compiled_at = _currently_compiled_notebook_metadata()
+
+    results = []
+    succeeded_count = 0
+    failed_count = 0
+
+    for filename in filenames:
+
+        try:
+
+            file_path = resolve_upload_path(filename)
+
+            if not file_path.is_file():
+
+                raise HTTPException(
+                    status_code=404,
+                    detail="Notebook file not found"
+                )
+
+            results.append({
+                "status": "success",
+                **_notebook_metadata_entry(
+                    file_path, compiled_path, compiled_sha256, compiled_at
+                ),
+            })
+            succeeded_count += 1
+
+        except HTTPException as exc:
+
+            results.append({
+                "filename": filename,
+                "status": "error",
+                "detail": exc.detail,
+            })
+            failed_count += 1
+
+    return {
+        "status": "success",
+        "results": results,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
+    }
+
+
 # Serializes rename_notebook's own check-then-write critical section per
 # *destination* filename within UPLOAD_DIR -- see _rename_lock_for's own
 # docstring below for why this exists. A plain threading.Lock, not an

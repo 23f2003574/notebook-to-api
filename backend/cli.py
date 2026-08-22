@@ -339,7 +339,7 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
     "export-curl", "serve", "watch", "deploy", "diff", "upload", "import-notebooks",
-    "list", "info",
+    "list", "info", "info-batch",
     "search-functions", "search-content", "find-duplicates",
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy", "tags",
     "remote-compile", "remote-build",
@@ -1302,6 +1302,50 @@ def _dispatch_core_command(args):
                     "  changed since compile: "
                     f"{data.get('notebook_changed_since_compile')}"
                 )
+    elif args.command == "info-batch":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.post(
+                f"{dashboard_url}/api/notebooks/info-batch",
+                json={"filenames": args.filename},
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            for result in data.get("results", []):
+
+                if result["status"] == "success":
+                    tags = result.get("tags") or []
+                    print(
+                        f"{result['filename']}  ({result['size_bytes']} bytes) "
+                        f"tags: {', '.join(tags) if tags else '(none)'}"
+                    )
+                else:
+                    print(f"Failed '{result['filename']}': {result['detail']}")
+
+            print(
+                f"\n{data.get('succeeded_count', 0)} succeeded, "
+                f"{data.get('failed_count', 0)} failed"
+            )
     elif args.command == "search-functions":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -3502,6 +3546,34 @@ def main():
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"filename\", \"size_bytes\", \"modified_at\", "
             "\"currently_compiled\", \"tags\", ...}) instead of a "
+            "human-readable summary, for scripting/automation."
+        )
+    )
+
+    # info-batch command (show several named notebooks' own metadata at
+    # once, via POST /api/notebooks/info-batch -- distinct from `info`
+    # above, which only ever fetches one notebook's own metadata at a
+    # time)
+    info_batch_parser = subparsers.add_parser(
+        "info-batch",
+        help=(
+            "Show several named notebooks' own metadata at once via a "
+            "running dashboard instance's POST /api/notebooks/info-batch."
+        )
+    )
+    info_batch_parser.add_argument(
+        "filename", nargs="+",
+        help="Filenames of the notebooks to look up, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(info_batch_parser)
+    info_batch_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"results\": [{\"filename\", \"status\", ...}, ...], "
+            "\"succeeded_count\", \"failed_count\"}) instead of a "
             "human-readable summary, for scripting/automation."
         )
     )

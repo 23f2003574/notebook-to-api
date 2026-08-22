@@ -1947,6 +1947,80 @@ def test_get_notebook_info_rejects_absolute_filename():
     assert "root:" not in resp.text
 
 
+def test_get_notebooks_info_batch_matches_each_notebooks_own_info_entry():
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    content_b = _notebook_bytes(
+        "def sub(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    for filename, content in (
+        ("info_batch_a.ipynb", content_a),
+        ("info_batch_b.ipynb", content_b),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    client.put("/api/notebooks/info_batch_a.ipynb/tags", json={"tags": ["scratch"]})
+
+    resp = client.post(
+        "/api/notebooks/info-batch",
+        json={"filenames": ["info_batch_a.ipynb", "info_batch_b.ipynb"]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["succeeded_count"] == 2
+    assert body["failed_count"] == 0
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["info_batch_a.ipynb"]["status"] == "success"
+    assert results_by_filename["info_batch_a.ipynb"]["tags"] == ["scratch"]
+
+    single_info = client.get("/api/notebooks/info_batch_a.ipynb/info").json()
+    assert results_by_filename["info_batch_a.ipynb"] == single_info
+
+
+def test_get_notebooks_info_batch_reports_a_missing_filename_without_aborting_the_rest():
+
+    _upload_sample_notebook("info_batch_partial.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/info-batch",
+        json={"filenames": ["info_batch_partial.ipynb", "does_not_exist.ipynb"]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["info_batch_partial.ipynb"]["status"] == "success"
+    assert results_by_filename["does_not_exist.ipynb"]["status"] == "error"
+    assert "not found" in results_by_filename["does_not_exist.ipynb"]["detail"]
+
+
+def test_get_notebooks_info_batch_rejects_a_non_list_filenames_value():
+
+    resp = client.post("/api/notebooks/info-batch", json={"filenames": "not-a-list"})
+
+    assert resp.status_code == 400
+
+
+def test_get_notebooks_info_batch_rejects_an_empty_filenames_list():
+
+    resp = client.post("/api/notebooks/info-batch", json={"filenames": []})
+
+    assert resp.status_code == 400
+
+
 def test_export_notebooks_zips_the_named_filenames():
 
     content_a = _notebook_bytes(

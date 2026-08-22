@@ -2659,6 +2659,120 @@ def test_info_command_reports_a_clean_error_when_the_dashboard_is_unreachable():
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_info_batch_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "info-batch" in proc.stdout
+
+
+def test_info_batch_command_prints_each_notebooks_metadata(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "results": [
+            {
+                "status": "success", "filename": "a.ipynb", "size_bytes": 100,
+                "modified_at": "2026-01-01T00:00:00+00:00",
+                "currently_compiled": False, "tags": ["scratch"],
+            },
+            {
+                "status": "success", "filename": "b.ipynb", "size_bytes": 200,
+                "modified_at": "2026-01-01T00:00:00+00:00",
+                "currently_compiled": False, "tags": [],
+            },
+        ],
+        "succeeded_count": 2,
+        "failed_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["info-batch", "a.ipynb", "b.ipynb", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "a.ipynb  (100 bytes) tags: scratch" in proc.stdout
+    assert "b.ipynb  (200 bytes) tags: (none)" in proc.stdout
+    assert "2 succeeded, 0 failed" in proc.stdout
+    assert handler.requests == ["/api/notebooks/info-batch"]
+    assert json.loads(handler.bodies[0]) == {"filenames": ["a.ipynb", "b.ipynb"]}
+
+
+def test_info_batch_command_reports_a_partial_failure(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "results": [
+            {
+                "status": "success", "filename": "a.ipynb", "size_bytes": 100,
+                "modified_at": "2026-01-01T00:00:00+00:00",
+                "currently_compiled": False, "tags": [],
+            },
+            {
+                "status": "error", "filename": "missing.ipynb",
+                "detail": "Notebook file not found",
+            },
+        ],
+        "succeeded_count": 1,
+        "failed_count": 1,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["info-batch", "a.ipynb", "missing.ipynb", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "a.ipynb  (100 bytes)" in proc.stdout
+    assert "Failed 'missing.ipynb': Notebook file not found" in proc.stdout
+    assert "1 succeeded, 1 failed" in proc.stdout
+
+
+def test_info_batch_command_json_flag_emits_the_dashboards_own_response(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "results": [
+            {
+                "status": "success", "filename": "a.ipynb", "size_bytes": 100,
+                "modified_at": "2026-01-01T00:00:00+00:00",
+                "currently_compiled": False, "tags": [],
+            },
+        ],
+        "succeeded_count": 1,
+        "failed_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["info-batch", "a.ipynb", "--dashboard-url", dashboard_url, "--json"],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_info_batch_command_reports_a_clean_error_when_the_dashboard_is_unreachable():
+
+    proc = _run_cli(
+        [
+            "info-batch", "a.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=Path.cwd(),
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_search_functions_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())
