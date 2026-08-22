@@ -1748,6 +1748,111 @@ def delete_notebook(filename: str):
     }
 
 
+@router.post("/notebooks/delete-batch")
+def delete_notebooks_batch(data: dict):
+    """Delete a caller-chosen set of already-uploaded notebooks in one
+    call.
+
+    DELETE /api/notebooks/{filename} already deletes one notebook, and
+    DELETE /api/notebooks (with "?confirm=true") deletes literally every
+    uploaded notebook -- but there was nothing in between: discarding a
+    handful of specific notebooks (e.g. everything a preceding GET
+    /api/notebooks?search=... turned up as stale scratch work) meant
+    calling DELETE /api/notebooks/{filename} once per filename, or reaching
+    for DELETE /api/notebooks and losing every *other* uploaded notebook
+    along with them.
+
+    Deliberately takes an explicit "filenames" list rather than a
+    search/tag filter, the same reasoning POST /api/tags/{tag}/apply's own
+    docstring already gives for its identical "filenames" body field: the
+    caller already knows exactly which notebooks to remove, typically from
+    a preceding GET /api/notebooks?search=... of its own, and an explicit
+    list keeps this endpoint's effect fully predictable from its own
+    request body alone.
+
+    Reuses the exact per-file "one bad entry doesn't abort the batch"
+    contract POST /api/upload/batch and POST /api/tags/{tag}/apply already
+    established: each filename is processed independently, and "results"
+    reports one {"filename", "status", ...} entry per filename --
+    "success" (with that notebook's own "was_currently_compiled" flag, the
+    same field DELETE /api/notebooks/{filename} already returns) or
+    "error" (with the HTTPException detail that filename's own single-file
+    delete would have raised on its own, e.g. a 404 for a filename that
+    doesn't exist). The response is always 200 -- the batch request itself
+    was handled, even if every filename in it failed -- with
+    "succeeded_count"/"failed_count" summarizing "results" the same way
+    those two endpoints' own identical fields already do.
+
+    Also removes each successfully-deleted notebook's tags sidecar file
+    and version history directory, exactly like DELETE
+    /api/notebooks/{filename} and DELETE /api/notebooks already do -- a
+    notebook re-uploaded later under the same filename must not silently
+    inherit either one left behind by this bulk delete.
+    """
+
+    filenames = data.get("filenames")
+
+    if (
+        not isinstance(filenames, list)
+        or not filenames
+        or not all(isinstance(f, str) for f in filenames)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="filenames must be a non-empty list of strings"
+        )
+
+    compiled_path, _, _ = _currently_compiled_notebook_metadata()
+
+    results = []
+    succeeded_count = 0
+    failed_count = 0
+
+    for filename in filenames:
+
+        try:
+
+            file_path = resolve_upload_path(filename)
+
+            if not file_path.is_file():
+
+                raise HTTPException(
+                    status_code=404,
+                    detail="Notebook file not found"
+                )
+
+            was_currently_compiled = (
+                compiled_path is not None and file_path.resolve() == compiled_path
+            )
+
+            os.remove(file_path)
+            _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
+            shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
+
+            results.append({
+                "filename": filename,
+                "status": "success",
+                "was_currently_compiled": was_currently_compiled,
+            })
+            succeeded_count += 1
+
+        except HTTPException as exc:
+
+            results.append({
+                "filename": filename,
+                "status": "error",
+                "detail": exc.detail,
+            })
+            failed_count += 1
+
+    return {
+        "status": "success",
+        "results": results,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
+    }
+
+
 @router.get("/notebooks/{filename}")
 def get_notebook(filename: str):
     """Download a previously uploaded notebook's raw content.

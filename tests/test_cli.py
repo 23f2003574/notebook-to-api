@@ -3008,6 +3008,150 @@ def test_delete_command_all_flag_reports_a_clean_error_when_the_dashboard_is_unr
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_delete_batch_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "delete-batch" in proc.stdout
+
+
+def test_delete_batch_command_reports_success_with_yes_flag(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {"filename": "a.ipynb", "status": "success", "was_currently_compiled": False},
+                {"filename": "b.ipynb", "status": "success", "was_currently_compiled": True},
+            ],
+            "succeeded_count": 2,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["delete-batch", "a.ipynb", "b.ipynb", "--dashboard-url", dashboard_url, "--yes"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Deleted 'a.ipynb'" in proc.stdout
+    assert "Deleted 'b.ipynb'" in proc.stdout
+    assert "currently compiled app" in proc.stdout
+    assert "2 succeeded, 0 failed" in proc.stdout
+    assert handler.requests == ["/api/notebooks/delete-batch"]
+
+
+def test_delete_batch_command_reports_a_partial_failure(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {"filename": "a.ipynb", "status": "success", "was_currently_compiled": False},
+                {"filename": "missing.ipynb", "status": "error", "detail": "Notebook file not found"},
+            ],
+            "succeeded_count": 1,
+            "failed_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["delete-batch", "a.ipynb", "missing.ipynb", "--dashboard-url", dashboard_url, "--yes"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Deleted 'a.ipynb'" in proc.stdout
+    assert "Failed to delete missing.ipynb: Notebook file not found" in proc.stdout
+    assert "1 succeeded, 1 failed" in proc.stdout
+
+
+def test_delete_batch_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {"filename": "a.ipynb", "status": "success", "was_currently_compiled": False},
+            ],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "delete-batch", "a.ipynb",
+            "--dashboard-url", dashboard_url, "--yes", "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["succeeded_count"] == 1
+
+
+def test_delete_batch_command_aborts_without_yes_when_declined(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = []
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli",
+            "delete-batch", "a.ipynb", "b.ipynb", "--dashboard-url", dashboard_url,
+        ],
+        cwd=str(workdir),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        capture_output=True,
+        text=True,
+        input="n\n",
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Aborted." in proc.stdout
+    assert handler.requests == []
+
+
+def test_delete_batch_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "delete-batch", "a.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5", "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_rename_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

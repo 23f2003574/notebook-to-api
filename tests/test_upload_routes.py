@@ -1904,6 +1904,107 @@ def test_delete_all_notebooks_returns_zero_when_nothing_uploaded():
     assert body["currently_compiled_notebook_deleted"] is False
 
 
+def test_delete_notebooks_batch_removes_only_the_named_notebooks():
+
+    _upload_sample_notebook("delete_batch_a.ipynb")
+    _upload_sample_notebook("delete_batch_b.ipynb")
+    _upload_sample_notebook("delete_batch_c.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/delete-batch",
+        json={"filenames": ["delete_batch_a.ipynb", "delete_batch_b.ipynb"]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["succeeded_count"] == 2
+    assert body["failed_count"] == 0
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["delete_batch_a.ipynb"]["status"] == "success"
+    assert results_by_filename["delete_batch_b.ipynb"]["status"] == "success"
+
+    assert client.get("/api/notebooks/delete_batch_a.ipynb").status_code == 404
+    assert client.get("/api/notebooks/delete_batch_b.ipynb").status_code == 404
+    # Untouched -- not named in the batch.
+    assert client.get("/api/notebooks/delete_batch_c.ipynb").status_code == 200
+
+
+def test_delete_notebooks_batch_reports_a_missing_filename_without_aborting_the_rest():
+
+    _upload_sample_notebook("delete_batch_partial.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/delete-batch",
+        json={"filenames": ["delete_batch_partial.ipynb", "does_not_exist.ipynb"]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["delete_batch_partial.ipynb"]["status"] == "success"
+    assert results_by_filename["does_not_exist.ipynb"]["status"] == "error"
+    assert "not found" in results_by_filename["does_not_exist.ipynb"]["detail"]
+
+    assert client.get("/api/notebooks/delete_batch_partial.ipynb").status_code == 404
+
+
+def test_delete_notebooks_batch_flags_was_currently_compiled():
+
+    _upload_sample_notebook("delete_batch_compiled.ipynb")
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "delete_batch_compiled.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    resp = client.post(
+        "/api/notebooks/delete-batch",
+        json={"filenames": ["delete_batch_compiled.ipynb"]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["results"][0]["was_currently_compiled"] is True
+
+
+def test_delete_notebooks_batch_removes_tags_and_version_history():
+
+    _upload_sample_notebook("delete_batch_cleanup.ipynb")
+    client.put(
+        "/api/notebooks/delete_batch_cleanup.ipynb/tags",
+        json={"tags": ["scratch"]},
+    )
+    assert _tags_sidecar_path("delete_batch_cleanup.ipynb").is_file()
+
+    resp = client.post(
+        "/api/notebooks/delete-batch",
+        json={"filenames": ["delete_batch_cleanup.ipynb"]},
+    )
+
+    assert resp.status_code == 200
+    assert not _tags_sidecar_path("delete_batch_cleanup.ipynb").is_file()
+
+
+def test_delete_notebooks_batch_rejects_a_non_list_filenames_value():
+
+    resp = client.post(
+        "/api/notebooks/delete-batch", json={"filenames": "not-a-list"}
+    )
+
+    assert resp.status_code == 400
+
+
+def test_delete_notebooks_batch_rejects_an_empty_filenames_list():
+
+    resp = client.post("/api/notebooks/delete-batch", json={"filenames": []})
+
+    assert resp.status_code == 400
+
+
 def test_rename_notebook_renames_the_file_on_disk():
 
     content = _notebook_bytes(

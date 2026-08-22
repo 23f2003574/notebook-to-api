@@ -340,7 +340,7 @@ _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
     "export-curl", "serve", "watch", "deploy", "diff", "upload", "list", "info",
     "search-functions",
-    "download", "delete", "rename", "copy", "tags", "remote-compile", "remote-build",
+    "download", "delete", "delete-batch", "rename", "copy", "tags", "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "remote-export", "remote-deploy",
     "status", "remote-validate", "remote-curl",
 })
@@ -1439,6 +1439,61 @@ def _dispatch_core_command(args):
                 print(f"Deleted '{data.get('filename', args.filename)}' from {dashboard_url}")
                 if data.get("was_currently_compiled"):
                     print("  note: this was the notebook backing the currently compiled app.")
+    elif args.command == "delete-batch":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        if not args.yes:
+            # POST /api/notebooks/delete-batch (routes/upload.py) has no
+            # confirmation step of its own and is irreversible -- the same
+            # reasoning `delete`'s own single-filename/--all paths already
+            # prompt for.
+            filenames_display = ", ".join(args.filename)
+            answer = input(
+                f"Delete {filenames_display} from {dashboard_url}? [y/N] "
+            )
+            if answer.strip().lower() not in ("y", "yes"):
+                print("Aborted.")
+                return
+
+        try:
+            response = httpx.post(
+                f"{dashboard_url}/api/notebooks/delete-batch",
+                json={"filenames": args.filename},
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            for result in data.get("results", []):
+
+                if result["status"] == "success":
+                    print(f"Deleted '{result['filename']}'")
+                    if result.get("was_currently_compiled"):
+                        print("  note: this was the notebook backing the currently compiled app.")
+                else:
+                    print(f"Failed to delete {result['filename']}: {result['detail']}")
+
+            print(
+                f"\n{data.get('succeeded_count', 0)} succeeded, "
+                f"{data.get('failed_count', 0)} failed"
+            )
     elif args.command == "rename":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -3117,6 +3172,47 @@ def main():
             "\"deleted_filenames\", \"currently_compiled_notebook_deleted\"} "
             "for --all -- instead of a human-readable summary, for "
             "scripting/automation."
+        )
+    )
+
+    # delete-batch command (remove several named notebooks at once, via
+    # POST /api/notebooks/delete-batch -- distinct from `delete`'s own
+    # single-filename/--all pair above: neither removes an arbitrary
+    # caller-chosen *set* of notebooks in one call without either
+    # discovering and deleting each one individually or wiping every
+    # uploaded notebook via --all)
+    delete_batch_parser = subparsers.add_parser(
+        "delete-batch",
+        help=(
+            "Delete several named notebooks at once, via POST "
+            "/api/notebooks/delete-batch."
+        )
+    )
+    delete_batch_parser.add_argument(
+        "filename", nargs="+",
+        help="Filenames of the notebooks to delete, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(delete_batch_parser)
+    delete_batch_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Confirm the deletion without an interactive prompt. Without "
+            "this, `delete-batch` asks for a y/N confirmation on the "
+            "terminal before sending the request -- POST "
+            "/api/notebooks/delete-batch itself has no confirmation step "
+            "of its own and is irreversible."
+        )
+    )
+    delete_batch_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"results\": [{\"filename\", \"status\", ...}, ...], "
+            "\"succeeded_count\", \"failed_count\"}) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 
