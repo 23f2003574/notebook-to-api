@@ -2797,6 +2797,66 @@ def list_notebook_versions(filename: str):
     }
 
 
+@router.delete("/notebooks/{filename}/versions")
+def clear_notebook_versions(filename: str):
+    """Permanently discard every one of a notebook's snapshotted previous
+    versions at once, without touching the notebook's own current content,
+    tags, or currently-compiled status.
+
+    DELETE /api/notebooks/{filename}/versions/{version_id} already removes
+    one snapshot at a time, and _prune_notebook_versions (above) already
+    trims the oldest ones automatically once a notebook accumulates more
+    than MAX_NOTEBOOK_VERSIONS -- but there was no way to clear a
+    notebook's entire version history in one call. An operator wanting to
+    reclaim the disk space an actively-edited notebook's history has
+    built up, or to discard a run of snapshots that turn out to contain
+    something sensitive, had to first GET .../versions to enumerate every
+    version_id, then call the single-version DELETE once per entry --
+    mirroring exactly the gap DELETE /api/notebooks/delete-batch already
+    closed for deleting several *notebooks* at once, just one level down,
+    for a single notebook's own *version history* instead.
+
+    Held under the same _version_lock_for restore_notebook_version's own
+    snapshot-then-copy sequence already uses, for the identical reason:
+    without it, this could rmtree a versions directory a concurrent
+    POST .../restore is in the middle of snapshotting the current content
+    into (see _snapshot_current_notebook_version), losing that snapshot
+    before it was ever listed here.
+
+    A no-op success (not a 404) when the notebook has no version history
+    at all -- "nothing to clear" is a valid outcome of a bulk operation
+    like this, not an error, the same reasoning DELETE /api/tags/{tag}'s
+    own empty "affected_notebooks" already applies when nothing matched.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    versions_dir = _notebook_versions_dir(file_path.name)
+
+    with _version_lock_for(file_path.name):
+
+        deleted_version_ids = sorted(
+            entry.name for entry in versions_dir.iterdir()
+            if entry.is_file()
+        ) if versions_dir.is_dir() else []
+
+        shutil.rmtree(versions_dir, ignore_errors=True)
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "deleted_version_ids": deleted_version_ids,
+        "deleted_count": len(deleted_version_ids),
+    }
+
+
 @router.get("/notebooks/{filename}/versions/{version_id}")
 def get_notebook_version(filename: str, version_id: str):
     """Download the raw content of one of a notebook's previously

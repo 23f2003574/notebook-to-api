@@ -2426,7 +2426,7 @@ def _dispatch_core_command(args):
                 )
                 print_notebook_diff(diff)
 
-        else:  # args.versions_command == "delete"
+        elif args.versions_command == "delete":
 
             if not args.yes:
                 # DELETE /api/notebooks/{filename}/versions/{version_id}
@@ -2466,6 +2466,51 @@ def _dispatch_core_command(args):
                     f"'{data.get('deleted_version_id', args.version_id)}' of "
                     f"'{data.get('filename', args.filename)}' on {dashboard_url}"
                 )
+        else:  # args.versions_command == "clear"
+
+            if not args.yes:
+                # DELETE /api/notebooks/{filename}/versions
+                # (routes/upload.py) has no confirmation step of its own
+                # and is irreversible -- the same reasoning `versions
+                # delete` above already applies.
+                answer = input(
+                    f"Permanently delete every version of '{args.filename}' "
+                    f"from {dashboard_url}? [y/N] "
+                )
+                if answer.strip().lower() not in ("y", "yes"):
+                    print("Aborted.")
+                    return
+
+            try:
+                response = httpx.delete(
+                    f"{dashboard_url}/api/notebooks/{args.filename}/versions",
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                deleted_count = data.get("deleted_count", 0)
+
+                if not deleted_count:
+                    print(f"'{args.filename}' has no version history on {dashboard_url}.")
+                else:
+                    print(
+                        f"Deleted {deleted_count} version(s) of "
+                        f"'{data.get('filename', args.filename)}' on {dashboard_url}"
+                    )
     elif args.command == "remote-files":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -4128,6 +4173,44 @@ def main():
             "Emit the dashboard's own JSON response "
             "({\"status\", \"filename\", \"deleted_version_id\"}) instead "
             "of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    # versions clear (discard every one of a notebook's snapshotted
+    # versions at once, via DELETE /api/notebooks/{filename}/versions --
+    # distinct from `versions delete` above, which only ever discards one
+    # named version_id at a time)
+    versions_clear_parser = versions_subparsers.add_parser(
+        "clear",
+        help=(
+            "Permanently discard every one of a notebook's snapshotted "
+            "versions at once, via DELETE "
+            "/api/notebooks/{filename}/versions."
+        )
+    )
+    versions_clear_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(versions_clear_parser)
+    versions_clear_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Confirm the deletion without an interactive prompt. Without "
+            "this, `versions clear` asks for a y/N confirmation on the "
+            "terminal before sending the request -- DELETE "
+            "/api/notebooks/{filename}/versions itself has no "
+            "confirmation step of its own, and is irreversible."
+        )
+    )
+    versions_clear_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"filename\", \"deleted_version_ids\", \"deleted_count\"}) "
+            "instead of a human-readable summary, for scripting/automation."
         )
     )
 

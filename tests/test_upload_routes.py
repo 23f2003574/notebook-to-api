@@ -4118,6 +4118,121 @@ def test_delete_notebook_version_rejects_an_absolute_version_id():
     assert "root:" not in resp.text
 
 
+def test_clear_notebook_versions_removes_every_snapshot():
+
+    filename = "versions_clear.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    current_content = _notebook_bytes("def h() -> int:\n    return 3\n")
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(current_content),
+                "application/json",
+            )
+        },
+    )
+
+    versions_before = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(versions_before) == 2
+
+    clear_resp = client.delete(f"/api/notebooks/{filename}/versions")
+
+    assert clear_resp.status_code == 200
+    body = clear_resp.json()
+    assert body["status"] == "success"
+    assert body["filename"] == filename
+    assert body["deleted_count"] == 2
+    assert sorted(body["deleted_version_ids"]) == sorted(
+        v["version_id"] for v in versions_before
+    )
+
+    assert client.get(f"/api/notebooks/{filename}/versions").json()["versions"] == []
+
+    # The notebook's own current content is completely untouched.
+    get_resp = client.get(f"/api/notebooks/{filename}")
+    assert get_resp.status_code == 200
+    assert get_resp.content == current_content
+
+
+def test_clear_notebook_versions_is_a_no_op_success_for_a_notebook_with_no_history():
+
+    _upload_sample_notebook("versions_clear_none.ipynb")
+
+    resp = client.delete("/api/notebooks/versions_clear_none.ipynb/versions")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "success",
+        "filename": "versions_clear_none.ipynb",
+        "deleted_version_ids": [],
+        "deleted_count": 0,
+    }
+
+
+def test_clear_notebook_versions_returns_404_for_missing_notebook():
+
+    resp = client.delete("/api/notebooks/versions_clear_missing.ipynb/versions")
+
+    assert resp.status_code == 404
+
+
+def test_clear_notebook_versions_does_not_affect_a_different_notebooks_history():
+
+    filename_a = "versions_clear_a.ipynb"
+    filename_b = "versions_clear_b.ipynb"
+
+    for filename in (filename_a, filename_b):
+        client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                    "application/json",
+                )
+            },
+        )
+        client.post(
+            "/api/upload?overwrite=true",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                    "application/json",
+                )
+            },
+        )
+
+    clear_resp = client.delete(f"/api/notebooks/{filename_a}/versions")
+    assert clear_resp.status_code == 200
+    assert clear_resp.json()["deleted_count"] == 1
+
+    assert client.get(f"/api/notebooks/{filename_a}/versions").json()["versions"] == []
+    assert len(client.get(f"/api/notebooks/{filename_b}/versions").json()["versions"]) == 1
+
+
 def test_notebook_versions_are_pruned_beyond_the_configured_maximum():
 
     filename = "versions_pruned.ipynb"
