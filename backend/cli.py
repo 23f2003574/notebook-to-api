@@ -2593,6 +2593,43 @@ def _dispatch_core_command(args):
                 )
                 print_notebook_diff(diff)
 
+        elif args.versions_command == "compare":
+
+            try:
+                response = httpx.get(
+                    f"{dashboard_url}/api/notebooks/{args.filename}"
+                    f"/versions/{args.version_id}/diff",
+                    params={"against": args.against} if args.against else {},
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                against_label = (
+                    f"version '{args.against}'" if args.against
+                    else f"'{args.filename}''s current live content"
+                )
+
+                print(
+                    f"Comparing version '{args.version_id}' of "
+                    f"'{args.filename}' against {against_label} on "
+                    f"{dashboard_url}"
+                )
+                print_notebook_diff(data)
+
         elif args.versions_command == "delete":
 
             if not args.yes:
@@ -4602,6 +4639,52 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(versions_diff_parser)
     versions_diff_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit machine-readable JSON ({\"added\", \"removed\", "
+            "\"changed\", \"unchanged\"}) instead of the human-readable "
+            "report, for scripting/automation."
+        )
+    )
+
+    # versions compare (the same version-vs-current/version-vs-version
+    # comparison `versions diff` already computes, but entirely
+    # server-side via GET /api/notebooks/{filename}/versions/{version_id}
+    # /diff -- neither side downloaded to a local temp file first, the
+    # same round trip `diff-notebooks` already avoids for two
+    # independently-uploaded notebooks)
+    versions_compare_parser = versions_subparsers.add_parser(
+        "compare",
+        help=(
+            "Compare a notebook's snapshotted version against its current "
+            "live content (or another snapshotted version) entirely "
+            "server-side, via GET "
+            "/api/notebooks/{filename}/versions/{version_id}/diff."
+        )
+    )
+    versions_compare_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    versions_compare_parser.add_argument(
+        "version_id",
+        help=(
+            "The (older) version id to use as the baseline, as reported "
+            "by `versions list`."
+        )
+    )
+    versions_compare_parser.add_argument(
+        "--against",
+        default=None,
+        metavar="VERSION_ID",
+        help=(
+            "Another version id to compare `version_id` against, instead "
+            "of the notebook's current live content (the default)."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(versions_compare_parser)
+    versions_compare_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",

@@ -3302,6 +3302,107 @@ def get_notebook_version(filename: str, version_id: str):
     )
 
 
+@router.get("/notebooks/{filename}/versions/{version_id}/diff")
+def diff_notebook_version(filename: str, version_id: str, against: str = None):
+    """Compare the top-level functions a snapshotted version of `filename`
+    would compile into endpoints against either another snapshotted
+    version (`against`, a version_id) or -- if `against` is omitted --
+    `filename`'s own current live content. Entirely server-side, without
+    downloading either side.
+
+    The CLI's own `versions diff` already computes this same comparison,
+    but only by GETting both sides' raw bytes (GET
+    /api/notebooks/{filename}/versions/{version_id} and/or GET
+    /api/notebooks/{filename}) down to temporary files and diffing those
+    local copies itself -- the same round trip GET /api/notebooks/diff's
+    own docstring already closed for comparing two independently-uploaded
+    notebooks. A caller that just wants to know "what would restoring this
+    snapshot actually change" (a dashboard frontend's `versions list`
+    entry showing an inline preview before a restore, for instance) had no
+    way to get that without pulling the full notebook JSON for both sides
+    across the wire first.
+
+    Reuses diff_notebook_functions (backend/inspector.py) unchanged -- the
+    exact same {"added", "removed", "changed", "unchanged"} report
+    `versions diff`/`diff`/`remote-diff`/`diff-notebooks` already produce
+    -- so this can never drift from what any of those already report for
+    the same two sides.
+
+    Both sides are resolved and validated (existence, then parseability)
+    before diffing, each labeled by exactly which side it is ("version
+    '<version_id>'" or "the current live content of '<filename>'"), the
+    same per-side labeling GET /api/notebooks/diff's own "old"/"new"
+    validation already applies -- so a 404 or 400 names exactly which side
+    is the problem rather than one ambiguous error covering both.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    versions_dir = _notebook_versions_dir(file_path.name)
+
+    old_path = _resolve_path_within(
+        str(versions_dir), version_id, "notebook version"
+    )
+
+    if not old_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook version not found"
+        )
+
+    if against is None:
+        new_path = file_path
+        new_label = f"the current live content of '{filename}'"
+    else:
+
+        new_path = _resolve_path_within(
+            str(versions_dir), against, "notebook version"
+        )
+
+        if not new_path.is_file():
+
+            raise HTTPException(
+                status_code=404,
+                detail="Notebook version not found"
+            )
+
+        new_label = f"version '{against}'"
+
+    for label, path in (
+        (f"version '{version_id}'", old_path),
+        (new_label, new_path),
+    ):
+
+        try:
+
+            load_notebook(str(path))
+
+        except MALFORMED_NOTEBOOK_ERRORS as e:
+
+            raise HTTPException(
+                status_code=400,
+                detail=f"{label} is not a valid Jupyter notebook: {e}"
+            )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "version_id": version_id,
+        "against": against,
+        **diff,
+    }
+
+
 @router.post("/notebooks/{filename}/versions/{version_id}/restore")
 def restore_notebook_version(filename: str, version_id: str):
     """Make a previously snapshotted version `filename`'s current content

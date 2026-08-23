@@ -6882,6 +6882,139 @@ def test_versions_diff_command_reports_a_clean_error_for_a_missing_version(
     _assert_clean_cli_error(proc, "Notebook version not found")
 
 
+def test_versions_compare_command_is_registered():
+
+    proc = _run_cli(["versions", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "compare" in proc.stdout
+
+
+def test_versions_compare_command_compares_a_version_against_the_current_notebook(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "version_id": "v1.ipynb",
+            "against": None,
+            "added": [{"name": "multiply"}],
+            "removed": [{"name": "subtract"}],
+            "changed": [{"name": "add", "old": {}, "new": {}}],
+            "unchanged": ["noop"],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "compare", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Comparing version 'v1.ipynb'" in proc.stdout
+    assert "current live content" in proc.stdout
+    assert "Added 1 endpoint(s):" in proc.stdout
+    assert "POST /multiply" in proc.stdout
+    assert "Removed 1 endpoint(s):" in proc.stdout
+    assert "POST /subtract" in proc.stdout
+    assert "Changed 1 endpoint(s):" in proc.stdout
+    assert "POST /add" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions/v1.ipynb/diff"]
+
+
+def test_versions_compare_command_compares_two_versions_via_against(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "version_id": "v1.ipynb",
+            "against": "v2.ipynb",
+            "added": [], "removed": [], "changed": [], "unchanged": ["add"],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "compare", "nb.ipynb", "v1.ipynb",
+            "--against", "v2.ipynb", "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Comparing version 'v1.ipynb'" in proc.stdout
+    assert "against version 'v2.ipynb'" in proc.stdout
+    assert "No changes to the compiled API surface." in proc.stdout
+    assert handler.requests == [
+        "/api/notebooks/nb.ipynb/versions/v1.ipynb/diff?against=v2.ipynb"
+    ]
+
+
+def test_versions_compare_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "filename": "nb.ipynb", "version_id": "v1.ipynb",
+        "against": None, "added": [], "removed": [], "changed": [], "unchanged": [],
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "compare", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_versions_compare_command_reports_a_clean_error_for_a_missing_version(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook version not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "compare", "nb.ipynb", "does-not-exist.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook version not found")
+
+
 def test_remote_files_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

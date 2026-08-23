@@ -4367,6 +4367,170 @@ def test_get_notebook_version_rejects_an_absolute_version_id():
     assert "root:" not in resp.text
 
 
+def test_diff_notebook_version_against_current_live_content():
+
+    filename = "versions_diff_against_live.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+                    "def remove_me() -> int:\n    return 0\n\n"
+                    "def unchanged_fn() -> int:\n    return 1\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "def add(a: int, b: int, c: int) -> int:\n    return a + b + c\n\n"
+                    "def add_me() -> int:\n    return 2\n\n"
+                    "def unchanged_fn() -> int:\n    return 1\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.get(f"/api/notebooks/{filename}/versions/{version_id}/diff")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["filename"] == filename
+    assert body["version_id"] == version_id
+    assert body["against"] is None
+    assert [f["name"] for f in body["added"]] == ["add_me"]
+    assert [f["name"] for f in body["removed"]] == ["remove_me"]
+    assert [c["name"] for c in body["changed"]] == ["add"]
+    assert body["unchanged"] == ["unchanged_fn"]
+
+
+def test_diff_notebook_version_against_another_version():
+
+    filename = "versions_diff_against_version.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "def f() -> int:\n    return 1\n\ndef g() -> int:\n    return 2\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+
+    # Newest first (see list_notebook_versions), so index 0 is the
+    # second-uploaded content (with `g`) and index 1 is the very first.
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    newer_version_id = versions[0]["version_id"]
+    older_version_id = versions[1]["version_id"]
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions/{older_version_id}/diff",
+        params={"against": newer_version_id},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["against"] == newer_version_id
+    assert [f["name"] for f in body["added"]] == ["g"]
+    assert body["removed"] == []
+    assert body["unchanged"] == ["f"]
+
+
+def test_diff_notebook_version_returns_404_for_missing_notebook():
+
+    resp = client.get(
+        "/api/notebooks/versions_diff_missing_notebook.ipynb/versions/x.ipynb/diff"
+    )
+
+    assert resp.status_code == 404
+
+
+def test_diff_notebook_version_returns_404_for_an_unknown_version_id():
+
+    _upload_sample_notebook("versions_diff_unknown_id.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/versions_diff_unknown_id.ipynb/versions/not_real.ipynb/diff"
+    )
+
+    assert resp.status_code == 404
+
+
+def test_diff_notebook_version_returns_404_for_an_unknown_against_version_id():
+
+    filename = "versions_diff_unknown_against.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions/{version_id}/diff",
+        params={"against": "not_real.ipynb"},
+    )
+
+    assert resp.status_code == 404
+
+
 def test_restore_notebook_version_makes_it_the_current_content_again():
 
     filename = "versions_restore.ipynb"
