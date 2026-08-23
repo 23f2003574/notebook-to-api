@@ -8097,6 +8097,135 @@ def test_deploy_endpoint_does_not_push_by_default(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
+def test_deploy_history_is_empty_before_any_deploy(monkeypatch, tmp_path):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "deploy_history_empty_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    resp = client.get("/api/deploy/history")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "success",
+        "entries": [],
+        "entry_count": 0,
+    }
+
+
+def test_deploy_records_a_history_entry_on_successful_build(tmp_path, monkeypatch):
+
+    _compile_a_notebook("deploy_history_record_test.ipynb")
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post("/api/deploy", json={"tag": "myapp:v1"})
+    assert resp.status_code == 200
+
+    history_resp = client.get("/api/deploy/history")
+    assert history_resp.status_code == 200
+    body = history_resp.json()
+    assert body["entry_count"] >= 1
+
+    entry = body["entries"][0]
+    assert entry["tag"] == "myapp:v1"
+    assert entry["platform"] is None
+    assert entry["pushed"] is False
+    assert entry["source_notebook_filename"] == "deploy_history_record_test.ipynb"
+    assert entry["source_notebook_sha256"]
+    assert "deployed_at" in entry
+
+
+def test_deploy_records_pushed_true_when_push_requested(tmp_path, monkeypatch):
+
+    _compile_a_notebook("deploy_history_pushed_test.ipynb")
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post(
+        "/api/deploy",
+        json={"tag": "myapp:pushed", "push": True, "platform": "linux/amd64"},
+    )
+    assert resp.status_code == 200
+
+    entry = client.get("/api/deploy/history").json()["entries"][0]
+    assert entry["tag"] == "myapp:pushed"
+    assert entry["pushed"] is True
+    assert entry["platform"] == "linux/amd64"
+
+
+def test_deploy_history_lists_most_recent_first(tmp_path, monkeypatch):
+
+    _compile_a_notebook("deploy_history_order_test.ipynb")
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    client.post("/api/deploy", json={"tag": "order:first"})
+    client.post("/api/deploy", json={"tag": "order:second"})
+
+    entries = client.get("/api/deploy/history").json()["entries"]
+    tags_in_order = [e["tag"] for e in entries if e["tag"] in ("order:first", "order:second")]
+    assert tags_in_order == ["order:second", "order:first"]
+
+
+def test_deploy_history_is_capped_at_the_configured_maximum(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "deploy_history_cap_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+    monkeypatch.setattr(upload_module, "MAX_DEPLOY_HISTORY_ENTRIES", 3)
+
+    for i in range(5):
+        upload_module._append_deploy_history_entry({
+            "deployed_at": f"2024-01-0{i + 1}T00:00:00+00:00",
+            "tag": f"cap:{i}",
+            "platform": None,
+            "pushed": False,
+            "source_notebook_filename": None,
+            "source_notebook_sha256": None,
+        })
+
+    body = client.get("/api/deploy/history").json()
+    assert body["entry_count"] == 3
+    assert [e["tag"] for e in body["entries"]] == ["cap:4", "cap:3", "cap:2"]
+
+
+def test_deploy_does_not_record_a_history_entry_on_build_failure(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "deploy_history_build_failure_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    _compile_a_notebook("deploy_history_build_failure_test.ipynb")
+
+    bin_dir = tmp_path / "fakebin"
+    docker_stub = bin_dir / "docker"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    docker_stub.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    docker_stub.chmod(docker_stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post("/api/deploy", json={})
+    assert resp.status_code == 500
+
+    assert client.get("/api/deploy/history").json()["entries"] == []
+
+
 def test_deploy_endpoint_returns_500_when_docker_is_missing(tmp_path, monkeypatch):
 
     _compile_a_notebook("deploy_missing_docker_test.ipynb")

@@ -8937,6 +8937,113 @@ def test_remote_deploy_command_reports_a_clean_error_when_the_dashboard_is_unrea
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_deploy_history_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "deploy-history" in proc.stdout
+
+
+def test_deploy_history_command_prints_past_deploys(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "entries": [
+                {
+                    "deployed_at": "2024-06-01T12:00:00+00:00",
+                    "tag": "myapp:v2",
+                    "platform": "linux/amd64",
+                    "pushed": True,
+                    "source_notebook_filename": "nb.ipynb",
+                    "source_notebook_sha256": "abc123",
+                },
+                {
+                    "deployed_at": "2024-05-01T12:00:00+00:00",
+                    "tag": "myapp:v1",
+                    "platform": None,
+                    "pushed": False,
+                    "source_notebook_filename": "nb.ipynb",
+                    "source_notebook_sha256": "def456",
+                },
+            ],
+            "entry_count": 2,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["deploy-history", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "myapp:v2" in proc.stdout
+    assert "pushed, from nb.ipynb" in proc.stdout
+    assert "myapp:v1" in proc.stdout
+    assert "not pushed, from nb.ipynb" in proc.stdout
+    assert "2 deploy(s)" in proc.stdout
+    assert handler.requests == ["/api/deploy/history"]
+
+
+def test_deploy_history_command_reports_no_deploys(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "entries": [], "entry_count": 0})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["deploy-history", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No deploys recorded" in proc.stdout
+
+
+def test_deploy_history_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "entries": [], "entry_count": 0}
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["deploy-history", "--dashboard-url", dashboard_url, "--json"], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_deploy_history_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "deploy-history",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_status_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

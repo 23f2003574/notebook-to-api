@@ -342,7 +342,7 @@ _CORE_COMMANDS = frozenset({
     "list", "info", "info-batch",
     "search-functions", "search-content", "find-duplicates", "storage",
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy",
-    "copy-batch", "tags", "prune-versions", "description",
+    "copy-batch", "tags", "prune-versions", "description", "deploy-history",
     "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
     "status", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
@@ -3371,6 +3371,51 @@ def _dispatch_core_command(args):
             print(f"Built image '{data.get('tag')}' on {dashboard_url}")
             if data.get("pushed"):
                 print("Pushed to the registry.")
+    elif args.command == "deploy-history":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/deploy/history", timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            entries = data.get("entries", [])
+
+            if not entries:
+                print(f"No deploys recorded on {dashboard_url} yet.")
+            else:
+
+                for entry in entries:
+
+                    push_note = "pushed" if entry.get("pushed") else "not pushed"
+                    source = entry.get("source_notebook_filename") or "(unknown source)"
+
+                    print(
+                        f"{entry.get('deployed_at')}  {entry.get('tag')}  "
+                        f"({push_note}, from {source})"
+                    )
+
+                print(f"\n{data.get('entry_count', len(entries))} deploy(s) on {dashboard_url}")
+
     elif args.command == "status":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -5490,6 +5535,30 @@ def main():
             "Emit the dashboard's own JSON response "
             "({\"status\", \"tag\", \"pushed\"}) instead of "
             "human-readable progress output, for scripting/automation."
+        )
+    )
+
+    # deploy-history command (this dashboard's own past POST /api/deploy
+    # invocations, via its GET /api/deploy/history -- distinct from
+    # `remote-deploy`, which triggers a new one)
+    deploy_history_parser = subparsers.add_parser(
+        "deploy-history",
+        help=(
+            "Show a running dashboard instance's own past deploys, via "
+            "its GET /api/deploy/history."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(deploy_history_parser)
+    deploy_history_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"entries\": [{\"deployed_at\", \"tag\", \"platform\", "
+            "\"pushed\", \"source_notebook_filename\", "
+            "\"source_notebook_sha256\"}, ...], \"entry_count\"}) instead "
+            "of a human-readable summary, for scripting/automation."
         )
     )
 

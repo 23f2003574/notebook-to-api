@@ -207,6 +207,14 @@ DEPLOY_SUBPROCESS_TIMEOUT_SECONDS = int(
     os.getenv("NOTEBOOK_API_DEPLOY_TIMEOUT_SECONDS", "600")
 )
 
+# Same NOTEBOOK_API_* convention as MAX_NOTEBOOK_VERSIONS below. Without a
+# cap, a dashboard's own deploy history (see _append_deploy_history_entry
+# below) would grow by one entry every single POST /api/deploy, forever,
+# for the lifetime of the dashboard process.
+MAX_DEPLOY_HISTORY_ENTRIES = int(
+    os.getenv("NOTEBOOK_API_MAX_DEPLOY_HISTORY_ENTRIES", "50")
+)
+
 # Same NOTEBOOK_API_* convention as MAX_UPLOAD_BYTES/DEPLOY_SUBPROCESS_
 # TIMEOUT_SECONDS above. upload_notebook's own hidden ".<name>.<uuid>.part"
 # temp files (see temp_path below) are already cleaned up on every error
@@ -5136,6 +5144,84 @@ def export_sdk_endpoint(
     }
 
 
+def _deploy_history_path() -> Path:
+    """Path to the hidden JSON file recording this dashboard's own past
+    POST /api/deploy invocations.
+
+    Stored directly inside UPLOAD_DIR (a hidden ".deploy_history.json",
+    the same hidden-sidecar-file convention _tags_sidecar_path and
+    _description_sidecar_path already use for their own per-notebook
+    metadata), not inside GENERATED_DIR: every successful POST
+    /api/compile already clears GENERATED_DIR down to a fresh build via
+    clear_stale_export_artifacts (backend/compiler.py), and DELETE
+    /api/generated removes it entirely -- neither should also wipe out a
+    dashboard's own deploy history, which is bookkeeping about *this
+    dashboard's* past deploys, not part of any one compile's own output.
+    Unlike the per-notebook tags/description sidecars, this one isn't
+    keyed to any single notebook's filename: a dashboard's deploy history
+    spans every notebook ever compiled and deployed through it, so it
+    isn't moved/copied/removed by rename_notebook/copy_notebook/
+    delete_notebook the way those are.
+    """
+    return Path(UPLOAD_DIR) / ".deploy_history.json"
+
+
+def _read_deploy_history() -> list:
+    """This dashboard's own past deploys, oldest first -- the same
+    fixed-width list _append_deploy_history_entry below maintains, or []
+    if nothing has ever been deployed yet, or the history file is
+    missing/unreadable/corrupt. Deploy history is optional, best-effort
+    bookkeeping, the same way a notebook's tags already are (see
+    _read_notebook_tags) -- a bad history file should never break POST
+    /api/deploy or GET /api/deploy/history over it.
+    """
+    history_path = _deploy_history_path()
+
+    if not history_path.is_file():
+        return []
+
+    try:
+
+        with open(history_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+    except (OSError, ValueError):
+        return []
+
+    entries = data.get("entries")
+
+    if not isinstance(entries, list):
+        return []
+
+    return entries
+
+
+def _append_deploy_history_entry(entry: dict) -> None:
+    """Record `entry` as this dashboard's most recent deploy, keeping at
+    most the MAX_DEPLOY_HISTORY_ENTRIES most recent entries -- the oldest
+    is dropped once that many already exist, the same bounded-history
+    policy _prune_notebook_versions already applies to a single
+    notebook's own version snapshots, just applied to deploy history
+    instead of file snapshots.
+
+    Writes via a temp-file-then-os.replace swap in UPLOAD_DIR -- the
+    identical atomic-write pattern _write_notebook_tags already uses --
+    so a concurrent GET /api/deploy/history never observes a
+    partially-written history file.
+    """
+    entries = _read_deploy_history()
+    entries.append(entry)
+    entries = entries[-MAX_DEPLOY_HISTORY_ENTRIES:]
+
+    upload_root = Path(UPLOAD_DIR).resolve()
+    temp_path = upload_root / f".deploy_history.{uuid.uuid4().hex}.part"
+
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump({"entries": entries}, f)
+
+    os.replace(temp_path, _deploy_history_path())
+
+
 def _run_docker_command(args, cwd):
     """Run a `docker ...` subprocess for /api/deploy, translating the two
     ways it can fail to even complete into a clean HTTPException instead
@@ -5205,6 +5291,17 @@ def deploy_generated_app(data: dict = None):
     at the one place actually shipping that stale build somewhere. Pass
     "force": true to deploy the stale build anyway (e.g. deliberately
     re-deploying a known-good previous compile).
+
+    Every successful deploy (a successful build, and -- with "push": true
+    -- a successful push) is also appended to this dashboard's own
+    persistent deploy history (see _append_deploy_history_entry above),
+    readable back via GET /api/deploy/history. Before this, a POST
+    /api/deploy's own result was only ever visible in that one request's
+    response, gone the moment it scrolled off a terminal or wasn't
+    otherwise recorded by the caller -- an operator asking "when was this
+    last deployed, with what tag, was it actually pushed" had nothing on
+    this dashboard itself to answer that; .compile_metadata.json only
+    ever tracks the most recent *compile*, not any deploy.
     """
 
     generated_path = Path(GENERATED_DIR)
@@ -5296,6 +5393,8 @@ def deploy_generated_app(data: dict = None):
                 detail=f"Docker build failed: {build_result.stderr}"
             )
 
+        compiled_path, compiled_sha256, _ = _currently_compiled_notebook_metadata()
+
     response = {
         "status": "success",
         "tag": tag,
@@ -5317,7 +5416,63 @@ def deploy_generated_app(data: dict = None):
 
         response["pushed"] = True
 
+    source_notebook_filename = None
+
+    if compiled_path is not None:
+
+        try:
+            source_notebook_filename = str(
+                compiled_path.relative_to(Path(UPLOAD_DIR).resolve())
+            )
+        except ValueError:
+            source_notebook_filename = None
+
+    _append_deploy_history_entry({
+        "deployed_at": datetime.now(timezone.utc).isoformat(),
+        "tag": tag,
+        "platform": platform,
+        "pushed": response["pushed"],
+        "source_notebook_filename": source_notebook_filename,
+        "source_notebook_sha256": compiled_sha256,
+    })
+
     return response
+
+
+@router.get("/deploy/history")
+def deploy_history_endpoint():
+    """This dashboard's own past POST /api/deploy invocations, most
+    recent first -- up to the last MAX_DEPLOY_HISTORY_ENTRIES.
+
+    Every field mirrors exactly what the POST /api/deploy call that
+    produced it either received or returned at the time: "tag" and
+    "platform" are the request's own values (platform null when not
+    given, the same way the request itself treats it), "pushed" is the
+    response's own "pushed" flag, and "source_notebook_filename"/
+    "source_notebook_sha256" identify which notebook (and which exact
+    content of it) was actually compiled into the image that got built --
+    the same "source_notebook_filename" GET /api/generated already
+    resolves relative to UPLOAD_DIR, null if whatever was compiled came
+    from outside UPLOAD_DIR entirely, or if nothing was compiled at all
+    (confirmed unreachable in practice: POST /api/deploy itself already
+    404s before ever reaching a build when no Dockerfile exists in
+    GENERATED_DIR).
+
+    Deliberately read-only: this dashboard's deploy history is a record
+    of what already happened, not something a caller edits or replays
+    through this endpoint -- an entry age out only once
+    MAX_DEPLOY_HISTORY_ENTRIES more deploys have happened since, the same
+    fixed-window retention _prune_notebook_versions already applies to a
+    single notebook's own version snapshots.
+    """
+
+    entries = list(reversed(_read_deploy_history()))
+
+    return {
+        "status": "success",
+        "entries": entries,
+        "entry_count": len(entries),
+    }
 
 
 @router.get("/download")
