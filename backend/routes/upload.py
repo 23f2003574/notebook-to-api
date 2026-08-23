@@ -3472,6 +3472,114 @@ def set_notebook_tags(filename: str, data: dict):
     }
 
 
+@router.post("/notebooks/tags-batch")
+def set_notebook_tags_batch(data: dict):
+    """Replace the full tag set for a caller-chosen set of already-
+    uploaded notebooks in one call, each notebook getting its own
+    explicit tags.
+
+    PUT /api/notebooks/{filename}/tags already replaces one notebook's
+    entire tag set at a time, and POST /api/tags/{tag}/apply/POST
+    /api/tags/{tag}/remove already add or remove a single *shared* tag
+    across several notebooks at once -- but neither helps a caller
+    re-establishing a whole tagging scheme across many notebooks in one
+    pass (e.g. importing a filename->tags mapping from an external
+    source, or restoring a previously exported one), where each notebook
+    needs its *own*, potentially completely different, tag set replaced
+    all at once. Before this, that meant one PUT
+    /api/notebooks/{filename}/tags call per notebook -- no way to submit
+    the whole mapping in a single request.
+
+    Takes "entries", a list of {"filename", "tags"} objects rather than
+    the single shared "tag" POST /api/tags/{tag}/apply/remove take, or the
+    single shared "filenames" POST /api/notebooks/delete-batch and POST
+    /api/notebooks/info-batch take -- each entry here carries its own
+    independent value, the same shape restore/replace-many-different-
+    things-at-once operations need that a single shared value/filter
+    can't express.
+
+    "entries" itself (a non-empty list, each element an object with a
+    string "filename") is validated once, up front, as a 400 covering the
+    whole request -- a malformed *shape* is this request's own fault, not
+    any one entry's. Each entry's own "tags", though, is validated
+    independently via _validate_and_normalize_tags (the exact same
+    per-tag rules PUT .../tags already enforces) as part of that entry's
+    own per-entry result, since -- unlike POST /api/tags/{tag}/apply's
+    single shared tag string -- a bad "tags" value here belongs to
+    exactly the one entry that supplied it, not the batch as a whole.
+    Reuses the identical per-entry "one bad entry doesn't abort the
+    batch" contract those endpoints already established: "results"
+    reports one {"filename", "status", ...} entry per input entry --
+    "success" (with that notebook's resulting tag set) or "error" (a 404
+    for an unknown filename, or the same 400 a bad "tags" value alone
+    would raise through PUT .../tags directly).
+    """
+
+    entries = data.get("entries")
+
+    if not isinstance(entries, list) or not entries:
+
+        raise HTTPException(
+            status_code=400,
+            detail="entries must be a non-empty list of objects"
+        )
+
+    for entry in entries:
+
+        if not isinstance(entry, dict) or not isinstance(entry.get("filename"), str):
+
+            raise HTTPException(
+                status_code=400,
+                detail="each entry must be an object with a string 'filename'"
+            )
+
+    results = []
+    succeeded_count = 0
+    failed_count = 0
+
+    for entry in entries:
+
+        filename = entry["filename"]
+
+        try:
+
+            file_path = resolve_upload_path(filename)
+
+            if not file_path.is_file():
+
+                raise HTTPException(
+                    status_code=404,
+                    detail="Notebook file not found"
+                )
+
+            tags = _validate_and_normalize_tags(entry.get("tags", []))
+
+            _write_notebook_tags(file_path.name, tags)
+
+            results.append({
+                "filename": filename,
+                "status": "success",
+                "tags": tags,
+            })
+            succeeded_count += 1
+
+        except HTTPException as exc:
+
+            results.append({
+                "filename": filename,
+                "status": "error",
+                "detail": exc.detail,
+            })
+            failed_count += 1
+
+    return {
+        "status": "success",
+        "results": results,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
+    }
+
+
 @router.get("/notebooks/{filename}/description")
 def get_notebook_description(filename: str):
     """Return the freeform description currently recorded for a

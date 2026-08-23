@@ -2189,7 +2189,7 @@ def _dispatch_core_command(args):
                         f"notebook(s) updated on {dashboard_url}"
                     )
 
-        else:  # args.tags_command == "set"
+        elif args.tags_command == "set":
 
             try:
                 response = httpx.put(
@@ -2214,6 +2214,65 @@ def _dispatch_core_command(args):
             else:
                 tags = data.get("tags", [])
                 print(f"{args.filename} tags set to: {', '.join(tags) if tags else '(none)'}")
+
+        else:  # args.tags_command == "set-batch"
+
+            entries = []
+
+            for raw_entry in args.entry:
+
+                if "=" not in raw_entry:
+                    raise RuntimeError(
+                        f"Invalid --entry '{raw_entry}' -- expected "
+                        "FILENAME=TAG1,TAG2,... (an empty right-hand side "
+                        "clears that notebook's tags)."
+                    )
+
+                filename, _, tags_str = raw_entry.partition("=")
+
+                entries.append({
+                    "filename": filename,
+                    "tags": _parse_comma_separated_names(tags_str) or [],
+                })
+
+            try:
+                response = httpx.post(
+                    f"{dashboard_url}/api/notebooks/tags-batch",
+                    json={"entries": entries},
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                for result in data.get("results", []):
+
+                    if result["status"] == "success":
+                        tags = result.get("tags", [])
+                        print(
+                            f"{result['filename']} tags set to: "
+                            f"{', '.join(tags) if tags else '(none)'}"
+                        )
+                    else:
+                        print(f"Failed to set tags for {result['filename']}: {result['detail']}")
+
+                print(
+                    f"\n{data.get('succeeded_count', 0)} succeeded, "
+                    f"{data.get('failed_count', 0)} failed"
+                )
+
     elif args.command == "description":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -4703,6 +4762,44 @@ def main():
         help=(
             "Emit the dashboard's own JSON response "
             "({\"status\", \"filename\", \"tags\"}) instead of a "
+            "human-readable summary, for scripting/automation."
+        )
+    )
+
+    # tags set-batch (replace the full tag set for several notebooks at
+    # once, each getting its own explicit tags, via POST
+    # /api/notebooks/tags-batch -- distinct from `tags set` above, which
+    # only ever replaces one notebook's tags, and from `tags apply`/
+    # `tags remove`, which add/remove a single *shared* tag across
+    # several notebooks rather than replacing each one's own full set)
+    tags_set_batch_parser = tags_subparsers.add_parser(
+        "set-batch",
+        help=(
+            "Replace the full tag set for several notebooks at once, "
+            "each getting its own explicit tags, via POST "
+            "/api/notebooks/tags-batch."
+        )
+    )
+    tags_set_batch_parser.add_argument(
+        "--entry",
+        action="append",
+        required=True,
+        metavar="FILENAME=TAG1,TAG2,...",
+        help=(
+            "One notebook's own new tag set, as FILENAME=TAG1,TAG2,... "
+            "(an empty right-hand side clears that notebook's tags). "
+            "Repeat --entry once per notebook."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(tags_set_batch_parser)
+    tags_set_batch_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"results\": [{\"filename\", \"status\", ...}, ...], "
+            "\"succeeded_count\", \"failed_count\"}) instead of a "
             "human-readable summary, for scripting/automation."
         )
     )

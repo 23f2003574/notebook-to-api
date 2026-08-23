@@ -3728,6 +3728,138 @@ def test_set_notebook_tags_rejects_more_than_the_max_distinct_tags():
     assert resp.status_code == 400
 
 
+def test_set_notebook_tags_batch_sets_each_notebooks_own_distinct_tags():
+
+    _upload_sample_notebook("tags_batch_a.ipynb")
+    _upload_sample_notebook("tags_batch_b.ipynb")
+    client.put(
+        "/api/notebooks/tags_batch_a.ipynb/tags", json={"tags": ["stale"]}
+    )
+
+    resp = client.post(
+        "/api/notebooks/tags-batch",
+        json={
+            "entries": [
+                {"filename": "tags_batch_a.ipynb", "tags": ["production", "v2"]},
+                {"filename": "tags_batch_b.ipynb", "tags": ["bug"]},
+            ],
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["succeeded_count"] == 2
+    assert body["failed_count"] == 0
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["tags_batch_a.ipynb"]["status"] == "success"
+    assert results_by_filename["tags_batch_a.ipynb"]["tags"] == ["production", "v2"]
+    assert results_by_filename["tags_batch_b.ipynb"]["tags"] == ["bug"]
+
+    # A full replace, not a merge -- "stale" is gone.
+    assert client.get(
+        "/api/notebooks/tags_batch_a.ipynb/tags"
+    ).json()["tags"] == ["production", "v2"]
+
+
+def test_set_notebook_tags_batch_with_an_empty_tags_list_clears_that_entry():
+
+    _upload_sample_notebook("tags_batch_clear.ipynb")
+    client.put("/api/notebooks/tags_batch_clear.ipynb/tags", json={"tags": ["bug"]})
+
+    resp = client.post(
+        "/api/notebooks/tags-batch",
+        json={"entries": [{"filename": "tags_batch_clear.ipynb", "tags": []}]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["results"][0]["tags"] == []
+    assert client.get(
+        "/api/notebooks/tags_batch_clear.ipynb/tags"
+    ).json()["tags"] == []
+
+
+def test_set_notebook_tags_batch_reports_a_missing_filename_without_aborting_the_rest():
+
+    _upload_sample_notebook("tags_batch_partial.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/tags-batch",
+        json={
+            "entries": [
+                {"filename": "tags_batch_partial.ipynb", "tags": ["urgent"]},
+                {"filename": "does_not_exist.ipynb", "tags": ["urgent"]},
+            ],
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["tags_batch_partial.ipynb"]["status"] == "success"
+    assert results_by_filename["does_not_exist.ipynb"]["status"] == "error"
+    assert "not found" in results_by_filename["does_not_exist.ipynb"]["detail"]
+
+
+def test_set_notebook_tags_batch_reports_an_invalid_tags_value_for_just_that_entry():
+
+    _upload_sample_notebook("tags_batch_bad_tag_a.ipynb")
+    _upload_sample_notebook("tags_batch_bad_tag_b.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/tags-batch",
+        json={
+            "entries": [
+                {"filename": "tags_batch_bad_tag_a.ipynb", "tags": ["ok"]},
+                {"filename": "tags_batch_bad_tag_b.ipynb", "tags": ["   "]},
+            ],
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["tags_batch_bad_tag_a.ipynb"]["status"] == "success"
+    assert results_by_filename["tags_batch_bad_tag_b.ipynb"]["status"] == "error"
+    assert "whitespace-only" in results_by_filename["tags_batch_bad_tag_b.ipynb"]["detail"]
+
+    # The failing entry never got its tags touched.
+    assert client.get(
+        "/api/notebooks/tags_batch_bad_tag_b.ipynb/tags"
+    ).json()["tags"] == []
+
+
+def test_set_notebook_tags_batch_rejects_a_non_list_entries_value():
+
+    resp = client.post("/api/notebooks/tags-batch", json={"entries": "not-a-list"})
+
+    assert resp.status_code == 400
+
+
+def test_set_notebook_tags_batch_rejects_an_empty_entries_list():
+
+    resp = client.post("/api/notebooks/tags-batch", json={"entries": []})
+
+    assert resp.status_code == 400
+
+
+def test_set_notebook_tags_batch_rejects_an_entry_missing_a_filename():
+
+    resp = client.post(
+        "/api/notebooks/tags-batch",
+        json={"entries": [{"tags": ["bug"]}]},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_get_notebook_description_is_empty_for_a_never_described_notebook():
 
     _upload_sample_notebook("description_unset.ipynb")
