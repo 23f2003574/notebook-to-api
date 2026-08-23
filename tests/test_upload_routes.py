@@ -4531,6 +4531,364 @@ def test_diff_notebook_version_returns_404_for_an_unknown_against_version_id():
     assert resp.status_code == 404
 
 
+def test_copy_notebook_version_duplicates_a_past_version_into_a_new_notebook():
+
+    filename = "versions_copy_source.ipynb"
+    original_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(original_content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    copy_resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/copy",
+        json={"new_filename": "versions_copy_target.ipynb"},
+    )
+
+    assert copy_resp.status_code == 200
+    assert copy_resp.json() == {
+        "status": "success",
+        "filename": filename,
+        "version_id": version_id,
+        "new_filename": "versions_copy_target.ipynb",
+    }
+
+    assert (
+        Path(UPLOAD_DIR) / "versions_copy_target.ipynb"
+    ).read_bytes() == original_content
+
+    # The source notebook's own current content is untouched -- still the
+    # *second* upload's content, not the version that was just copied.
+    assert (Path(UPLOAD_DIR) / filename).read_bytes() != original_content
+
+    os.remove(Path(UPLOAD_DIR) / "versions_copy_target.ipynb")
+
+
+def test_copy_notebook_version_does_not_inherit_tags():
+
+    filename = "versions_copy_tags_source.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.put(f"/api/notebooks/{filename}/tags", json={"tags": ["production"]})
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    copy_resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/copy",
+        json={"new_filename": "versions_copy_tags_target.ipynb"},
+    )
+    assert copy_resp.status_code == 200
+
+    assert client.get(
+        "/api/notebooks/versions_copy_tags_target.ipynb/tags"
+    ).json()["tags"] == []
+
+    os.remove(Path(UPLOAD_DIR) / "versions_copy_tags_target.ipynb")
+
+
+def test_copy_notebook_version_does_not_copy_source_version_history():
+
+    filename = "versions_copy_history_source.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    copy_resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/copy",
+        json={"new_filename": "versions_copy_history_target.ipynb"},
+    )
+    assert copy_resp.status_code == 200
+
+    assert client.get(
+        "/api/notebooks/versions_copy_history_target.ipynb/versions"
+    ).json()["versions"] == []
+
+    os.remove(Path(UPLOAD_DIR) / "versions_copy_history_target.ipynb")
+
+
+def test_copy_notebook_version_returns_404_for_missing_notebook():
+
+    resp = client.post(
+        "/api/notebooks/versions_copy_missing_notebook.ipynb/versions/x.ipynb/copy",
+        json={"new_filename": "whatever.ipynb"},
+    )
+
+    assert resp.status_code == 404
+
+
+def test_copy_notebook_version_returns_404_for_an_unknown_version_id():
+
+    _upload_sample_notebook("versions_copy_unknown_id.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/versions_copy_unknown_id.ipynb/versions/not_real.ipynb/copy",
+        json={"new_filename": "whatever.ipynb"},
+    )
+
+    assert resp.status_code == 404
+
+
+def test_copy_notebook_version_requires_new_filename():
+
+    filename = "versions_copy_missing_target.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/copy",
+        json={},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_copy_notebook_version_rejects_a_non_ipynb_target_name():
+
+    filename = "versions_copy_bad_ext.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/copy",
+        json={"new_filename": "versions_copy_bad_ext.txt"},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_copy_notebook_version_rejects_copying_onto_its_own_source_filename():
+
+    filename = "versions_copy_onto_self.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/copy",
+        json={"new_filename": filename},
+    )
+
+    assert resp.status_code == 400
+    assert "restore" in resp.json()["detail"]
+
+
+def test_copy_notebook_version_rejects_collision_without_overwrite():
+
+    filename = "versions_copy_collision_source.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    _upload_sample_notebook("versions_copy_collision_target.ipynb")
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/copy",
+        json={"new_filename": "versions_copy_collision_target.ipynb"},
+    )
+
+    assert resp.status_code == 409
+    os.remove(Path(UPLOAD_DIR) / "versions_copy_collision_target.ipynb")
+
+
+def test_copy_notebook_version_overwrite_discards_the_destinations_previous_tags_and_history():
+
+    filename = "versions_copy_overwrite_source.ipynb"
+    original_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(original_content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    target = "versions_copy_overwrite_target.ipynb"
+    _upload_sample_notebook(target)
+    client.put(f"/api/notebooks/{target}/tags", json={"tags": ["stale"]})
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                target,
+                io.BytesIO(_notebook_bytes("def stale_history() -> int:\n    return 0\n")),
+                "application/json",
+            )
+        },
+    )
+    assert client.get(f"/api/notebooks/{target}/versions").json()["versions"]
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/copy",
+        json={"new_filename": target, "overwrite": True},
+    )
+
+    assert resp.status_code == 200
+    assert (Path(UPLOAD_DIR) / target).read_bytes() == original_content
+    assert client.get(f"/api/notebooks/{target}/tags").json()["tags"] == []
+    assert client.get(f"/api/notebooks/{target}/versions").json()["versions"] == []
+
+    os.remove(Path(UPLOAD_DIR) / target)
+
+
 def test_restore_notebook_version_makes_it_the_current_content_again():
 
     filename = "versions_restore.ipynb"

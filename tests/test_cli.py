@@ -6513,6 +6513,119 @@ def test_versions_get_command_reports_a_clean_error_for_a_missing_version(
     _assert_clean_cli_error(proc, "Notebook version not found")
 
 
+def test_versions_copy_command_is_registered():
+
+    proc = _run_cli(["versions", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "copy" in proc.stdout
+
+
+def test_versions_copy_command_reports_success(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "version_id": "v1.ipynb", "new_filename": "nb-old.ipynb",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "copy", "nb.ipynb", "v1.ipynb", "nb-old.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Copied version 'v1.ipynb' of 'nb.ipynb' to 'nb-old.ipynb'" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions/v1.ipynb/copy"]
+    assert json.loads(handler.bodies[0]) == {
+        "new_filename": "nb-old.ipynb", "overwrite": False,
+    }
+
+
+def test_versions_copy_command_passes_overwrite_flag(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "version_id": "v1.ipynb", "new_filename": "nb-old.ipynb",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "copy", "nb.ipynb", "v1.ipynb", "nb-old.ipynb",
+            "--overwrite", "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "new_filename": "nb-old.ipynb", "overwrite": True,
+    }
+
+
+def test_versions_copy_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "filename": "nb.ipynb",
+        "version_id": "v1.ipynb", "new_filename": "nb-old.ipynb",
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "copy", "nb.ipynb", "v1.ipynb", "nb-old.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_versions_copy_command_reports_a_clean_error_for_a_missing_version(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook version not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "copy", "nb.ipynb", "does-not-exist.ipynb", "nb-old.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook version not found")
+
+
 def test_versions_restore_command_reports_success(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

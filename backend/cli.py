@@ -2533,6 +2533,39 @@ def _dispatch_core_command(args):
                     f"{output_path} ({len(response.content)} bytes)"
                 )
 
+        elif args.versions_command == "copy":
+
+            try:
+                response = httpx.post(
+                    f"{dashboard_url}/api/notebooks/{args.filename}"
+                    f"/versions/{args.version_id}/copy",
+                    json={
+                        "new_filename": args.new_filename,
+                        "overwrite": args.overwrite,
+                    },
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                print(
+                    f"Copied version '{args.version_id}' of '{args.filename}' "
+                    f"to '{data.get('new_filename', args.new_filename)}' "
+                    f"on {dashboard_url}"
+                )
+
         elif args.versions_command == "restore":
 
             try:
@@ -4572,6 +4605,48 @@ def main():
             "({\"status\", \"filename\", \"version_id\", \"path\", "
             "\"size_bytes\"}) instead of a human-readable summary, for "
             "scripting/automation."
+        )
+    )
+
+    versions_copy_parser = versions_subparsers.add_parser(
+        "copy",
+        help=(
+            "Duplicate one of a notebook's snapshotted versions into a "
+            "brand-new notebook, leaving the source notebook's current "
+            "content and version history untouched, via POST "
+            "/api/notebooks/{filename}/versions/{version_id}/copy."
+        )
+    )
+    versions_copy_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    versions_copy_parser.add_argument(
+        "version_id",
+        help="Version id to copy, as reported by `versions list`."
+    )
+    versions_copy_parser.add_argument(
+        "new_filename",
+        help="Filename for the new notebook (must end in .ipynb, and differ from filename)."
+    )
+    _add_dashboard_url_and_timeout_arguments(versions_copy_parser)
+    versions_copy_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Replace an existing notebook already at new_filename, "
+            "mirroring this endpoint's own \"overwrite\": true -- "
+            "without this, copying onto an existing filename is rejected "
+            "with a 409."
+        )
+    )
+    versions_copy_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"filename\", \"version_id\", \"new_filename\"}) instead of "
+            "a human-readable summary, for scripting/automation."
         )
     )
 

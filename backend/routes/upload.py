@@ -3406,6 +3406,140 @@ def diff_notebook_version(filename: str, version_id: str, against: str = None):
     }
 
 
+@router.post("/notebooks/{filename}/versions/{version_id}/copy")
+def copy_notebook_version(filename: str, version_id: str, data: dict):
+    """Duplicate one of `filename`'s snapshotted past versions into a
+    brand-new notebook under `new_filename`, leaving `filename`'s own
+    current content, tags, and version history completely untouched.
+
+    POST /notebooks/{filename}/versions/{version_id}/restore already lets
+    a caller make a past version `filename`'s own current content again
+    -- but that's inherently destructive to whatever `filename` currently
+    holds (even though restoring is itself undoable, per its own
+    docstring): there was no way to get an *independent* copy of an old
+    snapshot to branch off of or compare against side-by-side without
+    first overwriting the live notebook a caller might still be actively
+    using. This is the version-history equivalent of what POST
+    /notebooks/{filename}/copy already provides for a notebook's current
+    content -- just sourced from one of its past snapshots instead.
+
+    `new_filename` must differ from `filename` itself: copying a version
+    "onto" its own source notebook is exactly what `.../restore` already
+    exists for (and does properly -- snapshotting the current content
+    first, which this endpoint has no reason to do for an unrelated
+    destination), so that's rejected with 400 pointing there instead of
+    silently overwriting `filename`'s own live content without a
+    snapshot.
+
+    Deliberately does NOT inherit `filename`'s current tags the way POST
+    /notebooks/{filename}/copy inherits the source notebook's tags for a
+    same-content copy: a tag like "production" describes `filename`'s
+    *current* content, which this snapshot may no longer match at all --
+    inheriting it here would misrepresent old content as whatever the
+    live notebook happens to be tagged today. The new copy starts
+    untagged, exactly like any other brand-new upload. If "overwrite":
+    true replaces an existing destination notebook, that destination's
+    own previous tags and version history are discarded along with the
+    rest of the file it belonged to, the same overwrite semantics
+    copy_notebook/rename_notebook already apply.
+
+    Same new_filename validation (".ipynb" suffix, collision rejected
+    with 409 unless "overwrite": true) and _rename_lock_for(dest) usage
+    as _copy_notebook_to, applied here to a version snapshot's bytes
+    instead of a notebook's current ones.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    versions_dir = _notebook_versions_dir(file_path.name)
+
+    version_path = _resolve_path_within(
+        str(versions_dir), version_id, "notebook version"
+    )
+
+    if not version_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook version not found"
+        )
+
+    new_filename = data.get("new_filename")
+
+    if not isinstance(new_filename, str) or not new_filename:
+
+        raise HTTPException(
+            status_code=400,
+            detail="new_filename is required"
+        )
+
+    if not new_filename.endswith(".ipynb"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="new_filename must be a .ipynb notebook"
+        )
+
+    dest_path = resolve_upload_path(new_filename)
+
+    if dest_path == file_path:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "new_filename must be different from filename -- to make "
+                "this version filename's own current content again, use "
+                "POST .../versions/{version_id}/restore instead."
+            )
+        )
+
+    overwrite = bool(data.get("overwrite", False))
+
+    with _rename_lock_for(dest_path.name):
+
+        if dest_path.exists() and not overwrite:
+
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"A notebook named '{new_filename}' already exists. "
+                    'Pass "overwrite": true to replace it.'
+                )
+            )
+
+        try:
+
+            shutil.copy2(version_path, dest_path)
+
+        except OSError as e:
+
+            raise HTTPException(
+                status_code=500,
+                detail=str(e)
+            )
+
+        dest_versions_dir = _notebook_versions_dir(dest_path.name)
+
+        if dest_versions_dir.exists():
+            shutil.rmtree(dest_versions_dir)
+
+        _write_notebook_tags(dest_path.name, [])
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "version_id": version_id,
+        "new_filename": new_filename,
+    }
+
+
 @router.post("/notebooks/{filename}/versions/{version_id}/restore")
 def restore_notebook_version(filename: str, version_id: str):
     """Make a previously snapshotted version `filename`'s current content
