@@ -4933,6 +4933,146 @@ def test_export_notebook_versions_returns_404_for_missing_notebook():
     assert resp.status_code == 404
 
 
+def test_inspect_notebook_version_reports_functions_and_dependencies_for_that_snapshot():
+
+    filename = "versions_inspect_snapshot.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "import pandas\n\n"
+                    "def add(a: int, b: int) -> int:\n    return a + b\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.get(f"/api/notebooks/{filename}/versions/{version_id}/inspect")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["filename"] == filename
+    assert body["version_id"] == version_id
+    assert [f["name"] for f in body["functions"]] == ["add"]
+    assert any(dep.startswith("pandas") for dep in body["dependencies"])
+    assert body["endpoints"] == [
+        {"path": "/add", "method": "POST", "is_async": False}
+    ]
+    assert body["reserved_name_conflicts"] == []
+    assert body["skipped_functions"] == []
+
+
+def test_inspect_notebook_version_reflects_the_old_snapshot_not_current_content():
+
+    filename = "versions_inspect_not_current.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def old_fn() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def new_fn() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.get(f"/api/notebooks/{filename}/versions/{version_id}/inspect")
+
+    assert resp.status_code == 200
+    function_names = [f["name"] for f in resp.json()["functions"]]
+    assert function_names == ["old_fn"]
+    assert "new_fn" not in function_names
+
+
+def test_inspect_notebook_version_reports_reserved_name_conflicts():
+
+    filename = "versions_inspect_reserved_name.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def health_check() -> dict:\n    return {}\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def fine() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.get(f"/api/notebooks/{filename}/versions/{version_id}/inspect")
+
+    assert resp.status_code == 200
+    assert resp.json()["reserved_name_conflicts"] == ["health_check"]
+
+
+def test_inspect_notebook_version_returns_404_for_missing_notebook():
+
+    resp = client.get(
+        "/api/notebooks/versions_inspect_missing_notebook.ipynb/versions/x.ipynb/inspect"
+    )
+
+    assert resp.status_code == 404
+
+
+def test_inspect_notebook_version_returns_404_for_an_unknown_version_id():
+
+    _upload_sample_notebook("versions_inspect_unknown_id.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/versions_inspect_unknown_id.ipynb/versions/not_real.ipynb/inspect"
+    )
+
+    assert resp.status_code == 404
+
+
 def test_diff_notebook_version_against_current_live_content():
 
     filename = "versions_diff_against_live.ipynb"

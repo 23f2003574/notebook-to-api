@@ -2769,6 +2769,62 @@ def _dispatch_core_command(args):
                     f"{output_path} ({len(response.content)} bytes)"
                 )
 
+        elif args.versions_command == "inspect":
+
+            try:
+                response = httpx.get(
+                    f"{dashboard_url}/api/notebooks/{args.filename}"
+                    f"/versions/{args.version_id}/inspect",
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                print(
+                    f"Inspecting version '{args.version_id}' of "
+                    f"'{args.filename}' on {dashboard_url}"
+                )
+
+                reserved_name_conflicts = data.get("reserved_name_conflicts", [])
+
+                if reserved_name_conflicts:
+                    print("\n✗ Reserved name conflicts (compilation will fail):")
+                    for name in reserved_name_conflicts:
+                        print(f"  - {name}")
+
+                endpoints = data.get("endpoints", [])
+
+                if endpoints:
+                    print(f"\n{len(endpoints)} endpoint(s):")
+                    for endpoint in endpoints:
+                        marker = "  [background]" if endpoint.get("is_async") else ""
+                        print(f"  {endpoint['method']} {endpoint['path']}{marker}")
+
+                skipped_functions = data.get("skipped_functions", [])
+
+                if skipped_functions:
+                    print(f"\n{len(skipped_functions)} skipped function(s):")
+                    for skipped in skipped_functions:
+                        print(f"  - {skipped['name']}: {skipped['reason']}")
+
+                dependencies = data.get("dependencies", [])
+
+                if dependencies:
+                    print(f"\nDependencies: {', '.join(dependencies)}")
+
         elif args.versions_command == "export":
 
             try:
@@ -5152,6 +5208,36 @@ def main():
             "({\"status\", \"filename\", \"version_id\", \"path\", "
             "\"size_bytes\"}) instead of a human-readable summary, for "
             "scripting/automation."
+        )
+    )
+
+    versions_inspect_parser = versions_subparsers.add_parser(
+        "inspect",
+        help=(
+            "Inspect one of a notebook's snapshotted versions -- its "
+            "functions, dependencies, and would-be endpoints -- via GET "
+            "/api/notebooks/{filename}/versions/{version_id}/inspect."
+        )
+    )
+    versions_inspect_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    versions_inspect_parser.add_argument(
+        "version_id",
+        help="Version id to inspect, as reported by `versions list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(versions_inspect_parser)
+    versions_inspect_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"filename\", \"version_id\", \"functions\", "
+            "\"dependencies\", \"generated_files\", "
+            "\"reserved_name_conflicts\", \"endpoints\", "
+            "\"skipped_functions\"}) instead of a human-readable summary, "
+            "for scripting/automation."
         )
     )
 

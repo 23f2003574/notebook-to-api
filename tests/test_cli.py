@@ -7108,6 +7108,145 @@ def test_versions_get_command_reports_a_clean_error_for_a_missing_version(
     _assert_clean_cli_error(proc, "Notebook version not found")
 
 
+def test_versions_inspect_command_is_registered():
+
+    proc = _run_cli(["versions", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "inspect" in proc.stdout
+
+
+def test_versions_inspect_command_prints_endpoints_and_dependencies(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "version_id": "v1.ipynb",
+            "functions": [{"name": "add"}],
+            "dependencies": ["pandas==2.1.0"],
+            "generated_files": [],
+            "reserved_name_conflicts": [],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "skipped_functions": [],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "inspect", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Inspecting version 'v1.ipynb' of 'nb.ipynb'" in proc.stdout
+    assert "1 endpoint(s):" in proc.stdout
+    assert "POST /add" in proc.stdout
+    assert "Dependencies: pandas==2.1.0" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions/v1.ipynb/inspect"]
+
+
+def test_versions_inspect_command_prints_reserved_name_conflicts_and_skipped_functions(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "version_id": "v1.ipynb",
+            "functions": [],
+            "dependencies": [],
+            "generated_files": [],
+            "reserved_name_conflicts": ["health_check"],
+            "endpoints": [],
+            "skipped_functions": [{"name": "helper", "reason": "uses **kwargs"}],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "inspect", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Reserved name conflicts" in proc.stdout
+    assert "health_check" in proc.stdout
+    assert "1 skipped function(s):" in proc.stdout
+    assert "helper: uses **kwargs" in proc.stdout
+
+
+def test_versions_inspect_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "filename": "nb.ipynb",
+        "version_id": "v1.ipynb",
+        "functions": [],
+        "dependencies": [],
+        "generated_files": [],
+        "reserved_name_conflicts": [],
+        "endpoints": [],
+        "skipped_functions": [],
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "inspect", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_versions_inspect_command_reports_a_clean_error_for_a_missing_version(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook version not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "inspect", "nb.ipynb", "does-not-exist.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook version not found")
+
+
 def test_versions_export_command_is_registered():
 
     proc = _run_cli(["versions", "--help"], cwd=Path.cwd())

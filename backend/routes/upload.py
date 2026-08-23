@@ -4013,6 +4013,101 @@ def get_notebook_version(filename: str, version_id: str):
     )
 
 
+@router.get("/notebooks/{filename}/versions/{version_id}/inspect")
+def inspect_notebook_version(filename: str, version_id: str):
+    """Inspect one of a notebook's previously snapshotted versions --
+    its functions, dependencies, reserved-name conflicts, would-be
+    endpoints, and skipped functions -- exactly as POST /api/inspect
+    already reports for an *uploaded* notebook, but for a past snapshot's
+    own content instead.
+
+    resolve_upload_path (used by POST /api/inspect, POST /api/validate,
+    POST /api/requirements-preview, POST /api/app-preview, and POST
+    /api/curl-preview for their own "notebook_path") deliberately rejects
+    any value with a directory component of its own (see its own
+    docstring) -- so none of those endpoints can be pointed at a version
+    snapshot at all: they live under UPLOAD_DIR/.versions/<filename>/,
+    not directly inside UPLOAD_DIR as a flat filename. Before this,
+    answering "would this old version still compile cleanly, and what
+    would it expose" meant first POST .../versions/{version_id}/restore-
+    ing it over the notebook's own current content (destructive, even
+    though restoring is itself undoable) or GET .../versions/{version_id}
+    downloading it locally just to run the CLI's own `inspect` against
+    that local copy.
+
+    GET .../versions/{version_id}/diff already answers "what changed"
+    between a version and something else -- this answers the
+    complementary "what does this version look like on its own", the
+    same full picture POST /api/inspect already gives for a live
+    notebook, not just the function-level comparison diff reports.
+
+    Reuses inspect_notebook_data (backend/inspector.py) completely
+    unchanged, pointed at the version snapshot's own file path instead of
+    an uploaded notebook's -- the exact same {"functions", "dependencies",
+    "generated_files", "reserved_name_conflicts", "endpoints",
+    "skipped_functions"} shape POST /api/inspect already returns, so this
+    can never drift from what that endpoint already reports for
+    identical content. "generated_files" still reflects whatever's
+    currently sitting in GENERATED_DIR -- informational context about
+    this dashboard's own current compiled state, the same way POST
+    /api/inspect's own "generated_files" already is regardless of which
+    notebook_path was actually inspected, not something tied to this
+    particular version.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    versions_dir = _notebook_versions_dir(file_path.name)
+
+    version_path = _resolve_path_within(
+        str(versions_dir), version_id, "notebook version"
+    )
+
+    if not version_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook version not found"
+        )
+
+    try:
+
+        load_notebook(str(version_path))
+
+    except MALFORMED_NOTEBOOK_ERRORS as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+        )
+
+    # Held for the same reason POST /api/inspect's identical
+    # inspect_notebook_data call already is (see its own comment): a
+    # concurrent POST /api/compile's clear_stale_export_artifacts can
+    # rmtree the sdk/ subdirectory this call's own "generated_files"
+    # field walks, mid-walk.
+    with COMPILE_LOCK:
+
+        inspection = inspect_notebook_data(
+            str(version_path),
+            GENERATED_DIR
+        )
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "version_id": version_id,
+        **inspection,
+    }
+
+
 @router.get("/notebooks/{filename}/versions/{version_id}/diff")
 def diff_notebook_version(filename: str, version_id: str, against: str = None):
     """Compare the top-level functions a snapshotted version of `filename`
