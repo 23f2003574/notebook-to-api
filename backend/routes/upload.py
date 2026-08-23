@@ -1168,6 +1168,98 @@ def _validate_and_normalize_tags(raw_tags) -> list:
     return sorted(normalized)
 
 
+# A notebook's tags (above) are categorical labels for filtering/grouping --
+# good for "which notebooks are 'production'", bad for "why does this
+# notebook exist, and is it still needed". Bounds a single freeform
+# description the same way _MAX_TAG_LENGTH bounds a single tag: without a
+# cap, a single PUT /api/notebooks/{filename}/description call could stuff
+# an arbitrarily large string into the sidecar file _write_notebook_description
+# below writes, and into every GET /api/notebooks response listing it back
+# out afterward.
+_MAX_DESCRIPTION_LENGTH = 2000
+
+
+def _description_sidecar_path(notebook_filename: str) -> Path:
+    """Path to the hidden JSON sidecar file that stores a notebook's own
+    freeform description -- the same ".<filename>.<thing>.json" hidden-
+    sidecar convention _tags_sidecar_path already establishes for tags,
+    just its own separate file rather than a second field jammed into
+    that one: _write_notebook_tags already unconditionally overwrites its
+    entire sidecar file's content with `{"tags": [...]}` on every write
+    (see its own docstring), so sharing one file between the two would
+    mean a tag-only write silently discarding whatever description had
+    already been set, and vice versa -- confirmed by that function's own
+    `json.dump({"tags": tags}, f)` overwrite, not a merge.
+
+    `notebook_filename` is always a notebook's own already-validated
+    Path.name, never raw, unresolved client input directly -- same
+    precondition _tags_sidecar_path already documents for the identical
+    reason.
+    """
+    return Path(UPLOAD_DIR) / f".{notebook_filename}.description.json"
+
+
+def _read_notebook_description(notebook_filename: str) -> str:
+    """The description currently recorded for the notebook named
+    `notebook_filename`, or "" if it has none -- no sidecar file yet (the
+    common case: most notebooks are never given one), or one that's
+    missing/unreadable/corrupt. A description is optional, best-effort
+    metadata, the same way a notebook's tags already are (see
+    _read_notebook_tags) -- a bad sidecar file should never break GET
+    /api/notebooks over it.
+    """
+    sidecar_path = _description_sidecar_path(notebook_filename)
+
+    if not sidecar_path.is_file():
+        return ""
+
+    try:
+
+        with open(sidecar_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+    except (OSError, ValueError):
+        return ""
+
+    description = data.get("description")
+
+    if not isinstance(description, str):
+        return ""
+
+    return description
+
+
+def _write_notebook_description(notebook_filename: str, description: str) -> None:
+    """Persist `description` (already validated/stripped by the caller)
+    as the description for the notebook named `notebook_filename`.
+
+    Removes the sidecar file entirely, rather than writing an empty
+    "description": "" one, when `description` is empty -- so a notebook
+    that's never had one (every notebook, before this feature existed at
+    all) never accumulates a sidecar file on disk just from an empty PUT.
+    Mirrors _write_notebook_tags' own identical "empty in, no file on
+    disk" contract.
+
+    Writes via a temp-file-then-os.replace swap in the same directory --
+    the identical atomic-write pattern _write_notebook_tags already uses
+    -- so a concurrent reader (GET .../description, list_notebooks) never
+    observes a partially-written sidecar file.
+    """
+    sidecar_path = _description_sidecar_path(notebook_filename)
+
+    if not description:
+        sidecar_path.unlink(missing_ok=True)
+        return
+
+    upload_root = Path(UPLOAD_DIR).resolve()
+    temp_path = upload_root / f".{notebook_filename}.description.{uuid.uuid4().hex}.part"
+
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump({"description": description}, f)
+
+    os.replace(temp_path, sidecar_path)
+
+
 @router.get("/tags")
 def list_tags():
     """The distinct tags currently in use across every uploaded notebook,
@@ -1667,6 +1759,7 @@ def _notebook_metadata_entry(entry, compiled_path, compiled_sha256, compiled_at)
         ).isoformat(),
         "currently_compiled": is_currently_compiled,
         "tags": _read_notebook_tags(entry.name),
+        "description": _read_notebook_description(entry.name),
     }
 
     if is_currently_compiled:
@@ -1764,6 +1857,13 @@ def list_notebooks(
     filters the list down to notebooks carrying that exact tag, applied
     (like "search") before "sort"/"limit"/"offset", so it composes with
     every other filter/pagination parameter this endpoint already has.
+
+    Each entry's "description" field is the freeform text PUT
+    /api/notebooks/{filename}/description has recorded for it (see
+    _read_notebook_description above), or "" for a notebook that's never
+    had one set -- the same "" default GET .../description itself already
+    returns for a single notebook, so a caller sees it here without a
+    separate follow-up request per notebook.
     """
 
     if sort not in _NOTEBOOK_SORT_KEYS:
@@ -2321,12 +2421,14 @@ def delete_all_notebooks(confirm: bool = False):
     own hidden ".part" temp file (see _cleanup_stale_upload_temp_files
     above) is never touched by this.
 
-    Also removes each deleted notebook's tags sidecar file and version
-    history directory, if it has either (see _tags_sidecar_path and
+    Also removes each deleted notebook's tags sidecar file, description
+    sidecar file, and version history directory, if it has any of them
+    (see _tags_sidecar_path, _description_sidecar_path, and
     _notebook_versions_dir above) -- without this, a notebook re-uploaded
-    later under the same filename would silently inherit tags, or gain
-    "previous versions" to restore, left behind by a completely different,
-    previously-deleted notebook that just happened to share its name.
+    later under the same filename would silently inherit tags or a
+    description, or gain "previous versions" to restore, left behind by a
+    completely different, previously-deleted notebook that just happened
+    to share its name.
     """
 
     if not confirm:
@@ -2356,6 +2458,7 @@ def delete_all_notebooks(confirm: bool = False):
 
         os.remove(entry)
         _tags_sidecar_path(entry.name).unlink(missing_ok=True)
+        _description_sidecar_path(entry.name).unlink(missing_ok=True)
         shutil.rmtree(_notebook_versions_dir(entry.name), ignore_errors=True)
         deleted_filenames.append(entry.name)
 
@@ -2491,10 +2594,11 @@ def delete_notebook(filename: str):
     Without this, a caller had no way to know that had just happened
     short of a separate GET /api/notebooks call beforehand to check.
 
-    Also removes this notebook's tags sidecar file and version history
-    directory, if it has either -- see delete_all_notebooks' own identical
-    cleanup above for why either one left behind must not silently carry
-    over to a future notebook re-uploaded under the same filename.
+    Also removes this notebook's tags sidecar file, description sidecar
+    file, and version history directory, if it has any of them -- see
+    delete_all_notebooks' own identical cleanup above for why any one
+    left behind must not silently carry over to a future notebook
+    re-uploaded under the same filename.
     """
 
     file_path = resolve_upload_path(filename)
@@ -2516,6 +2620,7 @@ def delete_notebook(filename: str):
 
         os.remove(file_path)
         _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
+        _description_sidecar_path(file_path.name).unlink(missing_ok=True)
         shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
 
     except Exception as e:
@@ -2567,11 +2672,11 @@ def delete_notebooks_batch(data: dict):
     "succeeded_count"/"failed_count" summarizing "results" the same way
     those two endpoints' own identical fields already do.
 
-    Also removes each successfully-deleted notebook's tags sidecar file
-    and version history directory, exactly like DELETE
-    /api/notebooks/{filename} and DELETE /api/notebooks already do -- a
-    notebook re-uploaded later under the same filename must not silently
-    inherit either one left behind by this bulk delete.
+    Also removes each successfully-deleted notebook's tags sidecar file,
+    description sidecar file, and version history directory, exactly like
+    DELETE /api/notebooks/{filename} and DELETE /api/notebooks already do
+    -- a notebook re-uploaded later under the same filename must not
+    silently inherit any of them left behind by this bulk delete.
     """
 
     filenames = data.get("filenames")
@@ -2611,6 +2716,7 @@ def delete_notebooks_batch(data: dict):
 
             os.remove(file_path)
             _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
+            _description_sidecar_path(file_path.name).unlink(missing_ok=True)
             shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
 
             results.append({
@@ -2883,14 +2989,16 @@ def rename_notebook(filename: str, data: dict):
     for the concurrent collision this closes, keyed by destination
     filename).
 
-    A notebook's tags (see PUT /api/notebooks/{filename}/tags) move along
-    with it: without this, a rename would silently orphan the old
-    filename's tags sidecar file (never read again -- nothing looks up
-    tags by a name that no longer exists) while the notebook's new name
-    read back as untagged. If "overwrite": true replaces an existing
-    destination notebook, that destination's own previous tags are
-    discarded along with the rest of the file it belonged to, rather than
-    left to be silently inherited by the just-renamed notebook.
+    A notebook's tags (see PUT /api/notebooks/{filename}/tags) and its
+    description (see PUT /api/notebooks/{filename}/description) both move
+    along with it: without this, a rename would silently orphan the old
+    filename's sidecar file(s) (never read again -- nothing looks up
+    tags or a description by a name that no longer exists) while the
+    notebook's new name read back as untagged/undescribed. If "overwrite":
+    true replaces an existing destination notebook, that destination's
+    own previous tags and description are discarded along with the rest
+    of the file it belonged to, rather than left to be silently inherited
+    by the just-renamed notebook.
 
     A notebook's version history (see PUT /api/upload?overwrite=true and
     GET/POST /api/notebooks/{filename}/versions[/{version_id}[/restore]])
@@ -2982,6 +3090,14 @@ def rename_notebook(filename: str, data: dict):
         else:
             new_tags_path.unlink(missing_ok=True)
 
+        old_description_path = _description_sidecar_path(old_path.name)
+        new_description_path = _description_sidecar_path(new_path.name)
+
+        if old_description_path.is_file():
+            os.replace(old_description_path, new_description_path)
+        else:
+            new_description_path.unlink(missing_ok=True)
+
         old_versions_dir = _notebook_versions_dir(old_path.name)
         new_versions_dir = _notebook_versions_dir(new_path.name)
 
@@ -3040,19 +3156,21 @@ def copy_notebook(filename: str, data: dict):
     meaningful no-op -- there's no "new" copy to speak of -- so it's
     rejected with 400 rather than silently succeeding.
 
-    A notebook's tags (see PUT /api/notebooks/{filename}/tags) are copied
-    along with it: they describe the notebook's *content* (e.g.
-    "production", "v2"), and the copy starts out as an identical copy of
-    that content, so inheriting them is more useful than the copy
-    silently reading back as untagged. Its version history (see GET/POST
+    A notebook's tags (see PUT /api/notebooks/{filename}/tags) and its
+    description (see PUT /api/notebooks/{filename}/description) are both
+    copied along with it: they describe the notebook's *content* (e.g.
+    "production", "v2", "quarterly churn model"), and the copy starts out
+    as an identical copy of that content, so inheriting them is more
+    useful than the copy silently reading back as untagged/undescribed.
+    Its version history (see GET/POST
     /api/notebooks/{filename}/versions[/{version_id}[/restore]]) is
     deliberately NOT copied, though -- that history belongs to
     `filename`'s own past overwrites, not to content in the abstract, and
     the new copy has no overwrites of its own yet to have a history of.
     If "overwrite": true replaces an existing destination notebook, that
-    destination's own previous tags and version history are discarded
-    along with the rest of the file it belonged to, the same overwrite
-    semantics rename_notebook already applies.
+    destination's own previous tags, description, and version history are
+    discarded along with the rest of the file it belonged to, the same
+    overwrite semantics rename_notebook already applies.
 
     Never touches .compile_metadata.json: the source notebook's own
     identity (and whatever it currently backs in GENERATED_DIR, if
@@ -3163,6 +3281,9 @@ def _copy_notebook_to(source_path: Path, new_filename, overwrite: bool) -> str:
             shutil.rmtree(dest_versions_dir)
 
         _write_notebook_tags(dest_path.name, _read_notebook_tags(source_path.name))
+        _write_notebook_description(
+            dest_path.name, _read_notebook_description(source_path.name)
+        )
 
     return new_filename
 
@@ -3340,6 +3461,94 @@ def set_notebook_tags(filename: str, data: dict):
         "status": "success",
         "filename": filename,
         "tags": tags,
+    }
+
+
+@router.get("/notebooks/{filename}/description")
+def get_notebook_description(filename: str):
+    """Return the freeform description currently recorded for a
+    previously uploaded notebook, or "" if it has none.
+
+    Tags (GET/PUT .../tags, just above) are good for categorizing and
+    filtering a catalog of notebooks -- "production", "v2" -- but say
+    nothing about *why* a given notebook exists, what it's for, or
+    whether it's still needed. Before this, the only place that context
+    could live was the notebook's own filename or its cells' own markdown
+    -- neither of which is visible from GET /api/notebooks or any other
+    listing endpoint without downloading and opening the notebook itself.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "description": _read_notebook_description(file_path.name),
+    }
+
+
+@router.put("/notebooks/{filename}/description")
+def set_notebook_description(filename: str, data: dict):
+    """Replace the freeform description recorded for a previously
+    uploaded notebook.
+
+    A PUT, not a PATCH that appends to or edits existing text: this
+    always replaces the notebook's entire description with "description"
+    from the request body, the same full-replace contract PUT
+    .../tags already establishes for a notebook's tags, for the identical
+    reason -- the simplest contract for a caller to reason about ("this
+    is now the complete description") without a separate append/clear
+    endpoint. Pass "" (or omit "description" entirely) to clear it.
+
+    "description" must be a string, at most _MAX_DESCRIPTION_LENGTH
+    characters after stripping leading/trailing whitespace -- an invalid
+    value is rejected with 400, the same way PUT .../tags' own "tags"
+    field already is for a non-list value.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    description = data.get("description", "")
+
+    if not isinstance(description, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="description must be a string"
+        )
+
+    description = description.strip()
+
+    if len(description) > _MAX_DESCRIPTION_LENGTH:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"description must be at most {_MAX_DESCRIPTION_LENGTH} "
+                "characters long"
+            )
+        )
+
+    _write_notebook_description(file_path.name, description)
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "description": description,
     }
 
 
@@ -3622,16 +3831,18 @@ def copy_notebook_version(filename: str, version_id: str, data: dict):
     silently overwriting `filename`'s own live content without a
     snapshot.
 
-    Deliberately does NOT inherit `filename`'s current tags the way POST
-    /notebooks/{filename}/copy inherits the source notebook's tags for a
-    same-content copy: a tag like "production" describes `filename`'s
-    *current* content, which this snapshot may no longer match at all --
-    inheriting it here would misrepresent old content as whatever the
-    live notebook happens to be tagged today. The new copy starts
-    untagged, exactly like any other brand-new upload. If "overwrite":
-    true replaces an existing destination notebook, that destination's
-    own previous tags and version history are discarded along with the
-    rest of the file it belonged to, the same overwrite semantics
+    Deliberately does NOT inherit `filename`'s current tags or
+    description the way POST /notebooks/{filename}/copy inherits the
+    source notebook's for a same-content copy: a tag like "production" or
+    a description like "the model currently in prod" describes
+    `filename`'s *current* content, which this snapshot may no longer
+    match at all -- inheriting either here would misrepresent old content
+    as whatever the live notebook happens to be tagged/described as
+    today. The new copy starts untagged and undescribed, exactly like any
+    other brand-new upload. If "overwrite": true replaces an existing
+    destination notebook, that destination's own previous tags,
+    description, and version history are discarded along with the rest of
+    the file it belonged to, the same overwrite semantics
     copy_notebook/rename_notebook already apply.
 
     Same new_filename validation (".ipynb" suffix, collision rejected
@@ -3722,6 +3933,7 @@ def copy_notebook_version(filename: str, version_id: str, data: dict):
             shutil.rmtree(dest_versions_dir)
 
         _write_notebook_tags(dest_path.name, [])
+        _write_notebook_description(dest_path.name, "")
 
     return {
         "status": "success",
@@ -5532,6 +5744,7 @@ def get_config():
         "max_notebook_versions": MAX_NOTEBOOK_VERSIONS,
         "max_tag_length": _MAX_TAG_LENGTH,
         "max_tags_per_notebook": _MAX_TAGS_PER_NOTEBOOK,
+        "max_description_length": _MAX_DESCRIPTION_LENGTH,
         "deploy_subprocess_timeout_seconds": DEPLOY_SUBPROCESS_TIMEOUT_SECONDS,
         "notebook_sort_keys": sorted(_NOTEBOOK_SORT_KEYS),
         "notebook_sort_orders": sorted(_NOTEBOOK_SORT_ORDERS),

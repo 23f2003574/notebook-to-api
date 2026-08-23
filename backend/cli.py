@@ -342,7 +342,7 @@ _CORE_COMMANDS = frozenset({
     "list", "info", "info-batch",
     "search-functions", "search-content", "find-duplicates", "storage",
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy",
-    "copy-batch", "tags", "prune-versions",
+    "copy-batch", "tags", "prune-versions", "description",
     "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
     "status", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
@@ -2214,6 +2214,67 @@ def _dispatch_core_command(args):
             else:
                 tags = data.get("tags", [])
                 print(f"{args.filename} tags set to: {', '.join(tags) if tags else '(none)'}")
+    elif args.command == "description":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        if args.description_command == "get":
+
+            try:
+                response = httpx.get(
+                    f"{dashboard_url}/api/notebooks/{args.filename}/description",
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                description = data.get("description", "")
+                print(f"{args.filename}: {description if description else '(no description)'}")
+
+        else:  # args.description_command == "set"
+
+            try:
+                response = httpx.put(
+                    f"{dashboard_url}/api/notebooks/{args.filename}/description",
+                    json={"description": args.description},
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                description = data.get("description", "")
+                print(
+                    f"{args.filename} description set to: "
+                    f"{description if description else '(cleared)'}"
+                )
+
     elif args.command == "remote-compile":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -4502,6 +4563,65 @@ def main():
         help=(
             "Emit the dashboard's own JSON response "
             "({\"status\", \"filename\", \"tags\"}) instead of a "
+            "human-readable summary, for scripting/automation."
+        )
+    )
+
+    # description command group (view or replace a notebook's own
+    # freeform description, via GET/PUT /api/notebooks/{filename}
+    # /description -- distinct from `tags`, which is for categorical
+    # labels, not freeform text)
+    description_parser = subparsers.add_parser(
+        "description",
+        help="View or replace the freeform description on a notebook already on a running dashboard instance."
+    )
+    description_subparsers = description_parser.add_subparsers(
+        dest="description_command", required=True
+    )
+
+    description_get_parser = description_subparsers.add_parser(
+        "get",
+        help="Show a notebook's description via GET /api/notebooks/{filename}/description."
+    )
+    description_get_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(description_get_parser)
+    description_get_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"filename\", \"description\"}) instead of a "
+            "human-readable summary, for scripting/automation."
+        )
+    )
+
+    description_set_parser = description_subparsers.add_parser(
+        "set",
+        help="Replace a notebook's description via PUT /api/notebooks/{filename}/description."
+    )
+    description_set_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    description_set_parser.add_argument(
+        "description",
+        help=(
+            "New description, replacing the notebook's entire existing "
+            "one -- the same replace-not-append contract PUT "
+            "/api/notebooks/{filename}/description itself has. Pass an "
+            "empty string to clear it."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(description_set_parser)
+    description_set_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"filename\", \"description\"}) instead of a "
             "human-readable summary, for scripting/automation."
         )
     )

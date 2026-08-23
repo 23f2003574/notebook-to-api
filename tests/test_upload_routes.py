@@ -18,6 +18,7 @@ from backend.dashboard import app
 from backend.routes.upload import (
     MAX_NOTEBOOK_VERSIONS,
     UPLOAD_DIR,
+    _description_sidecar_path,
     _notebook_versions_dir,
     _tags_sidecar_path,
     resolve_generated_path,
@@ -3725,6 +3726,253 @@ def test_set_notebook_tags_rejects_more_than_the_max_distinct_tags():
     )
 
     assert resp.status_code == 400
+
+
+def test_get_notebook_description_is_empty_for_a_never_described_notebook():
+
+    _upload_sample_notebook("description_unset.ipynb")
+
+    resp = client.get("/api/notebooks/description_unset.ipynb/description")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "success",
+        "filename": "description_unset.ipynb",
+        "description": "",
+    }
+
+
+def test_get_notebook_description_returns_404_for_missing_file():
+
+    resp = client.get("/api/notebooks/description_does_not_exist.ipynb/description")
+
+    assert resp.status_code == 404
+
+
+def test_set_notebook_description_returns_404_for_missing_file():
+
+    resp = client.put(
+        "/api/notebooks/description_does_not_exist.ipynb/description",
+        json={"description": "hello"},
+    )
+
+    assert resp.status_code == 404
+
+
+def test_set_notebook_description_persists_and_is_readable_back():
+
+    _upload_sample_notebook("description_persist.ipynb")
+
+    set_resp = client.put(
+        "/api/notebooks/description_persist.ipynb/description",
+        json={"description": "The quarterly churn model, retrained monthly."},
+    )
+
+    assert set_resp.status_code == 200
+    assert set_resp.json() == {
+        "status": "success",
+        "filename": "description_persist.ipynb",
+        "description": "The quarterly churn model, retrained monthly.",
+    }
+
+    get_resp = client.get("/api/notebooks/description_persist.ipynb/description")
+    assert get_resp.json()["description"] == "The quarterly churn model, retrained monthly."
+
+
+def test_set_notebook_description_strips_surrounding_whitespace():
+
+    _upload_sample_notebook("description_strip.ipynb")
+
+    resp = client.put(
+        "/api/notebooks/description_strip.ipynb/description",
+        json={"description": "   needs whitespace stripped   "},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["description"] == "needs whitespace stripped"
+
+
+def test_set_notebook_description_with_empty_string_clears_it_and_removes_the_sidecar_file():
+
+    _upload_sample_notebook("description_clear.ipynb")
+
+    client.put(
+        "/api/notebooks/description_clear.ipynb/description",
+        json={"description": "temporary"},
+    )
+    assert _description_sidecar_path("description_clear.ipynb").is_file()
+
+    clear_resp = client.put(
+        "/api/notebooks/description_clear.ipynb/description",
+        json={"description": ""},
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json()["description"] == ""
+    assert not _description_sidecar_path("description_clear.ipynb").is_file()
+
+
+def test_set_notebook_description_defaults_to_clearing_when_omitted():
+
+    _upload_sample_notebook("description_omitted.ipynb")
+
+    client.put(
+        "/api/notebooks/description_omitted.ipynb/description",
+        json={"description": "temporary"},
+    )
+
+    resp = client.put("/api/notebooks/description_omitted.ipynb/description", json={})
+
+    assert resp.status_code == 200
+    assert resp.json()["description"] == ""
+
+
+def test_set_notebook_description_rejects_a_non_string_value():
+
+    _upload_sample_notebook("description_not_a_string.ipynb")
+
+    resp = client.put(
+        "/api/notebooks/description_not_a_string.ipynb/description",
+        json={"description": 5},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_set_notebook_description_rejects_a_description_over_the_max_length():
+
+    _upload_sample_notebook("description_too_long.ipynb")
+
+    resp = client.put(
+        "/api/notebooks/description_too_long.ipynb/description",
+        json={"description": "x" * 2001},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_notebook_list_and_info_include_the_description_field():
+
+    _upload_sample_notebook("description_in_list.ipynb")
+    client.put(
+        "/api/notebooks/description_in_list.ipynb/description",
+        json={"description": "shown in listings"},
+    )
+
+    list_entry = next(
+        nb for nb in client.get("/api/notebooks").json()["notebooks"]
+        if nb["filename"] == "description_in_list.ipynb"
+    )
+    assert list_entry["description"] == "shown in listings"
+
+    info_resp = client.get("/api/notebooks/description_in_list.ipynb/info")
+    assert info_resp.json()["description"] == "shown in listings"
+
+
+def test_rename_notebook_moves_its_description():
+
+    _upload_sample_notebook("description_rename_source.ipynb")
+    client.put(
+        "/api/notebooks/description_rename_source.ipynb/description",
+        json={"description": "moves with the rename"},
+    )
+
+    rename_resp = client.patch(
+        "/api/notebooks/description_rename_source.ipynb",
+        json={"new_filename": "description_rename_target.ipynb"},
+    )
+    assert rename_resp.status_code == 200
+
+    assert client.get(
+        "/api/notebooks/description_rename_target.ipynb/description"
+    ).json()["description"] == "moves with the rename"
+    assert not _description_sidecar_path("description_rename_source.ipynb").is_file()
+
+    os.remove(Path(UPLOAD_DIR) / "description_rename_target.ipynb")
+    _description_sidecar_path("description_rename_target.ipynb").unlink(missing_ok=True)
+
+
+def test_copy_notebook_copies_the_description_from_the_source():
+
+    _upload_sample_notebook("description_copy_source.ipynb")
+    client.put(
+        "/api/notebooks/description_copy_source.ipynb/description",
+        json={"description": "copied along with the content"},
+    )
+
+    copy_resp = client.post(
+        "/api/notebooks/description_copy_source.ipynb/copy",
+        json={"new_filename": "description_copy_target.ipynb"},
+    )
+    assert copy_resp.status_code == 200
+
+    assert client.get(
+        "/api/notebooks/description_copy_target.ipynb/description"
+    ).json()["description"] == "copied along with the content"
+
+    os.remove(Path(UPLOAD_DIR) / "description_copy_target.ipynb")
+    _description_sidecar_path("description_copy_target.ipynb").unlink(missing_ok=True)
+
+
+def test_copy_notebook_version_does_not_inherit_the_current_description():
+
+    filename = "description_versions_copy_source.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.put(
+        f"/api/notebooks/{filename}/description",
+        json={"description": "the live notebook's own description"},
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    copy_resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/copy",
+        json={"new_filename": "description_versions_copy_target.ipynb"},
+    )
+    assert copy_resp.status_code == 200
+
+    assert client.get(
+        "/api/notebooks/description_versions_copy_target.ipynb/description"
+    ).json()["description"] == ""
+
+    os.remove(Path(UPLOAD_DIR) / "description_versions_copy_target.ipynb")
+
+
+def test_delete_notebook_removes_its_description_sidecar_file():
+
+    _upload_sample_notebook("description_delete.ipynb")
+    client.put(
+        "/api/notebooks/description_delete.ipynb/description",
+        json={"description": "goes away with the notebook"},
+    )
+    assert _description_sidecar_path("description_delete.ipynb").is_file()
+
+    delete_resp = client.delete("/api/notebooks/description_delete.ipynb")
+    assert delete_resp.status_code == 200
+
+    assert not _description_sidecar_path("description_delete.ipynb").is_file()
 
 
 def test_list_tags_response_has_the_expected_shape():
