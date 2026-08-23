@@ -2195,6 +2195,93 @@ def diff_notebooks(old: str = None, new: str = None):
     }
 
 
+@router.get("/notebooks/storage")
+def notebook_storage_usage():
+    """How much disk space UPLOAD_DIR is actually using, broken down per
+    notebook -- its own current bytes plus everything its snapshotted
+    version history (see _notebook_versions_dir/_snapshot_current_notebook_version
+    above) is holding onto -- and as running totals across the whole
+    catalog.
+
+    Nothing in this file previously had any notion of "how much space is
+    this dashboard's UPLOAD_DIR actually using": GET /api/notebooks
+    already reports each notebook's own "size_bytes", but that's silent
+    about its version history entirely, which POST /api/upload
+    ?overwrite=true and POST .../versions/{version_id}/restore both grow
+    on every overwrite, up to MAX_NOTEBOOK_VERSIONS-many snapshots per
+    notebook -- and there's no cap at all on how many notebooks a
+    dashboard can accumulate. An operator noticing UPLOAD_DIR's disk
+    usage climbing (or wanting to catch it before it becomes a problem)
+    had no way to see where that space was actually going short of
+    shelling into the server and running `du` by hand -- this dashboard's
+    own API had nothing to answer that with.
+
+    Each entry's "total_bytes" is its own current content plus its full
+    version history combined -- the same combination an operator would
+    actually want to reclaim via DELETE .../versions (clear a notebook's
+    history) or DELETE /api/notebooks/{filename} (remove the notebook
+    outright) -- and "notebooks" is sorted by "total_bytes" descending,
+    biggest first, the same "show me what's actually worth acting on"
+    ordering `du -sh | sort -rh` already gives an operator on the
+    command line, rather than GET /api/notebooks' own default
+    alphabetical-by-filename order, which has nothing to do with what
+    this endpoint exists to surface.
+
+    Read-only and never touches GENERATED_DIR, so this needs no
+    COMPILE_LOCK -- unlike GET /api/notebooks?sort=size, which orders by
+    a single notebook's own bytes alone, this is the first place a
+    notebook's version history is actually sized and summed at all.
+    """
+
+    upload_root = Path(UPLOAD_DIR)
+
+    notebooks = []
+    total_notebook_bytes = 0
+    total_version_bytes = 0
+    total_version_count = 0
+
+    for entry in sorted(upload_root.iterdir()):
+
+        if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        notebook_bytes = entry.stat().st_size
+
+        versions_dir = _notebook_versions_dir(entry.name)
+
+        version_files = (
+            [f for f in versions_dir.iterdir() if f.is_file()]
+            if versions_dir.is_dir() else []
+        )
+
+        version_bytes = sum(f.stat().st_size for f in version_files)
+        version_count = len(version_files)
+
+        notebooks.append({
+            "filename": entry.name,
+            "notebook_bytes": notebook_bytes,
+            "version_bytes": version_bytes,
+            "version_count": version_count,
+            "total_bytes": notebook_bytes + version_bytes,
+        })
+
+        total_notebook_bytes += notebook_bytes
+        total_version_bytes += version_bytes
+        total_version_count += version_count
+
+    notebooks.sort(key=lambda entry: entry["total_bytes"], reverse=True)
+
+    return {
+        "status": "success",
+        "notebooks": notebooks,
+        "notebook_count": len(notebooks),
+        "total_notebook_bytes": total_notebook_bytes,
+        "total_version_bytes": total_version_bytes,
+        "total_version_count": total_version_count,
+        "total_bytes": total_notebook_bytes + total_version_bytes,
+    }
+
+
 @router.delete("/notebooks")
 def delete_all_notebooks(confirm: bool = False):
     """Remove every uploaded notebook in UPLOAD_DIR at once.

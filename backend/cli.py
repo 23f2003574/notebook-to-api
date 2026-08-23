@@ -340,7 +340,7 @@ _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
     "export-curl", "serve", "watch", "deploy", "diff", "upload", "import-notebooks",
     "list", "info", "info-batch",
-    "search-functions", "search-content", "find-duplicates",
+    "search-functions", "search-content", "find-duplicates", "storage",
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy",
     "copy-batch", "tags",
     "remote-compile", "remote-build",
@@ -1469,6 +1469,57 @@ def _dispatch_core_command(args):
                     f"duplicate group(s), "
                     f"{data.get('duplicate_notebook_count', 0)} notebook(s) total"
                 )
+    elif args.command == "storage":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/notebooks/storage",
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            notebooks = data.get("notebooks", [])
+
+            if not notebooks:
+                print(f"No notebooks uploaded to {dashboard_url}.")
+            else:
+
+                for entry in notebooks:
+                    print(
+                        f"{entry['filename']}: {entry['total_bytes']} bytes "
+                        f"({entry['notebook_bytes']} notebook + "
+                        f"{entry['version_bytes']} bytes across "
+                        f"{entry['version_count']} version(s))"
+                    )
+
+                print(
+                    f"\n{data.get('notebook_count', len(notebooks))} "
+                    f"notebook(s), {data.get('total_bytes', 0)} bytes total "
+                    f"({data.get('total_notebook_bytes', 0)} notebooks + "
+                    f"{data.get('total_version_bytes', 0)} across "
+                    f"{data.get('total_version_count', 0)} version(s)) "
+                    f"on {dashboard_url}"
+                )
+
     elif args.command == "download":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -3840,6 +3891,33 @@ def main():
             "\"size_bytes\"}, ...], \"group_count\", "
             "\"duplicate_notebook_count\"}) instead of a human-readable "
             "summary, for scripting/automation."
+        )
+    )
+
+    # storage command (report disk usage across every uploaded notebook,
+    # each one's current content plus its own version history, via GET
+    # /api/notebooks/storage)
+    storage_parser = subparsers.add_parser(
+        "storage",
+        help=(
+            "Report disk usage across every notebook already uploaded to "
+            "a running dashboard instance, including their own version "
+            "history, via GET /api/notebooks/storage."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(storage_parser)
+    storage_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"notebooks\": [{\"filename\", \"notebook_bytes\", "
+            "\"version_bytes\", \"version_count\", \"total_bytes\"}, ...], "
+            "\"notebook_count\", \"total_notebook_bytes\", "
+            "\"total_version_bytes\", \"total_version_count\", "
+            "\"total_bytes\"}) instead of a human-readable summary, for "
+            "scripting/automation."
         )
     )
 

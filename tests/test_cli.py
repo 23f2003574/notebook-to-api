@@ -3083,6 +3083,108 @@ def test_find_duplicates_command_reports_a_clean_error_when_the_dashboard_is_unr
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_storage_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "storage" in proc.stdout
+
+
+def test_storage_command_prints_per_notebook_and_total_usage(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "notebooks": [
+            {
+                "filename": "a.ipynb",
+                "notebook_bytes": 900,
+                "version_bytes": 300,
+                "version_count": 2,
+                "total_bytes": 1200,
+            },
+        ],
+        "notebook_count": 1,
+        "total_notebook_bytes": 900,
+        "total_version_bytes": 300,
+        "total_version_count": 2,
+        "total_bytes": 1200,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["storage", "--dashboard-url", dashboard_url], cwd=Path.cwd()
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "a.ipynb: 1200 bytes (900 notebook + 300 bytes across 2 version(s))" in proc.stdout
+    assert "1 notebook(s), 1200 bytes total" in proc.stdout
+    assert handler.requests == ["/api/notebooks/storage"]
+
+
+def test_storage_command_reports_no_notebooks(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "notebooks": [],
+        "notebook_count": 0,
+        "total_notebook_bytes": 0,
+        "total_version_bytes": 0,
+        "total_version_count": 0,
+        "total_bytes": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["storage", "--dashboard-url", dashboard_url], cwd=Path.cwd()
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No notebooks uploaded" in proc.stdout
+
+
+def test_storage_command_json_flag_emits_the_dashboards_own_response(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "notebooks": [
+            {
+                "filename": "a.ipynb", "notebook_bytes": 900,
+                "version_bytes": 0, "version_count": 0, "total_bytes": 900,
+            },
+        ],
+        "notebook_count": 1,
+        "total_notebook_bytes": 900,
+        "total_version_bytes": 0,
+        "total_version_count": 0,
+        "total_bytes": 900,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["storage", "--dashboard-url", dashboard_url, "--json"], cwd=Path.cwd()
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_storage_command_reports_a_clean_error_when_the_dashboard_is_unreachable():
+
+    proc = _run_cli(
+        [
+            "storage",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=Path.cwd(),
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_download_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

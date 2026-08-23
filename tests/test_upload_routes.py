@@ -2418,6 +2418,128 @@ def test_delete_notebook_rejects_a_filename_with_an_embedded_null_byte():
     assert resp.status_code == 400
 
 
+def test_notebook_storage_reports_per_notebook_and_total_bytes():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+    content_b = _notebook_bytes(
+        "def subtract_two_numbers(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    for filename, content in (
+        ("storage_a.ipynb", content_a),
+        ("storage_b.ipynb", content_b),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    resp = client.get("/api/notebooks/storage")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["notebook_count"] == 2
+    assert body["total_version_bytes"] == 0
+    assert body["total_version_count"] == 0
+    assert body["total_notebook_bytes"] == len(content_a) + len(content_b)
+    assert body["total_bytes"] == body["total_notebook_bytes"]
+
+    entries_by_filename = {n["filename"]: n for n in body["notebooks"]}
+    assert entries_by_filename["storage_a.ipynb"] == {
+        "filename": "storage_a.ipynb",
+        "notebook_bytes": len(content_a),
+        "version_bytes": 0,
+        "version_count": 0,
+        "total_bytes": len(content_a),
+    }
+    assert entries_by_filename["storage_b.ipynb"]["notebook_bytes"] == len(content_b)
+
+
+def test_notebook_storage_includes_version_history_bytes():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    filename = "storage_versions.ipynb"
+    original_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    new_content = _notebook_bytes(
+        "def f() -> int:\n    return 1\n\ndef g() -> int:\n    return 2\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(original_content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(new_content), "application/json")},
+    )
+
+    resp = client.get("/api/notebooks/storage")
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    entry = body["notebooks"][0]
+    assert entry["filename"] == filename
+    assert entry["notebook_bytes"] == len(new_content)
+    assert entry["version_bytes"] == len(original_content)
+    assert entry["version_count"] == 1
+    assert entry["total_bytes"] == len(new_content) + len(original_content)
+
+    assert body["total_version_bytes"] == len(original_content)
+    assert body["total_version_count"] == 1
+    assert body["total_bytes"] == entry["total_bytes"]
+
+
+def test_notebook_storage_sorts_by_total_bytes_descending():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    small = _notebook_bytes("def f() -> int:\n    return 1\n")
+    large = _notebook_bytes(
+        "def a_much_longer_function_name_for_a_bigger_notebook() -> int:\n"
+        "    return 1\n"
+    )
+    assert len(large) > len(small)
+
+    for filename, content in (
+        ("storage_small.ipynb", small),
+        ("storage_large.ipynb", large),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    resp = client.get("/api/notebooks/storage")
+
+    assert resp.status_code == 200
+    filenames_in_order = [n["filename"] for n in resp.json()["notebooks"]]
+    assert filenames_in_order == ["storage_large.ipynb", "storage_small.ipynb"]
+
+
+def test_notebook_storage_reports_zeros_for_an_empty_catalog():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    resp = client.get("/api/notebooks/storage")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "success",
+        "notebooks": [],
+        "notebook_count": 0,
+        "total_notebook_bytes": 0,
+        "total_version_bytes": 0,
+        "total_version_count": 0,
+        "total_bytes": 0,
+    }
+
+
 def test_delete_all_notebooks_requires_confirm_true():
     """A bulk delete with real, hard-to-undo consequences (the notebooks
     in UPLOAD_DIR are the only copy of a user's original uploaded source
