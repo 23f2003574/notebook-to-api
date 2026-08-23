@@ -5870,6 +5870,44 @@ def deploy_history_endpoint():
     }
 
 
+@router.delete("/deploy/history")
+def clear_deploy_history():
+    """Permanently discard this dashboard's entire deploy history log at
+    once.
+
+    GET /api/deploy/history's own docstring already notes it's read-only
+    -- no way to edit or replay an individual entry through it -- but that
+    left no way to discard the log *as a whole* either, short of an
+    entry aging out only once MAX_DEPLOY_HISTORY_ENTRIES more deploys
+    happen. An operator wanting to reclaim it sooner (e.g. before handing
+    a dashboard instance off to someone else, or after a tag/platform
+    value in it turns out to have been sensitive) had no way to act on
+    that at all -- this dashboard's deploy history, unlike a notebook's
+    own version history (DELETE /api/notebooks/{filename}/versions), had
+    no bulk-clear equivalent whatsoever.
+
+    Never touches GENERATED_DIR, whatever it currently backs, or any
+    uploaded notebook's own tags/description/version history -- this
+    dashboard's deploy history is bookkeeping about past POST /api/deploy
+    calls, entirely independent of all of those (see
+    _deploy_history_path's own docstring for why it isn't even stored
+    alongside either one). A no-op success (not a 404) when nothing has
+    ever been deployed yet -- "nothing to clear" is a valid outcome of a
+    bulk operation like this, not an error, the same reasoning DELETE
+    /api/notebooks/{filename}/versions' own no-op-for-no-history case
+    already follows.
+    """
+
+    entries = _read_deploy_history()
+
+    _deploy_history_path().unlink(missing_ok=True)
+
+    return {
+        "status": "success",
+        "deleted_count": len(entries),
+    }
+
+
 @router.get("/download")
 def download_generated_app():
     """Download the compiled app as a zip archive.

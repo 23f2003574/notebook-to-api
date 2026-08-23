@@ -9585,6 +9585,106 @@ def test_deploy_history_command_reports_a_clean_error_when_the_dashboard_is_unre
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_clear_deploy_history_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "clear-deploy-history" in proc.stdout
+
+
+def test_clear_deploy_history_command_reports_success_with_yes_flag(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "deleted_count": 3})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["clear-deploy-history", "--dashboard-url", dashboard_url, "--yes"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Discarded 3 deploy history entr(y/ies)" in proc.stdout
+    assert handler.requests == ["/api/deploy/history"]
+
+
+def test_clear_deploy_history_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "deleted_count": 0})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "clear-deploy-history", "--dashboard-url", dashboard_url,
+            "--yes", "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == {"status": "success", "deleted_count": 0}
+
+
+def test_clear_deploy_history_command_aborts_without_yes_when_declined(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = []
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli",
+            "clear-deploy-history", "--dashboard-url", dashboard_url,
+        ],
+        cwd=str(workdir),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        input="n\n",
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Aborted." in proc.stdout
+    assert handler.requests == []
+
+
+def test_clear_deploy_history_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "clear-deploy-history",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5", "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_status_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

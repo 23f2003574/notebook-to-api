@@ -8694,6 +8694,81 @@ def test_deploy_does_not_record_a_history_entry_on_build_failure(tmp_path, monke
     assert client.get("/api/deploy/history").json()["entries"] == []
 
 
+def test_clear_deploy_history_removes_every_entry(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_deploy_history_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    for i in range(3):
+        upload_module._append_deploy_history_entry({
+            "deployed_at": f"2024-01-0{i + 1}T00:00:00+00:00",
+            "tag": f"clear:{i}",
+            "platform": None,
+            "pushed": False,
+            "source_notebook_filename": None,
+            "source_notebook_sha256": None,
+        })
+
+    assert client.get("/api/deploy/history").json()["entry_count"] == 3
+
+    clear_resp = client.delete("/api/deploy/history")
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "deleted_count": 3}
+
+    assert client.get("/api/deploy/history").json() == {
+        "status": "success",
+        "entries": [],
+        "entry_count": 0,
+    }
+
+
+def test_clear_deploy_history_is_a_no_op_success_when_nothing_was_ever_deployed(
+    tmp_path, monkeypatch
+):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_deploy_history_empty_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    resp = client.delete("/api/deploy/history")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "success", "deleted_count": 0}
+
+
+def test_clear_deploy_history_does_not_touch_generated_dir_or_notebooks(
+    tmp_path, monkeypatch
+):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_deploy_history_isolation_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    upload_module._append_deploy_history_entry({
+        "deployed_at": "2024-01-01T00:00:00+00:00",
+        "tag": "isolation:0",
+        "platform": None,
+        "pushed": False,
+        "source_notebook_filename": None,
+        "source_notebook_sha256": None,
+    })
+
+    generated_dir_before = Path(upload_module.GENERATED_DIR)
+    dockerfile_existed_before = (generated_dir_before / "Dockerfile").is_file()
+
+    client.delete("/api/deploy/history")
+
+    assert (generated_dir_before / "Dockerfile").is_file() == dockerfile_existed_before
+
+
 def test_deploy_endpoint_returns_500_when_docker_is_missing(tmp_path, monkeypatch):
 
     _compile_a_notebook("deploy_missing_docker_test.ipynb")

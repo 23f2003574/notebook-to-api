@@ -343,6 +343,7 @@ _CORE_COMMANDS = frozenset({
     "search-functions", "search-content", "find-duplicates", "storage",
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy",
     "copy-batch", "tags", "prune-versions", "description", "deploy-history",
+    "clear-deploy-history",
     "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
     "status", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
@@ -3626,6 +3627,50 @@ def _dispatch_core_command(args):
 
                 print(f"\n{data.get('entry_count', len(entries))} deploy(s) on {dashboard_url}")
 
+    elif args.command == "clear-deploy-history":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        if not args.yes:
+            # DELETE /api/deploy/history (routes/upload.py) has no
+            # confirmation step of its own and is irreversible -- the
+            # same reasoning `prune-versions`/`tags delete` already
+            # prompt for.
+            answer = input(
+                f"Permanently discard the entire deploy history on "
+                f"{dashboard_url}? [y/N] "
+            )
+            if answer.strip().lower() not in ("y", "yes"):
+                print("Aborted.")
+                return
+
+        try:
+            response = httpx.delete(
+                f"{dashboard_url}/api/deploy/history", timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            print(
+                f"Discarded {data.get('deleted_count', 0)} deploy history "
+                f"entr(y/ies) on {dashboard_url}"
+            )
+
     elif args.command == "status":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -5910,6 +5955,39 @@ def main():
             "\"pushed\", \"source_notebook_filename\", "
             "\"source_notebook_sha256\"}, ...], \"entry_count\"}) instead "
             "of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    # clear-deploy-history command (discard a running dashboard's entire
+    # deploy history log at once, via its DELETE /api/deploy/history --
+    # distinct from `deploy-history` above, which only ever reads it)
+    clear_deploy_history_parser = subparsers.add_parser(
+        "clear-deploy-history",
+        help=(
+            "Permanently discard a running dashboard instance's entire "
+            "deploy history log, via its DELETE /api/deploy/history."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(clear_deploy_history_parser)
+    clear_deploy_history_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Confirm the deletion without an interactive prompt. Without "
+            "this, `clear-deploy-history` asks for a y/N confirmation on "
+            "the terminal before sending the request -- DELETE "
+            "/api/deploy/history itself has no confirmation step of its "
+            "own, and is irreversible."
+        )
+    )
+    clear_deploy_history_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"deleted_count\"}) instead of a human-readable summary, "
+            "for scripting/automation."
         )
     )
 
