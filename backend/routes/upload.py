@@ -1383,6 +1383,107 @@ def apply_tag(tag: str, data: dict):
     }
 
 
+@router.post("/tags/{tag}/remove")
+def remove_tag_batch(tag: str, data: dict):
+    """Remove `tag` from a caller-chosen set of already-uploaded notebooks
+    in one call, leaving each one's other tags untouched.
+
+    DELETE /api/tags/{tag} already retires a tag from *every* notebook
+    that carries it, and POST /api/tags/{tag}/apply already adds a tag to
+    a caller-chosen *set* of notebooks -- but there was no way to remove a
+    tag from just a caller-chosen set, the mirror image of apply. Before
+    this, discarding a tag from a handful of notebooks without touching
+    every other notebook that also carries it meant GETting each target
+    notebook's current tags, dropping the one tag client-side, and PUTting
+    the reduced set back -- one round trip per notebook, same as
+    POST /api/tags/{tag}/apply's own docstring already describes for the
+    add case.
+
+    Deliberately takes an explicit "filenames" list, the same reasoning
+    POST /api/tags/{tag}/apply's own docstring already gives for that
+    endpoint: the caller already knows exactly which notebooks to affect,
+    typically from a preceding GET /api/notebooks?tag=<tag> or
+    ?search=... of its own.
+
+    Reuses the exact per-file "one bad entry doesn't abort the batch"
+    contract POST /api/tags/{tag}/apply already established: each filename
+    is processed independently, and "results" reports one {"filename",
+    "status", ...} entry per filename -- "success" (with that notebook's
+    resulting tag set) or "error" (with the HTTPException detail that
+    filename's own removal would have raised on its own, e.g. a 404 for a
+    filename that doesn't exist). A notebook that exists but never carried
+    `tag` in the first place still counts as "success" with its tags
+    unchanged -- removing a tag that isn't there is a no-op, not an error,
+    the same "nothing to act on is still a valid outcome" reasoning
+    DELETE /api/tags/{tag}'s own empty "affected_notebooks" already
+    follows for the whole-catalog case.
+    """
+
+    filenames = data.get("filenames")
+
+    if (
+        not isinstance(filenames, list)
+        or not filenames
+        or not all(isinstance(f, str) for f in filenames)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="filenames must be a non-empty list of strings"
+        )
+
+    # Validated the same way POST /api/tags/{tag}/apply validates the tag
+    # it's adding -- once, up front, for the whole batch, since an invalid
+    # `tag` is this request's fault rather than any one filename's.
+    tag = _validate_and_normalize_tags([tag])[0]
+
+    results = []
+    succeeded_count = 0
+    failed_count = 0
+
+    for filename in filenames:
+
+        try:
+
+            file_path = resolve_upload_path(filename)
+
+            if not file_path.is_file():
+
+                raise HTTPException(
+                    status_code=404,
+                    detail="Notebook file not found"
+                )
+
+            remaining_tags = [
+                t for t in _read_notebook_tags(file_path.name) if t != tag
+            ]
+
+            _write_notebook_tags(file_path.name, remaining_tags)
+
+            results.append({
+                "filename": filename,
+                "status": "success",
+                "tags": remaining_tags,
+            })
+            succeeded_count += 1
+
+        except HTTPException as exc:
+
+            results.append({
+                "filename": filename,
+                "status": "error",
+                "detail": exc.detail,
+            })
+            failed_count += 1
+
+    return {
+        "status": "success",
+        "tag": tag,
+        "results": results,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
+    }
+
+
 @router.patch("/tags/{tag}")
 def rename_tag(tag: str, data: dict):
     """Rename `tag` to `data["new_tag"]` on every notebook that currently

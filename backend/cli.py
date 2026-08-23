@@ -1987,6 +1987,42 @@ def _dispatch_core_command(args):
                     f"{data.get('failed_count', 0)} failed"
                 )
 
+        elif args.tags_command == "remove":
+
+            try:
+                response = httpx.post(
+                    f"{dashboard_url}/api/tags/{args.tag}/remove",
+                    json={"filenames": args.filename},
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                for result in data.get("results", []):
+
+                    if result["status"] == "success":
+                        print(f"Removed '{args.tag}' from {result['filename']}")
+                    else:
+                        print(f"Failed to update {result['filename']}: {result['detail']}")
+
+                print(
+                    f"\n{data.get('succeeded_count', 0)} succeeded, "
+                    f"{data.get('failed_count', 0)} failed"
+                )
+
         elif args.tags_command == "rename":
 
             if not args.yes:
@@ -4065,6 +4101,34 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(tags_apply_parser)
     tags_apply_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"tag\", \"results\": [{\"filename\", \"status\", ...}, ...], "
+            "\"succeeded_count\", \"failed_count\"}) instead of a "
+            "human-readable summary, for scripting/automation."
+        )
+    )
+
+    tags_remove_parser = tags_subparsers.add_parser(
+        "remove",
+        help=(
+            "Remove a tag from several named notebooks at once, leaving "
+            "each one's other tags untouched, via POST "
+            "/api/tags/{tag}/remove."
+        )
+    )
+    tags_remove_parser.add_argument(
+        "tag", help="Tag to remove from every named notebook."
+    )
+    tags_remove_parser.add_argument(
+        "filename", nargs="+",
+        help="Filenames of the notebooks to untag, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(tags_remove_parser)
+    tags_remove_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",

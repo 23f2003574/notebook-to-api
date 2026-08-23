@@ -3859,6 +3859,119 @@ def test_apply_tag_rejects_an_empty_tag():
     assert resp.status_code == 400
 
 
+def test_remove_tag_batch_removes_it_from_named_notebooks_only():
+
+    _upload_sample_notebook("tags_remove_a.ipynb")
+    _upload_sample_notebook("tags_remove_b.ipynb")
+    _upload_sample_notebook("tags_remove_untouched.ipynb")
+
+    client.put(
+        "/api/notebooks/tags_remove_a.ipynb/tags",
+        json={"tags": ["production", "bug"]},
+    )
+    client.put(
+        "/api/notebooks/tags_remove_b.ipynb/tags",
+        json={"tags": ["production"]},
+    )
+    client.put(
+        "/api/notebooks/tags_remove_untouched.ipynb/tags",
+        json={"tags": ["production"]},
+    )
+
+    resp = client.post(
+        "/api/tags/production/remove",
+        json={"filenames": ["tags_remove_a.ipynb", "tags_remove_b.ipynb"]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["tag"] == "production"
+    assert body["succeeded_count"] == 2
+    assert body["failed_count"] == 0
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["tags_remove_a.ipynb"]["status"] == "success"
+    assert results_by_filename["tags_remove_a.ipynb"]["tags"] == ["bug"]
+    assert results_by_filename["tags_remove_b.ipynb"]["tags"] == []
+
+    # A notebook not named in "filenames" keeps the tag untouched, even
+    # though it also carries it.
+    assert client.get(
+        "/api/notebooks/tags_remove_untouched.ipynb/tags"
+    ).json()["tags"] == ["production"]
+
+
+def test_remove_tag_batch_reports_a_missing_filename_without_aborting_the_rest():
+
+    _upload_sample_notebook("tags_remove_partial.ipynb")
+    client.put(
+        "/api/notebooks/tags_remove_partial.ipynb/tags",
+        json={"tags": ["urgent"]},
+    )
+
+    resp = client.post(
+        "/api/tags/urgent/remove",
+        json={"filenames": ["tags_remove_partial.ipynb", "does_not_exist.ipynb"]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["tags_remove_partial.ipynb"]["status"] == "success"
+    assert results_by_filename["does_not_exist.ipynb"]["status"] == "error"
+    assert "not found" in results_by_filename["does_not_exist.ipynb"]["detail"]
+
+    assert client.get(
+        "/api/notebooks/tags_remove_partial.ipynb/tags"
+    ).json()["tags"] == []
+
+
+def test_remove_tag_batch_is_idempotent_for_a_notebook_that_never_had_it():
+
+    _upload_sample_notebook("tags_remove_idempotent.ipynb")
+
+    resp = client.post(
+        "/api/tags/production/remove",
+        json={"filenames": ["tags_remove_idempotent.ipynb"]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["results"][0]["status"] == "success"
+    assert body["results"][0]["tags"] == []
+
+
+def test_remove_tag_batch_rejects_a_non_list_filenames_value():
+
+    resp = client.post("/api/tags/production/remove", json={"filenames": "not-a-list"})
+
+    assert resp.status_code == 400
+
+
+def test_remove_tag_batch_rejects_an_empty_filenames_list():
+
+    resp = client.post("/api/tags/production/remove", json={"filenames": []})
+
+    assert resp.status_code == 400
+
+
+def test_remove_tag_batch_rejects_an_empty_tag():
+
+    _upload_sample_notebook("tags_remove_empty_tag.ipynb")
+
+    resp = client.post(
+        "/api/tags/%20/remove",
+        json={"filenames": ["tags_remove_empty_tag.ipynb"]},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_rename_tag_renames_it_on_every_notebook_that_has_it():
 
     _upload_sample_notebook("tags_rename_a.ipynb")
