@@ -3610,6 +3610,81 @@ def list_notebook_versions(filename: str):
     }
 
 
+@router.get("/notebooks/{filename}/versions/export")
+def export_notebook_versions(filename: str):
+    """Download a previously uploaded notebook's current content together
+    with its entire snapshotted version history, bundled into a single
+    .zip -- a complete, restorable backup of everything POST
+    /api/upload?overwrite=true and POST .../restore have ever produced
+    for this one notebook.
+
+    GET /api/notebooks/export already bundles several *different*
+    notebooks' own current content into one zip, and GET
+    /api/notebooks/{filename}/versions/{version_id} already downloads one
+    snapshot's raw bytes at a time -- but there was no way to get a
+    complete backup of a single notebook's own full history (current
+    content plus every past version) in one call: a caller wanting that
+    (e.g. before DELETE /api/notebooks/{filename}/versions clears it, or
+    just to archive a notebook's edit history off this server entirely)
+    had to first GET .../versions to enumerate every version_id, then one
+    GET .../versions/{version_id} call per snapshot plus a separate GET
+    .../{filename} for the current content -- N+1 requests to reconstruct
+    what this endpoint now returns in one.
+
+    The archive's top-level entry is `filename` itself (the current
+    content, exactly as GET /api/notebooks/{filename} already returns
+    it), with every snapshot underneath a "versions/" prefix, named by its
+    own "version_id" (the same name GET .../versions/{version_id} already
+    downloads it by) -- so re-uploading the top-level entry and restoring
+    from any "versions/<version_id>" entry (via POST
+    .../versions/{version_id}/restore, after re-uploading it as a new
+    version through some other means) reconstructs this notebook's exact
+    prior state.
+
+    A notebook with no version history at all still exports successfully
+    -- just its current content, no "versions/" entries -- the same "an
+    empty/absent version history is a valid state, not an error"
+    reasoning GET /api/notebooks/{filename}/versions' own empty list
+    already follows.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    versions_dir = _notebook_versions_dir(file_path.name)
+
+    buffer = io.BytesIO()
+
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+
+        archive.write(file_path, filename)
+
+        if versions_dir.is_dir():
+
+            for entry in sorted(versions_dir.iterdir()):
+
+                if entry.is_file():
+                    archive.write(entry, f"versions/{entry.name}")
+
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{filename}.versions.zip"'
+            ),
+        },
+    )
+
+
 @router.delete("/notebooks/{filename}/versions")
 def clear_notebook_versions(filename: str):
     """Permanently discard every one of a notebook's snapshotted previous

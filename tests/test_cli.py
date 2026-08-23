@@ -6960,6 +6960,103 @@ def test_versions_get_command_reports_a_clean_error_for_a_missing_version(
     _assert_clean_cli_error(proc, "Notebook version not found")
 
 
+def test_versions_export_command_is_registered():
+
+    proc = _run_cli(["versions", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "export" in proc.stdout
+
+
+def test_versions_export_command_saves_the_zip_to_the_default_path(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["versions", "export", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"({len(zip_bytes)} bytes)" in proc.stdout
+    assert (workdir / "nb.ipynb.versions.zip").read_bytes() == zip_bytes
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions/export"]
+
+
+def test_versions_export_command_respects_a_custom_output_path(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "export", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--output", "backup.zip",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "backup.zip").read_bytes() == zip_bytes
+    assert not (workdir / "nb.ipynb.versions.zip").exists()
+
+
+def test_versions_export_command_json_flag_emits_a_machine_readable_result(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "export", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["filename"] == "nb.ipynb"
+    assert data["size_bytes"] == len(zip_bytes)
+
+
+def test_versions_export_command_reports_a_clean_error_for_a_missing_notebook(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook file not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["versions", "export", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook file not found")
+
+
 def test_versions_copy_command_is_registered():
 
     proc = _run_cli(["versions", "--help"], cwd=Path.cwd())

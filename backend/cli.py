@@ -2710,6 +2710,47 @@ def _dispatch_core_command(args):
                     f"{output_path} ({len(response.content)} bytes)"
                 )
 
+        elif args.versions_command == "export":
+
+            try:
+                response = httpx.get(
+                    f"{dashboard_url}/api/notebooks/{args.filename}/versions/export",
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            output_path = args.output or _filename_from_content_disposition(
+                response, f"{args.filename}.versions.zip"
+            )
+
+            with open(output_path, "wb") as f:
+                f.write(response.content)
+
+            if args.json_output:
+                print(json.dumps(
+                    {
+                        "status": "success",
+                        "filename": args.filename,
+                        "path": output_path,
+                        "size_bytes": len(response.content),
+                    },
+                    indent=2,
+                ))
+            else:
+                print(
+                    f"Exported '{args.filename}' and its version history "
+                    f"from {dashboard_url} to {output_path} "
+                    f"({len(response.content)} bytes)"
+                )
+
         elif args.versions_command == "copy":
 
             try:
@@ -4960,6 +5001,34 @@ def main():
             "({\"status\", \"filename\", \"version_id\", \"path\", "
             "\"size_bytes\"}) instead of a human-readable summary, for "
             "scripting/automation."
+        )
+    )
+
+    versions_export_parser = versions_subparsers.add_parser(
+        "export",
+        help=(
+            "Download a notebook's current content together with its "
+            "entire snapshotted version history as a single zip, via GET "
+            "/api/notebooks/{filename}/versions/export."
+        )
+    )
+    versions_export_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(versions_export_parser)
+    versions_export_parser.add_argument(
+        "--output",
+        default=None,
+        help="Path to save the downloaded zip to. Default: the server's own suggested filename."
+    )
+    versions_export_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit a machine-readable JSON result ({\"status\", "
+            "\"filename\", \"path\", \"size_bytes\"}) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 

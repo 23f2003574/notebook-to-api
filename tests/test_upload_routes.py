@@ -4737,6 +4737,70 @@ def test_get_notebook_version_rejects_an_absolute_version_id():
     assert "root:" not in resp.text
 
 
+def test_export_notebook_versions_bundles_current_content_and_every_version():
+
+    filename = "versions_export_bundle.ipynb"
+    original_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    middle_content = _notebook_bytes("def g() -> int:\n    return 2\n")
+    current_content = _notebook_bytes("def h() -> int:\n    return 3\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(original_content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(middle_content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(current_content), "application/json")},
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(versions) == 2
+    version_ids = {v["version_id"] for v in versions}
+
+    export_resp = client.get(f"/api/notebooks/{filename}/versions/export")
+
+    assert export_resp.status_code == 200
+    assert export_resp.headers["content-type"] == "application/zip"
+
+    with zipfile.ZipFile(io.BytesIO(export_resp.content)) as archive:
+
+        names = set(archive.namelist())
+        assert filename in names
+        assert names - {filename} == {f"versions/{vid}" for vid in version_ids}
+
+        assert archive.read(filename) == current_content
+
+        version_contents = {archive.read(f"versions/{vid}") for vid in version_ids}
+        assert version_contents == {original_content, middle_content}
+
+
+def test_export_notebook_versions_succeeds_with_no_version_history():
+
+    _upload_sample_notebook("versions_export_no_history.ipynb")
+
+    export_resp = client.get(
+        "/api/notebooks/versions_export_no_history.ipynb/versions/export"
+    )
+
+    assert export_resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(export_resp.content)) as archive:
+        assert archive.namelist() == ["versions_export_no_history.ipynb"]
+
+
+def test_export_notebook_versions_returns_404_for_missing_notebook():
+
+    resp = client.get(
+        "/api/notebooks/versions_export_does_not_exist.ipynb/versions/export"
+    )
+
+    assert resp.status_code == 404
+
+
 def test_diff_notebook_version_against_current_live_content():
 
     filename = "versions_diff_against_live.ipynb"
