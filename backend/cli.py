@@ -342,7 +342,7 @@ _CORE_COMMANDS = frozenset({
     "list", "info", "info-batch",
     "search-functions", "search-content", "find-duplicates", "storage",
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy",
-    "copy-batch", "tags",
+    "copy-batch", "tags", "prune-versions",
     "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
     "status", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
@@ -1776,6 +1776,71 @@ def _dispatch_core_command(args):
                 f"\n{data.get('succeeded_count', 0)} succeeded, "
                 f"{data.get('failed_count', 0)} failed"
             )
+    elif args.command == "prune-versions":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        if not args.yes:
+            # DELETE /api/notebooks/versions (routes/upload.py) has no
+            # confirmation step of its own, is irreversible, and affects
+            # every notebook's own version history at once -- the same
+            # reasoning `delete-batch`'s own confirmation already applies.
+            answer = input(
+                f"Permanently discard every version older than "
+                f"{args.older_than_days} day(s) across every notebook on "
+                f"{dashboard_url}? [y/N] "
+            )
+            if answer.strip().lower() not in ("y", "yes"):
+                print("Aborted.")
+                return
+
+        try:
+            response = httpx.delete(
+                f"{dashboard_url}/api/notebooks/versions",
+                params={"older_than_days": args.older_than_days},
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            results = data.get("results", [])
+
+            if not results:
+                print(
+                    f"No versions on {dashboard_url} older than "
+                    f"{args.older_than_days} day(s)."
+                )
+            else:
+
+                for result in results:
+                    print(
+                        f"{result['filename']}: discarded "
+                        f"{result['deleted_count']} version(s)"
+                    )
+
+                print(
+                    f"\n{data.get('total_deleted_count', 0)} version(s) "
+                    f"discarded across "
+                    f"{data.get('notebook_count_affected', len(results))} "
+                    f"notebook(s) on {dashboard_url}"
+                )
+
     elif args.command == "rename":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -4077,6 +4142,53 @@ def main():
             "\"results\": [{\"filename\", \"status\", ...}, ...], "
             "\"succeeded_count\", \"failed_count\"}) instead of a "
             "human-readable summary, for scripting/automation."
+        )
+    )
+
+    # prune-versions command (discard every notebook's own snapshotted
+    # versions older than a given age, across the whole catalog at once,
+    # via DELETE /api/notebooks/versions -- distinct from `versions
+    # clear`, which discards a single notebook's entire version history
+    # regardless of age)
+    prune_versions_parser = subparsers.add_parser(
+        "prune-versions",
+        help=(
+            "Discard every notebook's own snapshotted versions older "
+            "than a given age, across every notebook already uploaded "
+            "to a running dashboard instance, via DELETE "
+            "/api/notebooks/versions."
+        )
+    )
+    prune_versions_parser.add_argument(
+        "--older-than-days",
+        type=int,
+        required=True,
+        dest="older_than_days",
+        help="Discard any version snapshot saved more than this many days ago."
+    )
+    _add_dashboard_url_and_timeout_arguments(prune_versions_parser)
+    prune_versions_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Confirm the prune without an interactive prompt. Without "
+            "this, `prune-versions` asks for a y/N confirmation on the "
+            "terminal before sending the request -- DELETE "
+            "/api/notebooks/versions itself has no confirmation step of "
+            "its own, is irreversible, and affects every notebook's own "
+            "version history at once."
+        )
+    )
+    prune_versions_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"older_than_days\", \"results\": [{\"filename\", "
+            "\"deleted_version_ids\", \"deleted_count\"}, ...], "
+            "\"notebook_count_affected\", \"total_deleted_count\"}) "
+            "instead of a human-readable summary, for scripting/automation."
         )
     )
 

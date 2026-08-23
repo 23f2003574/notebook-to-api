@@ -5350,6 +5350,194 @@ def test_notebook_versions_are_pruned_beyond_the_configured_maximum():
     assert len(versions) == MAX_NOTEBOOK_VERSIONS
 
 
+def _backdate_notebook_version(filename, version_id, days_ago):
+    version_path = Path(UPLOAD_DIR) / ".versions" / filename / version_id
+    old_time = version_path.stat().st_mtime - (days_ago * 86400)
+    os.utime(version_path, (old_time, old_time))
+
+
+def test_prune_all_notebook_versions_deletes_only_versions_older_than_cutoff():
+
+    filename = "prune_versions_a.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(versions) == 2
+
+    old_version_id = versions[1]["version_id"]
+    recent_version_id = versions[0]["version_id"]
+    _backdate_notebook_version(filename, old_version_id, days_ago=40)
+
+    resp = client.delete("/api/notebooks/versions", params={"older_than_days": 30})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["older_than_days"] == 30
+    assert body["notebook_count_affected"] == 1
+    assert body["total_deleted_count"] == 1
+    assert body["results"] == [{
+        "filename": filename,
+        "deleted_version_ids": [old_version_id],
+        "deleted_count": 1,
+    }]
+
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert [v["version_id"] for v in remaining] == [recent_version_id]
+
+
+def test_prune_all_notebook_versions_spans_multiple_notebooks():
+
+    for filename in ("prune_versions_multi_a.ipynb", "prune_versions_multi_b.ipynb"):
+
+        client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                    "application/json",
+                )
+            },
+        )
+        client.post(
+            "/api/upload?overwrite=true",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                    "application/json",
+                )
+            },
+        )
+        version_id = client.get(
+            f"/api/notebooks/{filename}/versions"
+        ).json()["versions"][0]["version_id"]
+        _backdate_notebook_version(filename, version_id, days_ago=40)
+
+    resp = client.delete("/api/notebooks/versions", params={"older_than_days": 30})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["notebook_count_affected"] == 2
+    assert body["total_deleted_count"] == 2
+
+    for filename in ("prune_versions_multi_a.ipynb", "prune_versions_multi_b.ipynb"):
+        assert client.get(f"/api/notebooks/{filename}/versions").json()["versions"] == []
+
+
+def test_prune_all_notebook_versions_is_a_no_op_when_nothing_is_old_enough():
+
+    filename = "prune_versions_recent.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.delete("/api/notebooks/versions", params={"older_than_days": 30})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["results"] == []
+    assert body["notebook_count_affected"] == 0
+    assert body["total_deleted_count"] == 0
+
+    assert len(client.get(f"/api/notebooks/{filename}/versions").json()["versions"]) == 1
+
+
+def test_prune_all_notebook_versions_leaves_current_content_and_tags_untouched():
+
+    filename = "prune_versions_untouched.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.put(f"/api/notebooks/{filename}/tags", json={"tags": ["production"]})
+    current_content = _notebook_bytes("def g() -> int:\n    return 2\n")
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(current_content), "application/json")},
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+    _backdate_notebook_version(filename, version_id, days_ago=40)
+
+    resp = client.delete("/api/notebooks/versions", params={"older_than_days": 30})
+    assert resp.status_code == 200
+    assert resp.json()["total_deleted_count"] == 1
+
+    assert client.get(f"/api/notebooks/{filename}").content == current_content
+    assert client.get(f"/api/notebooks/{filename}/tags").json()["tags"] == ["production"]
+
+
+def test_prune_all_notebook_versions_requires_a_positive_older_than_days():
+
+    resp = client.delete("/api/notebooks/versions")
+    assert resp.status_code == 400
+
+    resp = client.delete("/api/notebooks/versions", params={"older_than_days": 0})
+    assert resp.status_code == 400
+
+    resp = client.delete("/api/notebooks/versions", params={"older_than_days": -5})
+    assert resp.status_code == 400
+
+
 def test_delete_notebook_removes_its_version_history():
 
     filename = "versions_delete_single.ipynb"

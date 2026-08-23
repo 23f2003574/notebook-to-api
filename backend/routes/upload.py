@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List
 import asyncio
 import io
@@ -2364,6 +2364,110 @@ def delete_all_notebooks(confirm: bool = False):
         "deleted_count": len(deleted_filenames),
         "deleted_filenames": deleted_filenames,
         "currently_compiled_notebook_deleted": currently_compiled_notebook_deleted,
+    }
+
+
+@router.delete("/notebooks/versions")
+def prune_all_notebook_versions(older_than_days: int = None):
+    """Permanently discard every notebook's snapshotted versions older
+    than "older_than_days" days, across the whole catalog at once,
+    without touching any notebook's own current content, tags, or
+    currently-compiled status.
+
+    DELETE /api/notebooks/{filename}/versions already clears one
+    notebook's *entire* version history in one call, and
+    _prune_notebook_versions (above) already trims the oldest snapshots
+    automatically once a single notebook accumulates more than
+    MAX_NOTEBOOK_VERSIONS -- but neither helps an operator who wants to
+    reclaim space from *old* snapshots specifically, across *every*
+    notebook, while still keeping each notebook's own recent history
+    intact: that meant GET .../versions per notebook to find every
+    version_id old enough to discard, then one DELETE
+    .../versions/{version_id} call per stale snapshot -- mirroring
+    exactly the gap DELETE /api/notebooks/delete-batch already closed for
+    deleting several *notebooks* at once, just applied one level down, to
+    every notebook's own version history, and age-based rather than
+    all-or-nothing the way DELETE /api/notebooks/{filename}/versions is.
+
+    A version's own age is its "saved_at" -- the exact same on-disk
+    mtime GET /api/notebooks/{filename}/versions already reports for each
+    entry (see list_notebook_versions above) -- so a version reported
+    there as, say, "saved 40 days ago" is exactly what "older_than_days":
+    30 would catch here; nothing about what counts as a version's age is
+    redefined for this endpoint.
+
+    Held per-notebook under the same _version_lock_for
+    restore_notebook_version's own snapshot-then-copy sequence already
+    uses, for the identical reason: without it, this could delete a
+    version file a concurrent restore is mid-snapshot into, or race
+    another concurrent prune of the same notebook.
+
+    A notebook with no version history at all, or none old enough to
+    prune, simply contributes nothing to "results" -- an empty
+    "results" list is still a valid (if uneventful) outcome of a bulk
+    operation like this, not an error, the same "nothing to act on is
+    still a valid outcome" reasoning DELETE /api/tags/{tag}'s own empty
+    "affected_notebooks" already follows.
+    """
+
+    if older_than_days is None or older_than_days <= 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="older_than_days is required and must be a positive integer"
+        )
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+
+    upload_root = Path(UPLOAD_DIR)
+
+    results = []
+    total_deleted_count = 0
+
+    for entry in sorted(upload_root.iterdir()):
+
+        if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        versions_dir = _notebook_versions_dir(entry.name)
+
+        if not versions_dir.is_dir():
+            continue
+
+        with _version_lock_for(entry.name):
+
+            deleted_version_ids = []
+
+            for version_file in versions_dir.iterdir():
+
+                if not version_file.is_file():
+                    continue
+
+                saved_at = datetime.fromtimestamp(
+                    version_file.stat().st_mtime, tz=timezone.utc
+                )
+
+                if saved_at < cutoff:
+                    version_file.unlink()
+                    deleted_version_ids.append(version_file.name)
+
+        if deleted_version_ids:
+
+            deleted_version_ids.sort()
+
+            results.append({
+                "filename": entry.name,
+                "deleted_version_ids": deleted_version_ids,
+                "deleted_count": len(deleted_version_ids),
+            })
+            total_deleted_count += len(deleted_version_ids)
+
+    return {
+        "status": "success",
+        "older_than_days": older_than_days,
+        "results": results,
+        "notebook_count_affected": len(results),
+        "total_deleted_count": total_deleted_count,
     }
 
 

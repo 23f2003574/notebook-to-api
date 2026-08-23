@@ -3898,6 +3898,152 @@ def test_delete_batch_command_reports_a_clean_error_when_the_dashboard_is_unreac
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_prune_versions_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "prune-versions" in proc.stdout
+
+
+def test_prune_versions_command_reports_success_with_yes_flag(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "older_than_days": 30,
+            "results": [
+                {
+                    "filename": "a.ipynb",
+                    "deleted_version_ids": ["v1.ipynb"],
+                    "deleted_count": 1,
+                },
+            ],
+            "notebook_count_affected": 1,
+            "total_deleted_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "prune-versions", "--older-than-days", "30",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "a.ipynb: discarded 1 version(s)" in proc.stdout
+    assert "1 version(s) discarded across 1 notebook(s)" in proc.stdout
+    assert handler.requests == ["/api/notebooks/versions?older_than_days=30"]
+
+
+def test_prune_versions_command_reports_nothing_to_prune(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "older_than_days": 30,
+            "results": [],
+            "notebook_count_affected": 0,
+            "total_deleted_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "prune-versions", "--older-than-days", "30",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No versions" in proc.stdout
+
+
+def test_prune_versions_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "older_than_days": 30,
+        "results": [],
+        "notebook_count_affected": 0,
+        "total_deleted_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "prune-versions", "--older-than-days", "30",
+            "--dashboard-url", dashboard_url, "--yes", "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_prune_versions_command_aborts_without_yes_when_declined(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = []
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli",
+            "prune-versions", "--older-than-days", "30",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=str(workdir),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        capture_output=True,
+        text=True,
+        input="n\n",
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Aborted." in proc.stdout
+    assert handler.requests == []
+
+
+def test_prune_versions_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "prune-versions", "--older-than-days", "30",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5", "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_rename_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())
