@@ -7373,6 +7373,163 @@ def test_versions_delete_command_reports_a_clean_error_for_a_missing_version(
     _assert_clean_cli_error(proc, "Notebook version not found")
 
 
+def test_versions_delete_batch_command_is_registered():
+
+    proc = _run_cli(["versions", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "delete-batch" in proc.stdout
+
+
+def test_versions_delete_batch_command_reports_success_with_yes_flag(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "results": [
+                {"version_id": "v1.ipynb", "status": "success"},
+                {"version_id": "v2.ipynb", "status": "success"},
+            ],
+            "succeeded_count": 2,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "delete-batch", "nb.ipynb", "v1.ipynb", "v2.ipynb",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Deleted version 'v1.ipynb'" in proc.stdout
+    assert "Deleted version 'v2.ipynb'" in proc.stdout
+    assert "2 succeeded, 0 failed" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions/delete-batch"]
+    assert json.loads(handler.bodies[0]) == {"version_ids": ["v1.ipynb", "v2.ipynb"]}
+
+
+def test_versions_delete_batch_command_reports_a_partial_failure(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "results": [
+                {"version_id": "v1.ipynb", "status": "success"},
+                {
+                    "version_id": "missing.ipynb", "status": "error",
+                    "detail": "Notebook version not found",
+                },
+            ],
+            "succeeded_count": 1,
+            "failed_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "delete-batch", "nb.ipynb", "v1.ipynb", "missing.ipynb",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Deleted version 'v1.ipynb'" in proc.stdout
+    assert "Failed to delete version 'missing.ipynb': Notebook version not found" in proc.stdout
+    assert "1 succeeded, 1 failed" in proc.stdout
+
+
+def test_versions_delete_batch_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "filename": "nb.ipynb",
+        "results": [{"version_id": "v1.ipynb", "status": "success"}],
+        "succeeded_count": 1,
+        "failed_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "delete-batch", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url, "--yes", "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_versions_delete_batch_command_aborts_without_yes_when_declined(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = []
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli",
+            "versions", "delete-batch", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=str(workdir),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        input="n\n",
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Aborted." in proc.stdout
+    assert handler.requests == []
+
+
+def test_versions_delete_batch_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "delete-batch", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5", "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_versions_clear_command_reports_success_with_yes_flag(
     tmp_path, fake_dashboard
 ):

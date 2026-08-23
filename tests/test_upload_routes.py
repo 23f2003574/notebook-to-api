@@ -5484,6 +5484,138 @@ def test_delete_notebook_version_removes_only_that_snapshot():
     ).status_code == 404
 
 
+def test_delete_notebook_versions_batch_removes_only_the_named_versions():
+
+    filename = "versions_delete_batch.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    for i in range(3):
+        client.post(
+            "/api/upload?overwrite=true",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes(f"def g{i}() -> int:\n    return {i}\n")),
+                    "application/json",
+                )
+            },
+        )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(versions) == 3
+    to_delete = [versions[0]["version_id"], versions[1]["version_id"]]
+    to_keep = versions[2]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/delete-batch",
+        json={"version_ids": to_delete},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["filename"] == filename
+    assert body["succeeded_count"] == 2
+    assert body["failed_count"] == 0
+
+    results_by_id = {r["version_id"]: r for r in body["results"]}
+    assert results_by_id[to_delete[0]]["status"] == "success"
+    assert results_by_id[to_delete[1]]["status"] == "success"
+
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert [v["version_id"] for v in remaining] == [to_keep]
+
+
+def test_delete_notebook_versions_batch_reports_a_missing_version_id_without_aborting_the_rest():
+
+    filename = "versions_delete_batch_partial.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/delete-batch",
+        json={"version_ids": [version_id, "does_not_exist.ipynb"]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_id = {r["version_id"]: r for r in body["results"]}
+    assert results_by_id[version_id]["status"] == "success"
+    assert results_by_id["does_not_exist.ipynb"]["status"] == "error"
+    assert "not found" in results_by_id["does_not_exist.ipynb"]["detail"]
+
+    assert client.get(f"/api/notebooks/{filename}/versions").json()["versions"] == []
+
+
+def test_delete_notebook_versions_batch_returns_404_for_missing_notebook():
+
+    resp = client.post(
+        "/api/notebooks/versions_delete_batch_missing_notebook.ipynb/versions/delete-batch",
+        json={"version_ids": ["whatever.ipynb"]},
+    )
+
+    assert resp.status_code == 404
+
+
+def test_delete_notebook_versions_batch_rejects_a_non_list_version_ids_value():
+
+    _upload_sample_notebook("versions_delete_batch_bad_value.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/versions_delete_batch_bad_value.ipynb/versions/delete-batch",
+        json={"version_ids": "not-a-list"},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_delete_notebook_versions_batch_rejects_an_empty_version_ids_list():
+
+    _upload_sample_notebook("versions_delete_batch_empty.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/versions_delete_batch_empty.ipynb/versions/delete-batch",
+        json={"version_ids": []},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_delete_notebook_version_returns_404_for_missing_notebook():
 
     resp = client.delete(

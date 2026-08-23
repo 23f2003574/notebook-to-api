@@ -3745,6 +3745,123 @@ def clear_notebook_versions(filename: str):
     }
 
 
+@router.post("/notebooks/{filename}/versions/delete-batch")
+def delete_notebook_versions_batch(filename: str, data: dict):
+    """Permanently discard a caller-chosen set of a notebook's own
+    snapshotted versions in one call.
+
+    DELETE /api/notebooks/{filename}/versions/{version_id} already
+    discards one snapshot at a time, and DELETE
+    /api/notebooks/{filename}/versions already discards a notebook's
+    *entire* version history at once -- but there was nothing in
+    between: discarding a handful of specific, known-bad snapshots (e.g.
+    a run of versions a `versions list` review turned up as accidentally
+    containing something sensitive) while keeping the rest of that same
+    notebook's history intact meant one DELETE
+    .../versions/{version_id} call per snapshot, or reaching for the
+    "clear everything" endpoint and losing every *other* version along
+    with them. delete_notebook_version's own docstring already names
+    this exact gap ("an operator wanting that already has it, via
+    `versions list` piped into one call per version_id") -- this closes
+    it, the identical "several specific ones" middle ground POST
+    /api/notebooks/delete-batch already provides one level up, for
+    notebooks themselves.
+
+    Deliberately takes an explicit "version_ids" list rather than a
+    filter, the same reasoning POST /api/notebooks/delete-batch's own
+    docstring already gives for its identical "filenames" field: the
+    caller already knows exactly which versions to remove, typically
+    from a preceding GET .../versions of its own.
+
+    Reuses the exact per-entry "one bad entry doesn't abort the batch"
+    contract POST /api/notebooks/delete-batch and POST
+    /api/tags/{tag}/apply already established: each version_id is
+    processed independently, and "results" reports one {"version_id",
+    "status", ...} entry per version_id -- "success" or "error" (with the
+    HTTPException detail that version_id's own single-version delete
+    would have raised on its own, e.g. a 404 for an unknown version_id).
+    The response is always 200 -- the batch request itself was handled,
+    even if every version_id in it failed -- with
+    "succeeded_count"/"failed_count" summarizing "results" the same way
+    those two endpoints' own identical fields already do.
+
+    Held under the same _version_lock_for restore_notebook_version's own
+    snapshot-then-copy sequence already uses, for the whole batch (not
+    reacquired per version_id) -- the identical reason
+    delete_notebook_version's own single-entry delete already holds it,
+    just for the batch's own full duration instead of one unlink.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    version_ids = data.get("version_ids")
+
+    if (
+        not isinstance(version_ids, list)
+        or not version_ids
+        or not all(isinstance(v, str) for v in version_ids)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="version_ids must be a non-empty list of strings"
+        )
+
+    versions_dir = _notebook_versions_dir(file_path.name)
+
+    results = []
+    succeeded_count = 0
+    failed_count = 0
+
+    with _version_lock_for(file_path.name):
+
+        for version_id in version_ids:
+
+            try:
+
+                version_path = _resolve_path_within(
+                    str(versions_dir), version_id, "notebook version"
+                )
+
+                if not version_path.is_file():
+
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Notebook version not found"
+                    )
+
+                version_path.unlink()
+
+                results.append({
+                    "version_id": version_id,
+                    "status": "success",
+                })
+                succeeded_count += 1
+
+            except HTTPException as exc:
+
+                results.append({
+                    "version_id": version_id,
+                    "status": "error",
+                    "detail": exc.detail,
+                })
+                failed_count += 1
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "results": results,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
+    }
+
+
 @router.get("/notebooks/{filename}/versions/{version_id}")
 def get_notebook_version(filename: str, version_id: str):
     """Download the raw content of one of a notebook's previously

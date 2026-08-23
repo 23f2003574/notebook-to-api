@@ -2962,6 +2962,60 @@ def _dispatch_core_command(args):
                     f"'{data.get('deleted_version_id', args.version_id)}' of "
                     f"'{data.get('filename', args.filename)}' on {dashboard_url}"
                 )
+
+        elif args.versions_command == "delete-batch":
+
+            if not args.yes:
+                # POST /api/notebooks/{filename}/versions/delete-batch
+                # (routes/upload.py) has no confirmation step of its own
+                # and is irreversible -- the same reasoning `versions
+                # delete` above already applies.
+                version_ids_display = ", ".join(args.version_id)
+                answer = input(
+                    f"Permanently delete version(s) {version_ids_display} "
+                    f"of '{args.filename}' from {dashboard_url}? [y/N] "
+                )
+                if answer.strip().lower() not in ("y", "yes"):
+                    print("Aborted.")
+                    return
+
+            try:
+                response = httpx.post(
+                    f"{dashboard_url}/api/notebooks/{args.filename}/versions/delete-batch",
+                    json={"version_ids": args.version_id},
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                for result in data.get("results", []):
+
+                    if result["status"] == "success":
+                        print(f"Deleted version '{result['version_id']}'")
+                    else:
+                        print(
+                            f"Failed to delete version '{result['version_id']}': "
+                            f"{result['detail']}"
+                        )
+
+                print(
+                    f"\n{data.get('succeeded_count', 0)} succeeded, "
+                    f"{data.get('failed_count', 0)} failed"
+                )
+
         else:  # args.versions_command == "clear"
 
             if not args.yes:
@@ -5127,6 +5181,51 @@ def main():
         help=(
             "Emit the dashboard's own JSON response "
             "({\"status\", \"filename\", \"deleted_version_id\"}) instead "
+            "of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    # versions delete-batch (discard a caller-chosen set of a notebook's
+    # own snapshotted versions at once, via POST
+    # /api/notebooks/{filename}/versions/delete-batch -- the middle
+    # ground between `versions delete` above, which only ever discards
+    # one named version_id, and `versions clear` below, which discards
+    # every one)
+    versions_delete_batch_parser = versions_subparsers.add_parser(
+        "delete-batch",
+        help=(
+            "Permanently discard several of a notebook's own snapshotted "
+            "versions at once, via POST "
+            "/api/notebooks/{filename}/versions/delete-batch."
+        )
+    )
+    versions_delete_batch_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    versions_delete_batch_parser.add_argument(
+        "version_id", nargs="+",
+        help="Version id(s) to permanently discard, as reported by `versions list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(versions_delete_batch_parser)
+    versions_delete_batch_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Confirm the deletion without an interactive prompt. Without "
+            "this, `versions delete-batch` asks for a y/N confirmation on "
+            "the terminal before sending the request -- POST "
+            "/api/notebooks/{filename}/versions/delete-batch itself has "
+            "no confirmation step of its own, and is irreversible."
+        )
+    )
+    versions_delete_batch_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"filename\", \"results\": [{\"version_id\", \"status\", "
+            "...}, ...], \"succeeded_count\", \"failed_count\"}) instead "
             "of a human-readable summary, for scripting/automation."
         )
     )
