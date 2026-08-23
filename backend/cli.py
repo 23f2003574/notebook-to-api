@@ -346,7 +346,7 @@ _CORE_COMMANDS = frozenset({
     "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
     "status", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
-    "remote-curl",
+    "remote-curl", "app-preview",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -2309,6 +2309,47 @@ def _dispatch_core_command(args):
 
             for dep in requirements:
                 print(f"  {dep}")
+    elif args.command == "app-preview":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        only = _parse_comma_separated_names(args.only)
+        exclude = _parse_comma_separated_names(args.exclude)
+
+        try:
+            response = httpx.post(
+                f"{dashboard_url}/api/app-preview",
+                json={
+                    "notebook_path": args.filename,
+                    "only": only,
+                    "exclude": exclude,
+                },
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            print(
+                f"app.py preview for '{args.filename}' on {dashboard_url} "
+                f"(package '{data.get('package_name')}'):\n"
+            )
+            print(data.get("app_code", ""))
+
     elif args.command == "curl-preview":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -4364,6 +4405,35 @@ def main():
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"notebook\", \"requirements\"}) instead of a "
             "human-readable listing, for scripting/automation."
+        )
+    )
+
+    # app-preview command (preview the generated app.py source for a
+    # notebook already uploaded to a running dashboard, via its own POST
+    # /api/app-preview -- unlike `remote-compile`, this never writes
+    # anything or touches GENERATED_DIR/whatever it currently serves)
+    app_preview_parser = subparsers.add_parser(
+        "app-preview",
+        help=(
+            "Preview the exact app.py source a compile of an "
+            "already-uploaded notebook would produce, via its POST "
+            "/api/app-preview -- without actually compiling it."
+        )
+    )
+    app_preview_parser.add_argument(
+        "filename",
+        help="Filename of the notebook already uploaded to the dashboard, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(app_preview_parser)
+    _add_function_selection_arguments(app_preview_parser)
+    app_preview_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"notebook\", \"package_name\", \"app_code\"}) instead of a "
+            "human-readable preview, for scripting/automation."
         )
     )
 

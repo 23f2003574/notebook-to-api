@@ -6100,6 +6100,206 @@ def test_requirements_preview_requires_a_notebook_path():
     assert resp.status_code == 400
 
 
+def test_app_preview_matches_what_an_actual_compile_writes():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "app_preview_match.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    preview_resp = client.post(
+        "/api/app-preview",
+        json={"notebook_path": "app_preview_match.ipynb"},
+    )
+    assert preview_resp.status_code == 200
+    preview_body = preview_resp.json()
+    assert preview_body["status"] == "success"
+    assert preview_body["notebook"] == "app_preview_match.ipynb"
+    assert preview_body["package_name"] == "generated"
+    assert "def add(" in preview_body["app_code"]
+
+    compile_resp = client.post(
+        "/api/compile",
+        json={"notebook_path": "app_preview_match.ipynb"},
+    )
+    assert compile_resp.status_code == 200
+
+    actual_app_code = client.get("/api/generated/app.py").json()["content"]
+
+    assert preview_body["app_code"] == actual_app_code
+
+
+def test_app_preview_respects_only_and_exclude():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "app_preview_only.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post(
+        "/api/app-preview",
+        json={"notebook_path": "app_preview_only.ipynb", "only": ["add"]},
+    )
+
+    assert resp.status_code == 200
+    app_code = resp.json()["app_code"]
+    assert "def add(" in app_code
+    assert "def subtract(" not in app_code
+
+
+def test_app_preview_does_not_touch_generated_dir(monkeypatch, tmp_path):
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "app_preview_no_side_effects.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    generated_dir = tmp_path / "app_preview_generated"
+    monkeypatch.setattr("backend.routes.upload.GENERATED_DIR", str(generated_dir))
+
+    resp = client.post(
+        "/api/app-preview",
+        json={"notebook_path": "app_preview_no_side_effects.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    assert not generated_dir.exists()
+
+
+def test_app_preview_returns_404_for_a_missing_notebook():
+
+    resp = client.post(
+        "/api/app-preview", json={"notebook_path": "does_not_exist.ipynb"}
+    )
+
+    assert resp.status_code == 404
+
+
+def test_app_preview_returns_400_for_a_malformed_notebook_file():
+
+    filename = "app_preview_malformed.ipynb"
+    file_path = os.path.join(UPLOAD_DIR, filename)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("not valid json at all")
+
+    resp = client.post("/api/app-preview", json={"notebook_path": filename})
+
+    assert resp.status_code == 400
+
+
+def test_app_preview_requires_a_notebook_path():
+
+    resp = client.post("/api/app-preview", json={})
+
+    assert resp.status_code == 400
+
+
+def test_app_preview_rejects_both_only_and_exclude():
+
+    resp = client.post(
+        "/api/app-preview",
+        json={
+            "notebook_path": "anything.ipynb",
+            "only": ["a"],
+            "exclude": ["b"],
+        },
+    )
+
+    assert resp.status_code == 400
+
+
+def test_app_preview_returns_400_for_an_unknown_only_name():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "app_preview_unknown_only.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post(
+        "/api/app-preview",
+        json={
+            "notebook_path": "app_preview_unknown_only.ipynb",
+            "only": ["does_not_exist_fn"],
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "does_not_exist_fn" in resp.json()["detail"]
+
+
+def test_app_preview_returns_400_for_a_reserved_function_name():
+
+    content = _notebook_bytes(
+        "def health_check() -> dict:\n    return {}\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "app_preview_reserved_name.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post(
+        "/api/app-preview",
+        json={"notebook_path": "app_preview_reserved_name.ipynb"},
+    )
+
+    assert resp.status_code == 400
+    assert "health_check" in resp.json()["detail"]
+
+
 def test_curl_preview_returns_one_command_per_function():
 
     content = _notebook_bytes(

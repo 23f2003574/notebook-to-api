@@ -37,6 +37,7 @@ from backend.compiler import (
 )
 from backend.generator.api_generator import (
     ReservedFunctionNameError,
+    generate_fastapi_code,
 )
 from backend.inspector import (
     EXCLUDED_GENERATED_DIR_NAMES,
@@ -48,6 +49,8 @@ from backend.inspector import (
     list_generated_files,
 )
 from backend.parser.ast_parser import (
+    deduplicate_functions_by_name,
+    extract_functions_from_code,
     is_parseable_python,
 )
 from backend.parser.notebook_parser import (
@@ -3900,6 +3903,145 @@ def requirements_preview_endpoint(data: dict):
         "status": "success",
         "notebook": notebook_path,
         "requirements": requirements,
+    }
+
+
+@router.post("/app-preview")
+def app_preview_endpoint(data: dict):
+    """The exact FastAPI application source code POST /api/compile would
+    write to app.py for an already-uploaded notebook -- without actually
+    compiling it, or touching GENERATED_DIR (or whatever it currently
+    backs) at all.
+
+    POST /api/requirements-preview and POST /api/curl-preview already let
+    a caller preview what compiling a notebook would produce without a
+    real compile -- but neither shows the one thing a caller most likely
+    wants to review before actually committing to it: the generated
+    Python source itself. Before this, seeing that meant POST
+    /api/compile-ing the notebook for real -- replacing whatever
+    GENERATED_DIR currently serves, live, for every other caller of this
+    dashboard -- and only then reading it back via
+    GET /api/generated/app.py, just to answer "what would this actually
+    generate."
+
+    Reuses the exact same function-building steps compile_notebook_to_api
+    itself performs, in the same order (extract_code_cells ->
+    is_parseable_python filter -> extract_functions_from_code ->
+    deduplicate_functions_by_name -> _filter_functions_by_name via
+    "only"/"exclude" -> generate_fastapi_code), stopping right before its
+    write phase -- so "app_code" here can never drift from what an actual
+    compile of the same notebook (with the same only/exclude) would write
+    to app.py. generate_fastapi_code (backend/generator/api_generator.py)
+    is a pure function -- it returns a string and writes nothing to disk
+    on its own -- so nothing here ever touches GENERATED_DIR, needs
+    COMPILE_LOCK, or has any observable effect on whatever this dashboard
+    currently has compiled.
+
+    "package_name" always reflects GENERATED_DIR's own basename (see
+    package_name_for_output_dir, backend/compiler.py) -- the same package
+    name an actual POST /api/compile of this notebook would use, since
+    every compile through this dashboard always targets that one fixed
+    directory.
+
+    "only"/"exclude" and their validation mirror POST /api/compile's own
+    exactly (see its docstring) -- an invalid value gets the identical 400
+    here that it would there.
+    """
+
+    notebook_path = data.get("notebook_path")
+
+    if not notebook_path:
+
+        raise HTTPException(
+            status_code=400,
+            detail="notebook_path is required"
+        )
+
+    only = data.get("only")
+    exclude = data.get("exclude")
+
+    for field_name, field_value in (("only", only), ("exclude", exclude)):
+
+        if field_value is not None and (
+            not isinstance(field_value, list)
+            or not all(isinstance(item, str) for item in field_value)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name} must be a list of strings"
+            )
+
+    if only and exclude:
+
+        raise HTTPException(
+            status_code=400,
+            detail="only and exclude can't both be given -- choose one."
+        )
+
+    full_path = resolve_upload_path(notebook_path)
+
+    if not full_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    try:
+
+        notebook = load_notebook(str(full_path))
+
+        code_cells = [
+            cell for cell in extract_code_cells(notebook)
+            if is_parseable_python(cell)
+        ]
+
+        functions = []
+
+        for cell in code_cells:
+            functions.extend(extract_functions_from_code(cell))
+
+        functions = deduplicate_functions_by_name(functions)
+
+        functions = _filter_functions_by_name(functions, only, exclude)
+
+        package_name = package_name_for_output_dir(GENERATED_DIR)
+
+        app_code = generate_fastapi_code(functions, package_name)
+
+    except ReservedFunctionNameError as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+
+    except MALFORMED_NOTEBOOK_ERRORS as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+        )
+
+    except ValueError as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Preview error: {str(e)}"
+        )
+
+    return {
+        "status": "success",
+        "notebook": notebook_path,
+        "package_name": package_name,
+        "app_code": app_code,
     }
 
 
