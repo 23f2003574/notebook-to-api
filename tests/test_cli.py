@@ -3084,6 +3084,188 @@ def test_find_duplicates_command_reports_a_clean_error_when_the_dashboard_is_unr
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_resolve_duplicates_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "resolve-duplicates" in proc.stdout
+
+
+def test_resolve_duplicates_command_reports_success_with_yes_flag(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {
+                    "sha256": "abc123",
+                    "status": "success",
+                    "kept_filename": "a.ipynb",
+                    "deleted_filenames": [
+                        {"filename": "b.ipynb", "was_currently_compiled": False},
+                    ],
+                },
+            ],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["resolve-duplicates", "--dashboard-url", dashboard_url, "--yes"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Kept a.ipynb, deleted b.ipynb" in proc.stdout
+    assert "1 group(s) resolved, 0 failed" in proc.stdout
+    assert handler.requests == ["/api/notebooks/duplicates/resolve"]
+    assert json.loads(handler.bodies[0]) == {"keep": {}}
+
+
+def test_resolve_duplicates_command_sends_keep_overrides(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "results": [], "succeeded_count": 0, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "resolve-duplicates", "--yes",
+            "--keep", "abc123=b.ipynb",
+            "--keep", "def456=c.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "keep": {"abc123": "b.ipynb", "def456": "c.ipynb"},
+    }
+
+
+def test_resolve_duplicates_command_reports_a_partial_failure(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {
+                    "sha256": "abc123", "status": "error",
+                    "detail": "'x.ipynb' is not a member of duplicate group abc123",
+                },
+            ],
+            "succeeded_count": 0,
+            "failed_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["resolve-duplicates", "--dashboard-url", dashboard_url, "--yes"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Failed to resolve group abc123" in proc.stdout
+    assert "0 group(s) resolved, 1 failed" in proc.stdout
+
+
+def test_resolve_duplicates_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "results": [], "succeeded_count": 0, "failed_count": 0}
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["resolve-duplicates", "--dashboard-url", dashboard_url, "--yes", "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_resolve_duplicates_command_aborts_without_yes_when_declined(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = []
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli",
+            "resolve-duplicates", "--dashboard-url", dashboard_url,
+        ],
+        cwd=str(workdir),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        input="n\n",
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Aborted." in proc.stdout
+    assert handler.requests == []
+
+
+def test_resolve_duplicates_command_rejects_a_malformed_keep_entry(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "resolve-duplicates", "--yes", "--keep", "no-equals-sign-here",
+            "--dashboard-url", "http://127.0.0.1:1",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Invalid --keep")
+
+
+def test_resolve_duplicates_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "resolve-duplicates",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5", "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_storage_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

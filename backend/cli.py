@@ -340,7 +340,7 @@ _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
     "export-curl", "serve", "watch", "deploy", "diff", "upload", "import-notebooks",
     "list", "info", "info-batch",
-    "search-functions", "search-content", "find-duplicates", "storage",
+    "search-functions", "search-content", "find-duplicates", "resolve-duplicates", "storage",
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy",
     "copy-batch", "tags", "prune-versions", "description", "deploy-history",
     "clear-deploy-history", "compile-history", "clear-compile-history",
@@ -1470,6 +1470,88 @@ def _dispatch_core_command(args):
                     f"duplicate group(s), "
                     f"{data.get('duplicate_notebook_count', 0)} notebook(s) total"
                 )
+
+    elif args.command == "resolve-duplicates":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        keep = {}
+
+        for raw_entry in args.keep or []:
+
+            if "=" not in raw_entry:
+                raise RuntimeError(
+                    f"Invalid --keep '{raw_entry}' -- expected "
+                    "SHA256=FILENAME."
+                )
+
+            sha256, _, keep_filename = raw_entry.partition("=")
+            keep[sha256] = keep_filename
+
+        if not args.yes:
+            # POST /api/notebooks/duplicates/resolve (routes/upload.py)
+            # has no confirmation step of its own, is irreversible, and
+            # deletes every duplicate but one across every group found on
+            # this dashboard -- the same reasoning `delete-batch`/
+            # `prune-versions` already prompt for.
+            answer = input(
+                f"Permanently delete every duplicate notebook (keeping "
+                f"one per group) on {dashboard_url}? [y/N] "
+            )
+            if answer.strip().lower() not in ("y", "yes"):
+                print("Aborted.")
+                return
+
+        try:
+            response = httpx.post(
+                f"{dashboard_url}/api/notebooks/duplicates/resolve",
+                json={"keep": keep},
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            results = data.get("results", [])
+
+            if not results:
+                print(f"No duplicate notebooks found on {dashboard_url}.")
+            else:
+
+                for result in results:
+
+                    if result["status"] == "success":
+
+                        deleted_names = [
+                            entry["filename"] for entry in result["deleted_filenames"]
+                        ]
+                        print(
+                            f"Kept {result['kept_filename']}, deleted "
+                            f"{', '.join(deleted_names) if deleted_names else '(nothing)'}"
+                        )
+                    else:
+                        print(f"Failed to resolve group {result['sha256']}: {result['detail']}")
+
+                print(
+                    f"\n{data.get('succeeded_count', 0)} group(s) resolved, "
+                    f"{data.get('failed_count', 0)} failed"
+                )
+
     elif args.command == "storage":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -4485,6 +4567,54 @@ def main():
             "\"size_bytes\"}, ...], \"group_count\", "
             "\"duplicate_notebook_count\"}) instead of a human-readable "
             "summary, for scripting/automation."
+        )
+    )
+
+    # resolve-duplicates command (delete every duplicate but one per
+    # group found by `find-duplicates` above, via POST
+    # /api/notebooks/duplicates/resolve -- distinct from `find-duplicates`,
+    # which only ever reports them)
+    resolve_duplicates_parser = subparsers.add_parser(
+        "resolve-duplicates",
+        help=(
+            "Delete every byte-identical duplicate notebook on a running "
+            "dashboard instance, keeping one filename per group, via "
+            "POST /api/notebooks/duplicates/resolve."
+        )
+    )
+    resolve_duplicates_parser.add_argument(
+        "--keep",
+        action="append",
+        metavar="SHA256=FILENAME",
+        help=(
+            "Override which filename to keep for a specific duplicate "
+            "group (its own \"sha256\", as reported by `find-duplicates`), "
+            "instead of the alphabetically-first filename in that group. "
+            "Repeat --keep once per group to override."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(resolve_duplicates_parser)
+    resolve_duplicates_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Confirm the deletion without an interactive prompt. Without "
+            "this, `resolve-duplicates` asks for a y/N confirmation on "
+            "the terminal before sending the request -- POST "
+            "/api/notebooks/duplicates/resolve itself has no confirmation "
+            "step of its own, and is irreversible."
+        )
+    )
+    resolve_duplicates_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"results\": [{\"sha256\", \"status\", \"kept_filename\", "
+            "\"deleted_filenames\"}, ...], \"succeeded_count\", "
+            "\"failed_count\"}) instead of a human-readable summary, for "
+            "scripting/automation."
         )
     )
 

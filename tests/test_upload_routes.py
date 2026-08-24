@@ -2193,6 +2193,161 @@ def test_find_duplicate_notebooks_reports_multiple_independent_groups():
     assert body["duplicate_notebook_count"] == 4
 
 
+def test_resolve_duplicate_notebooks_keeps_alphabetically_first_by_default():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in ("resolve_z.ipynb", "resolve_a.ipynb", "resolve_m.ipynb"):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content_a), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    resp = client.post("/api/notebooks/duplicates/resolve", json={})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 0
+
+    result = body["results"][0]
+    assert result["status"] == "success"
+    assert result["kept_filename"] == "resolve_a.ipynb"
+    assert sorted(e["filename"] for e in result["deleted_filenames"]) == [
+        "resolve_m.ipynb", "resolve_z.ipynb",
+    ]
+
+    remaining = {n["filename"] for n in client.get("/api/notebooks").json()["notebooks"]}
+    assert remaining == {"resolve_a.ipynb"}
+
+
+def test_resolve_duplicate_notebooks_honors_keep_override():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in ("resolve_keep_a.ipynb", "resolve_keep_b.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content_a), "application/json")},
+        )
+
+    sha256 = client.get("/api/notebooks/duplicates").json()["duplicate_groups"][0]["sha256"]
+
+    resp = client.post(
+        "/api/notebooks/duplicates/resolve",
+        json={"keep": {sha256: "resolve_keep_b.ipynb"}},
+    )
+
+    assert resp.status_code == 200
+    result = resp.json()["results"][0]
+    assert result["kept_filename"] == "resolve_keep_b.ipynb"
+    assert [e["filename"] for e in result["deleted_filenames"]] == ["resolve_keep_a.ipynb"]
+
+    remaining = {n["filename"] for n in client.get("/api/notebooks").json()["notebooks"]}
+    assert remaining == {"resolve_keep_b.ipynb"}
+
+
+def test_resolve_duplicate_notebooks_reports_an_invalid_keep_filename_for_just_that_group():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in ("resolve_bad_a.ipynb", "resolve_bad_b.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content_a), "application/json")},
+        )
+
+    sha256 = client.get("/api/notebooks/duplicates").json()["duplicate_groups"][0]["sha256"]
+
+    resp = client.post(
+        "/api/notebooks/duplicates/resolve",
+        json={"keep": {sha256: "not_in_this_group.ipynb"}},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 0
+    assert body["failed_count"] == 1
+    assert body["results"][0]["status"] == "error"
+    assert "not a member" in body["results"][0]["detail"]
+
+    # Nothing was deleted -- both duplicates remain.
+    remaining = {n["filename"] for n in client.get("/api/notebooks").json()["notebooks"]}
+    assert remaining == {"resolve_bad_a.ipynb", "resolve_bad_b.ipynb"}
+
+
+def test_resolve_duplicate_notebooks_is_a_no_op_success_when_nothing_is_duplicated():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    _upload_sample_notebook("resolve_none.ipynb")
+
+    resp = client.post("/api/notebooks/duplicates/resolve", json={})
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "success", "results": [], "succeeded_count": 0, "failed_count": 0,
+    }
+
+    remaining = {n["filename"] for n in client.get("/api/notebooks").json()["notebooks"]}
+    assert remaining == {"resolve_none.ipynb"}
+
+
+def test_resolve_duplicate_notebooks_also_removes_tags_description_and_versions(
+    tmp_path
+):
+
+    from backend.routes import upload as upload_module
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in ("resolve_cleanup_a.ipynb", "resolve_cleanup_z.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content_a), "application/json")},
+        )
+
+    client.put(
+        "/api/notebooks/resolve_cleanup_z.ipynb/tags", json={"tags": ["stale"]}
+    )
+    client.put(
+        "/api/notebooks/resolve_cleanup_z.ipynb/description",
+        json={"description": "about to be resolved away"},
+    )
+
+    resp = client.post("/api/notebooks/duplicates/resolve", json={})
+    assert resp.status_code == 200
+
+    assert not upload_module._tags_sidecar_path("resolve_cleanup_z.ipynb").is_file()
+    assert not upload_module._description_sidecar_path(
+        "resolve_cleanup_z.ipynb"
+    ).is_file()
+
+
+def test_resolve_duplicate_notebooks_rejects_a_non_object_keep_value():
+
+    resp = client.post("/api/notebooks/duplicates/resolve", json={"keep": "not-an-object"})
+
+    assert resp.status_code == 400
+
+
 def test_search_notebook_content_finds_notebooks_with_a_matching_cell():
 
     client.delete("/api/notebooks?confirm=true")

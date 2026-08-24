@@ -2135,6 +2135,137 @@ def find_duplicate_notebooks():
     }
 
 
+@router.post("/notebooks/duplicates/resolve")
+def resolve_duplicate_notebooks(data: dict = None):
+    """Delete every byte-identical duplicate of each already-uploaded
+    notebook in one call, keeping exactly one filename per duplicate
+    group -- acting on exactly what GET /api/notebooks/duplicates already
+    reports, without a caller having to turn that report back into a
+    per-filename POST /api/notebooks/delete-batch request by hand.
+
+    GET /api/notebooks/duplicates already answers "which uploads are
+    actually the same notebook under different names", but there was no
+    way to act on that beyond copying its own "filenames" out of each
+    group and building a delete-batch request naming every filename
+    except whichever one a caller wanted kept -- tedious and error-prone
+    for a catalog with several duplicate groups at once, and impossible
+    to script without first parsing that response.
+
+    By default, keeps each group's alphabetically-first filename (the
+    same deterministic order GET /api/notebooks/duplicates' own
+    "filenames" already sorts by) and deletes the rest. "keep" (optional)
+    overrides that per group: a {"<sha256>": "<filename to keep>"} object
+    keyed by each group's own "sha256" from GET /api/notebooks/duplicates
+    -- a sha256 naming a filename that isn't actually a member of that
+    duplicate group is reported as its own {"sha256", "status": "error"}
+    result rather than silently falling back to the default, the same
+    "one bad entry doesn't abort the batch" contract POST
+    /api/notebooks/delete-batch already established, just keyed by
+    "sha256" (a duplicate group's own identity) instead of "filename".
+
+    Every deletion reuses the exact same cleanup DELETE
+    /api/notebooks/{filename} and POST /api/notebooks/delete-batch
+    already apply per file -- removing that filename's own tags sidecar,
+    description sidecar, and version history directory, and reporting
+    "was_currently_compiled" -- so a notebook resolved away this way is
+    indistinguishable from one deleted individually. A notebook with no
+    duplicates at all is left completely untouched: this endpoint only
+    ever acts on groups GET /api/notebooks/duplicates would itself
+    report, recomputed fresh (not cached from an earlier call), so a
+    notebook uploaded or deleted between that GET and this POST is
+    reflected correctly.
+    """
+
+    keep_overrides = (data or {}).get("keep") or {}
+
+    if not isinstance(keep_overrides, dict) or not all(
+        isinstance(sha256, str) and isinstance(keep_filename, str)
+        for sha256, keep_filename in keep_overrides.items()
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="keep must be an object mapping sha256 to a filename"
+        )
+
+    upload_root = Path(UPLOAD_DIR)
+
+    entries_by_hash = {}
+
+    for entry in sorted(upload_root.iterdir()):
+
+        if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        entries_by_hash.setdefault(hash_notebook_file(entry), []).append(entry.name)
+
+    duplicate_groups = [
+        (sha256, sorted(filenames))
+        for sha256, filenames in sorted(entries_by_hash.items())
+        if len(filenames) > 1
+    ]
+
+    compiled_path, _, _ = _currently_compiled_notebook_metadata()
+
+    results = []
+    succeeded_count = 0
+    failed_count = 0
+
+    for sha256, filenames in duplicate_groups:
+
+        keep_filename = keep_overrides.get(sha256, filenames[0])
+
+        if keep_filename not in filenames:
+
+            results.append({
+                "sha256": sha256,
+                "status": "error",
+                "detail": (
+                    f"'{keep_filename}' is not a member of duplicate "
+                    f"group {sha256}"
+                ),
+            })
+            failed_count += 1
+            continue
+
+        deleted_filenames = []
+
+        for filename in filenames:
+
+            if filename == keep_filename:
+                continue
+
+            file_path = resolve_upload_path(filename)
+
+            was_currently_compiled = (
+                compiled_path is not None and file_path.resolve() == compiled_path
+            )
+
+            os.remove(file_path)
+            _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
+            _description_sidecar_path(file_path.name).unlink(missing_ok=True)
+            shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
+
+            deleted_filenames.append({
+                "filename": filename,
+                "was_currently_compiled": was_currently_compiled,
+            })
+
+        results.append({
+            "sha256": sha256,
+            "status": "success",
+            "kept_filename": keep_filename,
+            "deleted_filenames": deleted_filenames,
+        })
+        succeeded_count += 1
+
+    return {
+        "status": "success",
+        "results": results,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
+    }
+
+
 @router.get("/notebooks/search-content")
 def search_notebook_content(search: str = None):
     """Find every uploaded notebook with a code cell whose raw source
