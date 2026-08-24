@@ -711,6 +711,7 @@ async def _save_uploaded_notebook(file: UploadFile, overwrite: bool) -> dict:
 async def upload_notebook(
     file: UploadFile = File(...),
     overwrite: bool = False,
+    tags: str = None,
 ):
     """Upload a Jupyter notebook file.
 
@@ -738,14 +739,37 @@ async def upload_notebook(
     _snapshot_current_notebook_version above) right before it's replaced,
     recoverable afterward via GET/POST
     /api/notebooks/{filename}/versions[/{version_id}[/restore]].
+
+    "tags" (optional, a comma-separated list, validated via
+    _parse_and_validate_tags_query_param above -- the identical query
+    param POST /api/notebooks/import already accepts for the same
+    reason) replaces this notebook's own tag set once the upload itself
+    succeeds. Before this, tagging a notebook at upload time meant a
+    separate PUT /api/notebooks/{filename}/tags round trip immediately
+    after -- fine for a human clicking through a dashboard UI, but an
+    unnecessary extra request for a script uploading and tagging in one
+    logical step (e.g. seeding a "production" notebook that should never
+    exist untagged, even for the instant between the two calls). An
+    invalid "tags" value is rejected with 400 before the file itself is
+    even read, so a malformed tag list can't cause a notebook to be
+    uploaded successfully but silently left untagged.
     """
-    return await _save_uploaded_notebook(file, overwrite)
+
+    normalized_tags = _parse_and_validate_tags_query_param(tags)
+
+    result = await _save_uploaded_notebook(file, overwrite)
+
+    if normalized_tags is not None:
+        _write_notebook_tags(result["filename"], normalized_tags)
+
+    return result
 
 
 @router.post("/upload/batch")
 async def upload_notebooks_batch(
     files: List[UploadFile] = File(...),
     overwrite: bool = False,
+    tags: str = None,
 ):
     """Upload several Jupyter notebook files in a single request.
 
@@ -778,6 +802,18 @@ async def upload_notebooks_batch(
     Bounded by MAX_BATCH_UPLOAD_FILES (default 50, configurable via
     NOTEBOOK_API_MAX_BATCH_UPLOAD_FILES) so a single request can't try to
     stream, validate, and write an unbounded number of notebooks at once.
+
+    "tags" (optional, a comma-separated list, validated via
+    _parse_and_validate_tags_query_param above) applies uniformly to
+    every successfully-uploaded file in the batch, the same single flag
+    "overwrite" itself already applies uniformly rather than per-file --
+    the identical query param POST /api/upload and POST
+    /api/notebooks/import already accept for a single upload/a zip
+    import respectively, just shared across every file this endpoint
+    uploads at once instead. Validated once, up front, as a
+    whole-request 400 -- a malformed "tags" value is this request's own
+    fault, not any one file's -- and never applied to a file that itself
+    failed to upload.
     """
 
     if len(files) > MAX_BATCH_UPLOAD_FILES:
@@ -790,6 +826,8 @@ async def upload_notebooks_batch(
             )
         )
 
+    normalized_tags = _parse_and_validate_tags_query_param(tags)
+
     results = []
     succeeded_count = 0
     failed_count = 0
@@ -799,6 +837,10 @@ async def upload_notebooks_batch(
         try:
 
             result = await _save_uploaded_notebook(file, overwrite)
+
+            if normalized_tags is not None:
+                _write_notebook_tags(result["filename"], normalized_tags)
+
             results.append(result)
             succeeded_count += 1
 
@@ -895,12 +937,7 @@ async def import_notebooks(
             detail="File must be a .zip archive"
         )
 
-    normalized_tags = (
-        _validate_and_normalize_tags(
-            [t.strip() for t in tags.split(",") if t.strip()]
-        )
-        if tags else None
-    )
+    normalized_tags = _parse_and_validate_tags_query_param(tags)
 
     try:
 
@@ -1211,6 +1248,31 @@ def _validate_and_normalize_tags(raw_tags) -> list:
         )
 
     return sorted(normalized)
+
+
+def _parse_and_validate_tags_query_param(tags: str):
+    """Parse a comma-separated "tags" query-string value (the same format
+    GET /api/notebooks/export's own "filenames" already uses) into a
+    validated, normalized tag list via _validate_and_normalize_tags above
+    -- or None if `tags` is empty/omitted, distinct from [] (an explicit,
+    already-normalized empty list would mean "clear every tag", which no
+    caller of this helper currently means by simply not passing "tags" at
+    all).
+
+    Shared by every upload-time endpoint that accepts an optional "tags"
+    query param to apply on success (POST /api/upload, POST
+    /api/upload/batch, POST /api/notebooks/import) so parsing/validating a
+    query-string tag list is identical -- and raises the identical 400
+    HTTPException -- everywhere it's accepted, rather than three
+    independent, inevitably-drifting copies of the same split/strip/
+    validate logic.
+    """
+    if not tags:
+        return None
+
+    return _validate_and_normalize_tags(
+        [tag.strip() for tag in tags.split(",") if tag.strip()]
+    )
 
 
 # A notebook's tags (above) are categorical labels for filtering/grouping --

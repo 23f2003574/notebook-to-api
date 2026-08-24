@@ -1876,6 +1876,33 @@ def test_upload_command_passes_the_overwrite_flag_through(tmp_path, fake_dashboa
     assert handler.requests == ["/api/upload?overwrite=true"]
 
 
+def test_upload_command_passes_the_tags_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "path": "/srv/uploads/nb.ipynb", "overwritten": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "upload", str(notebook_path),
+            "--dashboard-url", dashboard_url, "--tags", "prod,reviewed",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/upload?overwrite=false&tags=prod%2Creviewed"]
+
+
 def test_upload_command_json_flag_emits_the_dashboards_own_response(
     tmp_path, fake_dashboard
 ):
@@ -2128,6 +2155,36 @@ def test_upload_command_with_multiple_notebooks_passes_the_overwrite_flag_throug
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert handler.requests == ["/api/upload/batch?overwrite=true"]
+
+
+def test_upload_command_with_multiple_notebooks_passes_the_tags_flag_through(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "results": [], "succeeded_count": 0, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_a = workdir / "a.ipynb"
+    notebook_b = workdir / "b.ipynb"
+    _write_notebook(notebook_a)
+    _write_notebook(notebook_b)
+
+    proc = _run_cli(
+        [
+            "upload", str(notebook_a), str(notebook_b),
+            "--dashboard-url", dashboard_url, "--tags", "prod",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/upload/batch?overwrite=false&tags=prod"]
 
 
 def test_upload_command_with_multiple_notebooks_reports_a_clean_error_for_a_missing_notebook(

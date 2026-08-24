@@ -513,6 +513,68 @@ def test_upload_reports_overwritten_false_for_a_brand_new_notebook():
     assert resp.json()["overwritten"] is False
 
 
+def test_upload_tags_sets_the_notebooks_tags_on_success():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    resp = client.post(
+        "/api/upload",
+        params={"tags": "prod, reviewed"},
+        files={"file": ("upload_tags.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    assert resp.status_code == 200
+    assert client.get("/api/notebooks/upload_tags.ipynb/tags").json()["tags"] == [
+        "prod", "reviewed",
+    ]
+
+
+def test_upload_tags_is_not_applied_when_the_upload_itself_fails():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={"file": ("upload_tags_collision.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/upload",
+        params={"tags": "prod"},
+        files={
+            "file": (
+                "upload_tags_collision.ipynb", io.BytesIO(content), "application/json",
+            )
+        },
+    )
+
+    assert resp.status_code == 409
+    assert client.get(
+        "/api/notebooks/upload_tags_collision.ipynb/tags"
+    ).json()["tags"] == []
+
+
+def test_upload_rejects_an_invalid_tags_value_before_reading_the_file(monkeypatch):
+
+    resp = client.post(
+        "/api/upload",
+        params={"tags": "x" * 51},
+        files={
+            "file": (
+                "upload_tags_bad.ipynb", io.BytesIO(b"not valid json"), "application/json",
+            )
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "tags" in resp.json()["detail"]
+    assert not (Path(UPLOAD_DIR) / "upload_tags_bad.ipynb").exists()
+
+
 def test_upload_sweeps_a_stale_leftover_temp_file_from_a_previous_crashed_upload(
     monkeypatch,
 ):
@@ -833,6 +895,65 @@ def test_upload_batch_overwrite_applies_to_every_file():
     assert body["succeeded_count"] == 1
     assert body["results"][0]["overwritten"] is True
     assert (Path(UPLOAD_DIR) / "batch_overwrite.ipynb").read_bytes() == replacement_content
+
+
+def test_upload_batch_tags_applies_uniformly_to_every_successful_file():
+
+    first_content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+    second_content = _notebook_bytes("def sub(a: int, b: int) -> int:\n    return a - b\n")
+
+    resp = client.post(
+        "/api/upload/batch",
+        params={"tags": "prod,batch"},
+        files=[
+            ("files", ("batch_tags_a.ipynb", io.BytesIO(first_content), "application/json")),
+            ("files", ("batch_tags_b.ipynb", io.BytesIO(second_content), "application/json")),
+        ],
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["succeeded_count"] == 2
+
+    assert client.get("/api/notebooks/batch_tags_a.ipynb/tags").json()["tags"] == [
+        "batch", "prod",
+    ]
+    assert client.get("/api/notebooks/batch_tags_b.ipynb/tags").json()["tags"] == [
+        "batch", "prod",
+    ]
+
+
+def test_upload_batch_tags_is_not_applied_to_a_file_that_failed_to_upload():
+
+    resp = client.post(
+        "/api/upload/batch",
+        params={"tags": "prod"},
+        files=[
+            (
+                "files",
+                (
+                    "batch_tags_bad.ipynb", io.BytesIO(b"not a notebook"), "application/json",
+                ),
+            ),
+        ],
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["failed_count"] == 1
+    assert not (Path(UPLOAD_DIR) / "batch_tags_bad.ipynb").exists()
+
+
+def test_upload_batch_rejects_an_invalid_tags_value_as_a_whole_request_400():
+
+    resp = client.post(
+        "/api/upload/batch",
+        params={"tags": "x" * 51},
+        files=[
+            ("files", ("batch_tags_invalid.ipynb", io.BytesIO(b"{}"), "application/json")),
+        ],
+    )
+
+    assert resp.status_code == 400
+    assert not (Path(UPLOAD_DIR) / "batch_tags_invalid.ipynb").exists()
 
 
 def test_upload_batch_rejects_more_files_than_the_configured_maximum(monkeypatch):

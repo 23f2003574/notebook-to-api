@@ -1033,13 +1033,17 @@ def _dispatch_core_command(args):
             # keeps working exactly as it did.
             notebook_path = args.notebook[0]
 
+            params = {"overwrite": args.overwrite}
+            if args.tags:
+                params["tags"] = args.tags
+
             try:
 
                 with open(notebook_path, "rb") as f:
 
                     response = httpx.post(
                         f"{dashboard_url}/api/upload",
-                        params={"overwrite": args.overwrite},
+                        params=params,
                         files={
                             "file": (
                                 os.path.basename(notebook_path), f,
@@ -1091,10 +1095,14 @@ def _dispatch_core_command(args):
                     for notebook_path, f in zip(args.notebook, opened_files)
                 ]
 
+                batch_params = {"overwrite": args.overwrite}
+                if args.tags:
+                    batch_params["tags"] = args.tags
+
                 try:
                     response = httpx.post(
                         f"{dashboard_url}/api/upload/batch",
-                        params={"overwrite": args.overwrite},
+                        params=batch_params,
                         files=files_payload,
                         timeout=args.timeout,
                     )
@@ -4342,6 +4350,15 @@ def main():
             "-- without this, uploading onto an existing filename is "
             "rejected with a 409, exactly as it already is through that "
             "endpoint directly."
+        )
+    )
+    upload_parser.add_argument(
+        "--tags",
+        help=(
+            "Comma-separated tags to set on the uploaded notebook(s), via "
+            "POST /api/upload's or POST /api/upload/batch's own ?tags= "
+            "query param -- applied uniformly to every file when "
+            "uploading more than one."
         )
     )
     upload_parser.add_argument(
