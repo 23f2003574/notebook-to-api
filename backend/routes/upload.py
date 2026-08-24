@@ -3668,6 +3668,127 @@ def set_notebook_description(filename: str, data: dict):
     }
 
 
+@router.post("/notebooks/description-batch")
+def set_notebook_description_batch(data: dict):
+    """Replace the description for a caller-chosen set of already-
+    uploaded notebooks in one call, each notebook getting its own
+    explicit description.
+
+    PUT /api/notebooks/{filename}/description already replaces one
+    notebook's description at a time, and POST /api/notebooks/tags-batch
+    already does the analogous "several notebooks, each its own value"
+    replacement for tags -- but there was no equivalent for descriptions,
+    so re-establishing descriptions across many notebooks at once (e.g.
+    importing a filename->description mapping from an external source, or
+    restoring a previously exported one) meant one PUT .../description
+    call per notebook.
+
+    Takes "entries", a list of {"filename", "description"} objects, the
+    identical shape POST /api/notebooks/tags-batch takes for the same
+    reason: each entry here carries its own independent value, unlike the
+    single shared "tag" POST /api/tags/{tag}/apply/remove take.
+
+    "entries" itself (a non-empty list, each element an object with a
+    string "filename") is validated once, up front, as a 400 covering the
+    whole request. Each entry's own "description", though, is validated
+    independently -- must be a string, at most _MAX_DESCRIPTION_LENGTH
+    characters after stripping -- as part of that entry's own per-entry
+    result, since a bad "description" value here belongs to exactly the
+    one entry that supplied it, not the batch as a whole. Reuses the
+    identical per-entry "one bad entry doesn't abort the batch" contract
+    POST /api/notebooks/tags-batch already established: "results" reports
+    one {"filename", "status", ...} entry per input entry -- "success"
+    (with that notebook's resulting description) or "error" (a 404 for an
+    unknown filename, or the same 400 a bad "description" value alone
+    would raise through PUT .../description directly). Omitting
+    "description" from an entry clears it, the same default PUT
+    .../description itself already applies.
+    """
+
+    entries = data.get("entries")
+
+    if not isinstance(entries, list) or not entries:
+
+        raise HTTPException(
+            status_code=400,
+            detail="entries must be a non-empty list of objects"
+        )
+
+    for entry in entries:
+
+        if not isinstance(entry, dict) or not isinstance(entry.get("filename"), str):
+
+            raise HTTPException(
+                status_code=400,
+                detail="each entry must be an object with a string 'filename'"
+            )
+
+    results = []
+    succeeded_count = 0
+    failed_count = 0
+
+    for entry in entries:
+
+        filename = entry["filename"]
+
+        try:
+
+            file_path = resolve_upload_path(filename)
+
+            if not file_path.is_file():
+
+                raise HTTPException(
+                    status_code=404,
+                    detail="Notebook file not found"
+                )
+
+            description = entry.get("description", "")
+
+            if not isinstance(description, str):
+
+                raise HTTPException(
+                    status_code=400,
+                    detail="description must be a string"
+                )
+
+            description = description.strip()
+
+            if len(description) > _MAX_DESCRIPTION_LENGTH:
+
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"description must be at most {_MAX_DESCRIPTION_LENGTH} "
+                        "characters long"
+                    )
+                )
+
+            _write_notebook_description(file_path.name, description)
+
+            results.append({
+                "filename": filename,
+                "status": "success",
+                "description": description,
+            })
+            succeeded_count += 1
+
+        except HTTPException as exc:
+
+            results.append({
+                "filename": filename,
+                "status": "error",
+                "detail": exc.detail,
+            })
+            failed_count += 1
+
+    return {
+        "status": "success",
+        "results": results,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
+    }
+
+
 @router.get("/notebooks/{filename}/versions")
 def list_notebook_versions(filename: str):
     """List a previously uploaded notebook's snapshotted previous

@@ -4001,6 +4001,195 @@ def test_notebook_list_and_info_include_the_description_field():
     assert info_resp.json()["description"] == "shown in listings"
 
 
+def test_set_notebook_description_batch_sets_each_notebooks_own_distinct_description():
+
+    _upload_sample_notebook("description_batch_a.ipynb")
+    _upload_sample_notebook("description_batch_b.ipynb")
+    client.put(
+        "/api/notebooks/description_batch_a.ipynb/description",
+        json={"description": "stale"},
+    )
+
+    resp = client.post(
+        "/api/notebooks/description-batch",
+        json={
+            "entries": [
+                {"filename": "description_batch_a.ipynb", "description": "The churn model."},
+                {"filename": "description_batch_b.ipynb", "description": "The pricing model."},
+            ],
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["succeeded_count"] == 2
+    assert body["failed_count"] == 0
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["description_batch_a.ipynb"]["status"] == "success"
+    assert results_by_filename["description_batch_a.ipynb"]["description"] == "The churn model."
+    assert results_by_filename["description_batch_b.ipynb"]["description"] == "The pricing model."
+
+    # A full replace -- "stale" is gone.
+    assert client.get(
+        "/api/notebooks/description_batch_a.ipynb/description"
+    ).json()["description"] == "The churn model."
+
+
+def test_set_notebook_description_batch_with_an_empty_description_clears_that_entry():
+
+    _upload_sample_notebook("description_batch_clear.ipynb")
+    client.put(
+        "/api/notebooks/description_batch_clear.ipynb/description",
+        json={"description": "temporary"},
+    )
+
+    resp = client.post(
+        "/api/notebooks/description-batch",
+        json={"entries": [{"filename": "description_batch_clear.ipynb", "description": ""}]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["results"][0]["description"] == ""
+    assert client.get(
+        "/api/notebooks/description_batch_clear.ipynb/description"
+    ).json()["description"] == ""
+
+
+def test_set_notebook_description_batch_defaults_to_clearing_when_omitted():
+
+    _upload_sample_notebook("description_batch_omitted.ipynb")
+    client.put(
+        "/api/notebooks/description_batch_omitted.ipynb/description",
+        json={"description": "temporary"},
+    )
+
+    resp = client.post(
+        "/api/notebooks/description-batch",
+        json={"entries": [{"filename": "description_batch_omitted.ipynb"}]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["results"][0]["description"] == ""
+
+
+def test_set_notebook_description_batch_strips_surrounding_whitespace():
+
+    _upload_sample_notebook("description_batch_strip.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/description-batch",
+        json={
+            "entries": [
+                {"filename": "description_batch_strip.ipynb", "description": "  padded  "},
+            ],
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["results"][0]["description"] == "padded"
+
+
+def test_set_notebook_description_batch_reports_a_missing_filename_without_aborting_the_rest():
+
+    _upload_sample_notebook("description_batch_partial.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/description-batch",
+        json={
+            "entries": [
+                {"filename": "description_batch_partial.ipynb", "description": "ok"},
+                {"filename": "does_not_exist.ipynb", "description": "ok"},
+            ],
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["description_batch_partial.ipynb"]["status"] == "success"
+    assert results_by_filename["does_not_exist.ipynb"]["status"] == "error"
+    assert "not found" in results_by_filename["does_not_exist.ipynb"]["detail"]
+
+
+def test_set_notebook_description_batch_reports_an_invalid_description_for_just_that_entry():
+
+    _upload_sample_notebook("description_batch_bad_a.ipynb")
+    _upload_sample_notebook("description_batch_bad_b.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/description-batch",
+        json={
+            "entries": [
+                {"filename": "description_batch_bad_a.ipynb", "description": "ok"},
+                {"filename": "description_batch_bad_b.ipynb", "description": 5},
+            ],
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["description_batch_bad_a.ipynb"]["status"] == "success"
+    assert results_by_filename["description_batch_bad_b.ipynb"]["status"] == "error"
+    assert "must be a string" in results_by_filename["description_batch_bad_b.ipynb"]["detail"]
+
+    # The failing entry never got its description touched.
+    assert client.get(
+        "/api/notebooks/description_batch_bad_b.ipynb/description"
+    ).json()["description"] == ""
+
+
+def test_set_notebook_description_batch_reports_a_too_long_description_for_just_that_entry():
+
+    _upload_sample_notebook("description_batch_too_long.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/description-batch",
+        json={
+            "entries": [
+                {"filename": "description_batch_too_long.ipynb", "description": "x" * 2001},
+            ],
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["failed_count"] == 1
+    assert "at most" in body["results"][0]["detail"]
+
+
+def test_set_notebook_description_batch_rejects_a_non_list_entries_value():
+
+    resp = client.post("/api/notebooks/description-batch", json={"entries": "not-a-list"})
+
+    assert resp.status_code == 400
+
+
+def test_set_notebook_description_batch_rejects_an_empty_entries_list():
+
+    resp = client.post("/api/notebooks/description-batch", json={"entries": []})
+
+    assert resp.status_code == 400
+
+
+def test_set_notebook_description_batch_rejects_an_entry_missing_a_filename():
+
+    resp = client.post(
+        "/api/notebooks/description-batch",
+        json={"entries": [{"description": "ok"}]},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_rename_notebook_moves_its_description():
 
     _upload_sample_notebook("description_rename_source.ipynb")

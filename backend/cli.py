@@ -2306,7 +2306,7 @@ def _dispatch_core_command(args):
                 description = data.get("description", "")
                 print(f"{args.filename}: {description if description else '(no description)'}")
 
-        else:  # args.description_command == "set"
+        elif args.description_command == "set":
 
             try:
                 response = httpx.put(
@@ -2333,6 +2333,64 @@ def _dispatch_core_command(args):
                 print(
                     f"{args.filename} description set to: "
                     f"{description if description else '(cleared)'}"
+                )
+
+        else:  # args.description_command == "set-batch"
+
+            entries = []
+
+            for raw_entry in args.entry:
+
+                if "=" not in raw_entry:
+                    raise RuntimeError(
+                        f"Invalid --entry '{raw_entry}' -- expected "
+                        "FILENAME=DESCRIPTION (an empty right-hand side "
+                        "clears that notebook's description)."
+                    )
+
+                filename, _, description = raw_entry.partition("=")
+
+                entries.append({"filename": filename, "description": description})
+
+            try:
+                response = httpx.post(
+                    f"{dashboard_url}/api/notebooks/description-batch",
+                    json={"entries": entries},
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                for result in data.get("results", []):
+
+                    if result["status"] == "success":
+                        description = result.get("description", "")
+                        print(
+                            f"{result['filename']} description set to: "
+                            f"{description if description else '(cleared)'}"
+                        )
+                    else:
+                        print(
+                            f"Failed to set description for {result['filename']}: "
+                            f"{result['detail']}"
+                        )
+
+                print(
+                    f"\n{data.get('succeeded_count', 0)} succeeded, "
+                    f"{data.get('failed_count', 0)} failed"
                 )
 
     elif args.command == "remote-compile":
@@ -4960,6 +5018,43 @@ def main():
         help=(
             "Emit the dashboard's own JSON response "
             "({\"status\", \"filename\", \"description\"}) instead of a "
+            "human-readable summary, for scripting/automation."
+        )
+    )
+
+    # description set-batch (replace the description for several
+    # notebooks at once, each getting its own explicit description, via
+    # POST /api/notebooks/description-batch -- distinct from
+    # `description set` above, which only ever replaces one notebook's
+    # description)
+    description_set_batch_parser = description_subparsers.add_parser(
+        "set-batch",
+        help=(
+            "Replace the description for several notebooks at once, each "
+            "getting its own explicit description, via POST "
+            "/api/notebooks/description-batch."
+        )
+    )
+    description_set_batch_parser.add_argument(
+        "--entry",
+        action="append",
+        required=True,
+        metavar="FILENAME=DESCRIPTION",
+        help=(
+            "One notebook's own new description, as FILENAME=DESCRIPTION "
+            "(an empty right-hand side clears that notebook's "
+            "description). Repeat --entry once per notebook."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(description_set_batch_parser)
+    description_set_batch_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"results\": [{\"filename\", \"status\", ...}, ...], "
+            "\"succeeded_count\", \"failed_count\"}) instead of a "
             "human-readable summary, for scripting/automation."
         )
     )
