@@ -3994,6 +3994,8 @@ def _dispatch_core_command(args):
             print(f"  max notebook versions kept: {config.get('max_notebook_versions')}")
             print(f"  max tag length: {config.get('max_tag_length')}")
             print(f"  max tags per notebook: {config.get('max_tags_per_notebook')}")
+            print(f"  max deploy history entries: {config.get('max_deploy_history_entries')}")
+            print(f"  max compile history entries: {config.get('max_compile_history_entries')}")
             print(f"  deploy subprocess timeout: {config.get('deploy_subprocess_timeout_seconds')}s")
             print(f"  notebook sort keys: {', '.join(config.get('notebook_sort_keys', []))}")
             print(f"  notebook sort orders: {', '.join(config.get('notebook_sort_orders', []))}")

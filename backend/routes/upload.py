@@ -6932,6 +6932,20 @@ def get_config():
     an operator or a client needing separate access to the server's own
     environment to know what it is.
 
+    "max_deploy_history_entries" and "max_compile_history_entries" (added
+    alongside this same docstring's original feature, not a separate
+    change) close the identical gap for GET /api/deploy/history and GET
+    /api/compile/history's own retention window: both were already
+    independently configurable via NOTEBOOK_API_MAX_DEPLOY_HISTORY_ENTRIES/
+    NOTEBOOK_API_MAX_COMPILE_HISTORY_ENTRIES since the endpoints
+    themselves were added, but this endpoint predated both and never
+    picked them up -- a caller wanting to know "how far back can this
+    dashboard's own compile/deploy history actually go" (e.g. before
+    deciding whether to also archive it elsewhere) had no way to ask
+    that short of reading the server's own environment directly, the
+    exact access this endpoint's own docstring already says a client
+    shouldn't need.
+
     Deliberately omits UPLOAD_DIR and GENERATED_DIR: those are absolute
     (or process-relative) filesystem paths on the compiling server, the
     same category of information GET /api/health's own docstring already
@@ -6946,6 +6960,8 @@ def get_config():
         "max_tag_length": _MAX_TAG_LENGTH,
         "max_tags_per_notebook": _MAX_TAGS_PER_NOTEBOOK,
         "max_description_length": _MAX_DESCRIPTION_LENGTH,
+        "max_deploy_history_entries": MAX_DEPLOY_HISTORY_ENTRIES,
+        "max_compile_history_entries": MAX_COMPILE_HISTORY_ENTRIES,
         "deploy_subprocess_timeout_seconds": DEPLOY_SUBPROCESS_TIMEOUT_SECONDS,
         "notebook_sort_keys": sorted(_NOTEBOOK_SORT_KEYS),
         "notebook_sort_orders": sorted(_NOTEBOOK_SORT_ORDERS),

@@ -10875,6 +10875,8 @@ def test_get_config_reports_the_configured_limits():
     assert isinstance(body["max_notebook_versions"], int)
     assert isinstance(body["max_tag_length"], int)
     assert isinstance(body["max_tags_per_notebook"], int)
+    assert isinstance(body["max_deploy_history_entries"], int)
+    assert isinstance(body["max_compile_history_entries"], int)
     assert isinstance(body["deploy_subprocess_timeout_seconds"], int)
 
 
@@ -10898,6 +10900,28 @@ def test_get_config_reflects_a_configured_max_batch_upload_files(monkeypatch):
     resp = client.get("/api/config")
 
     assert resp.json()["max_batch_upload_files"] == 7
+
+
+def test_get_config_reflects_a_configured_max_deploy_history_entries(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_DEPLOY_HISTORY_ENTRIES", 9)
+
+    resp = client.get("/api/config")
+
+    assert resp.json()["max_deploy_history_entries"] == 9
+
+
+def test_get_config_reflects_a_configured_max_compile_history_entries(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_COMPILE_HISTORY_ENTRIES", 11)
+
+    resp = client.get("/api/config")
+
+    assert resp.json()["max_compile_history_entries"] == 11
 
 
 def test_get_config_reports_notebook_sort_keys_and_orders_matching_list_notebooks():
