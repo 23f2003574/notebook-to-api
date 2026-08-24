@@ -2107,6 +2107,55 @@ def test_export_notebooks_rejects_a_blank_filenames_value():
     assert resp.status_code == 400
 
 
+def test_export_notebooks_by_tag_bundles_only_matching_notebooks():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in ("export_tag_a.ipynb", "export_tag_b.ipynb", "export_tag_c.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    client.put("/api/notebooks/export_tag_a.ipynb/tags", json={"tags": ["prod"]})
+    client.put("/api/notebooks/export_tag_b.ipynb/tags", json={"tags": ["prod"]})
+    client.put("/api/notebooks/export_tag_c.ipynb/tags", json={"tags": ["staging"]})
+
+    resp = client.get("/api/notebooks/export", params={"tag": "prod"})
+
+    assert resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as archive:
+        assert sorted(archive.namelist()) == ["export_tag_a.ipynb", "export_tag_b.ipynb"]
+
+
+def test_export_notebooks_by_tag_returns_404_when_nothing_matches():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    _upload_sample_notebook("export_tag_unmatched.ipynb")
+
+    resp = client.get("/api/notebooks/export", params={"tag": "does-not-exist"})
+
+    assert resp.status_code == 404
+
+
+def test_export_notebooks_rejects_both_filenames_and_tag():
+
+    _upload_sample_notebook("export_both_a.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/export",
+        params={"filenames": "export_both_a.ipynb", "tag": "prod"},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_find_duplicate_notebooks_groups_byte_identical_uploads():
 
     client.delete("/api/notebooks?confirm=true")

@@ -1969,7 +1969,7 @@ def list_notebooks(
 
 
 @router.get("/notebooks/export")
-def export_notebooks(filenames: str = None):
+def export_notebooks(filenames: str = None, tag: str = None):
     """Download a caller-chosen set of already-uploaded notebooks -- or,
     with "filenames" omitted, every uploaded notebook -- bundled into one
     .zip.
@@ -1990,16 +1990,37 @@ def export_notebooks(filenames: str = None):
     /api/download and GET /api/notebooks/{filename} are both GETs rather
     than POSTs despite returning a caller-shaped result.
 
+    "tag" (mutually exclusive with "filenames" -- combining both is a 400,
+    since each already picks the export set a completely different way)
+    exports every notebook currently carrying that exact tag instead, the
+    same exact-match GET /api/notebooks?tag= already filters by -- a
+    caller wanting to back up (or hand off) "every notebook tagged
+    production" previously had to fetch GET /api/notebooks?tag=production
+    first just to build the "filenames" list this endpoint already
+    required. Unlike an unknown "filenames" entry, a "tag" that matches no
+    notebook at all is simply an empty selection -- the same "no notebooks
+    to export" 404 an empty catalog already gets, not a per-tag 404, since
+    a tag (unlike a specific filename) was never guaranteed to exist in
+    the first place.
+
     Unlike POST /api/tags/{tag}/apply and POST /api/notebooks/delete-batch,
-    this is all-or-nothing rather than "one bad entry doesn't abort the
-    batch": a caller asking for a specific set of filenames is trying to
-    get exactly those notebooks back, and a zip silently missing one of
-    them (because it was already deleted, or typo'd) is a worse failure
-    mode here than in a delete/tag batch -- there's no per-entry "result"
-    list a caller could inspect after the fact, since the response body
-    *is* the zip. A 404 up front, naming every filename that doesn't
-    exist, lets a caller fix its request before getting nothing back.
+    a "filenames"-selected export is all-or-nothing rather than "one bad
+    entry doesn't abort the batch": a caller asking for a specific set of
+    filenames is trying to get exactly those notebooks back, and a zip
+    silently missing one of them (because it was already deleted, or
+    typo'd) is a worse failure mode here than in a delete/tag batch --
+    there's no per-entry "result" list a caller could inspect after the
+    fact, since the response body *is* the zip. A 404 up front, naming
+    every filename that doesn't exist, lets a caller fix its request
+    before getting nothing back.
     """
+
+    if filenames and tag:
+
+        raise HTTPException(
+            status_code=400,
+            detail="filenames and tag can't both be given -- choose one."
+        )
 
     upload_root = Path(UPLOAD_DIR)
 
@@ -2032,6 +2053,15 @@ def export_notebooks(filenames: str = None):
                 status_code=404,
                 detail=f"Notebook file(s) not found: {', '.join(missing)}"
             )
+
+    elif tag:
+
+        notebooks_to_export = [
+            (entry.name, entry)
+            for entry in sorted(upload_root.iterdir())
+            if entry.is_file() and entry.suffix == ".ipynb"
+            and tag in _read_notebook_tags(entry.name)
+        ]
 
     else:
 

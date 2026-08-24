@@ -1652,9 +1652,14 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        if args.filename and args.tag:
+            raise RuntimeError("Pass either a filename or --tag, not both.")
+
         params = {}
         if args.filename:
             params["filenames"] = ",".join(args.filename)
+        if args.tag:
+            params["tag"] = args.tag
 
         try:
             response = httpx.get(
@@ -4687,6 +4692,15 @@ def main():
         help=(
             "Filenames of the notebooks to export, as reported by `list`. "
             "Omit to export every uploaded notebook."
+        )
+    )
+    export_notebooks_parser.add_argument(
+        "--tag",
+        help=(
+            "Export every notebook currently carrying this exact tag, "
+            "via GET /api/notebooks/export's own ?tag= query param, "
+            "instead of naming filenames directly. Can't be combined "
+            "with an explicit filename."
         )
     )
     _add_dashboard_url_and_timeout_arguments(export_notebooks_parser)

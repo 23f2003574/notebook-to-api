@@ -3533,6 +3533,40 @@ def test_export_notebooks_command_with_no_filenames_omits_the_query_param(
     assert handler.requests == ["/api/notebooks/export"]
 
 
+def test_export_notebooks_command_sends_tag_query_param(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["export-notebooks", "--tag", "prod", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/export?tag=prod"]
+
+
+def test_export_notebooks_command_rejects_filename_and_tag_together(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "export-notebooks", "a.ipynb", "--tag", "prod",
+            "--dashboard-url", "http://127.0.0.1:1",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "either a filename or --tag, not both")
+
+
 def test_export_notebooks_command_respects_a_custom_output_path(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
