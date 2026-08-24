@@ -6164,7 +6164,10 @@ def clear_deploy_history():
 
 
 @router.get("/compile/history")
-def compile_history_endpoint():
+def compile_history_endpoint(
+    notebook_filename: str = None,
+    limit: int = None,
+):
     """This dashboard's own past POST /api/compile invocations, most
     recent first -- up to the last MAX_COMPILE_HISTORY_ENTRIES.
 
@@ -6190,6 +6193,17 @@ def compile_history_endpoint():
     "endpoint_count"/"dependency_count"/"skipped_function_count" are
     computed from that compile's own response.
 
+    "notebook_filename"/"limit" filter and cap the returned entries the
+    identical way GET /api/deploy/history's own "source_notebook_filename"
+    /"limit" query params already do for deploy history -- an operator
+    wanting only one specific notebook's own compile history (e.g. "how
+    many times has this one actually been recompiled") had to fetch the
+    entire log and filter it client-side otherwise. "notebook_filename"
+    matches exactly against each entry's own "notebook_filename" (a
+    404-free filter -- an unknown or never-compiled filename just yields
+    no matching entries, not an error); "limit" applies after that
+    filter, on the same most-recent-first ordering.
+
     Deliberately read-only, the same reasoning GET /api/deploy/history's
     own docstring already gives: this dashboard's compile history is a
     record of what already happened, not something a caller edits or
@@ -6200,6 +6214,23 @@ def compile_history_endpoint():
     """
 
     entries = list(reversed(_read_compile_history()))
+
+    if notebook_filename is not None:
+        entries = [
+            entry for entry in entries
+            if entry.get("notebook_filename") == notebook_filename
+        ]
+
+    if limit is not None:
+
+        if limit < 0:
+
+            raise HTTPException(
+                status_code=400,
+                detail="limit must be a non-negative integer"
+            )
+
+        entries = entries[:limit]
 
     return {
         "status": "success",

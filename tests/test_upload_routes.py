@@ -9170,6 +9170,92 @@ def test_compile_history_is_capped_at_the_configured_maximum(tmp_path, monkeypat
     ]
 
 
+def _seed_compile_history_for_filtering(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "compile_history_filter_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    entries = [
+        {
+            "compiled_at": "2024-01-01T00:00:00+00:00", "notebook_filename": "one.ipynb",
+            "source_notebook_sha256": "aaa", "only": None, "exclude": None,
+            "endpoint_count": 1, "dependency_count": 0, "skipped_function_count": 0,
+        },
+        {
+            "compiled_at": "2024-01-02T00:00:00+00:00", "notebook_filename": "two.ipynb",
+            "source_notebook_sha256": "bbb", "only": None, "exclude": None,
+            "endpoint_count": 2, "dependency_count": 1, "skipped_function_count": 0,
+        },
+        {
+            "compiled_at": "2024-01-03T00:00:00+00:00", "notebook_filename": "one.ipynb",
+            "source_notebook_sha256": "ccc", "only": None, "exclude": None,
+            "endpoint_count": 3, "dependency_count": 1, "skipped_function_count": 1,
+        },
+    ]
+
+    for entry in entries:
+        upload_module._append_compile_history_entry(entry)
+
+
+def test_compile_history_filters_by_notebook_filename(tmp_path, monkeypatch):
+
+    _seed_compile_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get(
+        "/api/compile/history", params={"notebook_filename": "one.ipynb"}
+    ).json()
+
+    assert [e["source_notebook_sha256"] for e in body["entries"]] == ["ccc", "aaa"]
+    assert body["entry_count"] == 2
+
+
+def test_compile_history_filters_by_unknown_notebook_filename_yields_no_entries(
+    tmp_path, monkeypatch
+):
+
+    _seed_compile_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get(
+        "/api/compile/history", params={"notebook_filename": "does_not_exist.ipynb"}
+    ).json()
+
+    assert body == {"status": "success", "entries": [], "entry_count": 0}
+
+
+def test_compile_history_respects_limit(tmp_path, monkeypatch):
+
+    _seed_compile_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get("/api/compile/history", params={"limit": 2}).json()
+
+    assert [e["source_notebook_sha256"] for e in body["entries"]] == ["ccc", "bbb"]
+    assert body["entry_count"] == 2
+
+
+def test_compile_history_combines_notebook_filter_and_limit(tmp_path, monkeypatch):
+
+    _seed_compile_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get(
+        "/api/compile/history",
+        params={"notebook_filename": "one.ipynb", "limit": 1},
+    ).json()
+
+    assert [e["source_notebook_sha256"] for e in body["entries"]] == ["ccc"]
+
+
+def test_compile_history_rejects_a_negative_limit(tmp_path, monkeypatch):
+
+    _seed_compile_history_for_filtering(tmp_path, monkeypatch)
+
+    resp = client.get("/api/compile/history", params={"limit": -1})
+
+    assert resp.status_code == 400
+
+
 def test_clear_compile_history_removes_every_entry(tmp_path, monkeypatch):
 
     from backend.routes import upload as upload_module

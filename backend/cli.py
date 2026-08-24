@@ -3749,9 +3749,18 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        params = {}
+
+        if args.notebook_filename:
+            params["notebook_filename"] = args.notebook_filename
+        if args.limit is not None:
+            params["limit"] = args.limit
+
         try:
             response = httpx.get(
-                f"{dashboard_url}/api/compile/history", timeout=args.timeout,
+                f"{dashboard_url}/api/compile/history",
+                params=params,
+                timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
             raise _dashboard_connection_error(exc, dashboard_url)
@@ -6237,6 +6246,23 @@ def main():
         help=(
             "Show a running dashboard instance's own past compiles, via "
             "its GET /api/compile/history."
+        )
+    )
+    compile_history_parser.add_argument(
+        "--notebook",
+        dest="notebook_filename",
+        help=(
+            "Only show compiles of this exact notebook filename, via GET "
+            "/api/compile/history's own ?notebook_filename= query param."
+        )
+    )
+    compile_history_parser.add_argument(
+        "--limit",
+        type=int,
+        help=(
+            "Only show (at most) this many of the most recent matching "
+            "compiles, via GET /api/compile/history's own ?limit= query "
+            "param."
         )
     )
     _add_dashboard_url_and_timeout_arguments(compile_history_parser)

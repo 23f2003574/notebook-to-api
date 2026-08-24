@@ -9988,6 +9988,37 @@ def test_compile_history_command_json_flag_emits_the_dashboards_own_response(
     assert json.loads(proc.stdout) == body
 
 
+def test_compile_history_command_sends_notebook_and_limit_query_params(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "entries": [], "entry_count": 0})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "compile-history",
+            "--notebook", "nb.ipynb",
+            "--limit", "5",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert len(handler.requests) == 1
+    request_path = handler.requests[0]
+    assert request_path.startswith("/api/compile/history?")
+
+    query = urllib.parse.parse_qs(request_path.split("?", 1)[1])
+    assert query == {"notebook_filename": ["nb.ipynb"], "limit": ["5"]}
+
+
 def test_compile_history_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
     tmp_path,
 ):
