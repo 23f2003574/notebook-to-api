@@ -5278,6 +5278,53 @@ def test_list_notebooks_filters_by_tag():
     assert [nb["filename"] for nb in notebooks] == ["tags_filter_a.ipynb"]
 
 
+def test_list_notebooks_filters_by_description_search():
+
+    _upload_sample_notebook("desc_search_a.ipynb")
+    _upload_sample_notebook("desc_search_b.ipynb")
+
+    client.put(
+        "/api/notebooks/desc_search_a.ipynb/description",
+        json={"description": "The quarterly churn model."},
+    )
+    client.put(
+        "/api/notebooks/desc_search_b.ipynb/description",
+        json={"description": "Unrelated pricing notebook."},
+    )
+
+    notebooks = client.get(
+        "/api/notebooks?search=desc_search_&description_search=churn"
+    ).json()["notebooks"]
+
+    assert [nb["filename"] for nb in notebooks] == ["desc_search_a.ipynb"]
+
+
+def test_list_notebooks_description_search_is_case_insensitive():
+
+    _upload_sample_notebook("desc_search_case.ipynb")
+    client.put(
+        "/api/notebooks/desc_search_case.ipynb/description",
+        json={"description": "The Quarterly Churn Model."},
+    )
+
+    notebooks = client.get(
+        "/api/notebooks?search=desc_search_case&description_search=quarterly churn"
+    ).json()["notebooks"]
+
+    assert [nb["filename"] for nb in notebooks] == ["desc_search_case.ipynb"]
+
+
+def test_list_notebooks_description_search_excludes_notebooks_without_a_description():
+
+    _upload_sample_notebook("desc_search_none.ipynb")
+
+    notebooks = client.get(
+        "/api/notebooks?search=desc_search_none&description_search=anything"
+    ).json()["notebooks"]
+
+    assert notebooks == []
+
+
 def test_delete_notebook_removes_its_tags_sidecar_file():
 
     _upload_sample_notebook("tags_delete_single.ipynb")

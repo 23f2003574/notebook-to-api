@@ -1887,6 +1887,7 @@ def list_notebooks(
     limit: int = None,
     offset: int = 0,
     tag: str = None,
+    description_search: str = None,
 ):
     """List previously uploaded notebooks.
 
@@ -1971,6 +1972,18 @@ def list_notebooks(
     had one set -- the same "" default GET .../description itself already
     returns for a single notebook, so a caller sees it here without a
     separate follow-up request per notebook.
+
+    "description_search" (composes with "search"/"tag" the identical way
+    they already compose with each other, applied before "sort"/"limit"/
+    "offset") filters to notebooks whose own description contains this
+    text, case-insensitively -- closing the one search this endpoint's
+    own "search" (a filename substring) and GET /api/notebooks/search-
+    content (a code cell's own raw source) never covered: description
+    text a caller wrote specifically to explain *why* a notebook exists,
+    invisible to both of those. A notebook with no description at all
+    (description "") simply never matches a non-empty
+    "description_search", the same way an untagged notebook already never
+    matches "tag".
     """
 
     if sort not in _NOTEBOOK_SORT_KEYS:
@@ -2026,6 +2039,12 @@ def list_notebooks(
         notebook_tags = _read_notebook_tags(entry.name)
 
         if tag and tag not in notebook_tags:
+            continue
+
+        if description_search and (
+            description_search.lower()
+            not in _read_notebook_description(entry.name).lower()
+        ):
             continue
 
         entry_stat = entry.stat()

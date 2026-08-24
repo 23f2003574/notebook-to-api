@@ -1219,6 +1219,8 @@ def _dispatch_core_command(args):
             params["search"] = args.search
         if args.tag:
             params["tag"] = args.tag
+        if args.description_search:
+            params["description_search"] = args.description_search
         if args.limit is not None:
             params["limit"] = args.limit
 
@@ -4439,6 +4441,14 @@ def main():
         "--tag",
         default=None,
         help="Only list notebooks carrying this exact tag, mirroring GET /api/notebooks' own ?tag=."
+    )
+    list_parser.add_argument(
+        "--description-search",
+        default=None,
+        help=(
+            "Case-insensitive description substring filter, mirroring "
+            "GET /api/notebooks' own ?description_search=."
+        )
     )
     list_parser.add_argument(
         "--sort",

@@ -2511,6 +2511,30 @@ def test_list_command_passes_sort_order_tag_and_limit_through(fake_dashboard):
     ]
 
 
+def test_list_command_passes_the_description_search_flag_through(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebooks": [], "total_count": 0,
+            "limit": None, "offset": 0,
+        })
+    ]
+
+    proc = _run_cli(
+        [
+            "list", "--dashboard-url", dashboard_url,
+            "--description-search", "churn",
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks?sort=name&order=asc&offset=0&description_search=churn"
+    ]
+
+
 def test_list_command_passes_offset_through(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
