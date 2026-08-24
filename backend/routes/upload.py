@@ -823,6 +823,7 @@ async def upload_notebooks_batch(
 async def import_notebooks(
     file: UploadFile = File(...),
     overwrite: bool = False,
+    tags: str = None,
 ):
     """Upload every .ipynb file bundled inside a single .zip archive --
     the counterpart to GET /api/notebooks/export, which produces exactly
@@ -867,6 +868,24 @@ async def import_notebooks(
     more entries than a multipart request practically would, and without
     a cap this could try to validate and write an unbounded number of
     notebooks from a single small .zip.
+
+    "tags" (optional, a comma-separated list -- the same query-string
+    format GET /api/notebooks/export's own "filenames" already uses)
+    replaces every successfully-imported notebook's own tag set with it,
+    via the identical _validate_and_normalize_tags/_write_notebook_tags
+    pair PUT /api/notebooks/{filename}/tags itself calls -- so, e.g., a
+    whole GET /api/notebooks/export?tag=production archive can be
+    re-imported elsewhere with "production" already applied, in the same
+    request, rather than a separate POST /api/notebooks/tags-batch
+    round trip afterward naming every filename the import just produced.
+    An invalid "tags" value (see _validate_and_normalize_tags) is
+    rejected with 400 up front, before any entry in the archive is even
+    read -- the request's own fault, not any one entry's, the same
+    reasoning a malformed "entries" shape is already a whole-request 400
+    on POST /api/notebooks/tags-batch. Never applied to an entry that
+    itself failed to import: its own {"filename", "status": "error"}
+    result is unaffected, and no tags sidecar file is written for a
+    notebook that was never actually saved.
     """
 
     if not file.filename.endswith(".zip"):
@@ -875,6 +894,13 @@ async def import_notebooks(
             status_code=400,
             detail="File must be a .zip archive"
         )
+
+    normalized_tags = (
+        _validate_and_normalize_tags(
+            [t.strip() for t in tags.split(",") if t.strip()]
+        )
+        if tags else None
+    )
 
     try:
 
@@ -937,6 +963,10 @@ async def import_notebooks(
             )
 
             result = await _save_uploaded_notebook(upload_file, overwrite)
+
+            if normalized_tags is not None:
+                _write_notebook_tags(result["filename"], normalized_tags)
+
             results.append(result)
             succeeded_count += 1
 

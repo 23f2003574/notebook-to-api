@@ -1011,6 +1011,74 @@ def test_import_notebooks_overwrite_applies_to_every_entry():
     assert (Path(UPLOAD_DIR) / "import_overwrite.ipynb").read_bytes() == replacement_content
 
 
+def test_import_notebooks_tags_applies_to_every_successfully_imported_entry():
+
+    content_a = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+    content_b = _notebook_bytes("def sub(a: int, b: int) -> int:\n    return a - b\n")
+
+    archive_bytes = _zip_bytes({
+        "import_tags_a.ipynb": content_a,
+        "import_tags_b.ipynb": content_b,
+    })
+
+    resp = client.post(
+        "/api/notebooks/import",
+        params={"tags": "imported,reviewed"},
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["succeeded_count"] == 2
+
+    assert client.get(
+        "/api/notebooks/import_tags_a.ipynb/tags"
+    ).json()["tags"] == ["imported", "reviewed"]
+    assert client.get(
+        "/api/notebooks/import_tags_b.ipynb/tags"
+    ).json()["tags"] == ["imported", "reviewed"]
+
+
+def test_import_notebooks_tags_is_not_applied_to_a_failed_entry():
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("import_tags_collision.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    archive_bytes = _zip_bytes({"import_tags_collision.ipynb": content})
+
+    resp = client.post(
+        "/api/notebooks/import",
+        params={"tags": "imported"},
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["results"][0]["status"] == "error"
+
+    assert client.get(
+        "/api/notebooks/import_tags_collision.ipynb/tags"
+    ).json()["tags"] == []
+
+
+def test_import_notebooks_rejects_an_invalid_tags_value_before_reading_the_archive():
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+    archive_bytes = _zip_bytes({"import_tags_bad.ipynb": content})
+
+    resp = client.post(
+        "/api/notebooks/import",
+        params={"tags": "x" * 51},
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 400
+    assert not (Path(UPLOAD_DIR) / "import_tags_bad.ipynb").exists()
+
+
 def test_import_notebooks_rejects_a_non_zip_file():
 
     resp = client.post(

@@ -1147,13 +1147,18 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        params = {"overwrite": args.overwrite}
+
+        if args.tags:
+            params["tags"] = args.tags
+
         try:
 
             with open(args.zip_path, "rb") as f:
 
                 response = httpx.post(
                     f"{dashboard_url}/api/notebooks/import",
-                    params={"overwrite": args.overwrite},
+                    params=params,
                     files={
                         "file": (
                             os.path.basename(args.zip_path), f, "application/zip",
@@ -4377,6 +4382,15 @@ def main():
             "collides with an already-uploaded notebook is reported as "
             "its own failed result rather than aborting the rest of the "
             "import."
+        )
+    )
+    import_notebooks_parser.add_argument(
+        "--tags",
+        help=(
+            "Comma-separated tags to set on every successfully-imported "
+            "notebook, via POST /api/notebooks/import's own ?tags= query "
+            "param -- e.g. to re-apply the tag a matching `export-"
+            "notebooks --tag ...` archive was originally selected by."
         )
     )
     import_notebooks_parser.add_argument(

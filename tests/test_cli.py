@@ -2224,6 +2224,34 @@ def test_import_notebooks_command_passes_the_overwrite_flag_through(tmp_path, fa
     assert handler.requests == ["/api/notebooks/import?overwrite=true"]
 
 
+def test_import_notebooks_command_passes_the_tags_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "results": [], "succeeded_count": 0, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "bundle.zip"
+    _write_zip(zip_path, {"a.ipynb": b"{}"})
+
+    proc = _run_cli(
+        [
+            "import-notebooks", str(zip_path),
+            "--dashboard-url", dashboard_url, "--tags", "imported,reviewed",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/import?overwrite=false&tags=imported%2Creviewed"
+    ]
+
+
 def test_import_notebooks_command_reports_per_file_failures_and_exits_nonzero(
     tmp_path, fake_dashboard
 ):
