@@ -1764,7 +1764,7 @@ def rename_tag(tag: str, data: dict):
 
 
 @router.get("/functions")
-def search_functions(search: str = None):
+def search_functions(search: str = None, tag: str = None):
     """Find which uploaded notebooks define a function whose name
     contains `search` (case-insensitive), across every notebook in
     UPLOAD_DIR at once.
@@ -1797,6 +1797,18 @@ def search_functions(search: str = None):
     bulk scan over one unrelated notebook's own bad content -- the same
     "one bad entry doesn't sink a bulk listing" precedent
     _read_notebook_tags already sets for a corrupt tags sidecar file.
+
+    "tag" (optional) scopes the scan to only notebooks currently carrying
+    that exact tag, the same exact-match GET /api/notebooks?tag= already
+    filters by -- closing the gap between this endpoint's own
+    catalog-wide scan and a caller who only cares about one category of
+    notebooks (e.g. "which of my *production* notebooks still define
+    `train_model`"), which previously meant scanning every notebook's own
+    functions and filtering the response down client-side afterward. A
+    notebook that fails to parse is still silently skipped exactly as
+    above, whether or not it happens to carry "tag" -- reading its tags
+    sidecar first only to then discard it as unparseable would be wasted
+    work either way.
     """
 
     if not search:
@@ -1815,6 +1827,9 @@ def search_functions(search: str = None):
     for entry in sorted(upload_root.iterdir()):
 
         if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        if tag and tag not in _read_notebook_tags(entry.name):
             continue
 
         try:
@@ -2408,7 +2423,7 @@ def resolve_duplicate_notebooks(data: dict = None):
 
 
 @router.get("/notebooks/search-content")
-def search_notebook_content(search: str = None):
+def search_notebook_content(search: str = None, tag: str = None):
     """Find every uploaded notebook with a code cell whose raw source
     contains `search` (case-insensitive), across the whole catalog at
     once.
@@ -2439,6 +2454,13 @@ def search_notebook_content(search: str = None):
     notebook is incidental to what *this* endpoint is answering (does any
     cell contain a substring), the identical reasoning GET /api/functions'
     own docstring already gives for skipping one here too.
+
+    "tag" (optional) scopes the scan to only notebooks currently carrying
+    that exact tag, the identical GET /api/notebooks?tag= exact match and
+    the same gap it closes for GET /api/functions above -- a caller
+    wanting "which of my *production* notebooks still call this
+    deprecated function" previously had to scan every uploaded notebook's
+    own code and filter the response down client-side afterward.
     """
 
     if not search:
@@ -2457,6 +2479,9 @@ def search_notebook_content(search: str = None):
     for entry in sorted(upload_root.iterdir()):
 
         if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        if tag and tag not in _read_notebook_tags(entry.name):
             continue
 
         try:

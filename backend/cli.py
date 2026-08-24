@@ -1370,10 +1370,14 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        params = {"search": args.search}
+        if args.tag:
+            params["tag"] = args.tag
+
         try:
             response = httpx.get(
                 f"{dashboard_url}/api/functions",
-                params={"search": args.search},
+                params=params,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -1411,10 +1415,14 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        params = {"search": args.search}
+        if args.tag:
+            params["tag"] = args.tag
+
         try:
             response = httpx.get(
                 f"{dashboard_url}/api/notebooks/search-content",
-                params={"search": args.search},
+                params=params,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -4554,6 +4562,14 @@ def main():
         "search",
         help="Case-insensitive substring to match against every uploaded notebook's own function names."
     )
+    search_functions_parser.add_argument(
+        "--tag",
+        default=None,
+        help=(
+            "Only scan notebooks carrying this exact tag, mirroring GET "
+            "/api/functions' own ?tag=."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(search_functions_parser)
     search_functions_parser.add_argument(
         "--json",
@@ -4579,6 +4595,14 @@ def main():
     search_content_parser.add_argument(
         "search",
         help="Case-insensitive substring to match against every uploaded notebook's own code cell source."
+    )
+    search_content_parser.add_argument(
+        "--tag",
+        default=None,
+        help=(
+            "Only scan notebooks carrying this exact tag, mirroring GET "
+            "/api/notebooks/search-content's own ?tag=."
+        )
     )
     _add_dashboard_url_and_timeout_arguments(search_content_parser)
     search_content_parser.add_argument(

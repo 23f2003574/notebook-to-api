@@ -2624,6 +2624,35 @@ def test_search_notebook_content_finds_notebooks_with_a_matching_cell():
     assert "read_csv" in cell_match["snippet"]
 
 
+def test_search_notebook_content_filters_by_tag():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "import pandas as pd\n\n"
+        "def load() -> str:\n    df = pd.read_csv('data.csv')\n    return 'done'\n"
+    )
+
+    for filename in ("search_content_tag_a.ipynb", "search_content_tag_b.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    client.put(
+        "/api/notebooks/search_content_tag_a.ipynb/tags", json={"tags": ["prod"]}
+    )
+
+    resp = client.get(
+        "/api/notebooks/search-content", params={"search": "read_csv", "tag": "prod"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["notebook_count"] == 1
+    assert body["matches"][0]["filename"] == "search_content_tag_a.ipynb"
+
+
 def test_search_notebook_content_is_case_insensitive():
 
     client.delete("/api/notebooks?confirm=true")
@@ -5188,6 +5217,30 @@ def test_search_functions_finds_notebooks_with_a_matching_function_name():
     assert body["notebook_count"] == 1
     assert body["matches"][0]["filename"] == "search_functions_a.ipynb"
     assert [f["name"] for f in body["matches"][0]["functions"]] == ["train_model"]
+
+
+def test_search_functions_filters_by_tag():
+
+    content = _notebook_bytes(
+        "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    for filename in ("search_functions_tag_a.ipynb", "search_functions_tag_b.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    client.put(
+        "/api/notebooks/search_functions_tag_a.ipynb/tags", json={"tags": ["prod"]}
+    )
+
+    resp = client.get("/api/functions?search=train&tag=prod")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["notebook_count"] == 1
+    assert body["matches"][0]["filename"] == "search_functions_tag_a.ipynb"
 
 
 def test_search_functions_is_case_insensitive():

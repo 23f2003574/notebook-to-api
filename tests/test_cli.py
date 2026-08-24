@@ -2923,6 +2923,21 @@ def test_search_functions_command_prints_matching_notebooks(fake_dashboard):
     assert handler.requests == ["/api/functions?search=train"]
 
 
+def test_search_functions_command_sends_tag_query_param(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "search": "train", "matches": [], "notebook_count": 0}
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["search-functions", "train", "--tag", "prod", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/functions?search=train&tag=prod"]
+
+
 def test_search_functions_command_reports_no_matches(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
@@ -3029,6 +3044,24 @@ def test_search_content_command_prints_matching_notebooks(fake_dashboard):
     assert "[0] df = pd.read_csv('x.csv')" in proc.stdout
     assert "1 notebook(s) matched." in proc.stdout
     assert handler.requests == ["/api/notebooks/search-content?search=read_csv"]
+
+
+def test_search_content_command_sends_tag_query_param(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "search": "read_csv", "matches": [], "notebook_count": 0}
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        [
+            "search-content", "read_csv", "--tag", "prod",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/search-content?search=read_csv&tag=prod"]
 
 
 def test_search_content_command_reports_no_matches(fake_dashboard):
