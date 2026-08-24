@@ -215,6 +215,13 @@ MAX_DEPLOY_HISTORY_ENTRIES = int(
     os.getenv("NOTEBOOK_API_MAX_DEPLOY_HISTORY_ENTRIES", "50")
 )
 
+# Same NOTEBOOK_API_* convention as MAX_DEPLOY_HISTORY_ENTRIES above, for
+# this dashboard's own compile history (see _append_compile_history_entry
+# below) instead of its deploy history.
+MAX_COMPILE_HISTORY_ENTRIES = int(
+    os.getenv("NOTEBOOK_API_MAX_COMPILE_HISTORY_ENTRIES", "50")
+)
+
 # Same NOTEBOOK_API_* convention as MAX_UPLOAD_BYTES/DEPLOY_SUBPROCESS_
 # TIMEOUT_SECONDS above. upload_notebook's own hidden ".<name>.<uuid>.part"
 # temp files (see temp_path below) are already cleaned up on every error
@@ -5359,6 +5366,17 @@ def compile_notebook_endpoint(
                 if endpoint["path"].lstrip("/") in kept_names
             ]
 
+        _append_compile_history_entry({
+            "compiled_at": datetime.now(timezone.utc).isoformat(),
+            "notebook_filename": notebook_path,
+            "source_notebook_sha256": hash_notebook_file(str(full_path)),
+            "only": only,
+            "exclude": exclude,
+            "endpoint_count": len(data["endpoints"]),
+            "dependency_count": len(data["dependencies"]),
+            "skipped_function_count": len(data["skipped_functions"]),
+        })
+
         return {
             "status": "success",
             "notebook": notebook_path,
@@ -5738,6 +5756,83 @@ def _append_deploy_history_entry(entry: dict) -> None:
     os.replace(temp_path, _deploy_history_path())
 
 
+def _compile_history_path() -> Path:
+    """Path to the hidden JSON file recording this dashboard's own past
+    POST /api/compile invocations.
+
+    Stored directly inside UPLOAD_DIR, the identical hidden-sidecar-file
+    convention _deploy_history_path already uses for this dashboard's
+    deploy history -- for the same reason: every successful compile
+    already clears GENERATED_DIR down to a fresh build via
+    clear_stale_export_artifacts (backend/compiler.py), and DELETE
+    /api/generated removes it entirely, neither of which should also
+    wipe out a dashboard's own compile history. .compile_metadata.json
+    (write_compile_metadata, backend/compiler.py) only ever tracks the
+    single most recent compile's own source notebook -- there was
+    previously nowhere a dashboard recorded that a compile had happened
+    at all once superseded by the next one, the same gap
+    _deploy_history_path's own docstring already named for deploys before
+    GET /api/deploy/history closed it.
+    """
+    return Path(UPLOAD_DIR) / ".compile_history.json"
+
+
+def _read_compile_history() -> list:
+    """This dashboard's own past compiles, oldest first -- the same
+    fixed-width list _append_compile_history_entry below maintains, or []
+    if nothing has ever been compiled through this dashboard yet, or the
+    history file is missing/unreadable/corrupt. Compile history is
+    optional, best-effort bookkeeping, the identical reasoning
+    _read_deploy_history already applies to deploy history -- a bad
+    history file should never break POST /api/compile or GET
+    /api/compile/history over it.
+    """
+    history_path = _compile_history_path()
+
+    if not history_path.is_file():
+        return []
+
+    try:
+
+        with open(history_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+    except (OSError, ValueError):
+        return []
+
+    entries = data.get("entries")
+
+    if not isinstance(entries, list):
+        return []
+
+    return entries
+
+
+def _append_compile_history_entry(entry: dict) -> None:
+    """Record `entry` as this dashboard's most recent compile, keeping at
+    most the MAX_COMPILE_HISTORY_ENTRIES most recent entries -- the same
+    bounded-history, oldest-dropped-first policy _append_deploy_history_
+    entry already applies to deploy history, just applied to compile
+    history instead.
+
+    Writes via the identical temp-file-then-os.replace atomic swap in
+    UPLOAD_DIR _append_deploy_history_entry itself already uses, so a
+    concurrent GET /api/compile/history never observes a
+    partially-written history file.
+    """
+    entries = _read_compile_history()
+    entries.append(entry)
+    entries = entries[-MAX_COMPILE_HISTORY_ENTRIES:]
+
+    upload_root = Path(UPLOAD_DIR).resolve()
+    temp_path = upload_root / f".compile_history.{uuid.uuid4().hex}.part"
+
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump({"entries": entries}, f)
+
+    os.replace(temp_path, _compile_history_path())
+
+
 def _run_docker_command(args, cwd):
     """Run a `docker ...` subprocess for /api/deploy, translating the two
     ways it can fail to even complete into a clean HTTPException instead
@@ -6061,6 +6156,80 @@ def clear_deploy_history():
     entries = _read_deploy_history()
 
     _deploy_history_path().unlink(missing_ok=True)
+
+    return {
+        "status": "success",
+        "deleted_count": len(entries),
+    }
+
+
+@router.get("/compile/history")
+def compile_history_endpoint():
+    """This dashboard's own past POST /api/compile invocations, most
+    recent first -- up to the last MAX_COMPILE_HISTORY_ENTRIES.
+
+    .compile_metadata.json (write_compile_metadata, backend/compiler.py)
+    only ever tracks the single most recent compile's own source
+    notebook -- overwritten by the very next one, the same way
+    GENERATED_DIR's own contents are. An operator asking "how many times
+    has this notebook been recompiled", "when did we last compile with
+    --exclude", or "did compiling this notebook actually change what it
+    exposed" had nothing on the dashboard itself to answer that once a
+    later compile had superseded the one they cared about -- the exact
+    gap GET /api/deploy/history already closed for this dashboard's past
+    deploys, just for compiles instead.
+
+    Every field mirrors exactly what the POST /api/compile call that
+    produced it either received or computed at the time:
+    "notebook_filename" is the request's own "notebook_path",
+    "source_notebook_sha256" is that notebook's exact content at compile
+    time (see hash_notebook_file, backend/compiler.py -- the same digest
+    GET /api/notebooks/duplicates and GET /api/notebooks' own
+    "notebook_changed_since_compile" already use), "only"/"exclude" are
+    the request's own values (null when neither was given), and
+    "endpoint_count"/"dependency_count"/"skipped_function_count" are
+    computed from that compile's own response.
+
+    Deliberately read-only, the same reasoning GET /api/deploy/history's
+    own docstring already gives: this dashboard's compile history is a
+    record of what already happened, not something a caller edits or
+    replays through this endpoint. Only recorded for POST /api/compile
+    (a dashboard-tracked compile) -- the CLI's own local `compile` never
+    touches a dashboard's UPLOAD_DIR at all, so it has nothing to record
+    this history into.
+    """
+
+    entries = list(reversed(_read_compile_history()))
+
+    return {
+        "status": "success",
+        "entries": entries,
+        "entry_count": len(entries),
+    }
+
+
+@router.delete("/compile/history")
+def clear_compile_history():
+    """Permanently discard this dashboard's entire compile history log at
+    once, the exact counterpart DELETE /api/deploy/history already
+    provides for this dashboard's deploy history.
+
+    An operator wanting to reclaim it sooner than
+    MAX_COMPILE_HISTORY_ENTRIES more compiles would age it out on its own
+    (e.g. before handing a dashboard instance off to someone else) had no
+    way to act on that at all. Never touches GENERATED_DIR, whatever it
+    currently backs, .compile_metadata.json, or any uploaded notebook's
+    own tags/description/version history -- compile history is
+    bookkeeping about past POST /api/compile calls, entirely independent
+    of all of those. A no-op success (not a 404) when nothing has ever
+    been compiled through this dashboard yet, the same "nothing to clear
+    is still a valid outcome" reasoning DELETE /api/deploy/history's own
+    no-op-for-no-history case already follows.
+    """
+
+    entries = _read_compile_history()
+
+    _compile_history_path().unlink(missing_ok=True)
 
     return {
         "status": "success",

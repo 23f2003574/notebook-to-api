@@ -343,7 +343,7 @@ _CORE_COMMANDS = frozenset({
     "search-functions", "search-content", "find-duplicates", "storage",
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy",
     "copy-batch", "tags", "prune-versions", "description", "deploy-history",
-    "clear-deploy-history",
+    "clear-deploy-history", "compile-history", "clear-compile-history",
     "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
     "status", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
@@ -3742,6 +3742,94 @@ def _dispatch_core_command(args):
                 f"entr(y/ies) on {dashboard_url}"
             )
 
+    elif args.command == "compile-history":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/compile/history", timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            entries = data.get("entries", [])
+
+            if not entries:
+                print(f"No compiles recorded on {dashboard_url} yet.")
+            else:
+
+                for entry in entries:
+
+                    endpoint_count = entry.get("endpoint_count", 0)
+                    notebook = entry.get("notebook_filename") or "(unknown notebook)"
+
+                    print(
+                        f"{entry.get('compiled_at')}  {notebook}  "
+                        f"({endpoint_count} endpoint(s))"
+                    )
+
+                print(f"\n{data.get('entry_count', len(entries))} compile(s) on {dashboard_url}")
+
+    elif args.command == "clear-compile-history":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        if not args.yes:
+            # DELETE /api/compile/history (routes/upload.py) has no
+            # confirmation step of its own and is irreversible -- the
+            # same reasoning `clear-deploy-history` already prompts for.
+            answer = input(
+                f"Permanently discard the entire compile history on "
+                f"{dashboard_url}? [y/N] "
+            )
+            if answer.strip().lower() not in ("y", "yes"):
+                print("Aborted.")
+                return
+
+        try:
+            response = httpx.delete(
+                f"{dashboard_url}/api/compile/history", timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            print(
+                f"Discarded {data.get('deleted_count', 0)} compile history "
+                f"entr(y/ies) on {dashboard_url}"
+            )
+
     elif args.command == "status":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -6129,6 +6217,66 @@ def main():
         )
     )
     clear_deploy_history_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"deleted_count\"}) instead of a human-readable summary, "
+            "for scripting/automation."
+        )
+    )
+
+    # compile-history command (this dashboard's own past POST
+    # /api/compile invocations, via its GET /api/compile/history --
+    # distinct from `remote-compile`, which triggers a new one, and from
+    # `deploy-history` above, which is this dashboard's *deploy* history
+    # instead)
+    compile_history_parser = subparsers.add_parser(
+        "compile-history",
+        help=(
+            "Show a running dashboard instance's own past compiles, via "
+            "its GET /api/compile/history."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(compile_history_parser)
+    compile_history_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"entries\": [{\"compiled_at\", \"notebook_filename\", "
+            "\"source_notebook_sha256\", \"only\", \"exclude\", "
+            "\"endpoint_count\", \"dependency_count\", "
+            "\"skipped_function_count\"}, ...], \"entry_count\"}) instead "
+            "of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    # clear-compile-history command (discard a running dashboard's entire
+    # compile history log at once, via its DELETE /api/compile/history --
+    # distinct from `compile-history` above, which only ever reads it)
+    clear_compile_history_parser = subparsers.add_parser(
+        "clear-compile-history",
+        help=(
+            "Permanently discard a running dashboard instance's entire "
+            "compile history log, via its DELETE /api/compile/history."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(clear_compile_history_parser)
+    clear_compile_history_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Confirm the deletion without an interactive prompt. Without "
+            "this, `clear-compile-history` asks for a y/N confirmation on "
+            "the terminal before sending the request -- DELETE "
+            "/api/compile/history itself has no confirmation step of its "
+            "own, and is irreversible."
+        )
+    )
+    clear_compile_history_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",

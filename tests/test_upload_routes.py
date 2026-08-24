@@ -9051,6 +9051,201 @@ def test_clear_deploy_history_does_not_touch_generated_dir_or_notebooks(
     assert (generated_dir_before / "Dockerfile").is_file() == dockerfile_existed_before
 
 
+def test_compile_history_is_empty_before_any_compile(monkeypatch, tmp_path):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "compile_history_empty_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    resp = client.get("/api/compile/history")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "success", "entries": [], "entry_count": 0}
+
+
+def test_compile_records_a_history_entry(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "compile_history_record_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    _compile_a_notebook("compile_history_record_test.ipynb")
+
+    history_resp = client.get("/api/compile/history")
+    assert history_resp.status_code == 200
+
+    body = history_resp.json()
+    assert body["entry_count"] == 1
+
+    entry = body["entries"][0]
+    assert entry["notebook_filename"] == "compile_history_record_test.ipynb"
+    assert entry["endpoint_count"] == 1
+    assert entry["only"] is None
+    assert entry["exclude"] is None
+    assert entry["source_notebook_sha256"]
+    assert entry["compiled_at"]
+
+
+def test_compile_history_records_only_and_exclude(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "compile_history_only_exclude_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+        "def sub(a: int, b: int) -> int:\n    return a - b\n"
+    )
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "compile_history_only_test.ipynb", io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/compile",
+        json={"notebook_path": "compile_history_only_test.ipynb", "only": ["add"]},
+    )
+    assert resp.status_code == 200
+
+    entry = client.get("/api/compile/history").json()["entries"][0]
+    assert entry["only"] == ["add"]
+    assert entry["exclude"] is None
+    assert entry["endpoint_count"] == 1
+
+
+def test_compile_history_lists_most_recent_first(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "compile_history_order_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    _compile_a_notebook("compile_history_order_a.ipynb")
+    _compile_a_notebook("compile_history_order_b.ipynb")
+
+    entries = client.get("/api/compile/history").json()["entries"]
+    filenames_in_order = [e["notebook_filename"] for e in entries]
+    assert filenames_in_order == [
+        "compile_history_order_b.ipynb", "compile_history_order_a.ipynb",
+    ]
+
+
+def test_compile_history_is_capped_at_the_configured_maximum(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "compile_history_cap_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+    monkeypatch.setattr(upload_module, "MAX_COMPILE_HISTORY_ENTRIES", 3)
+
+    for i in range(5):
+        upload_module._append_compile_history_entry({
+            "compiled_at": f"2024-01-0{i + 1}T00:00:00+00:00",
+            "notebook_filename": f"cap_{i}.ipynb",
+            "source_notebook_sha256": "abc",
+            "only": None,
+            "exclude": None,
+            "endpoint_count": 1,
+            "dependency_count": 0,
+            "skipped_function_count": 0,
+        })
+
+    body = client.get("/api/compile/history").json()
+    assert body["entry_count"] == 3
+    assert [e["notebook_filename"] for e in body["entries"]] == [
+        "cap_4.ipynb", "cap_3.ipynb", "cap_2.ipynb",
+    ]
+
+
+def test_clear_compile_history_removes_every_entry(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_compile_history_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    for i in range(3):
+        upload_module._append_compile_history_entry({
+            "compiled_at": f"2024-01-0{i + 1}T00:00:00+00:00",
+            "notebook_filename": f"clear_{i}.ipynb",
+            "source_notebook_sha256": "abc",
+            "only": None,
+            "exclude": None,
+            "endpoint_count": 1,
+            "dependency_count": 0,
+            "skipped_function_count": 0,
+        })
+
+    assert client.get("/api/compile/history").json()["entry_count"] == 3
+
+    clear_resp = client.delete("/api/compile/history")
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "deleted_count": 3}
+    assert client.get("/api/compile/history").json() == {
+        "status": "success", "entries": [], "entry_count": 0,
+    }
+
+
+def test_clear_compile_history_is_a_no_op_success_when_nothing_was_ever_compiled(
+    tmp_path, monkeypatch
+):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_compile_history_empty_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    resp = client.delete("/api/compile/history")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "success", "deleted_count": 0}
+
+
+def test_clear_compile_history_does_not_touch_generated_dir_or_notebooks(
+    tmp_path, monkeypatch
+):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_compile_history_isolation_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    upload_module._append_compile_history_entry({
+        "compiled_at": "2024-01-01T00:00:00+00:00",
+        "notebook_filename": "isolation.ipynb",
+        "source_notebook_sha256": "abc",
+        "only": None,
+        "exclude": None,
+        "endpoint_count": 1,
+        "dependency_count": 0,
+        "skipped_function_count": 0,
+    })
+
+    generated_dir_before = Path(upload_module.GENERATED_DIR)
+    dockerfile_existed_before = (generated_dir_before / "Dockerfile").is_file()
+
+    client.delete("/api/compile/history")
+
+    assert (generated_dir_before / "Dockerfile").is_file() == dockerfile_existed_before
+
+
 def test_deploy_endpoint_returns_500_when_docker_is_missing(tmp_path, monkeypatch):
 
     _compile_a_notebook("deploy_missing_docker_test.ipynb")
