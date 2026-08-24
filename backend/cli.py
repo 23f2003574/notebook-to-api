@@ -3647,9 +3647,22 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        params = {}
+
+        if args.source_notebook_filename:
+            params["source_notebook_filename"] = args.source_notebook_filename
+        if args.platform:
+            params["platform"] = args.platform
+        if args.pushed is not None:
+            params["pushed"] = args.pushed
+        if args.limit is not None:
+            params["limit"] = args.limit
+
         try:
             response = httpx.get(
-                f"{dashboard_url}/api/deploy/history", timeout=args.timeout,
+                f"{dashboard_url}/api/deploy/history",
+                params=params,
+                timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
             raise _dashboard_connection_error(exc, dashboard_url)
@@ -6037,6 +6050,46 @@ def main():
         help=(
             "Show a running dashboard instance's own past deploys, via "
             "its GET /api/deploy/history."
+        )
+    )
+    deploy_history_parser.add_argument(
+        "--source-notebook",
+        dest="source_notebook_filename",
+        help=(
+            "Only show deploys whose compiled source was this exact "
+            "notebook filename, via GET /api/deploy/history's own "
+            "?source_notebook_filename= query param."
+        )
+    )
+    deploy_history_parser.add_argument(
+        "--platform",
+        help=(
+            "Only show deploys built for this exact --platform value, via "
+            "GET /api/deploy/history's own ?platform= query param."
+        )
+    )
+    pushed_group = deploy_history_parser.add_mutually_exclusive_group()
+    pushed_group.add_argument(
+        "--pushed-only",
+        action="store_const",
+        dest="pushed",
+        const=True,
+        help="Only show deploys that were pushed to a registry."
+    )
+    pushed_group.add_argument(
+        "--not-pushed",
+        action="store_const",
+        dest="pushed",
+        const=False,
+        help="Only show deploys that were not pushed to a registry."
+    )
+    deploy_history_parser.add_argument(
+        "--limit",
+        type=int,
+        help=(
+            "Only show (at most) this many of the most recent matching "
+            "deploys, via GET /api/deploy/history's own ?limit= query "
+            "param."
         )
     )
     _add_dashboard_url_and_timeout_arguments(deploy_history_parser)

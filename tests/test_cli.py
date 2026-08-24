@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import threading
+import urllib.parse
 import zipfile
 from pathlib import Path
 
@@ -9713,6 +9714,79 @@ def test_deploy_history_command_json_flag_emits_the_dashboards_own_response(
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads(proc.stdout) == body
+
+
+def test_deploy_history_command_sends_filter_and_limit_query_params(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "entries": [], "entry_count": 0})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "deploy-history",
+            "--source-notebook", "nb.ipynb",
+            "--platform", "linux/amd64",
+            "--pushed-only",
+            "--limit", "5",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert len(handler.requests) == 1
+    request_path = handler.requests[0]
+    assert request_path.startswith("/api/deploy/history?")
+
+    query = urllib.parse.parse_qs(request_path.split("?", 1)[1])
+    assert query == {
+        "source_notebook_filename": ["nb.ipynb"],
+        "platform": ["linux/amd64"],
+        "pushed": ["true"],
+        "limit": ["5"],
+    }
+
+
+def test_deploy_history_command_not_pushed_flag_sends_pushed_false(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "entries": [], "entry_count": 0})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["deploy-history", "--not-pushed", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query["pushed"] == ["false"]
+
+
+def test_deploy_history_command_rejects_pushed_only_and_not_pushed_together(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "deploy-history", "--pushed-only", "--not-pushed",
+            "--dashboard-url", "http://127.0.0.1:1",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode != 0
+    assert "not allowed with argument" in proc.stderr
 
 
 def test_deploy_history_command_reports_a_clean_error_when_the_dashboard_is_unreachable(

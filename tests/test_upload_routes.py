@@ -8860,6 +8860,99 @@ def test_deploy_history_is_capped_at_the_configured_maximum(tmp_path, monkeypatc
     assert [e["tag"] for e in body["entries"]] == ["cap:4", "cap:3", "cap:2"]
 
 
+def _seed_deploy_history_for_filtering(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "deploy_history_filter_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    entries = [
+        {
+            "deployed_at": "2024-01-01T00:00:00+00:00", "tag": "filter:a",
+            "platform": "linux/amd64", "pushed": True,
+            "source_notebook_filename": "one.ipynb", "source_notebook_sha256": "aaa",
+        },
+        {
+            "deployed_at": "2024-01-02T00:00:00+00:00", "tag": "filter:b",
+            "platform": "linux/arm64", "pushed": False,
+            "source_notebook_filename": "two.ipynb", "source_notebook_sha256": "bbb",
+        },
+        {
+            "deployed_at": "2024-01-03T00:00:00+00:00", "tag": "filter:c",
+            "platform": "linux/amd64", "pushed": False,
+            "source_notebook_filename": "one.ipynb", "source_notebook_sha256": "ccc",
+        },
+    ]
+
+    for entry in entries:
+        upload_module._append_deploy_history_entry(entry)
+
+
+def test_deploy_history_filters_by_source_notebook_filename(tmp_path, monkeypatch):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get(
+        "/api/deploy/history", params={"source_notebook_filename": "one.ipynb"}
+    ).json()
+
+    assert [e["tag"] for e in body["entries"]] == ["filter:c", "filter:a"]
+    assert body["entry_count"] == 2
+
+
+def test_deploy_history_filters_by_platform(tmp_path, monkeypatch):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get("/api/deploy/history", params={"platform": "linux/arm64"}).json()
+
+    assert [e["tag"] for e in body["entries"]] == ["filter:b"]
+
+
+def test_deploy_history_filters_by_pushed(tmp_path, monkeypatch):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    pushed_body = client.get("/api/deploy/history", params={"pushed": "true"}).json()
+    assert [e["tag"] for e in pushed_body["entries"]] == ["filter:a"]
+
+    not_pushed_body = client.get("/api/deploy/history", params={"pushed": "false"}).json()
+    assert [e["tag"] for e in not_pushed_body["entries"]] == ["filter:c", "filter:b"]
+
+
+def test_deploy_history_respects_limit(tmp_path, monkeypatch):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get("/api/deploy/history", params={"limit": 2}).json()
+
+    assert [e["tag"] for e in body["entries"]] == ["filter:c", "filter:b"]
+    assert body["entry_count"] == 2
+
+
+def test_deploy_history_combines_filters_and_limit(tmp_path, monkeypatch):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get(
+        "/api/deploy/history",
+        params={"source_notebook_filename": "one.ipynb", "limit": 1},
+    ).json()
+
+    assert [e["tag"] for e in body["entries"]] == ["filter:c"]
+
+
+def test_deploy_history_rejects_a_negative_limit(tmp_path, monkeypatch):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    resp = client.get("/api/deploy/history", params={"limit": -1})
+
+    assert resp.status_code == 400
+
+
 def test_deploy_does_not_record_a_history_entry_on_build_failure(tmp_path, monkeypatch):
 
     from backend.routes import upload as upload_module

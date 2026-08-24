@@ -5956,7 +5956,12 @@ def deploy_generated_app(data: dict = None):
 
 
 @router.get("/deploy/history")
-def deploy_history_endpoint():
+def deploy_history_endpoint(
+    source_notebook_filename: str = None,
+    platform: str = None,
+    pushed: bool = None,
+    limit: int = None,
+):
     """This dashboard's own past POST /api/deploy invocations, most
     recent first -- up to the last MAX_DEPLOY_HISTORY_ENTRIES.
 
@@ -5974,6 +5979,17 @@ def deploy_history_endpoint():
     404s before ever reaching a build when no Dockerfile exists in
     GENERATED_DIR).
 
+    "source_notebook_filename"/"platform"/"pushed" filter the returned
+    entries to ones with an exact match on that field before "limit" is
+    applied -- before this, a caller wanting only a specific notebook's
+    own deploy history (e.g. to answer "when did we last deploy this one")
+    had to fetch the entire log and filter it client-side, the same gap
+    GET /api/notebooks' own "search"/"tag" query params already close for
+    the notebook catalog. "limit" caps how many of the (already-filtered)
+    entries are returned, same "most recent first" ordering, without
+    needing MAX_DEPLOY_HISTORY_ENTRIES raised or lowered just to change
+    how many a single call gets back.
+
     Deliberately read-only: this dashboard's deploy history is a record
     of what already happened, not something a caller edits or replays
     through this endpoint -- an entry age out only once
@@ -5983,6 +5999,29 @@ def deploy_history_endpoint():
     """
 
     entries = list(reversed(_read_deploy_history()))
+
+    if source_notebook_filename is not None:
+        entries = [
+            entry for entry in entries
+            if entry.get("source_notebook_filename") == source_notebook_filename
+        ]
+
+    if platform is not None:
+        entries = [entry for entry in entries if entry.get("platform") == platform]
+
+    if pushed is not None:
+        entries = [entry for entry in entries if entry.get("pushed") == pushed]
+
+    if limit is not None:
+
+        if limit < 0:
+
+            raise HTTPException(
+                status_code=400,
+                detail="limit must be a non-negative integer"
+            )
+
+        entries = entries[:limit]
 
     return {
         "status": "success",
