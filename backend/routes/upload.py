@@ -6621,6 +6621,7 @@ def clear_deploy_history(source_notebook_filename: str = None):
 @router.get("/compile/history")
 def compile_history_endpoint(
     notebook_filename: str = None,
+    source_notebook_sha256: str = None,
     limit: int = None,
     offset: int = 0,
 ):
@@ -6665,6 +6666,21 @@ def compile_history_endpoint(
     negative "offset" is rejected with 400, the same way a negative
     "limit" already is below.
 
+    "source_notebook_sha256" matches exactly against each entry's own
+    "source_notebook_sha256" -- the exact notebook *content* compiled,
+    the same digest GET /api/notebooks/duplicates already groups uploads
+    by -- rather than "notebook_filename"'s current name. A notebook can
+    be renamed (PATCH /api/notebooks/{filename}) or overwritten
+    (POST /api/upload?overwrite=true) between compiles, at which point
+    "notebook_filename" alone can no longer answer "was *this exact
+    content* -- the bytes I'm holding right now, or that GET
+    /api/notebooks/duplicates just grouped under this hash -- ever
+    actually compiled, and with what result", since that content may now
+    sit under a different filename, or several. Composes with
+    "notebook_filename"/"offset"/"limit" identically to every other
+    filter here; an unknown or never-compiled hash simply yields no
+    matching entries, not an error, the same as "notebook_filename".
+
     Deliberately read-only, the same reasoning GET /api/deploy/history's
     own docstring already gives: this dashboard's compile history is a
     record of what already happened, not something a caller edits or
@@ -6680,6 +6696,12 @@ def compile_history_endpoint(
         entries = [
             entry for entry in entries
             if entry.get("notebook_filename") == notebook_filename
+        ]
+
+    if source_notebook_sha256 is not None:
+        entries = [
+            entry for entry in entries
+            if entry.get("source_notebook_sha256") == source_notebook_sha256
         ]
 
     if offset < 0:

@@ -3903,6 +3903,8 @@ def _dispatch_core_command(args):
 
         if args.notebook_filename:
             params["notebook_filename"] = args.notebook_filename
+        if args.source_notebook_sha256:
+            params["source_notebook_sha256"] = args.source_notebook_sha256
         if args.limit is not None:
             params["limit"] = args.limit
         if args.offset:
@@ -6594,6 +6596,19 @@ def main():
         help=(
             "Only show compiles of this exact notebook filename, via GET "
             "/api/compile/history's own ?notebook_filename= query param."
+        )
+    )
+    compile_history_parser.add_argument(
+        "--source-sha256",
+        dest="source_notebook_sha256",
+        help=(
+            "Only show compiles of this exact notebook content, via GET "
+            "/api/compile/history's own ?source_notebook_sha256= query "
+            "param -- matches the notebook's content hash at compile "
+            "time (the same digest GET /api/notebooks/duplicates groups "
+            "uploads by) rather than its current filename, so it still "
+            "finds a compile after the notebook was later renamed or "
+            "overwritten."
         )
     )
     compile_history_parser.add_argument(

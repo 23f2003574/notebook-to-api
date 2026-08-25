@@ -10617,6 +10617,31 @@ def test_compile_history_command_sends_notebook_and_limit_query_params(
     assert query == {"notebook_filename": ["nb.ipynb"], "limit": ["5"]}
 
 
+def test_compile_history_command_sends_source_sha256_query_param(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "entries": [], "entry_count": 0})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "compile-history", "--source-sha256", "abc123",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query == {"source_notebook_sha256": ["abc123"]}
+
+
 def test_compile_history_command_sends_offset_query_param(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

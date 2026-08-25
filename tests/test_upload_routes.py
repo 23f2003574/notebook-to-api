@@ -10092,6 +10092,56 @@ def test_compile_history_filters_by_notebook_filename(tmp_path, monkeypatch):
     assert body["entry_count"] == 2
 
 
+def test_compile_history_filters_by_source_notebook_sha256(tmp_path, monkeypatch):
+
+    _seed_compile_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get(
+        "/api/compile/history", params={"source_notebook_sha256": "bbb"}
+    ).json()
+
+    assert [e["notebook_filename"] for e in body["entries"]] == ["two.ipynb"]
+    assert body["entry_count"] == 1
+
+
+def test_compile_history_combines_source_notebook_sha256_and_notebook_filename(
+    tmp_path, monkeypatch
+):
+
+    _seed_compile_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get(
+        "/api/compile/history",
+        params={"source_notebook_sha256": "ccc", "notebook_filename": "one.ipynb"},
+    ).json()
+
+    assert [e["source_notebook_sha256"] for e in body["entries"]] == ["ccc"]
+
+    # A mismatched combination (a hash that was never compiled under this
+    # filename) narrows to nothing, exactly like every other pair of
+    # filters here.
+    body = client.get(
+        "/api/compile/history",
+        params={"source_notebook_sha256": "ccc", "notebook_filename": "two.ipynb"},
+    ).json()
+
+    assert body["entries"] == []
+
+
+def test_compile_history_unknown_source_notebook_sha256_yields_no_entries(
+    tmp_path, monkeypatch
+):
+
+    _seed_compile_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get(
+        "/api/compile/history", params={"source_notebook_sha256": "no-such-hash"}
+    ).json()
+
+    assert body["entries"] == []
+    assert body["entry_count"] == 0
+
+
 def test_compile_history_filters_by_unknown_notebook_filename_yields_no_entries(
     tmp_path, monkeypatch
 ):
