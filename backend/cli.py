@@ -1593,9 +1593,14 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        params = {}
+        if args.tag:
+            params["tag"] = args.tag
+
         try:
             response = httpx.get(
                 f"{dashboard_url}/api/notebooks/storage",
+                params=params,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -4757,6 +4762,15 @@ def main():
             "Report disk usage across every notebook already uploaded to "
             "a running dashboard instance, including their own version "
             "history, via GET /api/notebooks/storage."
+        )
+    )
+    storage_parser.add_argument(
+        "--tag",
+        help=(
+            "Only report disk usage for notebooks currently carrying "
+            "this exact tag, via GET /api/notebooks/storage's own "
+            "?tag= query param -- both the per-notebook list and every "
+            "running total are scoped to it."
         )
     )
     _add_dashboard_url_and_timeout_arguments(storage_parser)

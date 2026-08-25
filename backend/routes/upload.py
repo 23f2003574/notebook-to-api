@@ -2655,7 +2655,7 @@ def diff_notebooks(old: str = None, new: str = None):
 
 
 @router.get("/notebooks/storage")
-def notebook_storage_usage():
+def notebook_storage_usage(tag: str = None):
     """How much disk space UPLOAD_DIR is actually using, broken down per
     notebook -- its own current bytes plus everything its snapshotted
     version history (see _notebook_versions_dir/_snapshot_current_notebook_version
@@ -2690,6 +2690,17 @@ def notebook_storage_usage():
     COMPILE_LOCK -- unlike GET /api/notebooks?sort=size, which orders by
     a single notebook's own bytes alone, this is the first place a
     notebook's version history is actually sized and summed at all.
+
+    "tag" (optional) scopes both the per-notebook "notebooks" list and
+    every running total to only notebooks currently carrying that exact
+    tag, the same exact-match GET /api/notebooks?tag= already filters by
+    -- an operator asking "how much space are my *production* notebooks
+    (plus their version history) actually using" previously had to fetch
+    every notebook's own entry here and filter/re-sum the response down
+    client-side, since totals computed over the whole catalog can't be
+    narrowed after the fact. Applied before a notebook's own bytes (or
+    its version directory) are ever read, so an out-of-tag notebook
+    contributes nothing to "notebooks" or any running total at all.
     """
 
     upload_root = Path(UPLOAD_DIR)
@@ -2702,6 +2713,9 @@ def notebook_storage_usage():
     for entry in sorted(upload_root.iterdir()):
 
         if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        if tag and tag not in _read_notebook_tags(entry.name):
             continue
 
         notebook_bytes = entry.stat().st_size

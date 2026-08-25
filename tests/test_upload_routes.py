@@ -2972,6 +2972,60 @@ def test_notebook_storage_reports_per_notebook_and_total_bytes():
     assert entries_by_filename["storage_b.ipynb"]["notebook_bytes"] == len(content_b)
 
 
+def test_notebook_storage_filters_by_tag():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+    content_b = _notebook_bytes(
+        "def subtract_two_numbers(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    for filename, content in (
+        ("storage_tag_prod.ipynb", content_a),
+        ("storage_tag_other.ipynb", content_b),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    client.put(
+        "/api/notebooks/storage_tag_prod.ipynb/tags", json={"tags": ["prod"]}
+    )
+
+    resp = client.get("/api/notebooks/storage", params={"tag": "prod"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["notebook_count"] == 1
+    assert [n["filename"] for n in body["notebooks"]] == ["storage_tag_prod.ipynb"]
+    assert body["total_notebook_bytes"] == len(content_a)
+    assert body["total_bytes"] == len(content_a)
+
+
+def test_notebook_storage_unknown_tag_reports_zeros():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    resp = client.post(
+        "/api/upload",
+        files={"file": ("storage_no_tag.ipynb", io.BytesIO(content), "application/json")},
+    )
+    assert resp.status_code == 200
+
+    resp = client.get("/api/notebooks/storage", params={"tag": "no-such-tag"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["notebooks"] == []
+    assert body["notebook_count"] == 0
+    assert body["total_bytes"] == 0
+
+
 def test_notebook_storage_includes_version_history_bytes():
 
     client.delete("/api/notebooks?confirm=true")

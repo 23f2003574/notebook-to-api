@@ -3533,6 +3533,25 @@ def test_storage_command_prints_per_notebook_and_total_usage(fake_dashboard):
     assert handler.requests == ["/api/notebooks/storage"]
 
 
+def test_storage_command_sends_tag_query_param(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "notebooks": [], "notebook_count": 0,
+        "total_notebook_bytes": 0, "total_version_bytes": 0,
+        "total_version_count": 0, "total_bytes": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["storage", "--tag", "prod", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/storage?tag=prod"]
+
+
 def test_storage_command_reports_no_notebooks(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
