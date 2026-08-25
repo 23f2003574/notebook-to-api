@@ -3774,6 +3774,8 @@ def _dispatch_core_command(args):
             params["source_notebook_filename"] = args.source_notebook_filename
         if args.platform:
             params["platform"] = args.platform
+        if args.tag:
+            params["tag"] = args.tag
         if args.pushed is not None:
             params["pushed"] = args.pushed
         if args.limit is not None:
@@ -6410,6 +6412,14 @@ def main():
         help=(
             "Only show deploys built for this exact --platform value, via "
             "GET /api/deploy/history's own ?platform= query param."
+        )
+    )
+    deploy_history_parser.add_argument(
+        "--tag",
+        help=(
+            "Only show deploys built under this exact Docker image tag "
+            "(e.g. \"myapp:latest\"), via GET /api/deploy/history's own "
+            "?tag= query param -- not a notebook's own category tag."
         )
     )
     pushed_group = deploy_history_parser.add_mutually_exclusive_group()

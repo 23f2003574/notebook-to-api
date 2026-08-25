@@ -6398,6 +6398,7 @@ def deploy_generated_app(data: dict = None):
 def deploy_history_endpoint(
     source_notebook_filename: str = None,
     platform: str = None,
+    tag: str = None,
     pushed: bool = None,
     limit: int = None,
     offset: int = 0,
@@ -6419,13 +6420,24 @@ def deploy_history_endpoint(
     404s before ever reaching a build when no Dockerfile exists in
     GENERATED_DIR).
 
-    "source_notebook_filename"/"platform"/"pushed" filter the returned
-    entries to ones with an exact match on that field before "offset"/
-    "limit" are applied -- before this, a caller wanting only a specific
-    notebook's own deploy history (e.g. to answer "when did we last
-    deploy this one") had to fetch the entire log and filter it
+    "source_notebook_filename"/"platform"/"tag"/"pushed" filter the
+    returned entries to ones with an exact match on that field before
+    "offset"/"limit" are applied -- before this, a caller wanting only a
+    specific notebook's own deploy history (e.g. to answer "when did we
+    last deploy this one") had to fetch the entire log and filter it
     client-side, the same gap GET /api/notebooks' own "search"/"tag"
     query params already close for the notebook catalog.
+
+    "tag" matches exactly against each entry's own "tag" -- the Docker
+    image tag POST /api/deploy actually built (its own request "tag", or
+    the "{generated_dir_name}:latest" default when omitted), not a
+    notebook's category tag as GET /api/notebooks?tag= filters by. A
+    caller who always deploys under one fixed image tag but rotates
+    through several source notebooks now has an exact-match filter of
+    its own, the same way "source_notebook_filename" already gives the
+    inverse -- both compose with each other and every other filter
+    below identically, since each only ever narrows by its own entry
+    field.
 
     "offset" (default 0) is how many of the (already-filtered) entries,
     still most-recent-first, to skip before "limit" is applied -- the
@@ -6458,6 +6470,9 @@ def deploy_history_endpoint(
 
     if platform is not None:
         entries = [entry for entry in entries if entry.get("platform") == platform]
+
+    if tag is not None:
+        entries = [entry for entry in entries if entry.get("tag") == tag]
 
     if pushed is not None:
         entries = [entry for entry in entries if entry.get("pushed") == pushed]

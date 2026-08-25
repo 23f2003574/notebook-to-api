@@ -9494,6 +9494,39 @@ def test_deploy_history_filters_by_platform(tmp_path, monkeypatch):
     assert [e["tag"] for e in body["entries"]] == ["filter:b"]
 
 
+def test_deploy_history_filters_by_tag(tmp_path, monkeypatch):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get("/api/deploy/history", params={"tag": "filter:b"}).json()
+
+    assert [e["tag"] for e in body["entries"]] == ["filter:b"]
+    assert body["entry_count"] == 1
+
+
+def test_deploy_history_filters_by_tag_and_platform_combined(tmp_path, monkeypatch):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get(
+        "/api/deploy/history",
+        params={"tag": "filter:a", "platform": "linux/arm64"},
+    ).json()
+
+    assert body["entries"] == []
+    assert body["entry_count"] == 0
+
+
+def test_deploy_history_unknown_tag_yields_no_entries(tmp_path, monkeypatch):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get("/api/deploy/history", params={"tag": "no-such-tag:latest"}).json()
+
+    assert body["entries"] == []
+    assert body["entry_count"] == 0
+
+
 def test_deploy_history_filters_by_pushed(tmp_path, monkeypatch):
 
     _seed_deploy_history_for_filtering(tmp_path, monkeypatch)

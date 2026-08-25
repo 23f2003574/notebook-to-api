@@ -10195,6 +10195,26 @@ def test_deploy_history_command_sends_filter_and_limit_query_params(tmp_path, fa
     }
 
 
+def test_deploy_history_command_sends_tag_query_param(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "entries": [], "entry_count": 0})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["deploy-history", "--tag", "myapp:v2", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query == {"tag": ["myapp:v2"]}
+
+
 def test_deploy_history_command_not_pushed_flag_sends_pushed_false(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
