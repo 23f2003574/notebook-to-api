@@ -6811,6 +6811,29 @@ def test_validate_all_command_passes_when_every_notebook_is_clean(tmp_path, fake
     assert handler.requests == ["/api/validate-all?strict=false"]
 
 
+def test_validate_all_command_sends_tag_query_param(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "results": [], "pass_count": 0,
+            "warn_count": 0, "fail_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["validate-all", "--tag", "prod", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query == {"strict": ["false"], "tag": ["prod"]}
+
+
 def test_validate_all_command_exits_1_on_warnings_without_failing(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

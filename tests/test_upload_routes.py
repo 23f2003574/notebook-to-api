@@ -8034,6 +8034,64 @@ def test_validate_all_reports_pass_warn_and_fail_across_the_catalog():
     ]
 
 
+def test_validate_all_filters_by_tag():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    clean_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    fail_content = _notebook_bytes(
+        "def health_check() -> dict:\n    return {}\n"
+    )
+
+    for filename, content in (
+        ("validate_all_tag_prod.ipynb", fail_content),
+        ("validate_all_tag_other.ipynb", clean_content),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    client.put(
+        "/api/notebooks/validate_all_tag_prod.ipynb/tags", json={"tags": ["prod"]}
+    )
+
+    resp = client.get("/api/validate-all", params={"tag": "prod"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [r["filename"] for r in body["results"]] == ["validate_all_tag_prod.ipynb"]
+    assert body["fail_count"] == 1
+    assert body["pass_count"] == 0
+
+
+def test_validate_all_unknown_tag_yields_no_results():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    clean_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    resp = client.post(
+        "/api/upload",
+        files={"file": ("validate_all_no_tag.ipynb", io.BytesIO(clean_content), "application/json")},
+    )
+    assert resp.status_code == 200
+
+    resp = client.get("/api/validate-all", params={"tag": "no-such-tag"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["results"] == []
+    assert body["pass_count"] == 0
+    assert body["warn_count"] == 0
+    assert body["fail_count"] == 0
+
+
 def test_validate_all_strict_turns_skipped_functions_into_a_failure():
 
     client.delete("/api/notebooks?confirm=true")

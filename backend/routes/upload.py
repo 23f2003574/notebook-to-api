@@ -5136,7 +5136,7 @@ def validate_notebook_endpoint(
 
 
 @router.get("/validate-all")
-def validate_all_notebooks(strict: bool = False):
+def validate_all_notebooks(strict: bool = False, tag: str = None):
     """Run the identical pass/warn/fail check POST /api/validate already
     performs for one notebook, across every notebook already uploaded to
     this dashboard at once.
@@ -5163,6 +5163,16 @@ def validate_all_notebooks(strict: bool = False):
 
     "strict" applies uniformly to every notebook, the same single flag
     POST /api/validate itself takes -- there's no per-notebook override.
+
+    "tag" (optional) scopes the scan to only notebooks currently carrying
+    that exact tag, the same exact-match GET /api/notebooks?tag= and GET
+    /api/functions?tag= already filter by -- a CI job that only cares
+    about, say, its "production" notebooks previously had to validate
+    the entire catalog and filter the response down client-side
+    afterward. Applied before a notebook is even parsed, so an
+    out-of-tag notebook (including one that would otherwise fail to
+    parse) never contributes a result or counts toward
+    pass_count/warn_count/fail_count at all.
     """
 
     upload_root = Path(UPLOAD_DIR)
@@ -5175,6 +5185,9 @@ def validate_all_notebooks(strict: bool = False):
     for entry in sorted(upload_root.iterdir()):
 
         if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        if tag and tag not in _read_notebook_tags(entry.name):
             continue
 
         try:

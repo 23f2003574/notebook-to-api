@@ -2640,10 +2640,14 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        params = {"strict": args.strict}
+        if args.tag:
+            params["tag"] = args.tag
+
         try:
             response = httpx.get(
                 f"{dashboard_url}/api/validate-all",
-                params={"strict": args.strict},
+                params=params,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -5518,6 +5522,15 @@ def main():
             "it has skipped functions -- the same --strict "
             "`validate`/`remote-validate` already accept. By default "
             "these are reported as a non-fatal warning."
+        )
+    )
+    validate_all_parser.add_argument(
+        "--tag",
+        help=(
+            "Only validate notebooks currently carrying this exact tag, "
+            "via GET /api/validate-all's own ?tag= query param, the same "
+            "exact-match filter `search-functions --tag`/`list --tag` "
+            "already accept."
         )
     )
     validate_all_parser.add_argument(
