@@ -3357,6 +3357,51 @@ def test_delete_notebooks_batch_removes_only_the_named_notebooks():
     assert client.get("/api/notebooks/delete_batch_c.ipynb").status_code == 200
 
 
+def test_delete_notebooks_batch_dry_run_reports_the_plan_without_deleting():
+
+    _upload_sample_notebook("delete_batch_dry_a.ipynb")
+    _upload_sample_notebook("delete_batch_dry_b.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/delete-batch",
+        json={
+            "filenames": [
+                "delete_batch_dry_a.ipynb", "delete_batch_dry_b.ipynb",
+                "does_not_exist_dry.ipynb",
+            ],
+            "dry_run": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["succeeded_count"] == 2
+    assert body["failed_count"] == 1
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["delete_batch_dry_a.ipynb"]["status"] == "success"
+    assert results_by_filename["delete_batch_dry_b.ipynb"]["status"] == "success"
+    assert results_by_filename["does_not_exist_dry.ipynb"]["status"] == "error"
+
+    # Nothing was actually deleted.
+    assert client.get("/api/notebooks/delete_batch_dry_a.ipynb").status_code == 200
+    assert client.get("/api/notebooks/delete_batch_dry_b.ipynb").status_code == 200
+
+
+def test_delete_notebooks_batch_non_dry_run_reports_dry_run_false():
+
+    _upload_sample_notebook("delete_batch_real_run.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/delete-batch",
+        json={"filenames": ["delete_batch_real_run.ipynb"]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["dry_run"] is False
+
+
 def test_delete_notebooks_batch_reports_a_missing_filename_without_aborting_the_rest():
 
     _upload_sample_notebook("delete_batch_partial.ipynb")

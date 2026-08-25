@@ -4320,6 +4320,39 @@ def test_delete_batch_command_reports_success_with_yes_flag(tmp_path, fake_dashb
     assert handler.requests == ["/api/notebooks/delete-batch"]
 
 
+def test_delete_batch_command_dry_run_skips_confirmation_and_sends_dry_run_field(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": True,
+            "results": [
+                {"filename": "a.ipynb", "status": "success", "was_currently_compiled": False},
+            ],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    # No --yes, and no stdin input provided -- would hang/fail on a
+    # confirmation prompt if --dry-run didn't skip it.
+    proc = _run_cli(
+        ["delete-batch", "a.ipynb", "--dry-run", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would delete 'a.ipynb'" in proc.stdout
+    assert "1 succeeded, 0 failed" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {"filenames": ["a.ipynb"], "dry_run": True}
+
+
 def test_delete_batch_command_reports_a_partial_failure(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

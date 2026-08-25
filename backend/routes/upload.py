@@ -3126,6 +3126,22 @@ def delete_notebooks_batch(data: dict):
     DELETE /api/notebooks/{filename} and DELETE /api/notebooks already do
     -- a notebook re-uploaded later under the same filename must not
     silently inherit any of them left behind by this bulk delete.
+
+    "dry_run" (optional, default false, in the request body) reports the
+    exact same "results" a real batch would -- each filename's own
+    "success" (with "was_currently_compiled") or "error" (with the same
+    detail a real delete would raise, e.g. a 404 for a typo'd filename)
+    -- without deleting anything at all, the identical preview POST
+    /api/notebooks/duplicates/resolve's and DELETE
+    /api/notebooks/versions's own "dry_run" already provide for their own
+    irreversible batch operations. A caller building "filenames" from a
+    preceding GET /api/notebooks?search=... had no way to confirm that
+    list actually matches what they intended -- or catch a typo'd
+    filename before it's reported as an error only *after* every other
+    filename in the same batch was already deleted for good -- short of
+    checking each one against a separate GET /api/notebooks/{filename}
+    first. The top-level response's own "dry_run" field echoes back
+    whether this call actually deleted anything.
     """
 
     filenames = data.get("filenames")
@@ -3139,6 +3155,8 @@ def delete_notebooks_batch(data: dict):
             status_code=400,
             detail="filenames must be a non-empty list of strings"
         )
+
+    dry_run = bool(data.get("dry_run", False))
 
     compiled_path, _, _ = _currently_compiled_notebook_metadata()
 
@@ -3163,10 +3181,11 @@ def delete_notebooks_batch(data: dict):
                 compiled_path is not None and file_path.resolve() == compiled_path
             )
 
-            os.remove(file_path)
-            _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
-            _description_sidecar_path(file_path.name).unlink(missing_ok=True)
-            shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
+            if not dry_run:
+                os.remove(file_path)
+                _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
+                _description_sidecar_path(file_path.name).unlink(missing_ok=True)
+                shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
 
             results.append({
                 "filename": filename,
@@ -3186,6 +3205,7 @@ def delete_notebooks_batch(data: dict):
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "results": results,
         "succeeded_count": succeeded_count,
         "failed_count": failed_count,

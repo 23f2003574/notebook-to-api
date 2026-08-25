@@ -1863,11 +1863,12 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        if not args.yes:
+        if not args.dry_run and not args.yes:
             # POST /api/notebooks/delete-batch (routes/upload.py) has no
             # confirmation step of its own and is irreversible -- the same
             # reasoning `delete`'s own single-filename/--all paths already
-            # prompt for.
+            # prompt for. Not asked at all under --dry-run, which never
+            # deletes anything.
             filenames_display = ", ".join(args.filename)
             answer = input(
                 f"Delete {filenames_display} from {dashboard_url}? [y/N] "
@@ -1876,10 +1877,14 @@ def _dispatch_core_command(args):
                 print("Aborted.")
                 return
 
+        delete_batch_body = {"filenames": args.filename}
+        if args.dry_run:
+            delete_batch_body["dry_run"] = True
+
         try:
             response = httpx.post(
                 f"{dashboard_url}/api/notebooks/delete-batch",
-                json={"filenames": args.filename},
+                json=delete_batch_body,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -1898,10 +1903,12 @@ def _dispatch_core_command(args):
             print(json.dumps(data, indent=2))
         else:
 
+            verb = "Would delete" if data.get("dry_run") else "Deleted"
+
             for result in data.get("results", []):
 
                 if result["status"] == "success":
-                    print(f"Deleted '{result['filename']}'")
+                    print(f"{verb} '{result['filename']}'")
                     if result.get("was_currently_compiled"):
                         print("  note: this was the notebook backing the currently compiled app.")
                 else:
@@ -4985,6 +4992,19 @@ def main():
         "filename", nargs="+",
         help="Filenames of the notebooks to delete, as reported by `list`."
     )
+    delete_batch_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report which of the given filenames would be deleted (and "
+            "which would fail, e.g. a typo'd filename), via POST "
+            "/api/notebooks/delete-batch's own \"dry_run\" body field, "
+            "without deleting anything. Skips the confirmation prompt "
+            "--yes would otherwise require, since nothing irreversible "
+            "happens."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(delete_batch_parser)
     delete_batch_parser.add_argument(
         "--yes",
@@ -4994,7 +5014,8 @@ def main():
             "this, `delete-batch` asks for a y/N confirmation on the "
             "terminal before sending the request -- POST "
             "/api/notebooks/delete-batch itself has no confirmation step "
-            "of its own and is irreversible."
+            "of its own and is irreversible. Ignored under --dry-run, "
+            "which never prompts."
         )
     )
     delete_batch_parser.add_argument(
