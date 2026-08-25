@@ -5496,6 +5496,77 @@ def test_list_notebooks_filters_by_description_search():
     assert [nb["filename"] for nb in notebooks] == ["desc_search_a.ipynb"]
 
 
+def test_list_notebooks_filters_by_sha256():
+
+    import hashlib
+
+    content_a = _notebook_bytes("def sha_filter_a() -> int:\n    return 1\n")
+    content_b = _notebook_bytes("def sha_filter_b() -> int:\n    return 2\n")
+
+    for filename, content in (
+        ("sha_filter_a.ipynb", content_a),
+        ("sha_filter_b.ipynb", content_b),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    target_sha256 = hashlib.sha256(content_a).hexdigest()
+
+    notebooks = client.get(
+        "/api/notebooks", params={"search": "sha_filter_", "sha256": target_sha256}
+    ).json()["notebooks"]
+
+    assert [nb["filename"] for nb in notebooks] == ["sha_filter_a.ipynb"]
+
+
+def test_list_notebooks_sha256_matches_every_notebook_with_that_content():
+
+    import hashlib
+
+    content = _notebook_bytes("def sha_filter_shared() -> int:\n    return 1\n")
+
+    for filename in ("sha_filter_dup_a.ipynb", "sha_filter_dup_b.ipynb"):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    notebooks = client.get(
+        "/api/notebooks",
+        params={"search": "sha_filter_dup_", "sha256": hashlib.sha256(content).hexdigest()},
+    ).json()["notebooks"]
+
+    assert sorted(nb["filename"] for nb in notebooks) == [
+        "sha_filter_dup_a.ipynb", "sha_filter_dup_b.ipynb",
+    ]
+
+
+def test_list_notebooks_unknown_sha256_yields_no_notebooks():
+
+    resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "sha_filter_none.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    assert resp.status_code == 200
+
+    notebooks = client.get(
+        "/api/notebooks",
+        params={"search": "sha_filter_none", "sha256": "no-such-hash"},
+    ).json()["notebooks"]
+
+    assert notebooks == []
+
+
 def test_list_notebooks_description_search_is_case_insensitive():
 
     _upload_sample_notebook("desc_search_case.ipynb")

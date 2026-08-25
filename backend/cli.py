@@ -1221,6 +1221,8 @@ def _dispatch_core_command(args):
             params["tag"] = args.tag
         if args.description_search:
             params["description_search"] = args.description_search
+        if args.sha256:
+            params["sha256"] = args.sha256
         if args.limit is not None:
             params["limit"] = args.limit
 
@@ -4510,6 +4512,19 @@ def main():
         help=(
             "Case-insensitive description substring filter, mirroring "
             "GET /api/notebooks' own ?description_search=."
+        )
+    )
+    list_parser.add_argument(
+        "--sha256",
+        default=None,
+        help=(
+            "Only list the notebook(s) whose exact current content "
+            "hashes to this value, mirroring GET /api/notebooks' own "
+            "?sha256= -- the same digest `find-duplicates` reports per "
+            "group and `deploy-history --source-sha256`/`compile-history "
+            "--source-sha256` already filter by, so a hash read back "
+            "from either history command can be checked against what's "
+            "still in the catalog today."
         )
     )
     list_parser.add_argument(

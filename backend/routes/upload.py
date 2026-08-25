@@ -1903,6 +1903,7 @@ def list_notebooks(
     offset: int = 0,
     tag: str = None,
     description_search: str = None,
+    sha256: str = None,
 ):
     """List previously uploaded notebooks.
 
@@ -1999,6 +2000,23 @@ def list_notebooks(
     (description "") simply never matches a non-empty
     "description_search", the same way an untagged notebook already never
     matches "tag".
+
+    "sha256" filters to the notebook(s) whose exact content currently
+    hashes to this value -- the same digest GET /api/notebooks/duplicates
+    already groups uploads by, and that GET /api/deploy/history's and GET
+    /api/compile/history's own "source_notebook_sha256" query params
+    already filter by. A notebook can be renamed (PATCH
+    /api/notebooks/{filename}) between a compile/deploy and now, so a
+    hash read back from either history endpoint had no way to answer
+    "is that content still in the catalog, and if so under what
+    filename(s) today" short of downloading and re-hashing every
+    uploaded notebook by hand. Applied last, after "search"/"tag"/
+    "description_search" have already narrowed the candidates -- hashing
+    a notebook's full content is real work GET /api/notebooks otherwise
+    never does per entry, so it's only ever paid for candidates that
+    already passed every cheaper filter first. An unknown hash simply
+    yields no matching notebooks, not an error, the same as every other
+    filter here.
     """
 
     if sort not in _NOTEBOOK_SORT_KEYS:
@@ -2060,6 +2078,9 @@ def list_notebooks(
             description_search.lower()
             not in _read_notebook_description(entry.name).lower()
         ):
+            continue
+
+        if sha256 and hash_notebook_file(entry) != sha256:
             continue
 
         entry_stat = entry.stat()
