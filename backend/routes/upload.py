@@ -6634,10 +6634,10 @@ def compile_history_endpoint(
 
 
 @router.delete("/compile/history")
-def clear_compile_history():
-    """Permanently discard this dashboard's entire compile history log at
-    once, the exact counterpart DELETE /api/deploy/history already
-    provides for this dashboard's deploy history.
+def clear_compile_history(notebook_filename: str = None):
+    """Permanently discard this dashboard's compile history log, the exact
+    counterpart DELETE /api/deploy/history already provides for this
+    dashboard's deploy history.
 
     An operator wanting to reclaim it sooner than
     MAX_COMPILE_HISTORY_ENTRIES more compiles would age it out on its own
@@ -6650,9 +6650,47 @@ def clear_compile_history():
     been compiled through this dashboard yet, the same "nothing to clear
     is still a valid outcome" reasoning DELETE /api/deploy/history's own
     no-op-for-no-history case already follows.
+
+    "notebook_filename", when given, discards only entries with an exact
+    match on that field (the same field GET /api/compile/history's own
+    "notebook_filename" already filters by) and leaves every other
+    notebook's own compile history entries in place -- before this, an
+    operator wanting to drop just one notebook's stale history (e.g.
+    after it was deleted or renamed) had no choice but to wipe the whole
+    log, discarding every other notebook's history along with it, the
+    same all-or-nothing gap DELETE /api/notebooks/{filename}/versions
+    already solves for a single notebook's own version snapshots (as
+    opposed to DELETE /api/notebooks/versions' own catalog-wide prune).
+    Omitted, this clears the entire log exactly as before.
     """
 
     entries = _read_compile_history()
+
+    if notebook_filename is not None:
+
+        remaining = [
+            entry for entry in entries
+            if entry.get("notebook_filename") != notebook_filename
+        ]
+        deleted_count = len(entries) - len(remaining)
+
+        if remaining:
+
+            upload_root = Path(UPLOAD_DIR).resolve()
+            temp_path = upload_root / f".compile_history.{uuid.uuid4().hex}.part"
+
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump({"entries": remaining}, f)
+
+            os.replace(temp_path, _compile_history_path())
+
+        else:
+            _compile_history_path().unlink(missing_ok=True)
+
+        return {
+            "status": "success",
+            "deleted_count": deleted_count,
+        }
 
     _compile_history_path().unlink(missing_ok=True)
 

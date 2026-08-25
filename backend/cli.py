@@ -3934,17 +3934,25 @@ def _dispatch_core_command(args):
             # DELETE /api/compile/history (routes/upload.py) has no
             # confirmation step of its own and is irreversible -- the
             # same reasoning `clear-deploy-history` already prompts for.
-            answer = input(
-                f"Permanently discard the entire compile history on "
-                f"{dashboard_url}? [y/N] "
+            target = (
+                f"the compile history for {args.notebook_filename!r} on "
+                f"{dashboard_url}" if args.notebook_filename
+                else f"the entire compile history on {dashboard_url}"
             )
+            answer = input(f"Permanently discard {target}? [y/N] ")
             if answer.strip().lower() not in ("y", "yes"):
                 print("Aborted.")
                 return
 
+        params = {}
+        if args.notebook_filename:
+            params["notebook_filename"] = args.notebook_filename
+
         try:
             response = httpx.delete(
-                f"{dashboard_url}/api/compile/history", timeout=args.timeout,
+                f"{dashboard_url}/api/compile/history",
+                params=params,
+                timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
             raise _dashboard_connection_error(exc, dashboard_url)
@@ -6567,6 +6575,17 @@ def main():
         help=(
             "Permanently discard a running dashboard instance's entire "
             "compile history log, via its DELETE /api/compile/history."
+        )
+    )
+    clear_compile_history_parser.add_argument(
+        "--notebook",
+        dest="notebook_filename",
+        help=(
+            "Only discard compile history entries for this exact notebook "
+            "filename, via DELETE /api/compile/history's own "
+            "?notebook_filename= query param, leaving every other "
+            "notebook's own compile history entries in place. Without "
+            "this, the entire compile history log is discarded."
         )
     )
     _add_dashboard_url_and_timeout_arguments(clear_compile_history_parser)

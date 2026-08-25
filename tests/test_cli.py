@@ -10610,6 +10610,30 @@ def test_clear_compile_history_command_reports_success_with_yes_flag(
     assert handler.requests == ["/api/compile/history"]
 
 
+def test_clear_compile_history_command_sends_notebook_filename_query_param(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "deleted_count": 1})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "clear-compile-history", "--notebook", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/compile/history?notebook_filename=nb.ipynb"]
+
+
 def test_clear_compile_history_command_json_flag_emits_the_dashboards_own_response(
     tmp_path, fake_dashboard
 ):
