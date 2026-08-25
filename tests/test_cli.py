@@ -10130,6 +10130,46 @@ def test_deploy_history_command_not_pushed_flag_sends_pushed_false(tmp_path, fak
     assert query["pushed"] == ["false"]
 
 
+def test_deploy_history_command_sends_offset_query_param(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "entries": [], "entry_count": 0})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["deploy-history", "--offset", "5", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query["offset"] == ["5"]
+
+
+def test_deploy_history_command_omits_offset_query_param_by_default(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "entries": [], "entry_count": 0})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["deploy-history", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests[0] == "/api/deploy/history"
+
+
 def test_deploy_history_command_rejects_pushed_only_and_not_pushed_together(tmp_path):
 
     workdir = tmp_path / "workdir"
@@ -10375,6 +10415,46 @@ def test_compile_history_command_sends_notebook_and_limit_query_params(
 
     query = urllib.parse.parse_qs(request_path.split("?", 1)[1])
     assert query == {"notebook_filename": ["nb.ipynb"], "limit": ["5"]}
+
+
+def test_compile_history_command_sends_offset_query_param(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "entries": [], "entry_count": 0})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["compile-history", "--offset", "5", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query["offset"] == ["5"]
+
+
+def test_compile_history_command_omits_offset_query_param_by_default(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "entries": [], "entry_count": 0})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["compile-history", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests[0] == "/api/compile/history"
 
 
 def test_compile_history_command_reports_a_clean_error_when_the_dashboard_is_unreachable(

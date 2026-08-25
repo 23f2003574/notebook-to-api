@@ -9446,6 +9446,47 @@ def test_deploy_history_rejects_a_negative_limit(tmp_path, monkeypatch):
     assert resp.status_code == 400
 
 
+def test_deploy_history_respects_offset(tmp_path, monkeypatch):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get("/api/deploy/history", params={"offset": 1}).json()
+
+    assert [e["tag"] for e in body["entries"]] == ["filter:b", "filter:a"]
+    assert body["entry_count"] == 2
+
+
+def test_deploy_history_combines_offset_and_limit_for_paging(tmp_path, monkeypatch):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get(
+        "/api/deploy/history", params={"offset": 1, "limit": 1}
+    ).json()
+
+    assert [e["tag"] for e in body["entries"]] == ["filter:b"]
+    assert body["entry_count"] == 1
+
+
+def test_deploy_history_offset_past_the_end_yields_no_entries(tmp_path, monkeypatch):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get("/api/deploy/history", params={"offset": 100}).json()
+
+    assert body["entries"] == []
+    assert body["entry_count"] == 0
+
+
+def test_deploy_history_rejects_a_negative_offset(tmp_path, monkeypatch):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    resp = client.get("/api/deploy/history", params={"offset": -1})
+
+    assert resp.status_code == 400
+
+
 def test_deploy_does_not_record_a_history_entry_on_build_failure(tmp_path, monkeypatch):
 
     from backend.routes import upload as upload_module
@@ -9745,6 +9786,47 @@ def test_compile_history_rejects_a_negative_limit(tmp_path, monkeypatch):
     _seed_compile_history_for_filtering(tmp_path, monkeypatch)
 
     resp = client.get("/api/compile/history", params={"limit": -1})
+
+    assert resp.status_code == 400
+
+
+def test_compile_history_respects_offset(tmp_path, monkeypatch):
+
+    _seed_compile_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get("/api/compile/history", params={"offset": 1}).json()
+
+    assert [e["source_notebook_sha256"] for e in body["entries"]] == ["bbb", "aaa"]
+    assert body["entry_count"] == 2
+
+
+def test_compile_history_combines_offset_and_limit_for_paging(tmp_path, monkeypatch):
+
+    _seed_compile_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get(
+        "/api/compile/history", params={"offset": 1, "limit": 1}
+    ).json()
+
+    assert [e["source_notebook_sha256"] for e in body["entries"]] == ["bbb"]
+    assert body["entry_count"] == 1
+
+
+def test_compile_history_offset_past_the_end_yields_no_entries(tmp_path, monkeypatch):
+
+    _seed_compile_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get("/api/compile/history", params={"offset": 100}).json()
+
+    assert body["entries"] == []
+    assert body["entry_count"] == 0
+
+
+def test_compile_history_rejects_a_negative_offset(tmp_path, monkeypatch):
+
+    _seed_compile_history_for_filtering(tmp_path, monkeypatch)
+
+    resp = client.get("/api/compile/history", params={"offset": -1})
 
     assert resp.status_code == 400
 

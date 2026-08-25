@@ -6353,6 +6353,7 @@ def deploy_history_endpoint(
     platform: str = None,
     pushed: bool = None,
     limit: int = None,
+    offset: int = 0,
 ):
     """This dashboard's own past POST /api/deploy invocations, most
     recent first -- up to the last MAX_DEPLOY_HISTORY_ENTRIES.
@@ -6372,15 +6373,25 @@ def deploy_history_endpoint(
     GENERATED_DIR).
 
     "source_notebook_filename"/"platform"/"pushed" filter the returned
-    entries to ones with an exact match on that field before "limit" is
-    applied -- before this, a caller wanting only a specific notebook's
-    own deploy history (e.g. to answer "when did we last deploy this one")
-    had to fetch the entire log and filter it client-side, the same gap
-    GET /api/notebooks' own "search"/"tag" query params already close for
-    the notebook catalog. "limit" caps how many of the (already-filtered)
-    entries are returned, same "most recent first" ordering, without
-    needing MAX_DEPLOY_HISTORY_ENTRIES raised or lowered just to change
-    how many a single call gets back.
+    entries to ones with an exact match on that field before "offset"/
+    "limit" are applied -- before this, a caller wanting only a specific
+    notebook's own deploy history (e.g. to answer "when did we last
+    deploy this one") had to fetch the entire log and filter it
+    client-side, the same gap GET /api/notebooks' own "search"/"tag"
+    query params already close for the notebook catalog.
+
+    "offset" (default 0) is how many of the (already-filtered) entries,
+    still most-recent-first, to skip before "limit" is applied -- the
+    identical pagination GET /api/notebooks' own "offset" already
+    provides over the notebook catalog, closing the same gap here: without
+    it, a caller paging through a deploy history longer than one page had
+    no way to ask for "the next N" short of re-fetching everything up to
+    that point via a larger "limit" and discarding the entries it had
+    already seen. "limit" caps how many of the (already-offset) entries
+    are returned, same "most recent first" ordering, without needing
+    MAX_DEPLOY_HISTORY_ENTRIES raised or lowered just to change how many a
+    single call gets back. A negative "offset" is rejected with 400, the
+    same way a negative "limit" already is below.
 
     Deliberately read-only: this dashboard's deploy history is a record
     of what already happened, not something a caller edits or replays
@@ -6403,6 +6414,15 @@ def deploy_history_endpoint(
 
     if pushed is not None:
         entries = [entry for entry in entries if entry.get("pushed") == pushed]
+
+    if offset < 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="offset must be a non-negative integer"
+        )
+
+    entries = entries[offset:]
 
     if limit is not None:
 
@@ -6464,6 +6484,7 @@ def clear_deploy_history():
 def compile_history_endpoint(
     notebook_filename: str = None,
     limit: int = None,
+    offset: int = 0,
 ):
     """This dashboard's own past POST /api/compile invocations, most
     recent first -- up to the last MAX_COMPILE_HISTORY_ENTRIES.
@@ -6490,16 +6511,21 @@ def compile_history_endpoint(
     "endpoint_count"/"dependency_count"/"skipped_function_count" are
     computed from that compile's own response.
 
-    "notebook_filename"/"limit" filter and cap the returned entries the
-    identical way GET /api/deploy/history's own "source_notebook_filename"
-    /"limit" query params already do for deploy history -- an operator
-    wanting only one specific notebook's own compile history (e.g. "how
-    many times has this one actually been recompiled") had to fetch the
-    entire log and filter it client-side otherwise. "notebook_filename"
-    matches exactly against each entry's own "notebook_filename" (a
-    404-free filter -- an unknown or never-compiled filename just yields
-    no matching entries, not an error); "limit" applies after that
-    filter, on the same most-recent-first ordering.
+    "notebook_filename"/"offset"/"limit" filter and page the returned
+    entries the identical way GET /api/deploy/history's own
+    "source_notebook_filename"/"offset"/"limit" query params already do
+    for deploy history -- an operator wanting only one specific notebook's
+    own compile history (e.g. "how many times has this one actually been
+    recompiled") had to fetch the entire log and filter it client-side
+    otherwise. "notebook_filename" matches exactly against each entry's
+    own "notebook_filename" (a 404-free filter -- an unknown or
+    never-compiled filename just yields no matching entries, not an
+    error); "offset" (default 0) skips this many of the matching entries,
+    still most-recent-first, before "limit" is applied, the same
+    "next page" gap GET /api/deploy/history's own "offset" already closes;
+    "limit" applies after that, on the same most-recent-first ordering. A
+    negative "offset" is rejected with 400, the same way a negative
+    "limit" already is below.
 
     Deliberately read-only, the same reasoning GET /api/deploy/history's
     own docstring already gives: this dashboard's compile history is a
@@ -6517,6 +6543,15 @@ def compile_history_endpoint(
             entry for entry in entries
             if entry.get("notebook_filename") == notebook_filename
         ]
+
+    if offset < 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="offset must be a non-negative integer"
+        )
+
+    entries = entries[offset:]
 
     if limit is not None:
 

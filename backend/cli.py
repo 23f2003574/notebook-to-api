@@ -3767,6 +3767,8 @@ def _dispatch_core_command(args):
             params["pushed"] = args.pushed
         if args.limit is not None:
             params["limit"] = args.limit
+        if args.offset:
+            params["offset"] = args.offset
 
         try:
             response = httpx.get(
@@ -3865,6 +3867,8 @@ def _dispatch_core_command(args):
             params["notebook_filename"] = args.notebook_filename
         if args.limit is not None:
             params["limit"] = args.limit
+        if args.offset:
+            params["offset"] = args.offset
 
         try:
             response = httpx.get(
@@ -6400,6 +6404,17 @@ def main():
             "param."
         )
     )
+    deploy_history_parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help=(
+            "Skip this many of the most recent matching deploys before "
+            "--limit is applied, via GET /api/deploy/history's own "
+            "?offset= query param -- e.g. for paging through a deploy "
+            "history longer than one --limit-sized page."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(deploy_history_parser)
     deploy_history_parser.add_argument(
         "--json",
@@ -6474,6 +6489,17 @@ def main():
             "Only show (at most) this many of the most recent matching "
             "compiles, via GET /api/compile/history's own ?limit= query "
             "param."
+        )
+    )
+    compile_history_parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help=(
+            "Skip this many of the most recent matching compiles before "
+            "--limit is applied, via GET /api/compile/history's own "
+            "?offset= query param -- e.g. for paging through a compile "
+            "history longer than one --limit-sized page."
         )
     )
     _add_dashboard_url_and_timeout_arguments(compile_history_parser)
