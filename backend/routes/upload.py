@@ -6505,9 +6505,8 @@ def deploy_history_endpoint(
 
 
 @router.delete("/deploy/history")
-def clear_deploy_history():
-    """Permanently discard this dashboard's entire deploy history log at
-    once.
+def clear_deploy_history(source_notebook_filename: str = None):
+    """Permanently discard this dashboard's deploy history log.
 
     GET /api/deploy/history's own docstring already notes it's read-only
     -- no way to edit or replay an individual entry through it -- but that
@@ -6530,9 +6529,46 @@ def clear_deploy_history():
     bulk operation like this, not an error, the same reasoning DELETE
     /api/notebooks/{filename}/versions' own no-op-for-no-history case
     already follows.
+
+    "source_notebook_filename", when given, discards only entries with an
+    exact match on that field (the same field GET /api/deploy/history's
+    own "source_notebook_filename" already filters by) and leaves every
+    other notebook's own deploy history entries in place -- the same
+    all-or-nothing gap DELETE /api/compile/history's own
+    "notebook_filename" query param already closes for compile history,
+    just applied to deploy history instead: an operator wanting to drop
+    just one deleted/renamed notebook's now-stale deploy history
+    previously had no choice but to wipe every other notebook's history
+    along with it. Omitted, this clears the entire log exactly as before.
     """
 
     entries = _read_deploy_history()
+
+    if source_notebook_filename is not None:
+
+        remaining = [
+            entry for entry in entries
+            if entry.get("source_notebook_filename") != source_notebook_filename
+        ]
+        deleted_count = len(entries) - len(remaining)
+
+        if remaining:
+
+            upload_root = Path(UPLOAD_DIR).resolve()
+            temp_path = upload_root / f".deploy_history.{uuid.uuid4().hex}.part"
+
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump({"entries": remaining}, f)
+
+            os.replace(temp_path, _deploy_history_path())
+
+        else:
+            _deploy_history_path().unlink(missing_ok=True)
+
+        return {
+            "status": "success",
+            "deleted_count": deleted_count,
+        }
 
     _deploy_history_path().unlink(missing_ok=True)
 

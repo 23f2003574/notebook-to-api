@@ -9665,6 +9665,66 @@ def test_clear_deploy_history_removes_every_entry(tmp_path, monkeypatch):
     }
 
 
+def test_clear_deploy_history_filters_by_source_notebook_filename(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_deploy_history_filter_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    for i in range(3):
+        upload_module._append_deploy_history_entry({
+            "deployed_at": f"2024-01-0{i + 1}T00:00:00+00:00",
+            "tag": f"clear:{i}",
+            "platform": None,
+            "pushed": False,
+            "source_notebook_filename": "keep.ipynb" if i != 1 else "drop.ipynb",
+            "source_notebook_sha256": None,
+        })
+
+    clear_resp = client.delete(
+        "/api/deploy/history", params={"source_notebook_filename": "drop.ipynb"}
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "deleted_count": 1}
+
+    remaining = client.get("/api/deploy/history").json()
+    assert remaining["entry_count"] == 2
+    assert all(
+        e["source_notebook_filename"] == "keep.ipynb" for e in remaining["entries"]
+    )
+
+
+def test_clear_deploy_history_unknown_source_notebook_filename_deletes_nothing(
+    tmp_path, monkeypatch
+):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_deploy_history_unknown_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    upload_module._append_deploy_history_entry({
+        "deployed_at": "2024-01-01T00:00:00+00:00",
+        "tag": "keep:0",
+        "platform": None,
+        "pushed": False,
+        "source_notebook_filename": "keep.ipynb",
+        "source_notebook_sha256": None,
+    })
+
+    clear_resp = client.delete(
+        "/api/deploy/history", params={"source_notebook_filename": "no-such.ipynb"}
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "deleted_count": 0}
+    assert client.get("/api/deploy/history").json()["entry_count"] == 1
+
+
 def test_clear_deploy_history_is_a_no_op_success_when_nothing_was_ever_deployed(
     tmp_path, monkeypatch
 ):

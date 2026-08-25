@@ -3835,17 +3835,25 @@ def _dispatch_core_command(args):
             # confirmation step of its own and is irreversible -- the
             # same reasoning `prune-versions`/`tags delete` already
             # prompt for.
-            answer = input(
-                f"Permanently discard the entire deploy history on "
-                f"{dashboard_url}? [y/N] "
+            target = (
+                f"the deploy history for {args.source_notebook_filename!r} on "
+                f"{dashboard_url}" if args.source_notebook_filename
+                else f"the entire deploy history on {dashboard_url}"
             )
+            answer = input(f"Permanently discard {target}? [y/N] ")
             if answer.strip().lower() not in ("y", "yes"):
                 print("Aborted.")
                 return
 
+        params = {}
+        if args.source_notebook_filename:
+            params["source_notebook_filename"] = args.source_notebook_filename
+
         try:
             response = httpx.delete(
-                f"{dashboard_url}/api/deploy/history", timeout=args.timeout,
+                f"{dashboard_url}/api/deploy/history",
+                params=params,
+                timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
             raise _dashboard_connection_error(exc, dashboard_url)
@@ -6487,6 +6495,18 @@ def main():
         help=(
             "Permanently discard a running dashboard instance's entire "
             "deploy history log, via its DELETE /api/deploy/history."
+        )
+    )
+    clear_deploy_history_parser.add_argument(
+        "--source-notebook",
+        dest="source_notebook_filename",
+        help=(
+            "Only discard deploy history entries whose compiled source "
+            "was this exact notebook filename, via DELETE "
+            "/api/deploy/history's own ?source_notebook_filename= query "
+            "param, leaving every other notebook's own deploy history "
+            "entries in place. Without this, the entire deploy history "
+            "log is discarded."
         )
     )
     _add_dashboard_url_and_timeout_arguments(clear_deploy_history_parser)
