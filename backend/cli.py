@@ -1918,11 +1918,13 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        if not args.yes:
+        if not args.dry_run and not args.yes:
             # DELETE /api/notebooks/versions (routes/upload.py) has no
             # confirmation step of its own, is irreversible, and affects
             # every notebook's own version history at once -- the same
             # reasoning `delete-batch`'s own confirmation already applies.
+            # Not asked at all under --dry-run, which never deletes
+            # anything.
             scope = (
                 f"every notebook tagged {args.tag!r}" if args.tag
                 else "every notebook"
@@ -1939,6 +1941,8 @@ def _dispatch_core_command(args):
         params = {"older_than_days": args.older_than_days}
         if args.tag:
             params["tag"] = args.tag
+        if args.dry_run:
+            params["dry_run"] = True
 
         try:
             response = httpx.delete(
@@ -1963,6 +1967,7 @@ def _dispatch_core_command(args):
         else:
 
             results = data.get("results", [])
+            verb = "would discard" if data.get("dry_run") else "discarded"
 
             if not results:
                 print(
@@ -1973,13 +1978,13 @@ def _dispatch_core_command(args):
 
                 for result in results:
                     print(
-                        f"{result['filename']}: discarded "
+                        f"{result['filename']}: {verb} "
                         f"{result['deleted_count']} version(s)"
                     )
 
                 print(
                     f"\n{data.get('total_deleted_count', 0)} version(s) "
-                    f"discarded across "
+                    f"{verb} across "
                     f"{data.get('notebook_count_affected', len(results))} "
                     f"notebook(s) on {dashboard_url}"
                 )
@@ -5034,6 +5039,18 @@ def main():
             "history untouched. Without this, every notebook is pruned."
         )
     )
+    prune_versions_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report which notebooks and version snapshots would be "
+            "discarded, via DELETE /api/notebooks/versions's own "
+            "?dry_run= query param, without deleting anything. Skips the "
+            "confirmation prompt --yes would otherwise require, since "
+            "nothing irreversible happens."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(prune_versions_parser)
     prune_versions_parser.add_argument(
         "--yes",
@@ -5044,7 +5061,8 @@ def main():
             "terminal before sending the request -- DELETE "
             "/api/notebooks/versions itself has no confirmation step of "
             "its own, is irreversible, and affects every notebook's own "
-            "version history at once."
+            "version history at once. Ignored under --dry-run, which "
+            "never prompts."
         )
     )
     prune_versions_parser.add_argument(

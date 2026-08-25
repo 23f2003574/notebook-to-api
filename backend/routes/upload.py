@@ -2889,7 +2889,9 @@ def delete_all_notebooks(confirm: bool = False):
 
 
 @router.delete("/notebooks/versions")
-def prune_all_notebook_versions(older_than_days: int = None, tag: str = None):
+def prune_all_notebook_versions(
+    older_than_days: int = None, tag: str = None, dry_run: bool = False
+):
     """Permanently discard every notebook's snapshotted versions older
     than "older_than_days" days, across the whole catalog at once,
     without touching any notebook's own current content, tags, or
@@ -2939,6 +2941,20 @@ def prune_all_notebook_versions(older_than_days: int = None, tag: str = None):
     before a notebook's version directory is ever touched, so an
     out-of-tag notebook's own version history is left untouched and
     never contributes to "results" or total_deleted_count.
+
+    "dry_run" (optional, default false) reports the exact same "results"
+    a real prune would -- which notebooks are affected, each one's own
+    "deleted_version_ids"/"deleted_count" -- without deleting a single
+    version file, the identical preview POST
+    /api/notebooks/duplicates/resolve's own "dry_run" already provides
+    for that endpoint's own irreversible batch deletion. This prune is
+    permanent and catalog-wide (age- and, with "tag", category-scoped,
+    but with no per-version undo), so an operator wanting to check
+    "older_than_days"/"tag" actually catch what they expect -- before any
+    version is gone for good -- had no safe way to preview that first
+    short of a separate GET .../versions per notebook and working out
+    each entry's own age by hand. The top-level response's own "dry_run"
+    field echoes back whether this call actually deleted anything.
     """
 
     if older_than_days is None or older_than_days <= 0:
@@ -2982,7 +2998,8 @@ def prune_all_notebook_versions(older_than_days: int = None, tag: str = None):
                 )
 
                 if saved_at < cutoff:
-                    version_file.unlink()
+                    if not dry_run:
+                        version_file.unlink()
                     deleted_version_ids.append(version_file.name)
 
         if deleted_version_ids:
@@ -2998,6 +3015,7 @@ def prune_all_notebook_versions(older_than_days: int = None, tag: str = None):
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "older_than_days": older_than_days,
         "results": results,
         "notebook_count_affected": len(results),

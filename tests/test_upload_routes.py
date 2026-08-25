@@ -7180,6 +7180,73 @@ def test_prune_all_notebook_versions_filters_by_tag():
     ).json()["versions"]) == 1
 
 
+def test_prune_all_notebook_versions_dry_run_reports_the_plan_without_deleting():
+
+    filename = "prune_versions_dry_run.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+    _backdate_notebook_version(filename, version_id, days_ago=40)
+
+    resp = client.delete(
+        "/api/notebooks/versions",
+        params={"older_than_days": 30, "dry_run": "true"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["notebook_count_affected"] == 1
+    assert body["total_deleted_count"] == 1
+    assert body["results"][0]["deleted_version_ids"] == [version_id]
+
+    # Nothing was actually deleted.
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert [v["version_id"] for v in remaining] == [version_id]
+
+
+def test_prune_all_notebook_versions_non_dry_run_reports_dry_run_false():
+
+    filename = "prune_versions_real_run.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.delete("/api/notebooks/versions", params={"older_than_days": 30})
+
+    assert resp.status_code == 200
+    assert resp.json()["dry_run"] is False
+
+
 def test_prune_all_notebook_versions_is_a_no_op_when_nothing_is_old_enough():
 
     filename = "prune_versions_recent.ipynb"

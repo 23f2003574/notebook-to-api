@@ -4469,6 +4469,49 @@ def test_prune_versions_command_reports_success_with_yes_flag(tmp_path, fake_das
     assert handler.requests == ["/api/notebooks/versions?older_than_days=30"]
 
 
+def test_prune_versions_command_dry_run_skips_confirmation_and_sends_dry_run_param(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": True,
+            "older_than_days": 30,
+            "results": [
+                {
+                    "filename": "a.ipynb",
+                    "deleted_version_ids": ["v1.ipynb"],
+                    "deleted_count": 1,
+                },
+            ],
+            "notebook_count_affected": 1,
+            "total_deleted_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    # No --yes, and no stdin input provided -- would hang/fail on a
+    # confirmation prompt if --dry-run didn't skip it.
+    proc = _run_cli(
+        [
+            "prune-versions", "--older-than-days", "30", "--dry-run",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "a.ipynb: would discard 1 version(s)" in proc.stdout
+    assert "1 version(s) would discard across 1 notebook(s)" in proc.stdout
+    assert handler.requests == [
+        "/api/notebooks/versions?older_than_days=30&dry_run=true"
+    ]
+
+
 def test_prune_versions_command_sends_tag_query_param(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
