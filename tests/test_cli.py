@@ -4405,6 +4405,33 @@ def test_prune_versions_command_reports_success_with_yes_flag(tmp_path, fake_das
     assert handler.requests == ["/api/notebooks/versions?older_than_days=30"]
 
 
+def test_prune_versions_command_sends_tag_query_param(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "older_than_days": 30, "results": [],
+            "notebook_count_affected": 0, "total_deleted_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "prune-versions", "--older-than-days", "30", "--tag", "prod",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/versions?older_than_days=30&tag=prod"
+    ]
+
+
 def test_prune_versions_command_reports_nothing_to_prune(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

@@ -1915,19 +1915,27 @@ def _dispatch_core_command(args):
             # confirmation step of its own, is irreversible, and affects
             # every notebook's own version history at once -- the same
             # reasoning `delete-batch`'s own confirmation already applies.
+            scope = (
+                f"every notebook tagged {args.tag!r}" if args.tag
+                else "every notebook"
+            )
             answer = input(
                 f"Permanently discard every version older than "
-                f"{args.older_than_days} day(s) across every notebook on "
+                f"{args.older_than_days} day(s) across {scope} on "
                 f"{dashboard_url}? [y/N] "
             )
             if answer.strip().lower() not in ("y", "yes"):
                 print("Aborted.")
                 return
 
+        params = {"older_than_days": args.older_than_days}
+        if args.tag:
+            params["tag"] = args.tag
+
         try:
             response = httpx.delete(
                 f"{dashboard_url}/api/notebooks/versions",
-                params={"older_than_days": args.older_than_days},
+                params=params,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -4977,6 +4985,15 @@ def main():
         required=True,
         dest="older_than_days",
         help="Discard any version snapshot saved more than this many days ago."
+    )
+    prune_versions_parser.add_argument(
+        "--tag",
+        help=(
+            "Only prune versions for notebooks currently carrying this "
+            "exact tag, via DELETE /api/notebooks/versions's own ?tag= "
+            "query param, leaving every other notebook's own version "
+            "history untouched. Without this, every notebook is pruned."
+        )
     )
     _add_dashboard_url_and_timeout_arguments(prune_versions_parser)
     prune_versions_parser.add_argument(

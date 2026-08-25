@@ -6998,6 +6998,57 @@ def test_prune_all_notebook_versions_spans_multiple_notebooks():
         assert client.get(f"/api/notebooks/{filename}/versions").json()["versions"] == []
 
 
+def test_prune_all_notebook_versions_filters_by_tag():
+
+    for filename in ("prune_versions_tag_prod.ipynb", "prune_versions_tag_other.ipynb"):
+
+        client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                    "application/json",
+                )
+            },
+        )
+        client.post(
+            "/api/upload?overwrite=true",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                    "application/json",
+                )
+            },
+        )
+        version_id = client.get(
+            f"/api/notebooks/{filename}/versions"
+        ).json()["versions"][0]["version_id"]
+        _backdate_notebook_version(filename, version_id, days_ago=40)
+
+    client.put(
+        "/api/notebooks/prune_versions_tag_prod.ipynb/tags", json={"tags": ["prod"]}
+    )
+
+    resp = client.delete(
+        "/api/notebooks/versions", params={"older_than_days": 30, "tag": "prod"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["notebook_count_affected"] == 1
+    assert body["total_deleted_count"] == 1
+    assert [r["filename"] for r in body["results"]] == ["prune_versions_tag_prod.ipynb"]
+
+    assert client.get(
+        "/api/notebooks/prune_versions_tag_prod.ipynb/versions"
+    ).json()["versions"] == []
+    assert len(client.get(
+        "/api/notebooks/prune_versions_tag_other.ipynb/versions"
+    ).json()["versions"]) == 1
+
+
 def test_prune_all_notebook_versions_is_a_no_op_when_nothing_is_old_enough():
 
     filename = "prune_versions_recent.ipynb"

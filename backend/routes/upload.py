@@ -2844,7 +2844,7 @@ def delete_all_notebooks(confirm: bool = False):
 
 
 @router.delete("/notebooks/versions")
-def prune_all_notebook_versions(older_than_days: int = None):
+def prune_all_notebook_versions(older_than_days: int = None, tag: str = None):
     """Permanently discard every notebook's snapshotted versions older
     than "older_than_days" days, across the whole catalog at once,
     without touching any notebook's own current content, tags, or
@@ -2884,6 +2884,16 @@ def prune_all_notebook_versions(older_than_days: int = None):
     operation like this, not an error, the same "nothing to act on is
     still a valid outcome" reasoning DELETE /api/tags/{tag}'s own empty
     "affected_notebooks" already follows.
+
+    "tag" (optional) scopes the prune to only notebooks currently
+    carrying that exact tag, the same exact-match GET /api/notebooks?tag=
+    already filters by -- an operator wanting to reclaim old snapshots
+    from just, say, its "scratch" notebooks (without touching a
+    "production" notebook's own older-but-still-wanted history) had no
+    way to ask for that short of pruning the entire catalog. Applied
+    before a notebook's version directory is ever touched, so an
+    out-of-tag notebook's own version history is left untouched and
+    never contributes to "results" or total_deleted_count.
     """
 
     if older_than_days is None or older_than_days <= 0:
@@ -2903,6 +2913,9 @@ def prune_all_notebook_versions(older_than_days: int = None):
     for entry in sorted(upload_root.iterdir()):
 
         if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        if tag and tag not in _read_notebook_tags(entry.name):
             continue
 
         versions_dir = _notebook_versions_dir(entry.name)
