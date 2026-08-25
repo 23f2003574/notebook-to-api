@@ -3333,6 +3333,46 @@ def test_resolve_duplicates_command_reports_success_with_yes_flag(tmp_path, fake
     assert json.loads(handler.bodies[0]) == {"keep": {}}
 
 
+def test_resolve_duplicates_command_dry_run_skips_confirmation_and_sends_dry_run_field(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": True,
+            "results": [
+                {
+                    "sha256": "abc123",
+                    "status": "success",
+                    "kept_filename": "a.ipynb",
+                    "deleted_filenames": [
+                        {"filename": "b.ipynb", "was_currently_compiled": False},
+                    ],
+                },
+            ],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    # No --yes, and no stdin input provided -- would hang/fail on a
+    # confirmation prompt if --dry-run didn't skip it.
+    proc = _run_cli(
+        ["resolve-duplicates", "--dry-run", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Kept a.ipynb, would delete b.ipynb" in proc.stdout
+    assert "1 group(s) previewed, 0 failed" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {"keep": {}, "dry_run": True}
+
+
 def test_resolve_duplicates_command_sends_keep_overrides(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

@@ -2511,6 +2511,65 @@ def test_resolve_duplicate_notebooks_keeps_alphabetically_first_by_default():
     assert remaining == {"resolve_a.ipynb"}
 
 
+def test_resolve_duplicate_notebooks_dry_run_reports_the_plan_without_deleting():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in ("resolve_dry_z.ipynb", "resolve_dry_a.ipynb", "resolve_dry_m.ipynb"):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content_a), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    resp = client.post(
+        "/api/notebooks/duplicates/resolve", json={"dry_run": True}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 0
+
+    result = body["results"][0]
+    assert result["status"] == "success"
+    assert result["kept_filename"] == "resolve_dry_a.ipynb"
+    assert sorted(e["filename"] for e in result["deleted_filenames"]) == [
+        "resolve_dry_m.ipynb", "resolve_dry_z.ipynb",
+    ]
+
+    # Nothing was actually deleted.
+    remaining = {n["filename"] for n in client.get("/api/notebooks").json()["notebooks"]}
+    assert remaining == {
+        "resolve_dry_a.ipynb", "resolve_dry_m.ipynb", "resolve_dry_z.ipynb",
+    }
+
+
+def test_resolve_duplicate_notebooks_non_dry_run_reports_dry_run_false():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in ("resolve_real_a.ipynb", "resolve_real_b.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content_a), "application/json")},
+        )
+
+    resp = client.post("/api/notebooks/duplicates/resolve", json={})
+
+    assert resp.status_code == 200
+    assert resp.json()["dry_run"] is False
+
+
 def test_resolve_duplicate_notebooks_honors_keep_override():
 
     client.delete("/api/notebooks?confirm=true")
@@ -2584,7 +2643,8 @@ def test_resolve_duplicate_notebooks_is_a_no_op_success_when_nothing_is_duplicat
 
     assert resp.status_code == 200
     assert resp.json() == {
-        "status": "success", "results": [], "succeeded_count": 0, "failed_count": 0,
+        "status": "success", "dry_run": False, "results": [],
+        "succeeded_count": 0, "failed_count": 0,
     }
 
     remaining = {n["filename"] for n in client.get("/api/notebooks").json()["notebooks"]}

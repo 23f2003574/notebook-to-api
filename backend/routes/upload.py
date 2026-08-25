@@ -2387,9 +2387,29 @@ def resolve_duplicate_notebooks(data: dict = None):
     entry shouldn't be touched at all" reasoning "tag" already gives GET
     /api/notebooks/duplicates. Passing a non-string "tag" is a 400, the
     same way a malformed "keep" already is below.
+
+    "dry_run" (optional, default false, in the request body) reports the
+    exact same "results" a real run would -- each group's own
+    "kept_filename", the "deleted_filenames" (with "was_currently_compiled")
+    that would be removed, and any "keep" error -- without deleting
+    anything at all. Before this, the only way to see what a resolve
+    would actually do was GET /api/notebooks/duplicates plus working out
+    "keep"'s effect on each group by hand: this endpoint is otherwise
+    irreversible (every deletion also discards that filename's own tags,
+    description, and version history, the identical permanent cleanup
+    DELETE /api/notebooks/{filename} applies), so an operator wanting to
+    check a "keep" override actually lands on the filename they intended
+    -- before it, and every other duplicate, is gone for good -- had no
+    safe way to preview that first. A dry run still recomputes duplicate
+    groups fresh (not cached from an earlier call), so its report reflects
+    the catalog's exact current state; the top-level response's own
+    "dry_run" field echoes back whether this call actually deleted
+    anything, so a caller can't mistake one response for the other.
     """
 
-    tag = (data or {}).get("tag")
+    data = data or {}
+
+    tag = data.get("tag")
 
     if tag is not None and not isinstance(tag, str):
         raise HTTPException(
@@ -2397,7 +2417,7 @@ def resolve_duplicate_notebooks(data: dict = None):
             detail="tag must be a string"
         )
 
-    keep_overrides = (data or {}).get("keep") or {}
+    keep_overrides = data.get("keep") or {}
 
     if not isinstance(keep_overrides, dict) or not all(
         isinstance(sha256, str) and isinstance(keep_filename, str)
@@ -2407,6 +2427,8 @@ def resolve_duplicate_notebooks(data: dict = None):
             status_code=400,
             detail="keep must be an object mapping sha256 to a filename"
         )
+
+    dry_run = bool(data.get("dry_run", False))
 
     upload_root = Path(UPLOAD_DIR)
 
@@ -2464,10 +2486,11 @@ def resolve_duplicate_notebooks(data: dict = None):
                 compiled_path is not None and file_path.resolve() == compiled_path
             )
 
-            os.remove(file_path)
-            _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
-            _description_sidecar_path(file_path.name).unlink(missing_ok=True)
-            shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
+            if not dry_run:
+                os.remove(file_path)
+                _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
+                _description_sidecar_path(file_path.name).unlink(missing_ok=True)
+                shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
 
             deleted_filenames.append({
                 "filename": filename,
@@ -2484,6 +2507,7 @@ def resolve_duplicate_notebooks(data: dict = None):
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "results": results,
         "succeeded_count": succeeded_count,
         "failed_count": failed_count,

@@ -1522,12 +1522,13 @@ def _dispatch_core_command(args):
             sha256, _, keep_filename = raw_entry.partition("=")
             keep[sha256] = keep_filename
 
-        if not args.yes:
+        if not args.dry_run and not args.yes:
             # POST /api/notebooks/duplicates/resolve (routes/upload.py)
             # has no confirmation step of its own, is irreversible, and
             # deletes every duplicate but one across every group found on
             # this dashboard -- the same reasoning `delete-batch`/
-            # `prune-versions` already prompt for.
+            # `prune-versions` already prompt for. Not asked at all under
+            # --dry-run, which never deletes anything.
             answer = input(
                 f"Permanently delete every duplicate notebook (keeping "
                 f"one per group) on {dashboard_url}? [y/N] "
@@ -1540,6 +1541,8 @@ def _dispatch_core_command(args):
 
         if args.tag:
             resolve_body["tag"] = args.tag
+        if args.dry_run:
+            resolve_body["dry_run"] = True
 
         try:
             response = httpx.post(
@@ -1564,6 +1567,7 @@ def _dispatch_core_command(args):
         else:
 
             results = data.get("results", [])
+            verb = "would delete" if data.get("dry_run") else "deleted"
 
             if not results:
                 print(f"No duplicate notebooks found on {dashboard_url}.")
@@ -1577,16 +1581,18 @@ def _dispatch_core_command(args):
                             entry["filename"] for entry in result["deleted_filenames"]
                         ]
                         print(
-                            f"Kept {result['kept_filename']}, deleted "
+                            f"Kept {result['kept_filename']}, {verb} "
                             f"{', '.join(deleted_names) if deleted_names else '(nothing)'}"
                         )
                     else:
                         print(f"Failed to resolve group {result['sha256']}: {result['detail']}")
 
-                print(
-                    f"\n{data.get('succeeded_count', 0)} group(s) resolved, "
+                summary = (
+                    f"\n{data.get('succeeded_count', 0)} group(s) "
+                    f"{'previewed' if data.get('dry_run') else 'resolved'}, "
                     f"{data.get('failed_count', 0)} failed"
                 )
+                print(summary)
 
     elif args.command == "storage":
         # See `upload` above for why this is imported here rather than at
@@ -4755,6 +4761,19 @@ def main():
             "would have reported."
         )
     )
+    resolve_duplicates_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report which groups would be resolved and which filenames "
+            "would be deleted, via POST "
+            "/api/notebooks/duplicates/resolve's own \"dry_run\" body "
+            "field, without deleting anything. Skips the confirmation "
+            "prompt --yes would otherwise require, since nothing "
+            "irreversible happens."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(resolve_duplicates_parser)
     resolve_duplicates_parser.add_argument(
         "--yes",
@@ -4764,7 +4783,8 @@ def main():
             "this, `resolve-duplicates` asks for a y/N confirmation on "
             "the terminal before sending the request -- POST "
             "/api/notebooks/duplicates/resolve itself has no confirmation "
-            "step of its own, and is irreversible."
+            "step of its own, and is irreversible. Ignored under "
+            "--dry-run, which never prompts."
         )
     )
     resolve_duplicates_parser.add_argument(
