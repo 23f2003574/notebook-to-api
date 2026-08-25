@@ -2431,6 +2431,53 @@ def test_find_duplicate_notebooks_reports_multiple_independent_groups():
     assert body["duplicate_notebook_count"] == 4
 
 
+def test_find_duplicate_notebooks_scopes_to_a_tag():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in ("dup_tag_prod_a.ipynb", "dup_tag_prod_b.ipynb", "dup_tag_scratch.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content_a), "application/json")},
+        )
+
+    client.put("/api/notebooks/dup_tag_prod_a.ipynb/tags", json={"tags": ["production"]})
+    client.put("/api/notebooks/dup_tag_prod_b.ipynb/tags", json={"tags": ["production"]})
+
+    body = client.get("/api/notebooks/duplicates", params={"tag": "production"}).json()
+
+    assert body["group_count"] == 1
+    assert body["duplicate_groups"][0]["filenames"] == [
+        "dup_tag_prod_a.ipynb", "dup_tag_prod_b.ipynb",
+    ]
+
+
+def test_find_duplicate_notebooks_tag_with_only_one_matching_member_yields_no_group():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in ("dup_tag_solo_a.ipynb", "dup_tag_solo_b.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content_a), "application/json")},
+        )
+
+    client.put("/api/notebooks/dup_tag_solo_a.ipynb/tags", json={"tags": ["production"]})
+
+    body = client.get("/api/notebooks/duplicates", params={"tag": "production"}).json()
+
+    assert body["group_count"] == 0
+    assert body["duplicate_groups"] == []
+
+
 def test_resolve_duplicate_notebooks_keeps_alphabetically_first_by_default():
 
     client.delete("/api/notebooks?confirm=true")
@@ -2582,6 +2629,49 @@ def test_resolve_duplicate_notebooks_also_removes_tags_description_and_versions(
 def test_resolve_duplicate_notebooks_rejects_a_non_object_keep_value():
 
     resp = client.post("/api/notebooks/duplicates/resolve", json={"keep": "not-an-object"})
+
+    assert resp.status_code == 400
+
+
+def test_resolve_duplicate_notebooks_scopes_to_a_tag():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in (
+        "resolve_tag_prod_a.ipynb", "resolve_tag_prod_b.ipynb", "resolve_tag_scratch.ipynb",
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content_a), "application/json")},
+        )
+
+    client.put("/api/notebooks/resolve_tag_prod_a.ipynb/tags", json={"tags": ["production"]})
+    client.put("/api/notebooks/resolve_tag_prod_b.ipynb/tags", json={"tags": ["production"]})
+
+    resp = client.post(
+        "/api/notebooks/duplicates/resolve", json={"tag": "production"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["results"][0]["kept_filename"] == "resolve_tag_prod_a.ipynb"
+    assert [e["filename"] for e in body["results"][0]["deleted_filenames"]] == [
+        "resolve_tag_prod_b.ipynb",
+    ]
+
+    # The untagged byte-identical notebook was never touched.
+    remaining = {n["filename"] for n in client.get("/api/notebooks").json()["notebooks"]}
+    assert remaining == {"resolve_tag_prod_a.ipynb", "resolve_tag_scratch.ipynb"}
+
+
+def test_resolve_duplicate_notebooks_rejects_a_non_string_tag():
+
+    resp = client.post("/api/notebooks/duplicates/resolve", json={"tag": 123})
 
     assert resp.status_code == 400
 

@@ -1459,9 +1459,15 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        params = {}
+
+        if args.tag:
+            params["tag"] = args.tag
+
         try:
             response = httpx.get(
                 f"{dashboard_url}/api/notebooks/duplicates",
+                params=params,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -1528,10 +1534,15 @@ def _dispatch_core_command(args):
                 print("Aborted.")
                 return
 
+        resolve_body = {"keep": keep}
+
+        if args.tag:
+            resolve_body["tag"] = args.tag
+
         try:
             response = httpx.post(
                 f"{dashboard_url}/api/notebooks/duplicates/resolve",
-                json={"keep": keep},
+                json=resolve_body,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -4632,6 +4643,16 @@ def main():
             "/api/notebooks/duplicates."
         )
     )
+    find_duplicates_parser.add_argument(
+        "--tag",
+        help=(
+            "Only scan notebooks carrying this exact tag for duplicates, "
+            "via GET /api/notebooks/duplicates' own ?tag= query param -- "
+            "e.g. to find duplicates among only your \"production\" "
+            "notebooks, without an untagged or differently-tagged "
+            "byte-identical notebook pulling it into the same group."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(find_duplicates_parser)
     find_duplicates_parser.add_argument(
         "--json",
@@ -4667,6 +4688,17 @@ def main():
             "group (its own \"sha256\", as reported by `find-duplicates`), "
             "instead of the alphabetically-first filename in that group. "
             "Repeat --keep once per group to override."
+        )
+    )
+    resolve_duplicates_parser.add_argument(
+        "--tag",
+        help=(
+            "Only resolve duplicate groups among notebooks carrying this "
+            "exact tag, via POST /api/notebooks/duplicates/resolve's own "
+            "\"tag\" body field -- the identical scoping `find-duplicates "
+            "--tag` already applies to its own report, so resolving only "
+            "ever deletes what a matching `find-duplicates --tag` call "
+            "would have reported."
         )
     )
     _add_dashboard_url_and_timeout_arguments(resolve_duplicates_parser)

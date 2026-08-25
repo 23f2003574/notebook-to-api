@@ -2223,7 +2223,7 @@ def export_notebooks(filenames: str = None, tag: str = None):
 
 
 @router.get("/notebooks/duplicates")
-def find_duplicate_notebooks():
+def find_duplicate_notebooks(tag: str = None):
     """Group every uploaded notebook by its raw content, reporting only
     the groups with more than one filename -- byte-identical uploads
     sitting in UPLOAD_DIR under different names.
@@ -2251,6 +2251,24 @@ def find_duplicate_notebooks():
     reason -- this endpoint has no natural ordering of its own (unlike GET
     /api/notebooks' filename/size/modified sort) since a duplicate group
     isn't tied to any one notebook's own timestamp or name.
+
+    "tag" (optional) scopes the scan to only notebooks currently carrying
+    that exact tag, the same exact-match GET /api/notebooks?tag= already
+    filters by, and the identical gap "tag" already closes for GET
+    /api/functions and GET /api/notebooks/search-content -- before this,
+    answering "which of my *production* notebooks are byte-identical
+    duplicates of each other" meant fetching every duplicate group across
+    the entire catalog and filtering the response down to "filenames"
+    that also happen to carry that tag client-side, which -- unlike a
+    simple substring/exact-match filter -- can't be done correctly after
+    the fact: a group with one tagged and one untagged member would need
+    to be reported as if the untagged one were never there, not just
+    hidden or kept whole. Applied before a notebook is even hashed, so an
+    out-of-tag notebook never contributes to a group (or gets hashed at
+    all) in the first place -- a group where the scan finds only one
+    matching notebook simply isn't reported, the same "fewer than two
+    members isn't a duplicate group" rule this endpoint already applies
+    with no "tag" given.
     """
 
     upload_root = Path(UPLOAD_DIR)
@@ -2260,6 +2278,9 @@ def find_duplicate_notebooks():
     for entry in sorted(upload_root.iterdir()):
 
         if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        if tag and tag not in _read_notebook_tags(entry.name):
             continue
 
         digest = hash_notebook_file(entry)
@@ -2330,7 +2351,30 @@ def resolve_duplicate_notebooks(data: dict = None):
     report, recomputed fresh (not cached from an earlier call), so a
     notebook uploaded or deleted between that GET and this POST is
     reflected correctly.
+
+    "tag" (optional, in the request body) scopes which groups get
+    resolved the identical way GET /api/notebooks/duplicates' own "tag"
+    query param scopes which groups get reported -- an out-of-tag
+    notebook is never hashed, grouped, or deleted, and never counted
+    towards whether a group even has more than one member. Without this,
+    an operator wanting to clean up duplicates among only their
+    "production" notebooks (e.g. before a tag-scoped GET
+    /api/notebooks/export?tag=production backup) had no way to avoid this
+    endpoint also acting on a byte-identical scratch/experiment notebook
+    that happens to carry no tag, or a different one, at all -- exactly
+    the same "one bad entry doesn't abort the batch, but an out-of-scope
+    entry shouldn't be touched at all" reasoning "tag" already gives GET
+    /api/notebooks/duplicates. Passing a non-string "tag" is a 400, the
+    same way a malformed "keep" already is below.
     """
+
+    tag = (data or {}).get("tag")
+
+    if tag is not None and not isinstance(tag, str):
+        raise HTTPException(
+            status_code=400,
+            detail="tag must be a string"
+        )
 
     keep_overrides = (data or {}).get("keep") or {}
 
@@ -2350,6 +2394,9 @@ def resolve_duplicate_notebooks(data: dict = None):
     for entry in sorted(upload_root.iterdir()):
 
         if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        if tag and tag not in _read_notebook_tags(entry.name):
             continue
 
         entries_by_hash.setdefault(hash_notebook_file(entry), []).append(entry.name)

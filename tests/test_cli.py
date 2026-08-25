@@ -3213,6 +3213,45 @@ def test_find_duplicates_command_json_flag_emits_the_dashboards_own_response(
     assert json.loads(proc.stdout) == body
 
 
+def test_find_duplicates_command_sends_tag_query_param(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "duplicate_groups": [],
+            "group_count": 0, "duplicate_notebook_count": 0,
+        })
+    ]
+
+    proc = _run_cli(
+        ["find-duplicates", "--tag", "production", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query["tag"] == ["production"]
+
+
+def test_find_duplicates_command_omits_tag_query_param_by_default(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "duplicate_groups": [],
+            "group_count": 0, "duplicate_notebook_count": 0,
+        })
+    ]
+
+    proc = _run_cli(
+        ["find-duplicates", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests[0] == "/api/notebooks/duplicates"
+
+
 def test_find_duplicates_command_reports_a_clean_error_when_the_dashboard_is_unreachable():
 
     proc = _run_cli(
@@ -3296,6 +3335,52 @@ def test_resolve_duplicates_command_sends_keep_overrides(tmp_path, fake_dashboar
     assert json.loads(handler.bodies[0]) == {
         "keep": {"abc123": "b.ipynb", "def456": "c.ipynb"},
     }
+
+
+def test_resolve_duplicates_command_sends_tag_body_field(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "results": [], "succeeded_count": 0, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "resolve-duplicates", "--yes",
+            "--tag", "production",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {"keep": {}, "tag": "production"}
+
+
+def test_resolve_duplicates_command_omits_tag_body_field_by_default(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "results": [], "succeeded_count": 0, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["resolve-duplicates", "--yes", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {"keep": {}}
 
 
 def test_resolve_duplicates_command_reports_a_partial_failure(tmp_path, fake_dashboard):
