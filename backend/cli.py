@@ -3789,6 +3789,8 @@ def _dispatch_core_command(args):
 
         if args.source_notebook_filename:
             params["source_notebook_filename"] = args.source_notebook_filename
+        if args.source_notebook_sha256:
+            params["source_notebook_sha256"] = args.source_notebook_sha256
         if args.platform:
             params["platform"] = args.platform
         if args.tag:
@@ -6467,6 +6469,19 @@ def main():
             "Only show deploys whose compiled source was this exact "
             "notebook filename, via GET /api/deploy/history's own "
             "?source_notebook_filename= query param."
+        )
+    )
+    deploy_history_parser.add_argument(
+        "--source-sha256",
+        dest="source_notebook_sha256",
+        help=(
+            "Only show deploys whose compiled source was this exact "
+            "notebook content, via GET /api/deploy/history's own "
+            "?source_notebook_sha256= query param -- matches the "
+            "notebook's content hash at deploy time (the same digest "
+            "GET /api/notebooks/duplicates groups uploads by) rather "
+            "than its current filename, so it still finds a deploy "
+            "after the notebook was later renamed or overwritten."
         )
     )
     deploy_history_parser.add_argument(

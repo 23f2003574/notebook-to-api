@@ -6437,6 +6437,7 @@ def deploy_generated_app(data: dict = None):
 @router.get("/deploy/history")
 def deploy_history_endpoint(
     source_notebook_filename: str = None,
+    source_notebook_sha256: str = None,
     platform: str = None,
     tag: str = None,
     pushed: bool = None,
@@ -6479,6 +6480,20 @@ def deploy_history_endpoint(
     below identically, since each only ever narrows by its own entry
     field.
 
+    "source_notebook_sha256" matches exactly against each entry's own
+    "source_notebook_sha256" -- the exact notebook *content* deployed,
+    the same digest GET /api/notebooks/duplicates already groups uploads
+    by and GET /api/compile/history's own "source_notebook_sha256" query
+    param already filters compile history by -- rather than
+    "source_notebook_filename"'s current name. A notebook can be renamed
+    (PATCH /api/notebooks/{filename}) or overwritten (POST
+    /api/upload?overwrite=true) between deploys, at which point
+    "source_notebook_filename" alone can no longer answer "was *this
+    exact content* ever actually deployed, and under what tag", since
+    that content may now sit under a different filename, or several.
+    Composes with every other filter here identically; an unknown or
+    never-deployed hash simply yields no matching entries, not an error.
+
     "offset" (default 0) is how many of the (already-filtered) entries,
     still most-recent-first, to skip before "limit" is applied -- the
     identical pagination GET /api/notebooks' own "offset" already
@@ -6506,6 +6521,12 @@ def deploy_history_endpoint(
         entries = [
             entry for entry in entries
             if entry.get("source_notebook_filename") == source_notebook_filename
+        ]
+
+    if source_notebook_sha256 is not None:
+        entries = [
+            entry for entry in entries
+            if entry.get("source_notebook_sha256") == source_notebook_sha256
         ]
 
     if platform is not None:

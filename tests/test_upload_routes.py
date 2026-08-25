@@ -9648,6 +9648,32 @@ def test_deploy_history_filters_by_source_notebook_filename(tmp_path, monkeypatc
     assert body["entry_count"] == 2
 
 
+def test_deploy_history_filters_by_source_notebook_sha256(tmp_path, monkeypatch):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get(
+        "/api/deploy/history", params={"source_notebook_sha256": "bbb"}
+    ).json()
+
+    assert [e["tag"] for e in body["entries"]] == ["filter:b"]
+    assert body["entry_count"] == 1
+
+
+def test_deploy_history_unknown_source_notebook_sha256_yields_no_entries(
+    tmp_path, monkeypatch
+):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    body = client.get(
+        "/api/deploy/history", params={"source_notebook_sha256": "no-such-hash"}
+    ).json()
+
+    assert body["entries"] == []
+    assert body["entry_count"] == 0
+
+
 def test_deploy_history_filters_by_platform(tmp_path, monkeypatch):
 
     _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
