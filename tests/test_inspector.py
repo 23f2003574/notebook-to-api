@@ -457,6 +457,42 @@ def test_inspect_notebook_report_excludes_standard_library_imports(tmp_path, cap
     assert "- sys" not in dependencies_section
 
 
+def test_inspect_notebook_data_dependencies_omits_an_excluded_import(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: exclude pandas\n"
+        "import pandas as pd\n"
+        "import nbformat\n\n"
+        "def summarize(count: int) -> int:\n    return count * 2\n",
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    assert "pandas" not in data["dependencies"]
+    assert "nbformat" in data["dependencies"]
+
+
+def test_inspect_notebook_report_omits_an_excluded_import(tmp_path, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: exclude pandas\n"
+        "import pandas as pd\n"
+        "import nbformat\n\n"
+        "def summarize(count: int) -> int:\n    return count * 2\n",
+    )
+
+    inspect_notebook(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    dependencies_section = output.split("Dependencies:")[1].split("Generated Files:")[0]
+    assert "- pandas" not in dependencies_section
+    assert "- nbformat" in dependencies_section
+
+
 def test_inspect_notebook_data_dependencies_resolves_the_actual_distribution_name(
     tmp_path,
 ):

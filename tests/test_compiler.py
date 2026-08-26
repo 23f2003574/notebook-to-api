@@ -15,6 +15,7 @@ import nbformat
 import pytest
 
 from backend.compiler import (
+    _extract_excluded_imports,
     _extract_explicit_requirements,
     _filter_functions_by_name,
     clear_stale_export_artifacts,
@@ -22,6 +23,7 @@ from backend.compiler import (
     compile_notebook,
     compile_notebook_to_api,
     compiling_python_version,
+    extract_third_party_imports,
     package_name_for_output_dir,
     STANDARD_LIBS,
     THIS_TOOLS_OWN_PACKAGE_NAME,
@@ -4466,6 +4468,103 @@ def test_extract_explicit_requirements_returns_an_empty_list_with_no_directives(
     code_cells = ["import pandas\n\ndef f() -> int:\n    return 1\n"]
 
     assert _extract_explicit_requirements(code_cells) == []
+
+
+def test_extract_excluded_imports_finds_a_directive_in_a_cell():
+
+    code_cells = [
+        "# notebook-to-api: exclude pytest\n"
+        "import pandas\n"
+    ]
+
+    assert _extract_excluded_imports(code_cells) == {"pytest"}
+
+
+def test_extract_excluded_imports_finds_a_directive_indented_inside_a_function():
+
+    code_cells = [
+        "def f() -> int:\n"
+        "    # notebook-to-api: exclude debug_only_pkg\n"
+        "    return 1\n"
+    ]
+
+    assert _extract_excluded_imports(code_cells) == {"debug_only_pkg"}
+
+
+def test_extract_excluded_imports_collects_several_across_cells():
+
+    code_cells = [
+        "# notebook-to-api: exclude pytest\n",
+        "# notebook-to-api: exclude ipdb\n",
+    ]
+
+    assert _extract_excluded_imports(code_cells) == {"pytest", "ipdb"}
+
+
+def test_extract_excluded_imports_ignores_an_unrelated_comment():
+
+    code_cells = [
+        "# this notebook-to-api project should exclude nothing\n"
+        "import pandas\n"
+    ]
+
+    assert _extract_excluded_imports(code_cells) == set()
+
+
+def test_extract_excluded_imports_returns_an_empty_set_with_no_directives():
+
+    code_cells = ["import pandas\n\ndef f() -> int:\n    return 1\n"]
+
+    assert _extract_excluded_imports(code_cells) == set()
+
+
+def test_extract_third_party_imports_omits_an_excluded_import():
+
+    code_cells = [
+        "# notebook-to-api: exclude pytest\n"
+        "import pytest\n"
+        "import pandas\n"
+    ]
+
+    imports = extract_third_party_imports(code_cells)
+
+    assert "pandas" in imports
+    assert "pytest" not in imports
+
+
+def test_extract_third_party_imports_keeps_a_non_excluded_import():
+
+    code_cells = ["import pandas\n"]
+
+    assert extract_third_party_imports(code_cells) == ["pandas"]
+
+
+def test_compile_notebook_excludes_a_directive_named_import_from_requirements_txt(
+    tmp_path
+):
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "# notebook-to-api: exclude nbformat\n"
+            "import nbformat\n\n"
+            "def f() -> int:\n    return 1\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    requirements = (output_dir / "requirements.txt").read_text(encoding="utf-8")
+
+    assert "nbformat" not in requirements
+    assert any(
+        line.startswith("fastapi==") for line in requirements.splitlines()
+    )
 
 
 def test_compile_notebook_writes_an_explicit_requirement_directive_to_requirements_txt(

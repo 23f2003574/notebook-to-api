@@ -401,6 +401,58 @@ def _extract_explicit_requirements(code_cells):
     return specs
 
 
+# Recognizes a "# notebook-to-api: exclude <import-name>" comment
+# directive -- see _extract_excluded_imports below for what it's for.
+# Same matching rules as REQUIREMENT_DIRECTIVE_PATTERN above (leading
+# whitespace allowed, "#" must start the line) for the identical reason:
+# usable indented inside a function body, and immune to an unrelated
+# inline comment merely containing this phrase elsewhere in a line.
+EXCLUDE_DIRECTIVE_PATTERN = re.compile(
+    r"^\s*#\s*notebook-to-api:\s*exclude\s+(?P<name>\S+)\s*$",
+    re.MULTILINE,
+)
+
+
+def _extract_excluded_imports(code_cells):
+    """Import names a notebook author explicitly opts out of
+    requirements.txt (and, via inspector.py's own identical use of this,
+    every "dependencies" field derived from the same import scan) via a
+    "# notebook-to-api: exclude <import-name>" comment directive, one per
+    line, anywhere in any code cell.
+
+    extract_third_party_imports (below) otherwise pins every third-party
+    name any code cell's own `import` statement references, with no way
+    to keep one out short of deleting the import (and whatever uses it)
+    from the notebook entirely -- even for an import that's incidental to
+    what actually gets compiled into an endpoint (e.g. a scratch cell
+    doing `import pytest` to sanity-check a function inline, never
+    imported by anything the generated app itself calls at runtime), or
+    one already vendored/bundled into the deploy target's own image and
+    never meant to be pip-installed there at all.
+
+    `name` is matched exactly against an import's own top-level module
+    name (the same name extract_third_party_imports/
+    extract_imports_from_code already collect it under, before any
+    distribution_name_for_import resolution) -- not a PyPI distribution
+    name, since that's what a notebook's own `import` statement actually
+    names, and what a caller writing this directive is looking at.
+    Returns a set, the same membership-tested shape STANDARD_LIBS already
+    is here, for the identical `imp not in ...` filter below.
+    """
+    excluded = set()
+
+    for cell in code_cells:
+
+        for match in EXCLUDE_DIRECTIVE_PATTERN.finditer(cell):
+
+            name = match.group("name").strip()
+
+            if name:
+                excluded.add(name)
+
+    return excluded
+
+
 def extract_third_party_imports(code_cells):
     """The raw, STANDARD_LIBS-filtered import names `code_cells` (already
     filtered to parseable cells, as compile_notebook_to_api's own
@@ -417,13 +469,23 @@ def extract_third_party_imports(code_cells):
     problem _third_party_dependencies' own docstring (backend/inspector.py)
     already describes happening once before, for a related but distinct
     computation.
+
+    Also filters out anything _extract_excluded_imports (above) collects
+    from the same `code_cells` -- applied here, in the one place both
+    compile_notebook_to_api and the requirements-preview endpoint already
+    share, rather than at each call site separately.
     """
     imports = set()
 
     for cell in code_cells:
         imports.update(extract_imports_from_code(cell))
 
-    return [imp for imp in imports if imp not in STANDARD_LIBS]
+    excluded = _extract_excluded_imports(code_cells)
+
+    return [
+        imp for imp in imports
+        if imp not in STANDARD_LIBS and imp not in excluded
+    ]
 
 
 def resolve_requirements(imports, explicit_requirements=None):

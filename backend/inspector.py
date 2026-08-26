@@ -4,6 +4,7 @@ from pathlib import Path
 
 from backend.compiler import (
     COMPILE_METADATA_FILENAME,
+    _extract_excluded_imports,
     _filter_functions_by_name,
     distribution_name_for_import,
     STANDARD_LIBS,
@@ -266,6 +267,14 @@ def inspect_notebook(notebook_path, output_dir="generated"):
 
     all_functions = deduplicate_functions_by_name(all_functions)
 
+    # Same "# notebook-to-api: exclude <import-name>" directive
+    # extract_third_party_imports (backend/compiler.py) already applies
+    # before write_requirements pins anything -- without this, an import
+    # a notebook author explicitly opted out of requirements.txt would
+    # still show up here as a "dependency", even though it's never
+    # actually pinned by an ensuing compile.
+    all_imports -= _extract_excluded_imports(code_cells)
+
     reserved_name_conflicts = _reserved_name_conflicts(all_functions)
 
     skipped_functions = _aggregate_skipped_functions(
@@ -385,6 +394,14 @@ def inspect_notebook_data(
         all_imports.update(imports)
 
     all_functions = deduplicate_functions_by_name(all_functions)
+
+    # See the identical comment in inspect_notebook above -- keeps this
+    # "dependencies" field (POST /api/inspect, POST /api/validate, POST
+    # /api/compile's own response, and print_compile_summary below, which
+    # all read it through this one function) from drifting out of sync
+    # with what write_requirements/extract_third_party_imports
+    # (backend/compiler.py) actually excludes.
+    all_imports -= _extract_excluded_imports(code_cells)
 
     return {
         "functions": all_functions,

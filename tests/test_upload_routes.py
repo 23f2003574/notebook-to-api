@@ -9377,6 +9377,36 @@ def test_requirements_preview_includes_an_explicit_requirement_directive():
     assert "definitely-not-a-real-pkg==1.2.3" in resp.json()["requirements"]
 
 
+def test_requirements_preview_omits_an_excluded_import():
+
+    content = _notebook_bytes(
+        "# notebook-to-api: exclude nbformat\n"
+        "import nbformat\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "requirements_preview_exclude.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/requirements-preview",
+        json={"notebook_path": "requirements_preview_exclude.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    assert not any(
+        dep.startswith("nbformat") for dep in resp.json()["requirements"]
+    )
+
+
 def test_requirements_preview_falls_back_to_a_bare_name_for_an_uninstalled_dependency():
 
     content = _notebook_bytes(
