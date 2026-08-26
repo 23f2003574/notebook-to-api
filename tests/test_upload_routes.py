@@ -2347,6 +2347,93 @@ def test_export_notebooks_rejects_both_filenames_and_tag():
     assert resp.status_code == 400
 
 
+def test_export_notebooks_include_versions_bundles_each_notebooks_own_history():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    original_a = _notebook_bytes("def f() -> int:\n    return 1\n")
+    current_a = _notebook_bytes("def f() -> int:\n    return 2\n")
+    current_b = _notebook_bytes("def g() -> int:\n    return 3\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("export_versions_a.ipynb", io.BytesIO(original_a), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": ("export_versions_a.ipynb", io.BytesIO(current_a), "application/json")},
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("export_versions_b.ipynb", io.BytesIO(current_b), "application/json")},
+    )
+
+    version_id = client.get(
+        "/api/notebooks/export_versions_a.ipynb/versions"
+    ).json()["versions"][0]["version_id"]
+
+    export_resp = client.get(
+        "/api/notebooks/export", params={"include_versions": "true"}
+    )
+
+    assert export_resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(export_resp.content)) as archive:
+
+        names = set(archive.namelist())
+        assert names == {
+            "export_versions_a.ipynb",
+            "export_versions_b.ipynb",
+            f"versions/export_versions_a.ipynb/{version_id}",
+        }
+
+        assert archive.read("export_versions_a.ipynb") == current_a
+        assert archive.read("export_versions_b.ipynb") == current_b
+        assert (
+            archive.read(f"versions/export_versions_a.ipynb/{version_id}")
+            == original_a
+        )
+
+
+def test_export_notebooks_without_include_versions_omits_version_history():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    original = _notebook_bytes("def f() -> int:\n    return 1\n")
+    current = _notebook_bytes("def f() -> int:\n    return 2\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("export_no_versions.ipynb", io.BytesIO(original), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": ("export_no_versions.ipynb", io.BytesIO(current), "application/json")},
+    )
+
+    export_resp = client.get("/api/notebooks/export")
+
+    assert export_resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(export_resp.content)) as archive:
+        assert archive.namelist() == ["export_no_versions.ipynb"]
+
+
+def test_export_notebooks_include_versions_with_no_history_adds_no_entries():
+
+    _upload_sample_notebook("export_versions_none.ipynb")
+
+    export_resp = client.get(
+        "/api/notebooks/export",
+        params={"filenames": "export_versions_none.ipynb", "include_versions": "true"},
+    )
+
+    assert export_resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(export_resp.content)) as archive:
+        assert archive.namelist() == ["export_versions_none.ipynb"]
+
+
 def test_find_duplicate_notebooks_groups_byte_identical_uploads():
 
     client.delete("/api/notebooks?confirm=true")

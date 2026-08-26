@@ -3994,6 +3994,44 @@ def test_export_notebooks_command_sends_tag_query_param(tmp_path, fake_dashboard
     assert handler.requests == ["/api/notebooks/export?tag=prod"]
 
 
+def test_export_notebooks_command_sends_include_versions_query_param(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["export-notebooks", "--include-versions", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/export?include_versions=true"]
+
+
+def test_export_notebooks_command_omits_include_versions_query_param_by_default(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["export-notebooks", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/export"]
+
+
 def test_export_notebooks_command_rejects_filename_and_tag_together(tmp_path):
 
     workdir = tmp_path / "workdir"

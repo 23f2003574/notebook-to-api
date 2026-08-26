@@ -1774,6 +1774,8 @@ def _dispatch_core_command(args):
             params["filenames"] = ",".join(args.filename)
         if args.tag:
             params["tag"] = args.tag
+        if args.include_versions:
+            params["include_versions"] = True
 
         try:
             response = httpx.get(
@@ -5150,6 +5152,19 @@ def main():
             "via GET /api/notebooks/export's own ?tag= query param, "
             "instead of naming filenames directly. Can't be combined "
             "with an explicit filename."
+        )
+    )
+    export_notebooks_parser.add_argument(
+        "--include-versions",
+        action="store_true",
+        dest="include_versions",
+        help=(
+            "Also bundle each exported notebook's own snapshotted version "
+            "history, via GET /api/notebooks/export's own "
+            "?include_versions= query param -- each notebook's own "
+            "snapshots land under versions/<filename>/<version_id> in the "
+            "downloaded zip, the same per-notebook layout `versions "
+            "export` already uses for one notebook at a time."
         )
     )
     _add_dashboard_url_and_timeout_arguments(export_notebooks_parser)

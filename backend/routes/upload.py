@@ -2154,7 +2154,9 @@ def list_notebooks(
 
 
 @router.get("/notebooks/export")
-def export_notebooks(filenames: str = None, tag: str = None):
+def export_notebooks(
+    filenames: str = None, tag: str = None, include_versions: bool = False
+):
     """Download a caller-chosen set of already-uploaded notebooks -- or,
     with "filenames" omitted, every uploaded notebook -- bundled into one
     .zip.
@@ -2198,6 +2200,26 @@ def export_notebooks(filenames: str = None, tag: str = None):
     fact, since the response body *is* the zip. A 404 up front, naming
     every filename that doesn't exist, lets a caller fix its request
     before getting nothing back.
+
+    "include_versions" (optional, default false) additionally bundles
+    every exported notebook's own snapshotted version history alongside
+    its current content -- each notebook's own snapshot files under
+    "versions/<filename>/<version_id>", the same per-notebook "versions/"
+    layout GET /api/notebooks/{filename}/versions/export already uses for
+    one notebook at a time, just namespaced one level deeper by owning
+    filename here so several notebooks' own histories can share one
+    archive without their own version_ids colliding. Before this, a
+    caller backing up (or handing off) more than one notebook at once
+    could only ever get their *current* content this way -- getting each
+    one's own version history too meant a separate GET
+    /api/notebooks/{filename}/versions/export call per notebook, the
+    exact N-request gap that endpoint's own docstring already describes
+    solving for a single notebook's current content plus history, just
+    reopened here for several notebooks' own histories at once. A
+    notebook with no version history of its own simply contributes no
+    "versions/<filename>/" entries, the same "an empty/absent version
+    history is a valid state, not an error" reasoning that endpoint's own
+    docstring already follows.
     """
 
     if filenames and tag:
@@ -2268,7 +2290,23 @@ def export_notebooks(filenames: str = None, tag: str = None):
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
 
         for name, file_path in notebooks_to_export:
+
             archive.write(file_path, name)
+
+            if not include_versions:
+                continue
+
+            versions_dir = _notebook_versions_dir(file_path.name)
+
+            if not versions_dir.is_dir():
+                continue
+
+            for version_entry in sorted(versions_dir.iterdir()):
+
+                if version_entry.is_file():
+                    archive.write(
+                        version_entry, f"versions/{name}/{version_entry.name}"
+                    )
 
     buffer.seek(0)
 
