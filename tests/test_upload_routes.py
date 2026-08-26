@@ -1261,6 +1261,93 @@ def test_import_notebooks_rejects_more_entries_than_the_configured_maximum(monke
     assert not (Path(UPLOAD_DIR) / "import_max_b.ipynb").exists()
 
 
+def test_import_notebooks_round_trips_an_include_versions_export_archive():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    original_a = _notebook_bytes("def f() -> int:\n    return 1\n")
+    current_a = _notebook_bytes("def f() -> int:\n    return 2\n")
+    current_b = _notebook_bytes("def g() -> int:\n    return 3\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("import_versions_a.ipynb", io.BytesIO(original_a), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": ("import_versions_a.ipynb", io.BytesIO(current_a), "application/json")},
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("import_versions_b.ipynb", io.BytesIO(current_b), "application/json")},
+    )
+
+    version_id = client.get(
+        "/api/notebooks/import_versions_a.ipynb/versions"
+    ).json()["versions"][0]["version_id"]
+
+    export_bytes = client.get(
+        "/api/notebooks/export", params={"include_versions": "true"}
+    ).content
+
+    client.delete("/api/notebooks?confirm=true")
+
+    resp = client.post(
+        "/api/notebooks/import",
+        files={"file": ("backup.zip", io.BytesIO(export_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 2
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["import_versions_a.ipynb"]["restored_version_count"] == 1
+    assert results_by_filename["import_versions_b.ipynb"]["restored_version_count"] == 0
+
+    assert client.get("/api/notebooks/import_versions_a.ipynb").content == current_a
+    assert client.get("/api/notebooks/import_versions_b.ipynb").content == current_b
+
+    restored_versions = client.get(
+        "/api/notebooks/import_versions_a.ipynb/versions"
+    ).json()["versions"]
+    assert [v["version_id"] for v in restored_versions] == [version_id]
+    assert (
+        client.get(
+            f"/api/notebooks/import_versions_a.ipynb/versions/{version_id}"
+        ).content
+        == original_a
+    )
+
+    assert (
+        client.get("/api/notebooks/import_versions_b.ipynb/versions").json()["versions"]
+        == []
+    )
+
+
+def test_import_notebooks_ignores_version_entries_with_no_matching_notebook_entry():
+
+    archive_bytes = _zip_bytes({
+        "import_orphan_versions.ipynb": _notebook_bytes("def f() -> int:\n    return 1\n"),
+        "versions/some_other_notebook.ipynb/20260101T000000000000_abcd1234.ipynb": b"{}",
+    })
+
+    resp = client.post(
+        "/api/notebooks/import",
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["results"][0]["filename"] == "import_orphan_versions.ipynb"
+    assert body["results"][0]["restored_version_count"] == 0
+
+    assert client.get(
+        "/api/notebooks/import_orphan_versions.ipynb/versions"
+    ).json()["versions"] == []
+
+
 def test_upload_lock_for_returns_the_same_lock_for_the_same_filename():
     """_upload_lock_for must hand back the *same* Lock instance for the
     same filename across separate calls (separate requests, in practice)

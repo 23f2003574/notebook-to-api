@@ -562,6 +562,82 @@ def _version_lock_for(filename: str) -> threading.Lock:
     return _version_locks_by_filename.setdefault(filename, threading.Lock())
 
 
+def _restore_version_snapshots_from_archive(archive, entry_names, versions_dir):
+    """Write each of `entry_names` (already-resolved zip entry names, one
+    per snapshot, from an already-opened `archive`) into `versions_dir`,
+    named by its own basename -- the exact same "version_id" GET
+    .../versions/{version_id} already downloads it by.
+
+    Shared by POST /api/notebooks/{filename}/versions/import (restoring
+    one notebook's own "versions/<version_id>" entries) and POST
+    /api/notebooks/import (restoring, for each notebook it successfully
+    imports, that notebook's own "versions/<filename>/<version_id>"
+    entries from a GET /api/notebooks/export?include_versions=true
+    archive) -- both need the identical write-then-reconstruct-mtime
+    sequence, and duplicating it a second time risked exactly the kind of
+    two-copies-silently-drift problem this file's own precedent (see
+    extract_third_party_imports' docstring, backend/compiler.py) already
+    warns about.
+
+    Every version_id _snapshot_current_notebook_version ever produces
+    starts with an exact "%Y%m%dT%H%M%S%f" prefix -- reused here as each
+    restored file's own mtime so "saved_at" (list_notebook_versions
+    above, which reads mtime directly) still reflects when that snapshot
+    was originally saved, not this import call's own timestamp. A
+    version_id that doesn't parse this way (e.g. a hand-built archive)
+    just keeps whatever mtime the write itself already produced.
+
+    Subject to the same MAX_NOTEBOOK_VERSIONS cap every other
+    version-writing path already enforces, applied once at the end (not
+    per entry) -- restoring an archive whose own history is longer than
+    the cap discards the oldest entries first, exactly as an ordinary
+    overwrite already would. An empty `entry_names` restores nothing and
+    never creates `versions_dir` at all, the same "nothing to do" no-op
+    every other empty-input path in this file already is. Callers are
+    responsible for holding _version_lock_for(filename) around this, the
+    same way every other write into a notebook's own version history
+    already does.
+
+    Returns the sorted list of version_ids actually restored.
+    """
+    imported_version_ids = []
+
+    if not entry_names:
+        return imported_version_ids
+
+    versions_dir.mkdir(parents=True, exist_ok=True)
+
+    for entry_name in sorted(entry_names):
+
+        version_id = os.path.basename(entry_name)
+
+        if not version_id:
+            continue
+
+        version_path = versions_dir / version_id
+
+        with open(version_path, "wb") as f:
+            f.write(archive.read(entry_name))
+
+        try:
+
+            saved_at = datetime.strptime(
+                version_id.split("_", 1)[0], "%Y%m%dT%H%M%S%f"
+            ).replace(tzinfo=timezone.utc)
+
+            mtime = saved_at.timestamp()
+            os.utime(version_path, (mtime, mtime))
+
+        except ValueError:
+            pass
+
+        imported_version_ids.append(version_id)
+
+    _prune_notebook_versions(versions_dir)
+
+    return sorted(imported_version_ids)
+
+
 async def _save_uploaded_notebook(file: UploadFile, overwrite: bool) -> dict:
     """Validate and save one uploaded notebook, exactly as upload_notebook
     (below) always has -- extracted into its own function so
@@ -894,6 +970,30 @@ async def import_notebooks(
     rather than rejecting the whole archive over content this endpoint
     never claimed to import anyway.
 
+    An entry under a "versions/<filename>/" prefix -- the exact layout
+    GET /api/notebooks/export's own "include_versions" query param
+    already produces -- is never imported as a standalone notebook of its
+    own; instead, once its owning "<filename>" has itself been
+    successfully imported (matched by that same basename this endpoint
+    already resolves every other entry's own resulting filename by), it's
+    restored into that notebook's own version history via the identical
+    _restore_version_snapshots_from_archive POST
+    /api/notebooks/{filename}/versions/import already uses, under the
+    lock every other write into a notebook's own version history already
+    holds. Before this, an "include_versions" archive fed back into this
+    endpoint had every one of its own version snapshots imported as its
+    own confusingly-named, unrelated top-level "notebook" instead (each
+    one's own basename ends in ".ipynb" too, so nothing here previously
+    told them apart from a real one) -- this closes that gap, completing
+    the round trip GET /api/notebooks/export?include_versions=true's own
+    docstring already promises. "restored_version_count" reports how many
+    of a given entry's own version snapshots this restored, 0 for a
+    notebook the archive carried no "versions/<filename>/" entries for
+    (including every ordinary, non-"include_versions" archive) -- never
+    present on an entry that itself failed to import, the same "only a
+    successfully-saved notebook gets follow-up side effects" reasoning
+    "tags" below already follows.
+
     Reuses _save_uploaded_notebook -- the exact same validation, atomic
     write, and pre-overwrite versioning upload_notebook and
     upload_notebooks_batch already apply per file -- by wrapping each
@@ -963,7 +1063,11 @@ async def import_notebooks(
 
     notebook_entries = [
         name for name in archive.namelist()
-        if name.endswith(".ipynb") and not name.endswith("/")
+        if (
+            name.endswith(".ipynb")
+            and not name.endswith("/")
+            and not name.startswith("versions/")
+        )
     ]
 
     if not notebook_entries:
@@ -982,6 +1086,27 @@ async def import_notebooks(
                 f".ipynb files at once (got {len(notebook_entries)})."
             )
         )
+
+    # Groups every "versions/<filename>/<version_id>" entry (the layout
+    # GET /api/notebooks/export?include_versions=true produces) by its own
+    # owning "<filename>" -- matched below against each entry's own
+    # resulting basename, the identical name notebook_entries' own import
+    # loop already resolves it by. A path with any other shape under
+    # "versions/" (not exactly "versions/<filename>/<version_id>") is
+    # skipped rather than guessed at.
+    version_entries_by_filename = {}
+
+    for name in archive.namelist():
+
+        if not name.startswith("versions/") or name.endswith("/"):
+            continue
+
+        parts = name.split("/")
+
+        if len(parts) != 3 or not parts[1] or not parts[2]:
+            continue
+
+        version_entries_by_filename.setdefault(parts[1], []).append(name)
 
     results = []
     succeeded_count = 0
@@ -1003,6 +1128,18 @@ async def import_notebooks(
 
             if normalized_tags is not None:
                 _write_notebook_tags(result["filename"], normalized_tags)
+
+            file_path = resolve_upload_path(result["filename"])
+            versions_dir = _notebook_versions_dir(file_path.name)
+
+            with _version_lock_for(file_path.name):
+                restored_version_ids = _restore_version_snapshots_from_archive(
+                    archive,
+                    version_entries_by_filename.get(result["filename"], []),
+                    versions_dir,
+                )
+
+            result["restored_version_count"] = len(restored_version_ids)
 
             results.append(result)
             succeeded_count += 1
@@ -4741,54 +4878,16 @@ async def import_notebook_versions(
     file_path = resolve_upload_path(filename)
     versions_dir = _notebook_versions_dir(file_path.name)
 
-    imported_version_ids = []
-
     with _version_lock_for(file_path.name):
-
-        if version_entries:
-            versions_dir.mkdir(parents=True, exist_ok=True)
-
-        for entry_name in sorted(version_entries):
-
-            version_id = os.path.basename(entry_name)
-
-            if not version_id:
-                continue
-
-            version_path = versions_dir / version_id
-
-            with open(version_path, "wb") as f:
-                f.write(archive.read(entry_name))
-
-            # Every version_id _snapshot_current_notebook_version ever
-            # produces starts with this exact "%Y%m%dT%H%M%S%f" prefix --
-            # reuse it as the restored file's own mtime so "saved_at"
-            # (list_notebook_versions above, which reads mtime directly)
-            # still reflects when this snapshot was originally saved
-            # rather than this import call's own timestamp. A version_id
-            # that doesn't parse this way (e.g. a hand-built archive) just
-            # keeps whatever mtime the write above already produced.
-            try:
-
-                saved_at = datetime.strptime(
-                    version_id.split("_", 1)[0], "%Y%m%dT%H%M%S%f"
-                ).replace(tzinfo=timezone.utc)
-
-                mtime = saved_at.timestamp()
-                os.utime(version_path, (mtime, mtime))
-
-            except ValueError:
-                pass
-
-            imported_version_ids.append(version_id)
-
-        _prune_notebook_versions(versions_dir)
+        imported_version_ids = _restore_version_snapshots_from_archive(
+            archive, version_entries, versions_dir
+        )
 
     return {
         "status": "success",
         "filename": filename,
         "overwritten": result["overwritten"],
-        "imported_version_ids": sorted(imported_version_ids),
+        "imported_version_ids": imported_version_ids,
         "imported_version_count": len(imported_version_ids),
     }
 

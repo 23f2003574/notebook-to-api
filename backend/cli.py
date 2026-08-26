@@ -1235,9 +1235,16 @@ def _dispatch_core_command(args):
             for result in data.get("results", []):
 
                 if result.get("status") == "success":
+
+                    restored_version_count = result.get("restored_version_count", 0)
+                    versions_suffix = (
+                        f", restored {restored_version_count} version(s)"
+                        if restored_version_count else ""
+                    )
                     print(
                         f"Imported '{result.get('filename')}' "
-                        f"(overwritten: {result.get('overwritten')})"
+                        f"(overwritten: {result.get('overwritten')}"
+                        f"{versions_suffix})"
                     )
                 else:
                     print(f"Failed '{result.get('filename')}': {result.get('detail')}")

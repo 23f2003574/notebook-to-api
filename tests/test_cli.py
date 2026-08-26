@@ -2255,6 +2255,42 @@ def test_import_notebooks_command_reports_success(tmp_path, fake_dashboard):
     assert handler.requests == ["/api/notebooks/import?overwrite=false"]
 
 
+def test_import_notebooks_command_reports_restored_version_count(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {
+                    "status": "success", "filename": "a.ipynb", "path": "/srv/a.ipynb",
+                    "overwritten": False, "restored_version_count": 2,
+                },
+                {
+                    "status": "success", "filename": "b.ipynb", "path": "/srv/b.ipynb",
+                    "overwritten": False, "restored_version_count": 0,
+                },
+            ],
+            "succeeded_count": 2,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "bundle.zip"
+    _write_zip(zip_path, {"a.ipynb": b"{}", "b.ipynb": b"{}"})
+
+    proc = _run_cli(
+        ["import-notebooks", str(zip_path), "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Imported 'a.ipynb' (overwritten: False, restored 2 version(s))" in proc.stdout
+    assert "Imported 'b.ipynb' (overwritten: False)" in proc.stdout
+
+
 def test_import_notebooks_command_passes_the_overwrite_flag_through(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
