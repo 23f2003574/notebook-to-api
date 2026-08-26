@@ -8600,6 +8600,46 @@ def test_versions_delete_batch_command_aborts_without_yes_when_declined(
     assert handler.requests == []
 
 
+def test_versions_delete_batch_command_dry_run_skips_confirmation_and_sends_dry_run_field(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": True,
+            "filename": "nb.ipynb",
+            "results": [
+                {"version_id": "v1.ipynb", "status": "success"},
+            ],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    # No --yes, and no stdin input provided -- would hang/fail on a
+    # confirmation prompt if --dry-run didn't skip it.
+    proc = _run_cli(
+        [
+            "versions", "delete-batch", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would delete version 'v1.ipynb'" in proc.stdout
+    assert "1 succeeded, 0 failed" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions/delete-batch"]
+    assert json.loads(handler.bodies[0]) == {
+        "version_ids": ["v1.ipynb"], "dry_run": True
+    }
+
+
 def test_versions_delete_batch_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
     tmp_path,
 ):
@@ -8727,6 +8767,37 @@ def test_versions_clear_command_aborts_without_yes_when_declined(
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "Aborted." in proc.stdout
     assert handler.requests == []
+
+
+def test_versions_clear_command_dry_run_skips_confirmation_and_sends_dry_run_param(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": True, "filename": "nb.ipynb",
+            "deleted_version_ids": ["v1.ipynb", "v2.ipynb"],
+            "deleted_count": 2,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    # No --yes, and no stdin input provided -- would hang/fail on a
+    # confirmation prompt if --dry-run didn't skip it.
+    proc = _run_cli(
+        [
+            "versions", "clear", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would delete 2 version(s) of 'nb.ipynb'" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions?dry_run=true"]
 
 
 def test_versions_clear_command_reports_a_clean_error_for_a_missing_notebook(

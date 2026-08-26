@@ -6856,6 +6856,92 @@ def test_delete_notebook_versions_batch_reports_a_missing_version_id_without_abo
     assert client.get(f"/api/notebooks/{filename}/versions").json()["versions"] == []
 
 
+def test_delete_notebook_versions_batch_dry_run_reports_the_plan_without_deleting():
+
+    filename = "versions_delete_batch_dry_run.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/delete-batch",
+        json={"version_ids": [version_id, "does_not_exist.ipynb"], "dry_run": True},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_id = {r["version_id"]: r for r in body["results"]}
+    assert results_by_id[version_id]["status"] == "success"
+    assert results_by_id["does_not_exist.ipynb"]["status"] == "error"
+
+    # Nothing was actually deleted.
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert [v["version_id"] for v in remaining] == [version_id]
+
+
+def test_delete_notebook_versions_batch_non_dry_run_reports_dry_run_false():
+
+    filename = "versions_delete_batch_real.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/delete-batch",
+        json={"version_ids": [version_id]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["dry_run"] is False
+    assert client.get(f"/api/notebooks/{filename}/versions").json()["versions"] == []
+
+
 def test_delete_notebook_versions_batch_returns_404_for_missing_notebook():
 
     resp = client.post(
@@ -6980,6 +7066,81 @@ def test_clear_notebook_versions_removes_every_snapshot():
     assert get_resp.content == current_content
 
 
+def test_clear_notebook_versions_dry_run_reports_the_plan_without_deleting():
+
+    filename = "versions_clear_dry_run.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions_before = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(versions_before) == 1
+
+    resp = client.delete(
+        f"/api/notebooks/{filename}/versions", params={"dry_run": "true"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["deleted_count"] == 1
+    assert body["deleted_version_ids"] == [versions_before[0]["version_id"]]
+
+    # Nothing was actually deleted.
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert [v["version_id"] for v in remaining] == [versions_before[0]["version_id"]]
+
+
+def test_clear_notebook_versions_non_dry_run_reports_dry_run_false():
+
+    filename = "versions_clear_real_run.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.delete(f"/api/notebooks/{filename}/versions")
+
+    assert resp.status_code == 200
+    assert resp.json()["dry_run"] is False
+    assert client.get(f"/api/notebooks/{filename}/versions").json()["versions"] == []
+
+
 def test_clear_notebook_versions_is_a_no_op_success_for_a_notebook_with_no_history():
 
     _upload_sample_notebook("versions_clear_none.ipynb")
@@ -6989,6 +7150,7 @@ def test_clear_notebook_versions_is_a_no_op_success_for_a_notebook_with_no_histo
     assert resp.status_code == 200
     assert resp.json() == {
         "status": "success",
+        "dry_run": False,
         "filename": "versions_clear_none.ipynb",
         "deleted_version_ids": [],
         "deleted_count": 0,

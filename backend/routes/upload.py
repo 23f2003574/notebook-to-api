@@ -4376,7 +4376,7 @@ def export_notebook_versions(filename: str):
 
 
 @router.delete("/notebooks/{filename}/versions")
-def clear_notebook_versions(filename: str):
+def clear_notebook_versions(filename: str, dry_run: bool = False):
     """Permanently discard every one of a notebook's snapshotted previous
     versions at once, without touching the notebook's own current content,
     tags, or currently-compiled status.
@@ -4405,6 +4405,18 @@ def clear_notebook_versions(filename: str):
     at all -- "nothing to clear" is a valid outcome of a bulk operation
     like this, not an error, the same reasoning DELETE /api/tags/{tag}'s
     own empty "affected_notebooks" already applies when nothing matched.
+
+    "dry_run" (optional, default false) reports the exact same
+    "deleted_version_ids"/"deleted_count" a real clear would, without
+    discarding a single snapshot, the identical preview DELETE
+    /api/notebooks/versions's own "dry_run" already provides for pruning
+    every notebook's own old versions at once -- an operator wanting to
+    confirm just how much of a single notebook's own history `clear`
+    would wipe out (e.g. before reaching for it over the narrower
+    `versions delete-batch`) had no safe way to check that first short of
+    a separate GET .../versions of their own. The top-level response's
+    own "dry_run" field echoes back whether this call actually deleted
+    anything.
     """
 
     file_path = resolve_upload_path(filename)
@@ -4425,10 +4437,12 @@ def clear_notebook_versions(filename: str):
             if entry.is_file()
         ) if versions_dir.is_dir() else []
 
-        shutil.rmtree(versions_dir, ignore_errors=True)
+        if not dry_run:
+            shutil.rmtree(versions_dir, ignore_errors=True)
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "filename": filename,
         "deleted_version_ids": deleted_version_ids,
         "deleted_count": len(deleted_version_ids),
@@ -4480,6 +4494,16 @@ def delete_notebook_versions_batch(filename: str, data: dict):
     reacquired per version_id) -- the identical reason
     delete_notebook_version's own single-entry delete already holds it,
     just for the batch's own full duration instead of one unlink.
+
+    "dry_run" (optional, default false, in the request body) reports the
+    exact same per-"version_id" "results" a real batch would -- each
+    entry's own "success" or "error" (with the identical detail a real
+    delete would raise, e.g. a 404 for a typo'd version_id) -- without
+    discarding a single snapshot, the identical preview POST
+    /api/notebooks/delete-batch's own "dry_run" already provides for
+    deleting several *notebooks* at once. The top-level response's own
+    "dry_run" field echoes back whether this call actually deleted
+    anything.
     """
 
     file_path = resolve_upload_path(filename)
@@ -4502,6 +4526,8 @@ def delete_notebook_versions_batch(filename: str, data: dict):
             status_code=400,
             detail="version_ids must be a non-empty list of strings"
         )
+
+    dry_run = bool(data.get("dry_run", False))
 
     versions_dir = _notebook_versions_dir(file_path.name)
 
@@ -4526,7 +4552,8 @@ def delete_notebook_versions_batch(filename: str, data: dict):
                         detail="Notebook version not found"
                     )
 
-                version_path.unlink()
+                if not dry_run:
+                    version_path.unlink()
 
                 results.append({
                     "version_id": version_id,
@@ -4545,6 +4572,7 @@ def delete_notebook_versions_batch(filename: str, data: dict):
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "filename": filename,
         "results": results,
         "succeeded_count": succeeded_count,

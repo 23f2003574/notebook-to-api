@@ -3297,11 +3297,12 @@ def _dispatch_core_command(args):
 
         elif args.versions_command == "delete-batch":
 
-            if not args.yes:
+            if not args.dry_run and not args.yes:
                 # POST /api/notebooks/{filename}/versions/delete-batch
                 # (routes/upload.py) has no confirmation step of its own
                 # and is irreversible -- the same reasoning `versions
-                # delete` above already applies.
+                # delete` above already applies. Not asked at all under
+                # --dry-run, which never deletes anything.
                 version_ids_display = ", ".join(args.version_id)
                 answer = input(
                     f"Permanently delete version(s) {version_ids_display} "
@@ -3311,10 +3312,14 @@ def _dispatch_core_command(args):
                     print("Aborted.")
                     return
 
+            body = {"version_ids": args.version_id}
+            if args.dry_run:
+                body["dry_run"] = True
+
             try:
                 response = httpx.post(
                     f"{dashboard_url}/api/notebooks/{args.filename}/versions/delete-batch",
-                    json={"version_ids": args.version_id},
+                    json=body,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -3333,10 +3338,12 @@ def _dispatch_core_command(args):
                 print(json.dumps(data, indent=2))
             else:
 
+                verb = "Would delete" if data.get("dry_run") else "Deleted"
+
                 for result in data.get("results", []):
 
                     if result["status"] == "success":
-                        print(f"Deleted version '{result['version_id']}'")
+                        print(f"{verb} version '{result['version_id']}'")
                     else:
                         print(
                             f"Failed to delete version '{result['version_id']}': "
@@ -3350,11 +3357,12 @@ def _dispatch_core_command(args):
 
         else:  # args.versions_command == "clear"
 
-            if not args.yes:
+            if not args.dry_run and not args.yes:
                 # DELETE /api/notebooks/{filename}/versions
                 # (routes/upload.py) has no confirmation step of its own
                 # and is irreversible -- the same reasoning `versions
-                # delete` above already applies.
+                # delete` above already applies. Not asked at all under
+                # --dry-run, which never deletes anything.
                 answer = input(
                     f"Permanently delete every version of '{args.filename}' "
                     f"from {dashboard_url}? [y/N] "
@@ -3363,9 +3371,12 @@ def _dispatch_core_command(args):
                     print("Aborted.")
                     return
 
+            params = {"dry_run": True} if args.dry_run else {}
+
             try:
                 response = httpx.delete(
                     f"{dashboard_url}/api/notebooks/{args.filename}/versions",
+                    params=params,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -3389,8 +3400,9 @@ def _dispatch_core_command(args):
                 if not deleted_count:
                     print(f"'{args.filename}' has no version history on {dashboard_url}.")
                 else:
+                    verb = "Would delete" if data.get("dry_run") else "Deleted"
                     print(
-                        f"Deleted {deleted_count} version(s) of "
+                        f"{verb} {deleted_count} version(s) of "
                         f"'{data.get('filename', args.filename)}' on {dashboard_url}"
                     )
     elif args.command == "remote-files":
@@ -6026,6 +6038,18 @@ def main():
         "version_id", nargs="+",
         help="Version id(s) to permanently discard, as reported by `versions list`."
     )
+    versions_delete_batch_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report which of the given version_id(s) would be discarded, "
+            "via POST /api/notebooks/{filename}/versions/delete-batch's "
+            "own \"dry_run\" body field, without deleting anything. Skips "
+            "the confirmation prompt --yes would otherwise require, since "
+            "nothing irreversible happens."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(versions_delete_batch_parser)
     versions_delete_batch_parser.add_argument(
         "--yes",
@@ -6035,7 +6059,8 @@ def main():
             "this, `versions delete-batch` asks for a y/N confirmation on "
             "the terminal before sending the request -- POST "
             "/api/notebooks/{filename}/versions/delete-batch itself has "
-            "no confirmation step of its own, and is irreversible."
+            "no confirmation step of its own, and is irreversible. "
+            "Ignored under --dry-run, which never prompts."
         )
     )
     versions_delete_batch_parser.add_argument(
@@ -6065,6 +6090,18 @@ def main():
     versions_clear_parser.add_argument(
         "filename", help="Filename of the notebook, as reported by `list`."
     )
+    versions_clear_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report which versions would be discarded, via DELETE "
+            "/api/notebooks/{filename}/versions's own \"dry_run\" query "
+            "param, without deleting anything. Skips the confirmation "
+            "prompt --yes would otherwise require, since nothing "
+            "irreversible happens."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(versions_clear_parser)
     versions_clear_parser.add_argument(
         "--yes",
@@ -6074,7 +6111,8 @@ def main():
             "this, `versions clear` asks for a y/N confirmation on the "
             "terminal before sending the request -- DELETE "
             "/api/notebooks/{filename}/versions itself has no "
-            "confirmation step of its own, and is irreversible."
+            "confirmation step of its own, and is irreversible. Ignored "
+            "under --dry-run, which never prompts."
         )
     )
     versions_clear_parser.add_argument(
