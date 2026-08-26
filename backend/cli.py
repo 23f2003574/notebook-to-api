@@ -1078,6 +1078,8 @@ def _dispatch_core_command(args):
             params = {"overwrite": args.overwrite}
             if args.tags:
                 params["tags"] = args.tags
+            if args.description is not None:
+                params["description"] = args.description
 
             try:
 
@@ -1140,6 +1142,8 @@ def _dispatch_core_command(args):
                 batch_params = {"overwrite": args.overwrite}
                 if args.tags:
                     batch_params["tags"] = args.tags
+                if args.description is not None:
+                    batch_params["description"] = args.description
 
                 try:
                     response = httpx.post(
@@ -1201,6 +1205,8 @@ def _dispatch_core_command(args):
 
         if args.tags:
             params["tags"] = args.tags
+        if args.description is not None:
+            params["description"] = args.description
 
         try:
 
@@ -4637,6 +4643,17 @@ def main():
         )
     )
     upload_parser.add_argument(
+        "--description",
+        default=None,
+        help=(
+            "Description to set on the uploaded notebook(s), via POST "
+            "/api/upload's or POST /api/upload/batch's own ?description= "
+            "query param -- applied uniformly to every file when "
+            "uploading more than one, instead of a separate `description "
+            "set` round trip immediately after."
+        )
+    )
+    upload_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -4683,6 +4700,15 @@ def main():
             "notebook, via POST /api/notebooks/import's own ?tags= query "
             "param -- e.g. to re-apply the tag a matching `export-"
             "notebooks --tag ...` archive was originally selected by."
+        )
+    )
+    import_notebooks_parser.add_argument(
+        "--description",
+        default=None,
+        help=(
+            "Description to set on every successfully-imported notebook, "
+            "via POST /api/notebooks/import's own ?description= query "
+            "param."
         )
     )
     import_notebooks_parser.add_argument(

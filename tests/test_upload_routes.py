@@ -577,6 +577,225 @@ def test_upload_rejects_an_invalid_tags_value_before_reading_the_file(monkeypatc
     assert not (Path(UPLOAD_DIR) / "upload_tags_bad.ipynb").exists()
 
 
+def test_upload_description_sets_the_notebooks_description_on_success():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    resp = client.post(
+        "/api/upload",
+        params={"description": "adds two numbers"},
+        files={"file": ("upload_description.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    assert resp.status_code == 200
+    assert client.get(
+        "/api/notebooks/upload_description.ipynb/description"
+    ).json()["description"] == "adds two numbers"
+
+
+def test_upload_without_description_leaves_the_notebook_undescribed():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    resp = client.post(
+        "/api/upload",
+        files={"file": ("upload_no_description.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    assert resp.status_code == 200
+    assert client.get(
+        "/api/notebooks/upload_no_description.ipynb/description"
+    ).json()["description"] == ""
+
+
+def test_upload_description_is_not_applied_when_the_upload_itself_fails():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "upload_description_collision.ipynb", io.BytesIO(content), "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/upload",
+        params={"description": "should not be set"},
+        files={
+            "file": (
+                "upload_description_collision.ipynb", io.BytesIO(content), "application/json",
+            )
+        },
+    )
+
+    assert resp.status_code == 409
+    assert client.get(
+        "/api/notebooks/upload_description_collision.ipynb/description"
+    ).json()["description"] == ""
+
+
+def test_upload_rejects_an_invalid_description_value_before_reading_the_file():
+
+    resp = client.post(
+        "/api/upload",
+        params={"description": "x" * 2001},
+        files={
+            "file": (
+                "upload_description_bad.ipynb", io.BytesIO(b"not valid json"), "application/json",
+            )
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "description" in resp.json()["detail"]
+    assert not (Path(UPLOAD_DIR) / "upload_description_bad.ipynb").exists()
+
+
+def test_upload_batch_description_applies_uniformly_to_every_successful_file():
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    resp = client.post(
+        "/api/upload/batch",
+        params={"description": "batch-uploaded"},
+        files=[
+            ("files", ("upload_batch_description_a.ipynb", io.BytesIO(content), "application/json")),
+            ("files", ("upload_batch_description_b.ipynb", io.BytesIO(content), "application/json")),
+        ],
+    )
+
+    assert resp.status_code == 200
+    assert client.get(
+        "/api/notebooks/upload_batch_description_a.ipynb/description"
+    ).json()["description"] == "batch-uploaded"
+    assert client.get(
+        "/api/notebooks/upload_batch_description_b.ipynb/description"
+    ).json()["description"] == "batch-uploaded"
+
+
+def test_upload_batch_description_is_not_applied_to_a_file_that_failed_to_upload():
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "upload_batch_description_collision.ipynb", io.BytesIO(content), "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/upload/batch",
+        params={"description": "batch-uploaded"},
+        files=[
+            ("files", ("upload_batch_description_collision.ipynb", io.BytesIO(content), "application/json")),
+        ],
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["results"][0]["status"] == "error"
+    assert client.get(
+        "/api/notebooks/upload_batch_description_collision.ipynb/description"
+    ).json()["description"] == ""
+
+
+def test_upload_batch_rejects_an_invalid_description_value_as_a_whole_request_400():
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    resp = client.post(
+        "/api/upload/batch",
+        params={"description": "x" * 2001},
+        files=[
+            ("files", ("upload_batch_description_bad.ipynb", io.BytesIO(content), "application/json")),
+        ],
+    )
+
+    assert resp.status_code == 400
+    assert not (Path(UPLOAD_DIR) / "upload_batch_description_bad.ipynb").exists()
+
+
+def test_import_notebooks_description_applies_to_every_successfully_imported_entry():
+
+    content_a = _notebook_bytes("def f() -> int:\n    return 1\n")
+    content_b = _notebook_bytes("def g() -> int:\n    return 2\n")
+
+    archive_bytes = _zip_bytes({
+        "import_description_a.ipynb": content_a,
+        "import_description_b.ipynb": content_b,
+    })
+
+    resp = client.post(
+        "/api/notebooks/import",
+        params={"description": "imported from backup"},
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    assert client.get(
+        "/api/notebooks/import_description_a.ipynb/description"
+    ).json()["description"] == "imported from backup"
+    assert client.get(
+        "/api/notebooks/import_description_b.ipynb/description"
+    ).json()["description"] == "imported from backup"
+
+
+def test_import_notebooks_description_is_not_applied_to_a_failed_entry():
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "import_description_collision.ipynb", io.BytesIO(content), "application/json",
+            )
+        },
+    )
+
+    archive_bytes = _zip_bytes({"import_description_collision.ipynb": content})
+
+    resp = client.post(
+        "/api/notebooks/import",
+        params={"description": "should not be set"},
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["results"][0]["status"] == "error"
+    assert client.get(
+        "/api/notebooks/import_description_collision.ipynb/description"
+    ).json()["description"] == ""
+
+
+def test_import_notebooks_rejects_an_invalid_description_value_before_reading_the_archive():
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    archive_bytes = _zip_bytes({"import_description_bad.ipynb": content})
+
+    resp = client.post(
+        "/api/notebooks/import",
+        params={"description": "x" * 2001},
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 400
+    assert not (Path(UPLOAD_DIR) / "import_description_bad.ipynb").exists()
+
+
 def test_upload_sweeps_a_stale_leftover_temp_file_from_a_previous_crashed_upload(
     monkeypatch,
 ):

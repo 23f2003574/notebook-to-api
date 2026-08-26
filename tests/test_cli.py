@@ -1903,6 +1903,58 @@ def test_upload_command_passes_the_tags_flag_through(tmp_path, fake_dashboard):
     assert handler.requests == ["/api/upload?overwrite=false&tags=prod%2Creviewed"]
 
 
+def test_upload_command_passes_the_description_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "path": "/srv/uploads/nb.ipynb", "overwritten": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "upload", str(notebook_path),
+            "--dashboard-url", dashboard_url, "--description", "adds two numbers",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query["description"] == ["adds two numbers"]
+
+
+def test_upload_command_omits_the_description_query_param_by_default(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "path": "/srv/uploads/nb.ipynb", "overwritten": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["upload", str(notebook_path), "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/upload?overwrite=false"]
+
+
 def test_upload_command_json_flag_emits_the_dashboards_own_response(
     tmp_path, fake_dashboard
 ):
@@ -2187,6 +2239,37 @@ def test_upload_command_with_multiple_notebooks_passes_the_tags_flag_through(
     assert handler.requests == ["/api/upload/batch?overwrite=false&tags=prod"]
 
 
+def test_upload_command_with_multiple_notebooks_passes_the_description_flag_through(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "results": [], "succeeded_count": 0, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_a = workdir / "a.ipynb"
+    notebook_b = workdir / "b.ipynb"
+    _write_notebook(notebook_a)
+    _write_notebook(notebook_b)
+
+    proc = _run_cli(
+        [
+            "upload", str(notebook_a), str(notebook_b),
+            "--dashboard-url", dashboard_url, "--description", "batch-uploaded",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query["description"] == ["batch-uploaded"]
+
+
 def test_upload_command_with_multiple_notebooks_reports_a_clean_error_for_a_missing_notebook(
     tmp_path,
 ):
@@ -2343,6 +2426,33 @@ def test_import_notebooks_command_passes_the_tags_flag_through(tmp_path, fake_da
     assert handler.requests == [
         "/api/notebooks/import?overwrite=false&tags=imported%2Creviewed"
     ]
+
+
+def test_import_notebooks_command_passes_the_description_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "results": [], "succeeded_count": 0, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "bundle.zip"
+    _write_zip(zip_path, {"a.ipynb": b"{}"})
+
+    proc = _run_cli(
+        [
+            "import-notebooks", str(zip_path),
+            "--dashboard-url", dashboard_url, "--description", "imported from backup",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query["description"] == ["imported from backup"]
 
 
 def test_import_notebooks_command_reports_per_file_failures_and_exits_nonzero(

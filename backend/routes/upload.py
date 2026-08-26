@@ -789,6 +789,7 @@ async def upload_notebook(
     file: UploadFile = File(...),
     overwrite: bool = False,
     tags: str = None,
+    description: str = None,
 ):
     """Upload a Jupyter notebook file.
 
@@ -830,14 +831,32 @@ async def upload_notebook(
     invalid "tags" value is rejected with 400 before the file itself is
     even read, so a malformed tag list can't cause a notebook to be
     uploaded successfully but silently left untagged.
+
+    "description" (optional, validated via
+    _validate_and_normalize_description above -- the identical check PUT
+    /api/notebooks/{filename}/description's own "description" field
+    already applies) replaces this notebook's own description once the
+    upload itself succeeds, the same "set it at upload time instead of a
+    separate round trip immediately after" reasoning "tags" above already
+    gives, just for a notebook's freeform description instead of its
+    tags. An invalid "description" value is rejected with 400 before the
+    file itself is even read, the same way an invalid "tags" already is.
     """
 
     normalized_tags = _parse_and_validate_tags_query_param(tags)
+
+    normalized_description = (
+        _validate_and_normalize_description(description)
+        if description is not None else None
+    )
 
     result = await _save_uploaded_notebook(file, overwrite)
 
     if normalized_tags is not None:
         _write_notebook_tags(result["filename"], normalized_tags)
+
+    if normalized_description is not None:
+        _write_notebook_description(result["filename"], normalized_description)
 
     return result
 
@@ -847,6 +866,7 @@ async def upload_notebooks_batch(
     files: List[UploadFile] = File(...),
     overwrite: bool = False,
     tags: str = None,
+    description: str = None,
 ):
     """Upload several Jupyter notebook files in a single request.
 
@@ -891,6 +911,14 @@ async def upload_notebooks_batch(
     whole-request 400 -- a malformed "tags" value is this request's own
     fault, not any one file's -- and never applied to a file that itself
     failed to upload.
+
+    "description" (optional, validated via
+    _validate_and_normalize_description above) is the identical uniform-
+    across-the-batch counterpart for a notebook's own freeform
+    description -- the same single query param POST /api/upload already
+    accepts for one upload, applied to every successfully-uploaded file
+    here instead. Also validated once, up front, as a whole-request 400,
+    and never applied to a file that itself failed to upload.
     """
 
     if len(files) > MAX_BATCH_UPLOAD_FILES:
@@ -905,6 +933,11 @@ async def upload_notebooks_batch(
 
     normalized_tags = _parse_and_validate_tags_query_param(tags)
 
+    normalized_description = (
+        _validate_and_normalize_description(description)
+        if description is not None else None
+    )
+
     results = []
     succeeded_count = 0
     failed_count = 0
@@ -917,6 +950,9 @@ async def upload_notebooks_batch(
 
             if normalized_tags is not None:
                 _write_notebook_tags(result["filename"], normalized_tags)
+
+            if normalized_description is not None:
+                _write_notebook_description(result["filename"], normalized_description)
 
             results.append(result)
             succeeded_count += 1
@@ -943,6 +979,7 @@ async def import_notebooks(
     file: UploadFile = File(...),
     overwrite: bool = False,
     tags: str = None,
+    description: str = None,
 ):
     """Upload every .ipynb file bundled inside a single .zip archive --
     the counterpart to GET /api/notebooks/export, which produces exactly
@@ -1029,6 +1066,16 @@ async def import_notebooks(
     itself failed to import: its own {"filename", "status": "error"}
     result is unaffected, and no tags sidecar file is written for a
     notebook that was never actually saved.
+
+    "description" (optional, validated via
+    _validate_and_normalize_description above) is the identical
+    apply-to-every-successfully-imported-entry counterpart for a
+    notebook's own freeform description -- the same single query param
+    POST /api/upload/batch already accepts for its own batch, applied
+    uniformly to every entry this import produces instead. Also
+    validated once, up front (a bad value is a whole-request 400 before
+    any entry is read), and never applied to an entry that itself failed
+    to import.
     """
 
     if not file.filename.endswith(".zip"):
@@ -1039,6 +1086,11 @@ async def import_notebooks(
         )
 
     normalized_tags = _parse_and_validate_tags_query_param(tags)
+
+    normalized_description = (
+        _validate_and_normalize_description(description)
+        if description is not None else None
+    )
 
     try:
 
@@ -1129,6 +1181,9 @@ async def import_notebooks(
 
             if normalized_tags is not None:
                 _write_notebook_tags(result["filename"], normalized_tags)
+
+            if normalized_description is not None:
+                _write_notebook_description(result["filename"], normalized_description)
 
             file_path = resolve_upload_path(result["filename"])
             versions_dir = _notebook_versions_dir(file_path.name)
@@ -1503,6 +1558,48 @@ def _write_notebook_description(notebook_filename: str, description: str) -> Non
         json.dump({"description": description}, f)
 
     os.replace(temp_path, sidecar_path)
+
+
+def _validate_and_normalize_description(description) -> str:
+    """Validate `description` and return it stripped of surrounding
+    whitespace -- the exact "must be a string, at most
+    _MAX_DESCRIPTION_LENGTH characters after stripping" check PUT
+    /api/notebooks/{filename}/description and POST
+    /api/notebooks/description-batch's own per-entry "description" field
+    each already performed inline, factored out here so POST /api/upload,
+    POST /api/upload/batch, and POST /api/notebooks/import can accept the
+    identical optional "description" at upload time too, without a
+    fourth, inevitably-drifting copy of the same check -- the same
+    "shared validation, not independently re-implemented" reasoning
+    _validate_and_normalize_tags already established for a notebook's
+    tags.
+
+    `description` comes straight from a raw JSON body field (or, for the
+    three upload-time callers above, straight from a query string value),
+    not a Pydantic-validated type, so it can be any type at all -- the
+    same reason _validate_and_normalize_tags' own isinstance check exists
+    for "tags".
+    """
+    if not isinstance(description, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="description must be a string"
+        )
+
+    description = description.strip()
+
+    if len(description) > _MAX_DESCRIPTION_LENGTH:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"description must be at most {_MAX_DESCRIPTION_LENGTH} "
+                "characters long"
+            )
+        )
+
+    return description
 
 
 @router.get("/tags")
@@ -4434,26 +4531,7 @@ def set_notebook_description(filename: str, data: dict):
             detail="Notebook file not found"
         )
 
-    description = data.get("description", "")
-
-    if not isinstance(description, str):
-
-        raise HTTPException(
-            status_code=400,
-            detail="description must be a string"
-        )
-
-    description = description.strip()
-
-    if len(description) > _MAX_DESCRIPTION_LENGTH:
-
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"description must be at most {_MAX_DESCRIPTION_LENGTH} "
-                "characters long"
-            )
-        )
+    description = _validate_and_normalize_description(data.get("description", ""))
 
     _write_notebook_description(file_path.name, description)
 
@@ -4538,26 +4616,9 @@ def set_notebook_description_batch(data: dict):
                     detail="Notebook file not found"
                 )
 
-            description = entry.get("description", "")
-
-            if not isinstance(description, str):
-
-                raise HTTPException(
-                    status_code=400,
-                    detail="description must be a string"
-                )
-
-            description = description.strip()
-
-            if len(description) > _MAX_DESCRIPTION_LENGTH:
-
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"description must be at most {_MAX_DESCRIPTION_LENGTH} "
-                        "characters long"
-                    )
-                )
+            description = _validate_and_normalize_description(
+                entry.get("description", "")
+            )
 
             _write_notebook_description(file_path.name, description)
 
