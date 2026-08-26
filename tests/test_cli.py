@@ -11630,11 +11630,13 @@ def test_status_command_prints_health_and_config(tmp_path, fake_dashboard):
             "max_notebook_versions": 20,
             "max_tag_length": 40,
             "max_tags_per_notebook": 20,
+            "max_description_length": 500,
             "max_deploy_history_entries": 50,
             "max_compile_history_entries": 50,
             "deploy_subprocess_timeout_seconds": 600,
             "notebook_sort_keys": ["name", "size", "uploaded_at"],
             "notebook_sort_orders": ["asc", "desc"],
+            "compiling_python_version": "3.12",
         }),
     ]
 
@@ -11648,9 +11650,11 @@ def test_status_command_prints_health_and_config(tmp_path, fake_dashboard):
     assert "compiled app present, last compiled at 2026-01-01T00:00:00+00:00" in proc.stdout
     assert "max upload size: 10485760 bytes" in proc.stdout
     assert "max batch upload files: 50" in proc.stdout
+    assert "max description length: 500" in proc.stdout
     assert "max deploy history entries: 50" in proc.stdout
     assert "max compile history entries: 50" in proc.stdout
     assert "notebook sort keys: name, size, uploaded_at" in proc.stdout
+    assert "Compiling Python version: 3.12" in proc.stdout
     assert handler.requests == ["/api/health", "/api/config"]
 
 

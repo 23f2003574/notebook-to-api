@@ -29,6 +29,7 @@ from backend.compiler import (
     _extract_explicit_requirements,
     _filter_functions_by_name,
     compile_notebook,
+    compiling_python_version,
     extract_third_party_imports,
     hash_notebook_file,
     package_name_for_output_dir,
@@ -7983,6 +7984,27 @@ def get_config():
     (or process-relative) filesystem paths on the compiling server, the
     same category of information GET /api/health's own docstring already
     explains has no business leaking out of a dashboard API response.
+
+    "compiling_python_version" (added alongside this same docstring's
+    original feature, not a separate change) is compiling_python_version's
+    (backend/compiler.py) own "<major>.<minor>" reading of the interpreter
+    actually running this dashboard process -- already passed straight
+    through to generate_dockerfile by every POST /api/compile so the
+    generated Dockerfile's own base image always matches the interpreter
+    that resolved requirements.txt's pins (see that function's own
+    docstring for why a mismatch there can silently break `docker build`),
+    but never itself surfaced anywhere before this: a caller wanting to
+    know which Python version a compile would actually target -- e.g. to
+    sanity-check a pinned dependency's own wheel availability before
+    compiling, or to reproduce this dashboard's exact interpreter locally
+    -- had no way to ask that short of triggering a real POST /api/compile
+    and reading the resulting Dockerfile (or GET
+    /api/generated/Dockerfile) back afterward. Unlike UPLOAD_DIR/
+    GENERATED_DIR above, this isn't a filesystem path -- it's the same
+    kind of operationally-relevant fact every other field here already is,
+    just not independently configurable via its own NOTEBOOK_API_*
+    environment variable the way they are: it's whatever interpreter this
+    process actually happens to be running under.
     """
 
     return {
@@ -7998,4 +8020,5 @@ def get_config():
         "deploy_subprocess_timeout_seconds": DEPLOY_SUBPROCESS_TIMEOUT_SECONDS,
         "notebook_sort_keys": sorted(_NOTEBOOK_SORT_KEYS),
         "notebook_sort_orders": sorted(_NOTEBOOK_SORT_ORDERS),
+        "compiling_python_version": compiling_python_version(),
     }

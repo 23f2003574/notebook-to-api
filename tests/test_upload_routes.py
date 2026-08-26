@@ -15,7 +15,7 @@ import nbformat
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.compiler import COMPILE_LOCK, COMPILE_METADATA_FILENAME
+from backend.compiler import COMPILE_LOCK, COMPILE_METADATA_FILENAME, compiling_python_version
 from backend.dashboard import app
 from backend.routes.upload import (
     MAX_NOTEBOOK_VERSIONS,
@@ -13102,6 +13102,16 @@ def test_get_config_reports_the_configured_limits():
     assert isinstance(body["max_deploy_history_entries"], int)
     assert isinstance(body["max_compile_history_entries"], int)
     assert isinstance(body["deploy_subprocess_timeout_seconds"], int)
+
+
+def test_get_config_reports_the_compiling_python_version():
+
+    resp = client.get("/api/config")
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["compiling_python_version"] == compiling_python_version()
 
 
 def test_get_config_reflects_a_configured_max_upload_bytes(monkeypatch):
