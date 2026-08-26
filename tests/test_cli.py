@@ -8175,6 +8175,155 @@ def test_versions_export_command_reports_a_clean_error_for_a_missing_notebook(
     _assert_clean_cli_error(proc, "Notebook file not found")
 
 
+def test_versions_import_command_is_registered():
+
+    proc = _run_cli(["versions", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "import" in proc.stdout
+
+
+def test_versions_import_command_reports_success(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "overwritten": False,
+            "imported_version_ids": ["v1.ipynb", "v2.ipynb"],
+            "imported_version_count": 2,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "backup.zip"
+    _write_zip(zip_path, {"nb.ipynb": b"{}", "versions/v1.ipynb": b"{}", "versions/v2.ipynb": b"{}"})
+
+    proc = _run_cli(
+        ["versions", "import", "nb.ipynb", str(zip_path), "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Restored 'nb.ipynb' (overwritten: False) with 2 version(s)" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions/import?overwrite=false"]
+
+
+def test_versions_import_command_passes_the_overwrite_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb", "overwritten": True,
+            "imported_version_ids": [], "imported_version_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "backup.zip"
+    _write_zip(zip_path, {"nb.ipynb": b"{}"})
+
+    proc = _run_cli(
+        [
+            "versions", "import", "nb.ipynb", str(zip_path),
+            "--dashboard-url", dashboard_url, "--overwrite",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions/import?overwrite=true"]
+
+
+def test_versions_import_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "filename": "nb.ipynb", "overwritten": False,
+        "imported_version_ids": ["v1.ipynb"], "imported_version_count": 1,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "backup.zip"
+    _write_zip(zip_path, {"nb.ipynb": b"{}"})
+
+    proc = _run_cli(
+        [
+            "versions", "import", "nb.ipynb", str(zip_path),
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_versions_import_command_reports_a_clean_error_for_a_rejected_import(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(409, {"detail": "A notebook named 'nb.ipynb' already exists. Pass ?overwrite=true to replace it."})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "backup.zip"
+    _write_zip(zip_path, {"nb.ipynb": b"{}"})
+
+    proc = _run_cli(
+        ["versions", "import", "nb.ipynb", str(zip_path), "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "already exists")
+
+
+def test_versions_import_command_reports_a_clean_error_for_a_missing_zip(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "import", "nb.ipynb", str(workdir / "does-not-exist.zip"),
+            "--dashboard-url", "http://127.0.0.1:1",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_versions_import_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "backup.zip"
+    _write_zip(zip_path, {"nb.ipynb": b"{}"})
+
+    proc = _run_cli(
+        [
+            "versions", "import", "nb.ipynb", str(zip_path),
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_versions_copy_command_is_registered():
 
     proc = _run_cli(["versions", "--help"], cwd=Path.cwd())

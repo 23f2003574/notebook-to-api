@@ -4415,6 +4415,187 @@ def export_notebook_versions(filename: str):
     )
 
 
+@router.post("/notebooks/{filename}/versions/import")
+async def import_notebook_versions(
+    filename: str, file: UploadFile = File(...), overwrite: bool = False
+):
+    """Restore a notebook's current content together with its entire
+    snapshotted version history from a single .zip -- the counterpart to
+    GET /api/notebooks/{filename}/versions/export, which produces exactly
+    this archive shape.
+
+    GET .../versions/export's own docstring already describes the archive
+    it produces as "a complete, restorable backup", but restoring one back
+    onto a dashboard meant unzipping it locally, re-uploading the
+    top-level entry by hand, then one POST .../versions/{version_id}/copy
+    (after somehow re-uploading each "versions/<version_id>" entry as its
+    own version first) per snapshot to rebuild the history -- tedious
+    enough that a caller archiving a notebook's history off this server
+    (the exact use case that docstring names) had no practical way back
+    in. This endpoint takes that same archive directly, restoring both
+    halves in one call.
+
+    `filename` (the path segment, not whatever name the archive's own
+    top-level entry happens to carry -- GET .../versions/export always
+    names it after the notebook it was exported from, but this endpoint
+    doesn't require that to still match) is where the archive's
+    current-content entry is written, via the identical
+    _save_uploaded_notebook validation/atomic-write/versioning path POST
+    /api/upload and POST /api/notebooks/import already share -- so a
+    backup can be restored under its original name or a new one (e.g.
+    recovering a notebook that was since renamed or deleted) equally well.
+    "overwrite" (default false) is the identical query param POST
+    /api/upload already takes: without it, restoring onto a filename that
+    already exists is a 409, exactly as overwriting it any other way
+    already is; with it, the pre-restore content is itself snapshotted
+    first (via _snapshot_current_notebook_version, the same as any other
+    overwrite), so restoring never silently destroys whatever was already
+    at `filename`.
+
+    Every "versions/<version_id>" entry is then written into `filename`'s
+    own version history under that identical version_id -- the same name
+    GET .../versions/{version_id} already downloads it by -- so a
+    subsequent GET .../versions lists exactly the snapshots the archive
+    carried, immediately restorable via POST .../versions/{version_id}/
+    restore. Each one's "saved_at" (see list_notebook_versions above) is
+    reconstructed from the timestamp already encoded in its own version_id
+    (see _snapshot_current_notebook_version's own naming scheme) rather
+    than left at this call's own import time, so a restored history still
+    reports when each snapshot was *originally* saved, not when it was
+    re-imported; a version_id that doesn't match that naming scheme (e.g.
+    a hand-built archive) simply keeps whatever mtime writing it produced.
+    Subject to the same MAX_NOTEBOOK_VERSIONS cap _prune_notebook_versions
+    already enforces everywhere else -- restoring an archive whose own
+    history is longer than the cap (or that lands on top of a notebook
+    whose pre-restore content was itself just snapshotted) discards the
+    oldest entries first, exactly as an ordinary overwrite already would.
+
+    The archive must contain exactly one .ipynb entry outside a
+    "versions/" prefix -- GET .../versions/export never produces anything
+    else, so zero or several such entries means this isn't that kind of
+    archive (or is corrupt) and the whole request is rejected with 400
+    before anything is written, rather than guessing which one is the
+    "real" current content.
+    """
+
+    if not file.filename.endswith(".zip"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="File must be a .zip archive"
+        )
+
+    try:
+
+        zip_bytes = await file.read()
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+    try:
+
+        archive = zipfile.ZipFile(io.BytesIO(zip_bytes))
+
+    except zipfile.BadZipFile:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file is not a valid zip archive"
+        )
+
+    version_entries = [
+        name for name in archive.namelist()
+        if name.startswith("versions/") and not name.endswith("/")
+    ]
+
+    current_content_entries = [
+        name for name in archive.namelist()
+        if (
+            name.endswith(".ipynb")
+            and not name.startswith("versions/")
+            and not name.endswith("/")
+        )
+    ]
+
+    if len(current_content_entries) != 1:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Zip archive must contain exactly one current-content "
+                ".ipynb entry outside 'versions/' (found "
+                f"{len(current_content_entries)}) -- the same shape GET "
+                "/api/notebooks/{filename}/versions/export produces"
+            )
+        )
+
+    current_content_bytes = archive.read(current_content_entries[0])
+
+    upload_file = UploadFile(
+        file=io.BytesIO(current_content_bytes), filename=filename
+    )
+
+    result = await _save_uploaded_notebook(upload_file, overwrite)
+
+    file_path = resolve_upload_path(filename)
+    versions_dir = _notebook_versions_dir(file_path.name)
+
+    imported_version_ids = []
+
+    with _version_lock_for(file_path.name):
+
+        if version_entries:
+            versions_dir.mkdir(parents=True, exist_ok=True)
+
+        for entry_name in sorted(version_entries):
+
+            version_id = os.path.basename(entry_name)
+
+            if not version_id:
+                continue
+
+            version_path = versions_dir / version_id
+
+            with open(version_path, "wb") as f:
+                f.write(archive.read(entry_name))
+
+            # Every version_id _snapshot_current_notebook_version ever
+            # produces starts with this exact "%Y%m%dT%H%M%S%f" prefix --
+            # reuse it as the restored file's own mtime so "saved_at"
+            # (list_notebook_versions above, which reads mtime directly)
+            # still reflects when this snapshot was originally saved
+            # rather than this import call's own timestamp. A version_id
+            # that doesn't parse this way (e.g. a hand-built archive) just
+            # keeps whatever mtime the write above already produced.
+            try:
+
+                saved_at = datetime.strptime(
+                    version_id.split("_", 1)[0], "%Y%m%dT%H%M%S%f"
+                ).replace(tzinfo=timezone.utc)
+
+                mtime = saved_at.timestamp()
+                os.utime(version_path, (mtime, mtime))
+
+            except ValueError:
+                pass
+
+            imported_version_ids.append(version_id)
+
+        _prune_notebook_versions(versions_dir)
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "overwritten": result["overwritten"],
+        "imported_version_ids": sorted(imported_version_ids),
+        "imported_version_count": len(imported_version_ids),
+    }
+
+
 @router.delete("/notebooks/{filename}/versions")
 def clear_notebook_versions(filename: str, dry_run: bool = False):
     """Permanently discard every one of a notebook's snapshotted previous

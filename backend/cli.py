@@ -3092,6 +3092,47 @@ def _dispatch_core_command(args):
                     f"({len(response.content)} bytes)"
                 )
 
+        elif args.versions_command == "import":
+
+            params = {"overwrite": args.overwrite}
+
+            try:
+
+                with open(args.zip_path, "rb") as f:
+
+                    response = httpx.post(
+                        f"{dashboard_url}/api/notebooks/{args.filename}/versions/import",
+                        params=params,
+                        files={
+                            "file": (
+                                os.path.basename(args.zip_path), f, "application/zip",
+                            )
+                        },
+                        timeout=args.timeout,
+                    )
+
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the import ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                print(
+                    f"Restored '{data.get('filename', args.filename)}' "
+                    f"(overwritten: {data.get('overwritten')}) with "
+                    f"{data.get('imported_version_count', 0)} version(s) "
+                    f"on {dashboard_url}"
+                )
+
         elif args.versions_command == "copy":
 
             try:
@@ -5946,6 +5987,50 @@ def main():
             "Emit a machine-readable JSON result ({\"status\", "
             "\"filename\", \"path\", \"size_bytes\"}) instead of a "
             "human-readable summary, for scripting/automation."
+        )
+    )
+
+    # versions import (restore a notebook's current content together with
+    # its entire snapshotted version history from a single zip, via POST
+    # /api/notebooks/{filename}/versions/import -- the counterpart to
+    # `versions export` above)
+    versions_import_parser = versions_subparsers.add_parser(
+        "import",
+        help=(
+            "Restore a notebook's current content together with its "
+            "entire snapshotted version history from a single zip "
+            "produced by `versions export`, via POST "
+            "/api/notebooks/{filename}/versions/import."
+        )
+    )
+    versions_import_parser.add_argument(
+        "filename",
+        help="Filename to restore the archive's current content to (need not match its original name)."
+    )
+    versions_import_parser.add_argument(
+        "zip_path", help="Path to the local zip archive to import, as produced by `versions export`."
+    )
+    _add_dashboard_url_and_timeout_arguments(versions_import_parser)
+    versions_import_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Replace an existing notebook already at `filename`, "
+            "mirroring POST /api/notebooks/{filename}/versions/import's "
+            "own ?overwrite=true -- without this, restoring onto a "
+            "filename that already exists is rejected with a 409, "
+            "exactly as overwriting it any other way already is."
+        )
+    )
+    versions_import_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"filename\", \"overwritten\", \"imported_version_ids\", "
+            "\"imported_version_count\"}) instead of a human-readable "
+            "summary, for scripting/automation."
         )
     )
 

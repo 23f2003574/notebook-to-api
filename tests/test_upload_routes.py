@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 import nbformat
@@ -6040,6 +6041,201 @@ def test_export_notebook_versions_returns_404_for_missing_notebook():
     )
 
     assert resp.status_code == 404
+
+
+def test_import_notebook_versions_round_trips_an_export_archive():
+
+    filename = "versions_import_round_trip.ipynb"
+    original_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    middle_content = _notebook_bytes("def g() -> int:\n    return 2\n")
+    current_content = _notebook_bytes("def h() -> int:\n    return 3\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(original_content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(middle_content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(current_content), "application/json")},
+    )
+
+    original_versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(original_versions) == 2
+
+    export_bytes = client.get(f"/api/notebooks/{filename}/versions/export").content
+
+    # Delete the notebook (and its history) entirely, then restore it
+    # under a brand-new filename from the exported archive alone.
+    client.delete(f"/api/notebooks/{filename}")
+
+    new_filename = "versions_import_round_trip_restored.ipynb"
+
+    import_resp = client.post(
+        f"/api/notebooks/{new_filename}/versions/import",
+        files={"file": ("backup.zip", io.BytesIO(export_bytes), "application/zip")},
+    )
+
+    assert import_resp.status_code == 200
+    body = import_resp.json()
+    assert body["status"] == "success"
+    assert body["filename"] == new_filename
+    assert body["overwritten"] is False
+    assert body["imported_version_count"] == 2
+    assert set(body["imported_version_ids"]) == {v["version_id"] for v in original_versions}
+
+    assert client.get(f"/api/notebooks/{new_filename}").content == current_content
+
+    restored_versions = client.get(f"/api/notebooks/{new_filename}/versions").json()["versions"]
+    assert {v["version_id"] for v in restored_versions} == {
+        v["version_id"] for v in original_versions
+    }
+
+    # "saved_at" is reconstructed from each version_id's own encoded
+    # timestamp, not left at import time -- close to (within filesystem
+    # mtime rounding of) the original save time, not "just now".
+    original_saved_at = {v["version_id"]: v["saved_at"] for v in original_versions}
+    for restored in restored_versions:
+        original_dt = datetime.fromisoformat(original_saved_at[restored["version_id"]])
+        restored_dt = datetime.fromisoformat(restored["saved_at"])
+        assert abs((restored_dt - original_dt).total_seconds()) < 1
+
+    restored_contents = {
+        client.get(f"/api/notebooks/{new_filename}/versions/{v['version_id']}").content
+        for v in restored_versions
+    }
+    assert restored_contents == {original_content, middle_content}
+
+
+def test_import_notebook_versions_succeeds_with_no_version_history():
+
+    filename = "versions_import_no_history.ipynb"
+    _upload_sample_notebook(filename)
+
+    export_bytes = client.get(f"/api/notebooks/{filename}/versions/export").content
+
+    new_filename = "versions_import_no_history_restored.ipynb"
+
+    resp = client.post(
+        f"/api/notebooks/{new_filename}/versions/import",
+        files={"file": ("backup.zip", io.BytesIO(export_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["imported_version_count"] == 0
+    assert body["imported_version_ids"] == []
+    assert client.get(f"/api/notebooks/{new_filename}/versions").json()["versions"] == []
+
+
+def test_import_notebook_versions_reports_a_collision_error_without_overwrite():
+
+    filename = "versions_import_collision_source.ipynb"
+    _upload_sample_notebook(filename)
+    export_bytes = client.get(f"/api/notebooks/{filename}/versions/export").content
+
+    existing_filename = "versions_import_collision_target.ipynb"
+    _upload_sample_notebook(existing_filename)
+
+    resp = client.post(
+        f"/api/notebooks/{existing_filename}/versions/import",
+        files={"file": ("backup.zip", io.BytesIO(export_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 409
+
+
+def test_import_notebook_versions_overwrite_snapshots_the_pre_import_content():
+
+    filename = "versions_import_overwrite_source.ipynb"
+    original_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(original_content), "application/json")},
+    )
+    export_bytes = client.get(f"/api/notebooks/{filename}/versions/export").content
+
+    existing_filename = "versions_import_overwrite_target.ipynb"
+    pre_import_content = _notebook_bytes("def pre() -> int:\n    return 99\n")
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                existing_filename, io.BytesIO(pre_import_content), "application/json"
+            )
+        },
+    )
+
+    resp = client.post(
+        f"/api/notebooks/{existing_filename}/versions/import",
+        params={"overwrite": "true"},
+        files={"file": ("backup.zip", io.BytesIO(export_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["overwritten"] is True
+
+    assert client.get(f"/api/notebooks/{existing_filename}").content == original_content
+
+    versions = client.get(f"/api/notebooks/{existing_filename}/versions").json()["versions"]
+    assert len(versions) == 1
+    assert (
+        client.get(
+            f"/api/notebooks/{existing_filename}/versions/{versions[0]['version_id']}"
+        ).content
+        == pre_import_content
+    )
+
+
+def test_import_notebook_versions_rejects_an_archive_with_no_current_content_entry():
+
+    archive_bytes = _zip_bytes({"README.md": b"not a notebook"})
+
+    resp = client.post(
+        "/api/notebooks/versions_import_no_content.ipynb/versions/import",
+        files={"file": ("backup.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_import_notebook_versions_rejects_an_archive_with_multiple_current_content_entries():
+
+    archive_bytes = _zip_bytes({
+        "a.ipynb": _notebook_bytes("def f() -> int:\n    return 1\n"),
+        "b.ipynb": _notebook_bytes("def g() -> int:\n    return 2\n"),
+    })
+
+    resp = client.post(
+        "/api/notebooks/versions_import_multi_content.ipynb/versions/import",
+        files={"file": ("backup.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_import_notebook_versions_rejects_a_non_zip_file():
+
+    resp = client.post(
+        "/api/notebooks/versions_import_bad_file.ipynb/versions/import",
+        files={"file": ("backup.txt", io.BytesIO(b"not a zip"), "text/plain")},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_import_notebook_versions_rejects_a_corrupt_zip_file():
+
+    resp = client.post(
+        "/api/notebooks/versions_import_corrupt.ipynb/versions/import",
+        files={"file": ("backup.zip", io.BytesIO(b"not actually a zip"), "application/zip")},
+    )
+
+    assert resp.status_code == 400
 
 
 def test_inspect_notebook_version_reports_functions_and_dependencies_for_that_snapshot():
