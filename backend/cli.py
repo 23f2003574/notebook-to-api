@@ -2722,9 +2722,11 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        params = {"strict": args.strict}
+        params = {"strict": args.strict, "offset": args.offset}
         if args.tag:
             params["tag"] = args.tag
+        if args.limit is not None:
+            params["limit"] = args.limit
 
         try:
             response = httpx.get(
@@ -2765,6 +2767,21 @@ def _dispatch_core_command(args):
 
                     for skipped in result.get("skipped_functions", []):
                         print(f"    skipped: {skipped['name']}: {skipped['reason']}")
+
+                result_count = data.get("result_count", len(results))
+
+                # "results" can be a strict subset of "result_count" once
+                # --limit/--offset are in play -- the same "how many of
+                # the total am I actually looking at" gap `list`'s own
+                # identical --limit/--offset handling already closes for
+                # GET /api/notebooks. pass_count/warn_count/fail_count
+                # below still cover "result_count"-many notebooks
+                # regardless.
+                if args.limit is not None and (args.offset + len(results) < result_count):
+                    print(
+                        f"\nShowing {len(results)} of {result_count} "
+                        f"result(s) (offset {args.offset})."
+                    )
 
                 print(
                     f"\n{data.get('pass_count', 0)} passed, "
@@ -5801,14 +5818,36 @@ def main():
         )
     )
     validate_all_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help=(
+            "Cap how many results are returned, via GET "
+            "/api/validate-all's own ?limit= query param. "
+            "pass_count/warn_count/fail_count are unaffected, and still "
+            "cover every matching notebook regardless of --limit/--offset."
+        )
+    )
+    validate_all_parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help=(
+            "Skip this many results before --limit is applied, via GET "
+            "/api/validate-all's own ?offset= query param, for paging "
+            "past the first --limit."
+        )
+    )
+    validate_all_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"results\": [{\"filename\", \"status\", ...}, ...], "
-            "\"pass_count\", \"warn_count\", \"fail_count\"}) instead of "
-            "the human-readable report, for scripting/automation."
+            "\"result_count\", \"limit\", \"offset\", \"pass_count\", "
+            "\"warn_count\", \"fail_count\"}) instead of the "
+            "human-readable report, for scripting/automation."
         )
     )
 

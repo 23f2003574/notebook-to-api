@@ -9088,6 +9088,69 @@ def test_validate_all_reports_a_malformed_notebook_as_fail_instead_of_skipping_i
     assert "not a valid Jupyter notebook" in body["results"][0]["detail"]
 
 
+def test_validate_all_limit_caps_the_returned_results():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    for filename in (
+        "validate_all_limit_a.ipynb",
+        "validate_all_limit_b.ipynb",
+        "validate_all_limit_c.ipynb",
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    resp = client.get("/api/validate-all", params={"limit": 2})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["results"]) == 2
+    assert body["result_count"] == 3
+    assert body["limit"] == 2
+    assert body["offset"] == 0
+    # Counts still cover every notebook, not just the returned page.
+    assert body["pass_count"] == 3
+
+
+def test_validate_all_offset_skips_the_already_validated_notebooks():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    for filename in ("validate_all_offset_a.ipynb", "validate_all_offset_b.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    resp = client.get("/api/validate-all", params={"offset": 1})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["results"]) == 1
+    assert body["result_count"] == 2
+    assert body["offset"] == 1
+
+
+def test_validate_all_rejects_a_negative_offset():
+
+    resp = client.get("/api/validate-all", params={"offset": -1})
+
+    assert resp.status_code == 400
+
+
+def test_validate_all_rejects_a_non_positive_limit():
+
+    resp = client.get("/api/validate-all", params={"limit": 0})
+
+    assert resp.status_code == 400
+
+
 def test_validate_all_reports_zero_when_nothing_uploaded():
 
     client.delete("/api/notebooks?confirm=true")
@@ -9098,6 +9161,9 @@ def test_validate_all_reports_zero_when_nothing_uploaded():
     assert resp.json() == {
         "status": "success",
         "results": [],
+        "result_count": 0,
+        "limit": None,
+        "offset": 0,
         "pass_count": 0,
         "warn_count": 0,
         "fail_count": 0,

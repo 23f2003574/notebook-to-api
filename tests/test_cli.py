@@ -7057,7 +7057,7 @@ def test_validate_all_command_passes_when_every_notebook_is_clean(tmp_path, fake
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "✓ a.ipynb: pass" in proc.stdout
     assert "1 passed, 0 warned, 0 failed" in proc.stdout
-    assert handler.requests == ["/api/validate-all?strict=false"]
+    assert handler.requests == ["/api/validate-all?strict=false&offset=0"]
 
 
 def test_validate_all_command_sends_tag_query_param(tmp_path, fake_dashboard):
@@ -7080,7 +7080,7 @@ def test_validate_all_command_sends_tag_query_param(tmp_path, fake_dashboard):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
-    assert query == {"strict": ["false"], "tag": ["prod"]}
+    assert query == {"strict": ["false"], "tag": ["prod"], "offset": ["0"]}
 
 
 def test_validate_all_command_exits_1_on_warnings_without_failing(tmp_path, fake_dashboard):
@@ -7146,7 +7146,7 @@ def test_validate_all_command_exits_2_on_a_failure_and_passes_strict_through(
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "✗ bad.ipynb: fail" in proc.stdout
     assert "reserved name conflict: health_check" in proc.stdout
-    assert handler.requests == ["/api/validate-all?strict=true"]
+    assert handler.requests == ["/api/validate-all?strict=true&offset=0"]
 
 
 def test_validate_all_command_reports_no_notebooks(tmp_path, fake_dashboard):
@@ -7168,6 +7168,42 @@ def test_validate_all_command_reports_no_notebooks(tmp_path, fake_dashboard):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "No notebooks to validate" in proc.stdout
+
+
+def test_validate_all_command_passes_limit_and_offset_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {
+                    "filename": "b.ipynb", "status": "pass",
+                    "reserved_name_conflicts": [], "skipped_functions": [], "detail": None,
+                },
+            ],
+            "result_count": 3, "limit": 1, "offset": 1,
+            "pass_count": 3, "warn_count": 0, "fail_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "validate-all", "--limit", "1", "--offset", "1",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "✓ b.ipynb: pass" in proc.stdout
+    assert "Showing 1 of 3 result(s) (offset 1)." in proc.stdout
+    assert "3 passed, 0 warned, 0 failed" in proc.stdout
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query == {"strict": ["false"], "offset": ["1"], "limit": ["1"]}
 
 
 def test_validate_all_command_json_flag_emits_the_dashboards_own_response(

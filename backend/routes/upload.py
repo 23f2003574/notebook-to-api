@@ -5596,7 +5596,9 @@ def validate_notebook_endpoint(
 
 
 @router.get("/validate-all")
-def validate_all_notebooks(strict: bool = False, tag: str = None):
+def validate_all_notebooks(
+    strict: bool = False, tag: str = None, limit: int = None, offset: int = 0
+):
     """Run the identical pass/warn/fail check POST /api/validate already
     performs for one notebook, across every notebook already uploaded to
     this dashboard at once.
@@ -5633,7 +5635,35 @@ def validate_all_notebooks(strict: bool = False, tag: str = None):
     out-of-tag notebook (including one that would otherwise fail to
     parse) never contributes a result or counts toward
     pass_count/warn_count/fail_count at all.
+
+    "limit"/"offset" page the returned "results" the identical way GET
+    /api/notebooks' own "limit"/"offset" already page the notebook
+    catalog -- before this, a large catalog always validated (and
+    returned a result for) every notebook in one response, with no way
+    to page through it. Applied last, after every "tag"-matching notebook
+    has already been validated (still needed in full to compute
+    "pass_count"/"warn_count"/"fail_count" correctly) -- a negative
+    "offset" is rejected with 400 and a non-positive "limit" the same way
+    GET /api/notebooks' own do. "pass_count"/"warn_count"/"fail_count"
+    (and "result_count") always reflect every "tag"-matching notebook,
+    never just the current page, the same "totals describe the whole
+    matching set" reasoning GET /api/notebooks/storage's own identically-
+    paginated running totals already follow.
     """
+
+    if offset < 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="offset must be a non-negative integer"
+        )
+
+    if limit is not None and limit <= 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="limit must be a positive integer"
+        )
 
     upload_root = Path(UPLOAD_DIR)
 
@@ -5704,9 +5734,18 @@ def validate_all_notebooks(strict: bool = False, tag: str = None):
             "detail": None,
         })
 
+    result_count = len(results)
+
+    paginated_results = (
+        results[offset:offset + limit] if limit is not None else results[offset:]
+    )
+
     return {
         "status": "success",
-        "results": results,
+        "results": paginated_results,
+        "result_count": result_count,
+        "limit": limit,
+        "offset": offset,
         "pass_count": pass_count,
         "warn_count": warn_count,
         "fail_count": fail_count,
