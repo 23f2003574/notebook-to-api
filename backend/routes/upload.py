@@ -2700,7 +2700,7 @@ def diff_notebooks(old: str = None, new: str = None):
 
 
 @router.get("/notebooks/storage")
-def notebook_storage_usage(tag: str = None):
+def notebook_storage_usage(tag: str = None, limit: int = None, offset: int = 0):
     """How much disk space UPLOAD_DIR is actually using, broken down per
     notebook -- its own current bytes plus everything its snapshotted
     version history (see _notebook_versions_dir/_snapshot_current_notebook_version
@@ -2746,7 +2746,38 @@ def notebook_storage_usage(tag: str = None):
     narrowed after the fact. Applied before a notebook's own bytes (or
     its version directory) are ever read, so an out-of-tag notebook
     contributes nothing to "notebooks" or any running total at all.
+
+    "limit"/"offset" page the returned "notebooks" list the identical way
+    GET /api/notebooks' own "limit"/"offset" already page the notebook
+    catalog -- before this, a large catalog always returned every
+    notebook's own entry in one response, with no way to ask for just
+    "the 10 biggest notebooks" short of fetching everything and slicing it
+    client-side, even though "notebooks" is already sorted biggest-first
+    for exactly that use case. Applied after sorting, so "limit"
+    (optional) and "offset" (default 0) page the same biggest-first order
+    "notebooks" already has; a negative "offset" is rejected with 400 and
+    a non-positive "limit" the same way GET /api/notebooks' own do.
+    Deliberately does NOT scope any running total to the current page --
+    "total_notebook_bytes"/"total_version_bytes"/"total_version_count"/
+    "total_bytes" (and "notebook_count") always reflect every
+    "tag"-matching notebook, the same "totals describe the whole matching
+    set, never just one page of it" reasoning GET /api/notebooks' own
+    "total_count" already follows for its identically-paginated list.
     """
+
+    if offset < 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="offset must be a non-negative integer"
+        )
+
+    if limit is not None and limit <= 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="limit must be a positive integer"
+        )
 
     upload_root = Path(UPLOAD_DIR)
 
@@ -2789,10 +2820,18 @@ def notebook_storage_usage(tag: str = None):
 
     notebooks.sort(key=lambda entry: entry["total_bytes"], reverse=True)
 
+    notebook_count = len(notebooks)
+
+    paginated_notebooks = (
+        notebooks[offset:offset + limit] if limit is not None else notebooks[offset:]
+    )
+
     return {
         "status": "success",
-        "notebooks": notebooks,
-        "notebook_count": len(notebooks),
+        "notebooks": paginated_notebooks,
+        "notebook_count": notebook_count,
+        "limit": limit,
+        "offset": offset,
         "total_notebook_bytes": total_notebook_bytes,
         "total_version_bytes": total_version_bytes,
         "total_version_count": total_version_count,

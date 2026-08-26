@@ -3150,6 +3150,84 @@ def test_notebook_storage_sorts_by_total_bytes_descending():
     assert filenames_in_order == ["storage_large.ipynb", "storage_small.ipynb"]
 
 
+def test_notebook_storage_limit_caps_the_biggest_first_notebooks():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    small = _notebook_bytes("def f() -> int:\n    return 1\n")
+    medium = _notebook_bytes("def medium_sized_function_name() -> int:\n    return 1\n")
+    large = _notebook_bytes(
+        "def a_much_longer_function_name_for_a_bigger_notebook() -> int:\n"
+        "    return 1\n"
+    )
+
+    for filename, content in (
+        ("storage_limit_small.ipynb", small),
+        ("storage_limit_medium.ipynb", medium),
+        ("storage_limit_large.ipynb", large),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    resp = client.get("/api/notebooks/storage", params={"limit": 2})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [n["filename"] for n in body["notebooks"]] == [
+        "storage_limit_large.ipynb", "storage_limit_medium.ipynb",
+    ]
+    assert body["notebook_count"] == 3
+    assert body["limit"] == 2
+    assert body["offset"] == 0
+
+    # Running totals still cover every notebook, not just the returned page.
+    assert body["total_notebook_bytes"] == len(small) + len(medium) + len(large)
+
+
+def test_notebook_storage_offset_skips_the_biggest_first_notebooks():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    small = _notebook_bytes("def f() -> int:\n    return 1\n")
+    large = _notebook_bytes(
+        "def a_much_longer_function_name_for_a_bigger_notebook() -> int:\n"
+        "    return 1\n"
+    )
+
+    for filename, content in (
+        ("storage_offset_small.ipynb", small),
+        ("storage_offset_large.ipynb", large),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    resp = client.get("/api/notebooks/storage", params={"offset": 1})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [n["filename"] for n in body["notebooks"]] == ["storage_offset_small.ipynb"]
+    assert body["notebook_count"] == 2
+    assert body["offset"] == 1
+
+
+def test_notebook_storage_rejects_a_negative_offset():
+
+    resp = client.get("/api/notebooks/storage", params={"offset": -1})
+
+    assert resp.status_code == 400
+
+
+def test_notebook_storage_rejects_a_non_positive_limit():
+
+    resp = client.get("/api/notebooks/storage", params={"limit": 0})
+
+    assert resp.status_code == 400
+
+
 def test_notebook_storage_reports_zeros_for_an_empty_catalog():
 
     client.delete("/api/notebooks?confirm=true")
@@ -3161,6 +3239,8 @@ def test_notebook_storage_reports_zeros_for_an_empty_catalog():
         "status": "success",
         "notebooks": [],
         "notebook_count": 0,
+        "limit": None,
+        "offset": 0,
         "total_notebook_bytes": 0,
         "total_version_bytes": 0,
         "total_version_count": 0,

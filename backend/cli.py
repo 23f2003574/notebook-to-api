@@ -1625,9 +1625,11 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        params = {}
+        params = {"offset": args.offset}
         if args.tag:
             params["tag"] = args.tag
+        if args.limit is not None:
+            params["limit"] = args.limit
 
         try:
             response = httpx.get(
@@ -1665,8 +1667,23 @@ def _dispatch_core_command(args):
                         f"{entry['version_count']} version(s))"
                     )
 
+                notebook_count = data.get("notebook_count", len(notebooks))
+
+                # "notebooks" can be a strict subset of "notebook_count"
+                # once --limit/--offset are in play -- the same "how many
+                # of the total am I actually looking at" gap `list`'s own
+                # identical --limit/--offset handling already closes for
+                # GET /api/notebooks. Every running total below still
+                # covers "notebook_count"-many notebooks regardless, so
+                # this is an extra line, not a replacement for it.
+                if args.limit is not None and (args.offset + len(notebooks) < notebook_count):
+                    print(
+                        f"\nShowing {len(notebooks)} of {notebook_count} "
+                        f"notebook(s) (offset {args.offset})."
+                    )
+
                 print(
-                    f"\n{data.get('notebook_count', len(notebooks))} "
+                    f"\n{notebook_count} "
                     f"notebook(s), {data.get('total_bytes', 0)} bytes total "
                     f"({data.get('total_notebook_bytes', 0)} notebooks + "
                     f"{data.get('total_version_bytes', 0)} across "
@@ -4950,6 +4967,28 @@ def main():
             "running total are scoped to it."
         )
     )
+    storage_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help=(
+            "Cap how many of the biggest-first notebooks are returned, "
+            "via GET /api/notebooks/storage's own ?limit= query param -- "
+            "e.g. --limit 10 for just the 10 biggest. Every running "
+            "total is unaffected, and still covers every matching "
+            "notebook regardless of --limit/--offset."
+        )
+    )
+    storage_parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help=(
+            "Skip this many of the biggest-first notebooks before "
+            "--limit is applied, via GET /api/notebooks/storage's own "
+            "?offset= query param, for paging past the first --limit."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(storage_parser)
     storage_parser.add_argument(
         "--json",
@@ -4959,10 +4998,10 @@ def main():
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"notebooks\": [{\"filename\", \"notebook_bytes\", "
             "\"version_bytes\", \"version_count\", \"total_bytes\"}, ...], "
-            "\"notebook_count\", \"total_notebook_bytes\", "
-            "\"total_version_bytes\", \"total_version_count\", "
-            "\"total_bytes\"}) instead of a human-readable summary, for "
-            "scripting/automation."
+            "\"notebook_count\", \"limit\", \"offset\", "
+            "\"total_notebook_bytes\", \"total_version_bytes\", "
+            "\"total_version_count\", \"total_bytes\"}) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 

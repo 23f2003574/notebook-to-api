@@ -3594,7 +3594,7 @@ def test_storage_command_prints_per_notebook_and_total_usage(fake_dashboard):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "a.ipynb: 1200 bytes (900 notebook + 300 bytes across 2 version(s))" in proc.stdout
     assert "1 notebook(s), 1200 bytes total" in proc.stdout
-    assert handler.requests == ["/api/notebooks/storage"]
+    assert handler.requests == ["/api/notebooks/storage?offset=0"]
 
 
 def test_storage_command_sends_tag_query_param(fake_dashboard):
@@ -3613,7 +3613,39 @@ def test_storage_command_sends_tag_query_param(fake_dashboard):
     )
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert handler.requests == ["/api/notebooks/storage?tag=prod"]
+    assert handler.requests == ["/api/notebooks/storage?offset=0&tag=prod"]
+
+
+def test_storage_command_passes_limit_and_offset_through(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "notebooks": [
+            {
+                "filename": "b.ipynb", "notebook_bytes": 500, "version_bytes": 0,
+                "version_count": 0, "total_bytes": 500,
+            },
+        ],
+        "notebook_count": 3, "limit": 1, "offset": 1,
+        "total_notebook_bytes": 1800, "total_version_bytes": 0,
+        "total_version_count": 0, "total_bytes": 1800,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        [
+            "storage", "--limit", "1", "--offset", "1",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "b.ipynb: 500 bytes" in proc.stdout
+    assert "Showing 1 of 3 notebook(s) (offset 1)." in proc.stdout
+    assert "1800 bytes total" in proc.stdout
+    assert handler.requests == ["/api/notebooks/storage?offset=1&limit=1"]
 
 
 def test_storage_command_reports_no_notebooks(fake_dashboard):
