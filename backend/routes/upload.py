@@ -5392,6 +5392,66 @@ def inspect_notebook_endpoint(
         )
 
 
+def _resolve_preview_content_path(notebook_path, version_id=None):
+    """Resolve the file POST /api/validate, /api/requirements-preview,
+    /api/app-preview, and /api/curl-preview should each read
+    `notebook_path`'s content from -- its own current content, or, with
+    `version_id` given, one of its previously snapshotted versions
+    instead.
+
+    resolve_upload_path (which every one of those four already calls for
+    "notebook_path") deliberately rejects any value with a directory
+    component of its own (see its own docstring) -- so none of them could
+    previously be pointed at a version snapshot at all: those live under
+    UPLOAD_DIR/.versions/<filename>/, not directly inside UPLOAD_DIR as a
+    flat filename. inspect_notebook_version and
+    .../versions/{version_id}/diff (above) already closed this identical
+    gap for POST /api/inspect and for diffing a version against something
+    else; before this, answering "would this old version still validate/
+    compile cleanly, and what would its requirements.txt/app.py/curl
+    commands actually look like" meant first POST
+    .../versions/{version_id}/restore-ing it over the notebook's own
+    current content (destructive, even though restoring is itself
+    undoable) or GET .../versions/{version_id} downloading it locally
+    just to run the CLI's own local equivalents against that copy.
+
+    `version_id` reuses the exact same _resolve_path_within traversal
+    protection GET/POST .../versions/{version_id}[/...] already apply to
+    it. Raises the identical 404s each of these four endpoints already
+    raised for a missing `notebook_path` on its own (now also covering an
+    unknown `version_id` once one is given), so an invalid version_id
+    doesn't read back as a different failure mode than an invalid
+    notebook_path always has.
+    """
+
+    file_path = resolve_upload_path(notebook_path)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    if version_id is None:
+        return file_path
+
+    versions_dir = _notebook_versions_dir(file_path.name)
+
+    version_path = _resolve_path_within(
+        str(versions_dir), version_id, "notebook version"
+    )
+
+    if not version_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook version not found"
+        )
+
+    return version_path
+
+
 @router.post("/validate")
 def validate_notebook_endpoint(
     data: dict
@@ -5424,6 +5484,13 @@ def validate_notebook_endpoint(
     reasoning GET /api/notebooks' own "currently_compiled" already
     follows for reporting a fact about a notebook's state rather than
     raising over it.
+
+    "version_id" (optional, see _resolve_preview_content_path above) runs
+    this same check against one of "notebook_path"'s own previously
+    snapshotted versions instead of its current content -- e.g. to check
+    whether an old version would still validate cleanly before POST
+    .../versions/{version_id}/restore-ing it back over the notebook's
+    current content.
     """
 
     notebook_path = data.get(
@@ -5438,15 +5505,9 @@ def validate_notebook_endpoint(
         )
 
     strict = bool(data.get("strict", False))
+    version_id = data.get("version_id")
 
-    full_path = resolve_upload_path(notebook_path)
-
-    if not full_path.is_file():
-
-        raise HTTPException(
-            status_code=404,
-            detail="Notebook file not found"
-        )
+    full_path = _resolve_preview_content_path(notebook_path, version_id)
 
     try:
 
@@ -5489,6 +5550,7 @@ def validate_notebook_endpoint(
     return {
         "status": status,
         "notebook": notebook_path,
+        "version_id": version_id,
         "reserved_name_conflicts": reserved_name_conflicts,
         "skipped_functions": skipped_functions,
     }
@@ -5642,6 +5704,13 @@ def requirements_preview_endpoint(data: dict):
     compile of the same notebook would produce, the same "can't drift
     from the real thing" guarantee POST /api/validate's own reuse of
     inspect_notebook_data already provides for compile-success/failure.
+
+    "version_id" (optional, see _resolve_preview_content_path above)
+    previews requirements.txt for one of "notebook_path"'s own previously
+    snapshotted versions instead of its current content -- e.g. to check
+    whether an old version would still need a dependency that's since
+    been removed, before restoring it back over the notebook's current
+    content.
     """
 
     notebook_path = data.get("notebook_path")
@@ -5653,14 +5722,9 @@ def requirements_preview_endpoint(data: dict):
             detail="notebook_path is required"
         )
 
-    full_path = resolve_upload_path(notebook_path)
+    version_id = data.get("version_id")
 
-    if not full_path.is_file():
-
-        raise HTTPException(
-            status_code=404,
-            detail="Notebook file not found"
-        )
+    full_path = _resolve_preview_content_path(notebook_path, version_id)
 
     try:
 
@@ -5686,6 +5750,7 @@ def requirements_preview_endpoint(data: dict):
     return {
         "status": "success",
         "notebook": notebook_path,
+        "version_id": version_id,
         "requirements": requirements,
     }
 
@@ -5730,6 +5795,12 @@ def app_preview_endpoint(data: dict):
     "only"/"exclude" and their validation mirror POST /api/compile's own
     exactly (see its docstring) -- an invalid value gets the identical 400
     here that it would there.
+
+    "version_id" (optional, see _resolve_preview_content_path above)
+    previews app.py for one of "notebook_path"'s own previously
+    snapshotted versions instead of its current content -- e.g. to review
+    what an old version would generate before restoring it back over the
+    notebook's current content.
     """
 
     notebook_path = data.get("notebook_path")
@@ -5743,6 +5814,7 @@ def app_preview_endpoint(data: dict):
 
     only = data.get("only")
     exclude = data.get("exclude")
+    version_id = data.get("version_id")
 
     for field_name, field_value in (("only", only), ("exclude", exclude)):
 
@@ -5762,14 +5834,7 @@ def app_preview_endpoint(data: dict):
             detail="only and exclude can't both be given -- choose one."
         )
 
-    full_path = resolve_upload_path(notebook_path)
-
-    if not full_path.is_file():
-
-        raise HTTPException(
-            status_code=404,
-            detail="Notebook file not found"
-        )
+    full_path = _resolve_preview_content_path(notebook_path, version_id)
 
     try:
 
@@ -5824,6 +5889,7 @@ def app_preview_endpoint(data: dict):
     return {
         "status": "success",
         "notebook": notebook_path,
+        "version_id": version_id,
         "package_name": package_name,
         "app_code": app_code,
     }
@@ -5867,6 +5933,12 @@ def curl_preview_endpoint(data: dict):
     inspect_notebook_data's own output_dir default to) are the exact same
     directory, so a concurrent POST /api/compile really can clear it
     mid-walk unless this holds the same lock that endpoint already does.
+
+    "version_id" (optional, see _resolve_preview_content_path above)
+    previews curl commands for one of "notebook_path"'s own previously
+    snapshotted versions instead of its current content -- e.g. to see
+    what an old version would have exposed before restoring it back over
+    the notebook's current content.
     """
 
     notebook_path = data.get("notebook_path")
@@ -5878,14 +5950,9 @@ def curl_preview_endpoint(data: dict):
             detail="notebook_path is required"
         )
 
-    full_path = resolve_upload_path(notebook_path)
+    version_id = data.get("version_id")
 
-    if not full_path.is_file():
-
-        raise HTTPException(
-            status_code=404,
-            detail="Notebook file not found"
-        )
+    full_path = _resolve_preview_content_path(notebook_path, version_id)
 
     try:
 
@@ -5932,6 +5999,7 @@ def curl_preview_endpoint(data: dict):
     return {
         "status": "success",
         "notebook": notebook_path,
+        "version_id": version_id,
         "commands": commands,
     }
 

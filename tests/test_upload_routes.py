@@ -8666,6 +8666,7 @@ def test_validate_reports_pass_for_a_clean_notebook():
     assert resp.json() == {
         "status": "pass",
         "notebook": "validate_clean.ipynb",
+        "version_id": None,
         "reserved_name_conflicts": [],
         "skipped_functions": [],
     }
@@ -8801,6 +8802,60 @@ def test_validate_returns_400_for_a_malformed_notebook_file():
     resp = client.post("/api/validate", json={"notebook_path": filename})
 
     assert resp.status_code == 400
+
+
+def test_validate_with_version_id_validates_that_snapshot_not_current_content():
+
+    filename = "validate_version_id.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def health_check() -> dict:\n    return {}\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(f"/api/notebooks/{filename}/versions").json()["versions"][0]["version_id"]
+
+    current_resp = client.post("/api/validate", json={"notebook_path": filename})
+    assert current_resp.json()["status"] == "pass"
+
+    version_resp = client.post(
+        "/api/validate", json={"notebook_path": filename, "version_id": version_id}
+    )
+
+    assert version_resp.status_code == 200
+    body = version_resp.json()
+    assert body["status"] == "fail"
+    assert body["version_id"] == version_id
+    assert body["reserved_name_conflicts"] == ["health_check"]
+
+
+def test_validate_returns_404_for_an_unknown_version_id():
+
+    filename = "validate_version_id_unknown.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.post(
+        "/api/validate",
+        json={"notebook_path": filename, "version_id": "does-not-exist.ipynb"},
+    )
+
+    assert resp.status_code == 404
 
 
 def test_validate_all_reports_pass_warn_and_fail_across_the_catalog():
@@ -9127,6 +9182,64 @@ def test_requirements_preview_requires_a_notebook_path():
     assert resp.status_code == 400
 
 
+def test_requirements_preview_with_version_id_previews_that_snapshots_requirements():
+
+    filename = "requirements_preview_version_id.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "import pandas\n\ndef add(a: int, b: int) -> int:\n    return a + b\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(f"/api/notebooks/{filename}/versions").json()["versions"][0]["version_id"]
+
+    current_resp = client.post("/api/requirements-preview", json={"notebook_path": filename})
+    assert not any(
+        dep.startswith("pandas") for dep in current_resp.json()["requirements"]
+    )
+
+    version_resp = client.post(
+        "/api/requirements-preview",
+        json={"notebook_path": filename, "version_id": version_id},
+    )
+
+    assert version_resp.status_code == 200
+    body = version_resp.json()
+    assert body["version_id"] == version_id
+    assert any(dep.startswith("pandas") for dep in body["requirements"])
+
+
+def test_requirements_preview_returns_404_for_an_unknown_version_id():
+
+    filename = "requirements_preview_version_id_unknown.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.post(
+        "/api/requirements-preview",
+        json={"notebook_path": filename, "version_id": "does-not-exist.ipynb"},
+    )
+
+    assert resp.status_code == 404
+
+
 def test_app_preview_matches_what_an_actual_compile_writes():
 
     content = _notebook_bytes(
@@ -9327,6 +9440,61 @@ def test_app_preview_returns_400_for_a_reserved_function_name():
     assert "health_check" in resp.json()["detail"]
 
 
+def test_app_preview_with_version_id_previews_that_snapshots_source():
+
+    filename = "app_preview_version_id.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def old_func() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def new_func() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(f"/api/notebooks/{filename}/versions").json()["versions"][0]["version_id"]
+
+    version_resp = client.post(
+        "/api/app-preview", json={"notebook_path": filename, "version_id": version_id}
+    )
+
+    assert version_resp.status_code == 200
+    body = version_resp.json()
+    assert body["version_id"] == version_id
+    assert "def old_func" in body["app_code"]
+    assert "def new_func" not in body["app_code"]
+
+    current_resp = client.post("/api/app-preview", json={"notebook_path": filename})
+    assert "def new_func" in current_resp.json()["app_code"]
+    assert "def old_func" not in current_resp.json()["app_code"]
+
+
+def test_app_preview_returns_404_for_an_unknown_version_id():
+
+    filename = "app_preview_version_id_unknown.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.post(
+        "/api/app-preview",
+        json={"notebook_path": filename, "version_id": "does-not-exist.ipynb"},
+    )
+
+    assert resp.status_code == 404
+
+
 def test_curl_preview_returns_one_command_per_function():
 
     content = _notebook_bytes(
@@ -9491,6 +9659,57 @@ def test_curl_preview_rejects_a_non_integer_port():
     )
 
     assert resp.status_code == 400
+
+
+def test_curl_preview_with_version_id_previews_that_snapshots_commands():
+
+    filename = "curl_preview_version_id.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def old_func() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def new_func() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(f"/api/notebooks/{filename}/versions").json()["versions"][0]["version_id"]
+
+    version_resp = client.post(
+        "/api/curl-preview", json={"notebook_path": filename, "version_id": version_id}
+    )
+
+    assert version_resp.status_code == 200
+    body = version_resp.json()
+    assert body["version_id"] == version_id
+    assert any("old_func" in cmd for cmd in body["commands"])
+    assert not any("new_func" in cmd for cmd in body["commands"])
+
+
+def test_curl_preview_returns_404_for_an_unknown_version_id():
+
+    filename = "curl_preview_version_id_unknown.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.post(
+        "/api/curl-preview",
+        json={"notebook_path": filename, "version_id": "does-not-exist.ipynb"},
+    )
+
+    assert resp.status_code == 404
 
 
 def test_inspect_reports_endpoints_and_flags_background_ones_before_compiling():

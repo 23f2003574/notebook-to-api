@@ -526,6 +526,30 @@ def _add_debounce_argument(parser):
     )
 
 
+def _add_version_id_argument(parser, endpoint):
+    """Add --version-id to `parser` -- shared by `remote-validate`,
+    `requirements-preview`, `app-preview`, and `curl-preview` below, so
+    their help text and dest names can't drift apart from each other, the
+    same way _add_function_selection_arguments already shares
+    --only/--exclude and _add_debounce_argument already shares --debounce.
+
+    `endpoint` names the dashboard route this particular parser's own
+    "version_id" body field actually goes to (e.g. "/api/validate"), for
+    that flag's own help text.
+    """
+    parser.add_argument(
+        "--version-id",
+        default=None,
+        dest="version_id",
+        help=(
+            "Run against one of this notebook's own previously "
+            "snapshotted versions (as reported by `versions list`) "
+            f"instead of its current content, via {endpoint}'s own "
+            '"version_id" body field.'
+        )
+    )
+
+
 def _parse_comma_separated_names(value):
     """Parse a `--only`/`--exclude` argparse value ("add,subtract", or
     None) into a list of names, or None if nothing was given.
@@ -2617,10 +2641,14 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        validate_body = {"notebook_path": args.filename, "strict": args.strict}
+        if args.version_id:
+            validate_body["version_id"] = args.version_id
+
         try:
             response = httpx.post(
                 f"{dashboard_url}/api/validate",
-                json={"notebook_path": args.filename, "strict": args.strict},
+                json=validate_body,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -2642,7 +2670,11 @@ def _dispatch_core_command(args):
         if args.json_output:
             print(json.dumps(data, indent=2))
         else:
-            print(f"Validating '{args.filename}' on {dashboard_url}")
+            target = (
+                f"'{args.filename}' version '{args.version_id}'" if args.version_id
+                else f"'{args.filename}'"
+            )
+            print(f"Validating {target} on {dashboard_url}")
 
             if reserved_name_conflicts:
                 print("\n✗ Reserved name conflicts (compilation will fail):")
@@ -2734,10 +2766,14 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        requirements_preview_body = {"notebook_path": args.filename}
+        if args.version_id:
+            requirements_preview_body["version_id"] = args.version_id
+
         try:
             response = httpx.post(
                 f"{dashboard_url}/api/requirements-preview",
-                json={"notebook_path": args.filename},
+                json=requirements_preview_body,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -2758,7 +2794,11 @@ def _dispatch_core_command(args):
 
             requirements = data.get("requirements", [])
 
-            print(f"requirements.txt preview for '{args.filename}' on {dashboard_url}:\n")
+            target = (
+                f"'{args.filename}' version '{args.version_id}'" if args.version_id
+                else f"'{args.filename}'"
+            )
+            print(f"requirements.txt preview for {target} on {dashboard_url}:\n")
 
             for dep in requirements:
                 print(f"  {dep}")
@@ -2772,14 +2812,18 @@ def _dispatch_core_command(args):
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
 
+        app_preview_body = {
+            "notebook_path": args.filename,
+            "only": only,
+            "exclude": exclude,
+        }
+        if args.version_id:
+            app_preview_body["version_id"] = args.version_id
+
         try:
             response = httpx.post(
                 f"{dashboard_url}/api/app-preview",
-                json={
-                    "notebook_path": args.filename,
-                    "only": only,
-                    "exclude": exclude,
-                },
+                json=app_preview_body,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -2797,8 +2841,12 @@ def _dispatch_core_command(args):
         if args.json_output:
             print(json.dumps(data, indent=2))
         else:
+            target = (
+                f"'{args.filename}' version '{args.version_id}'" if args.version_id
+                else f"'{args.filename}'"
+            )
             print(
-                f"app.py preview for '{args.filename}' on {dashboard_url} "
+                f"app.py preview for {target} on {dashboard_url} "
                 f"(package '{data.get('package_name')}'):\n"
             )
             print(data.get("app_code", ""))
@@ -2810,15 +2858,19 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        curl_preview_body = {
+            "notebook_path": args.filename,
+            "host": args.host,
+            "port": args.port,
+            "api_key": args.api_key,
+        }
+        if args.version_id:
+            curl_preview_body["version_id"] = args.version_id
+
         try:
             response = httpx.post(
                 f"{dashboard_url}/api/curl-preview",
-                json={
-                    "notebook_path": args.filename,
-                    "host": args.host,
-                    "port": args.port,
-                    "api_key": args.api_key,
-                },
+                json=curl_preview_body,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -2839,7 +2891,11 @@ def _dispatch_core_command(args):
 
             commands = data.get("commands", [])
 
-            print(f"curl preview for '{args.filename}' on {dashboard_url}:\n")
+            target = (
+                f"'{args.filename}' version '{args.version_id}'" if args.version_id
+                else f"'{args.filename}'"
+            )
+            print(f"curl preview for {target} on {dashboard_url}:\n")
 
             if not commands:
                 print("No endpoints would be generated for this notebook.")
@@ -5650,6 +5706,7 @@ def main():
         help="Filename of the notebook already uploaded to the dashboard, as reported by `list`."
     )
     _add_dashboard_url_and_timeout_arguments(remote_validate_parser)
+    _add_version_id_argument(remote_validate_parser, "POST /api/validate")
     remote_validate_parser.add_argument(
         "--strict",
         action="store_true",
@@ -5666,7 +5723,7 @@ def main():
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\": "
-            "\"pass\"|\"warn\"|\"fail\", \"notebook\", "
+            "\"pass\"|\"warn\"|\"fail\", \"notebook\", \"version_id\", "
             "\"reserved_name_conflicts\", \"skipped_functions\"}) instead "
             "of the human-readable report, for scripting/automation."
         )
@@ -5732,14 +5789,15 @@ def main():
         help="Filename of the notebook already uploaded to the dashboard, as reported by `list`."
     )
     _add_dashboard_url_and_timeout_arguments(requirements_preview_parser)
+    _add_version_id_argument(requirements_preview_parser, "POST /api/requirements-preview")
     requirements_preview_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
-            "\"notebook\", \"requirements\"}) instead of a "
-            "human-readable listing, for scripting/automation."
+            "\"notebook\", \"version_id\", \"requirements\"}) instead of "
+            "a human-readable listing, for scripting/automation."
         )
     )
 
@@ -5761,14 +5819,16 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(app_preview_parser)
     _add_function_selection_arguments(app_preview_parser)
+    _add_version_id_argument(app_preview_parser, "POST /api/app-preview")
     app_preview_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
-            "\"notebook\", \"package_name\", \"app_code\"}) instead of a "
-            "human-readable preview, for scripting/automation."
+            "\"notebook\", \"version_id\", \"package_name\", "
+            "\"app_code\"}) instead of a human-readable preview, for "
+            "scripting/automation."
         )
     )
 
@@ -5812,14 +5872,15 @@ def main():
             "NOTEBOOK_API_KEY if it's been changed."
         )
     )
+    _add_version_id_argument(curl_preview_parser, "POST /api/curl-preview")
     curl_preview_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
-            "\"notebook\", \"commands\"}) instead of a human-readable "
-            "listing, for scripting/automation."
+            "\"notebook\", \"version_id\", \"commands\"}) instead of a "
+            "human-readable listing, for scripting/automation."
         )
     )
 

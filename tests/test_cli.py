@@ -6806,6 +6806,37 @@ def test_remote_validate_command_passes_a_clean_notebook(tmp_path, fake_dashboar
     }
 
 
+def test_remote_validate_command_passes_the_version_id_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "fail",
+            "notebook": "nb.ipynb",
+            "version_id": "v1.ipynb",
+            "reserved_name_conflicts": ["health_check"],
+            "skipped_functions": [],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-validate", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--version-id", "v1.ipynb",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "'nb.ipynb' version 'v1.ipynb'" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "strict": False, "version_id": "v1.ipynb",
+    }
+
+
 def test_remote_validate_command_warns_but_does_not_fail_on_skipped_functions(
     tmp_path, fake_dashboard
 ):
@@ -7181,6 +7212,38 @@ def test_requirements_preview_command_prints_the_requirements(tmp_path, fake_das
     assert json.loads(handler.bodies[0]) == {"notebook_path": "nb.ipynb"}
 
 
+def test_requirements_preview_command_passes_the_version_id_flag_through(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebook": "nb.ipynb",
+            "version_id": "v1.ipynb",
+            "requirements": ["pandas==2.1.0"],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "requirements-preview", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--version-id", "v1.ipynb",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "'nb.ipynb' version 'v1.ipynb'" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "version_id": "v1.ipynb",
+    }
+
+
 def test_requirements_preview_command_json_flag_emits_the_dashboards_own_response(
     tmp_path, fake_dashboard
 ):
@@ -7306,6 +7369,38 @@ def test_app_preview_command_passes_only_and_exclude(tmp_path, fake_dashboard):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads(handler.bodies[0]) == {
         "notebook_path": "nb.ipynb", "only": ["add", "subtract"], "exclude": None,
+    }
+
+
+def test_app_preview_command_passes_the_version_id_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebook": "nb.ipynb",
+            "version_id": "v1.ipynb",
+            "package_name": "generated",
+            "app_code": "app = FastAPI()\n",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-preview", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--version-id", "v1.ipynb",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "'nb.ipynb' version 'v1.ipynb'" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "only": None, "exclude": None,
+        "version_id": "v1.ipynb",
     }
 
 
@@ -7441,6 +7536,38 @@ def test_curl_preview_command_passes_host_port_and_api_key_through(
         "host": "api.example.com",
         "port": 9000,
         "api_key": "mykey123",
+    }
+
+
+def test_curl_preview_command_passes_the_version_id_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebook": "nb.ipynb", "version_id": "v1.ipynb",
+            "commands": ["curl -X POST http://localhost:8000/old_func"],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "curl-preview", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--version-id", "v1.ipynb",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "'nb.ipynb' version 'v1.ipynb'" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb",
+        "host": "localhost",
+        "port": 8000,
+        "api_key": "notebook-to-api-dev-key",
+        "version_id": "v1.ipynb",
     }
 
 
