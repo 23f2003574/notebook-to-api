@@ -2913,9 +2913,14 @@ def _dispatch_core_command(args):
 
         if args.versions_command == "list":
 
+            params = {"offset": args.offset}
+            if args.limit is not None:
+                params["limit"] = args.limit
+
             try:
                 response = httpx.get(
                     f"{dashboard_url}/api/notebooks/{args.filename}/versions",
+                    params=params,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -2945,6 +2950,10 @@ def _dispatch_core_command(args):
                             f"({version['size_bytes']} bytes, "
                             f"saved {version['saved_at']})"
                         )
+
+                    total_count = data.get("total_count")
+                    if total_count is not None and total_count != len(versions):
+                        print(f"\n{len(versions)} of {total_count} total version(s) shown")
 
         elif args.versions_command == "get":
 
@@ -5819,6 +5828,27 @@ def main():
     versions_list_parser.add_argument(
         "filename", help="Filename of the notebook, as reported by `list`."
     )
+    versions_list_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help=(
+            "Cap how many of the newest-first versions are returned, via "
+            "GET /api/notebooks/{filename}/versions's own ?limit= query "
+            "param. Without this, every version is returned, as before."
+        )
+    )
+    versions_list_parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help=(
+            "Skip this many of the newest-first versions before --limit "
+            "is applied, via GET /api/notebooks/{filename}/versions's own "
+            "?offset= query param, for paging through a long-lived "
+            "notebook's own history."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(versions_list_parser)
     versions_list_parser.add_argument(
         "--json",
@@ -5826,8 +5856,9 @@ def main():
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response "
-            "({\"status\", \"filename\", \"versions\"}) instead of a "
-            "human-readable listing, for scripting/automation."
+            "({\"status\", \"filename\", \"versions\", \"total_count\", "
+            "\"limit\", \"offset\"}) instead of a human-readable listing, "
+            "for scripting/automation."
         )
     )
 

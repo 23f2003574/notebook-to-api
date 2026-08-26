@@ -7747,7 +7747,7 @@ def test_versions_list_command_prints_the_notebooks_versions(tmp_path, fake_dash
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "20260101T000000Z-abcdef.ipynb" in proc.stdout
     assert "512 bytes" in proc.stdout
-    assert handler.requests == ["/api/notebooks/nb.ipynb/versions"]
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions?offset=0"]
 
 
 def test_versions_list_command_reports_no_saved_versions(tmp_path, fake_dashboard):
@@ -7794,6 +7794,36 @@ def test_versions_list_command_json_flag_emits_the_dashboards_own_response(
     assert proc.returncode == 0, proc.stdout + proc.stderr
     data = json.loads(proc.stdout)
     assert data["versions"][0]["version_id"] == "v1.ipynb"
+
+
+def test_versions_list_command_passes_limit_and_offset_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "versions": [
+                {"version_id": "v2.ipynb", "size_bytes": 20, "saved_at": "2026-01-02T00:00:00+00:00"},
+            ],
+            "total_count": 3, "limit": 1, "offset": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "list", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--limit", "1", "--offset", "1",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "v2.ipynb" in proc.stdout
+    assert "1 of 3 total version(s) shown" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions?offset=1&limit=1"]
 
 
 def test_versions_list_command_reports_a_clean_error_for_a_missing_notebook(

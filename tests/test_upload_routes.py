@@ -5788,6 +5788,9 @@ def test_list_notebook_versions_is_empty_for_a_notebook_never_overwritten():
         "status": "success",
         "filename": "versions_never_overwritten.ipynb",
         "versions": [],
+        "total_count": 0,
+        "limit": None,
+        "offset": 0,
     }
 
 
@@ -5796,6 +5799,110 @@ def test_list_notebook_versions_returns_404_for_missing_notebook():
     resp = client.get("/api/notebooks/versions_does_not_exist.ipynb/versions")
 
     assert resp.status_code == 404
+
+
+def test_list_notebook_versions_limit_caps_the_returned_versions():
+
+    filename = "versions_list_limit.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    for i in range(3):
+        client.post(
+            "/api/upload?overwrite=true",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes(f"def g{i}() -> int:\n    return {i}\n")),
+                    "application/json",
+                )
+            },
+        )
+
+    all_versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(all_versions) == 3
+
+    resp = client.get(f"/api/notebooks/{filename}/versions", params={"limit": 2})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [v["version_id"] for v in body["versions"]] == [
+        v["version_id"] for v in all_versions[:2]
+    ]
+    assert body["total_count"] == 3
+    assert body["limit"] == 2
+    assert body["offset"] == 0
+
+
+def test_list_notebook_versions_offset_skips_the_newest_first_entries():
+
+    filename = "versions_list_offset.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    for i in range(3):
+        client.post(
+            "/api/upload?overwrite=true",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes(f"def g{i}() -> int:\n    return {i}\n")),
+                    "application/json",
+                )
+            },
+        )
+
+    all_versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+
+    resp = client.get(f"/api/notebooks/{filename}/versions", params={"offset": 1})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [v["version_id"] for v in body["versions"]] == [
+        v["version_id"] for v in all_versions[1:]
+    ]
+    assert body["total_count"] == 3
+    assert body["offset"] == 1
+
+
+def test_list_notebook_versions_rejects_a_negative_offset():
+
+    _upload_sample_notebook("versions_list_bad_offset.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/versions_list_bad_offset.ipynb/versions",
+        params={"offset": -1},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_list_notebook_versions_rejects_a_non_positive_limit():
+
+    _upload_sample_notebook("versions_list_bad_limit.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/versions_list_bad_limit.ipynb/versions",
+        params={"limit": 0},
+    )
+
+    assert resp.status_code == 400
 
 
 def test_overwriting_a_notebook_snapshots_the_previous_content():

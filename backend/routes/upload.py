@@ -4251,7 +4251,7 @@ def set_notebook_description_batch(data: dict):
 
 
 @router.get("/notebooks/{filename}/versions")
-def list_notebook_versions(filename: str):
+def list_notebook_versions(filename: str, limit: int = None, offset: int = 0):
     """List a previously uploaded notebook's snapshotted previous
     versions, newest first.
 
@@ -4261,6 +4261,23 @@ def list_notebook_versions(filename: str):
     outright -- but before this endpoint, there was no way to see what had
     actually been captured, or with what version_id to pass to GET/POST
     below.
+
+    "limit"/"offset" page the returned "versions" the identical way GET
+    /api/notebooks' own "limit"/"offset" already page the notebook
+    catalog: before this, a notebook whose own NOTEBOOK_API_MAX_VERSIONS_PER_NOTEBOOK
+    (MAX_NOTEBOOK_VERSIONS above) had been raised well past its default
+    always returned every one of its snapshots in a single response, with
+    no way for a caller -- e.g. a dashboard frontend rendering one page of
+    "versions list" at a time -- to fetch only a slice of an otherwise
+    long-lived notebook's own history. "offset" (default 0) skips this
+    many of the newest-first entries before "limit" is applied; a
+    negative "offset" is rejected with 400, the same way GET
+    /api/notebooks' own negative "offset" already is. "limit" (optional)
+    caps how many entries follow; omitted, every remaining version after
+    "offset" is returned exactly as before. "total_count" reports how many
+    versions exist in total (before "offset"/"limit" are applied), so a
+    caller can tell whether it has reached the end of a notebook's own
+    history without a separate, unpaginated request.
     """
 
     file_path = resolve_upload_path(filename)
@@ -4270,6 +4287,20 @@ def list_notebook_versions(filename: str):
         raise HTTPException(
             status_code=404,
             detail="Notebook file not found"
+        )
+
+    if offset < 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="offset must be a non-negative integer"
+        )
+
+    if limit is not None and limit <= 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="limit must be a positive integer"
         )
 
     versions_dir = _notebook_versions_dir(file_path.name)
@@ -4293,10 +4324,19 @@ def list_notebook_versions(filename: str):
                 ).isoformat(),
             })
 
+    total_count = len(versions)
+
+    paginated_versions = (
+        versions[offset:offset + limit] if limit is not None else versions[offset:]
+    )
+
     return {
         "status": "success",
         "filename": filename,
-        "versions": versions,
+        "versions": paginated_versions,
+        "total_count": total_count,
+        "limit": limit,
+        "offset": offset,
     }
 
 
