@@ -2282,7 +2282,7 @@ def export_notebooks(filenames: str = None, tag: str = None):
 
 
 @router.get("/notebooks/duplicates")
-def find_duplicate_notebooks(tag: str = None):
+def find_duplicate_notebooks(tag: str = None, sha256: str = None):
     """Group every uploaded notebook by its raw content, reporting only
     the groups with more than one filename -- byte-identical uploads
     sitting in UPLOAD_DIR under different names.
@@ -2328,6 +2328,22 @@ def find_duplicate_notebooks(tag: str = None):
     matching notebook simply isn't reported, the same "fewer than two
     members isn't a duplicate group" rule this endpoint already applies
     with no "tag" given.
+
+    "sha256" (optional) narrows the report to at most the one group
+    matching that exact digest -- the same one GET /api/notebooks?sha256=
+    already matches notebooks by, and GET /api/deploy/history's and GET
+    /api/compile/history's own "source_notebook_sha256" already filter
+    either history log by. A caller who already has a hash in hand (read
+    back from one of those, or from a duplicate group returned by an
+    earlier, unfiltered call here) and wants to know "is this exact
+    content still duplicated, and under which filenames today" previously
+    had to fetch every group across the whole catalog and search the
+    response for the matching "sha256" itself. Composes with "tag"
+    identically to how they'd otherwise both narrow the scan
+    independently; a "sha256" matching no notebook, or exactly one (not a
+    duplicate), simply yields an empty "duplicate_groups" -- not an
+    error, the same "no match is a valid, unexceptional outcome" rule
+    every other filter in this file already follows.
     """
 
     upload_root = Path(UPLOAD_DIR)
@@ -2343,6 +2359,9 @@ def find_duplicate_notebooks(tag: str = None):
             continue
 
         digest = hash_notebook_file(entry)
+
+        if sha256 and digest != sha256:
+            continue
 
         entries_by_hash.setdefault(digest, []).append(entry)
 
@@ -2443,6 +2462,20 @@ def resolve_duplicate_notebooks(data: dict = None):
     the catalog's exact current state; the top-level response's own
     "dry_run" field echoes back whether this call actually deleted
     anything, so a caller can't mistake one response for the other.
+
+    "sha256" (optional, in the request body) narrows resolution to at
+    most the one group matching that exact digest, the same one GET
+    /api/notebooks/duplicates' own "sha256" query param already narrows
+    its report to -- composing with "tag" and "keep" identically. Without
+    it, an operator who only wants to clean up one specific, already-
+    identified duplicate group (e.g. one just reported by GET
+    /api/notebooks/duplicates?sha256=..., without wanting to also resolve
+    every *other* duplicate group elsewhere in the catalog in the same
+    call) had no way to scope this endpoint down that far -- only to an
+    entire tag's worth of groups at once, or the whole catalog. A
+    "sha256" matching no duplicate group (or exactly one notebook, not a
+    duplicate) simply resolves nothing, the same "no match is a valid
+    outcome" reasoning "tag" already follows here.
     """
 
     data = data or {}
@@ -2453,6 +2486,14 @@ def resolve_duplicate_notebooks(data: dict = None):
         raise HTTPException(
             status_code=400,
             detail="tag must be a string"
+        )
+
+    sha256_filter = data.get("sha256")
+
+    if sha256_filter is not None and not isinstance(sha256_filter, str):
+        raise HTTPException(
+            status_code=400,
+            detail="sha256 must be a string"
         )
 
     keep_overrides = data.get("keep") or {}
@@ -2480,7 +2521,12 @@ def resolve_duplicate_notebooks(data: dict = None):
         if tag and tag not in _read_notebook_tags(entry.name):
             continue
 
-        entries_by_hash.setdefault(hash_notebook_file(entry), []).append(entry.name)
+        digest = hash_notebook_file(entry)
+
+        if sha256_filter and digest != sha256_filter:
+            continue
+
+        entries_by_hash.setdefault(digest, []).append(entry.name)
 
     duplicate_groups = [
         (sha256, sorted(filenames))

@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import os
@@ -2479,6 +2480,79 @@ def test_find_duplicate_notebooks_tag_with_only_one_matching_member_yields_no_gr
     assert body["duplicate_groups"] == []
 
 
+def test_find_duplicate_notebooks_sha256_narrows_to_the_matching_group():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    content_b = _notebook_bytes(
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    for filename in ("dup_sha_a1.ipynb", "dup_sha_a2.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content_a), "application/json")},
+        )
+    for filename in ("dup_sha_b1.ipynb", "dup_sha_b2.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content_b), "application/json")},
+        )
+
+    unfiltered = client.get("/api/notebooks/duplicates").json()
+    assert unfiltered["group_count"] == 2
+
+    target_sha256 = next(
+        g["sha256"] for g in unfiltered["duplicate_groups"]
+        if g["filenames"] == ["dup_sha_a1.ipynb", "dup_sha_a2.ipynb"]
+    )
+
+    body = client.get(
+        "/api/notebooks/duplicates", params={"sha256": target_sha256}
+    ).json()
+
+    assert body["group_count"] == 1
+    assert body["duplicate_groups"][0]["sha256"] == target_sha256
+    assert body["duplicate_groups"][0]["filenames"] == [
+        "dup_sha_a1.ipynb", "dup_sha_a2.ipynb",
+    ]
+
+
+def test_find_duplicate_notebooks_sha256_matching_no_notebook_yields_no_group():
+
+    _upload_sample_notebook("dup_sha_unknown.ipynb")
+
+    body = client.get(
+        "/api/notebooks/duplicates", params={"sha256": "0" * 64}
+    ).json()
+
+    assert body["group_count"] == 0
+    assert body["duplicate_groups"] == []
+
+
+def test_find_duplicate_notebooks_sha256_matching_a_single_notebook_yields_no_group():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    client.post(
+        "/api/upload",
+        files={"file": ("dup_sha_solo.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    solo_sha256 = hashlib.sha256(content).hexdigest()
+
+    body = client.get(
+        "/api/notebooks/duplicates", params={"sha256": solo_sha256}
+    ).json()
+
+    assert body["group_count"] == 0
+    assert body["duplicate_groups"] == []
+
+
 def test_resolve_duplicate_notebooks_keeps_alphabetically_first_by_default():
 
     client.delete("/api/notebooks?confirm=true")
@@ -2733,6 +2807,77 @@ def test_resolve_duplicate_notebooks_scopes_to_a_tag():
 def test_resolve_duplicate_notebooks_rejects_a_non_string_tag():
 
     resp = client.post("/api/notebooks/duplicates/resolve", json={"tag": 123})
+
+    assert resp.status_code == 400
+
+
+def test_resolve_duplicate_notebooks_sha256_resolves_only_the_matching_group():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    content_b = _notebook_bytes(
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    for filename in ("resolve_sha_a1.ipynb", "resolve_sha_a2.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content_a), "application/json")},
+        )
+    for filename in ("resolve_sha_b1.ipynb", "resolve_sha_b2.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content_b), "application/json")},
+        )
+
+    target_sha256 = hashlib.sha256(content_a).hexdigest()
+
+    resp = client.post(
+        "/api/notebooks/duplicates/resolve", json={"sha256": target_sha256}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["results"][0]["sha256"] == target_sha256
+    assert body["results"][0]["kept_filename"] == "resolve_sha_a1.ipynb"
+    assert [e["filename"] for e in body["results"][0]["deleted_filenames"]] == [
+        "resolve_sha_a2.ipynb",
+    ]
+
+    # The other duplicate group was never touched.
+    remaining = {n["filename"] for n in client.get("/api/notebooks").json()["notebooks"]}
+    assert remaining == {
+        "resolve_sha_a1.ipynb", "resolve_sha_b1.ipynb", "resolve_sha_b2.ipynb",
+    }
+
+
+def test_resolve_duplicate_notebooks_sha256_matching_no_group_resolves_nothing():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    _upload_sample_notebook("resolve_sha_no_match.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/duplicates/resolve", json={"sha256": "0" * 64}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["results"] == []
+    assert body["succeeded_count"] == 0
+    assert body["failed_count"] == 0
+
+    remaining = {n["filename"] for n in client.get("/api/notebooks").json()["notebooks"]}
+    assert remaining == {"resolve_sha_no_match.ipynb"}
+
+
+def test_resolve_duplicate_notebooks_rejects_a_non_string_sha256():
+
+    resp = client.post("/api/notebooks/duplicates/resolve", json={"sha256": 123})
 
     assert resp.status_code == 400
 

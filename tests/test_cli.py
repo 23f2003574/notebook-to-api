@@ -3328,6 +3328,30 @@ def test_find_duplicates_command_omits_tag_query_param_by_default(fake_dashboard
     assert handler.requests[0] == "/api/notebooks/duplicates"
 
 
+def test_find_duplicates_command_sends_sha256_query_param(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "duplicate_groups": [
+                {"sha256": "abc123", "filenames": ["a.ipynb", "b.ipynb"], "size_bytes": 10},
+            ],
+            "group_count": 1, "duplicate_notebook_count": 2,
+        })
+    ]
+
+    proc = _run_cli(
+        ["find-duplicates", "--sha256", "abc123", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "abc123: a.ipynb, b.ipynb" in proc.stdout
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query["sha256"] == ["abc123"]
+
+
 def test_find_duplicates_command_reports_a_clean_error_when_the_dashboard_is_unreachable():
 
     proc = _run_cli(
@@ -3476,6 +3500,31 @@ def test_resolve_duplicates_command_sends_tag_body_field(tmp_path, fake_dashboar
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads(handler.bodies[0]) == {"keep": {}, "tag": "production"}
+
+
+def test_resolve_duplicates_command_sends_sha256_body_field(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "results": [], "succeeded_count": 0, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "resolve-duplicates", "--yes",
+            "--sha256", "abc123",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {"keep": {}, "sha256": "abc123"}
 
 
 def test_resolve_duplicates_command_omits_tag_body_field_by_default(tmp_path, fake_dashboard):

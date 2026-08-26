@@ -1511,6 +1511,8 @@ def _dispatch_core_command(args):
 
         if args.tag:
             params["tag"] = args.tag
+        if args.sha256:
+            params["sha256"] = args.sha256
 
         try:
             response = httpx.get(
@@ -1587,6 +1589,8 @@ def _dispatch_core_command(args):
 
         if args.tag:
             resolve_body["tag"] = args.tag
+        if args.sha256:
+            resolve_body["sha256"] = args.sha256
         if args.dry_run:
             resolve_body["dry_run"] = True
 
@@ -4929,6 +4933,16 @@ def main():
             "byte-identical notebook pulling it into the same group."
         )
     )
+    find_duplicates_parser.add_argument(
+        "--sha256",
+        help=(
+            "Narrow the report to at most the one group matching this "
+            "exact content hash, via GET /api/notebooks/duplicates' own "
+            "?sha256= query param -- the same digest GET "
+            "/api/notebooks?sha256= and this dashboard's history commands "
+            "already match by."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(find_duplicates_parser)
     find_duplicates_parser.add_argument(
         "--json",
@@ -4975,6 +4989,17 @@ def main():
             "--tag` already applies to its own report, so resolving only "
             "ever deletes what a matching `find-duplicates --tag` call "
             "would have reported."
+        )
+    )
+    resolve_duplicates_parser.add_argument(
+        "--sha256",
+        help=(
+            "Only resolve the one duplicate group matching this exact "
+            "content hash, via POST /api/notebooks/duplicates/resolve's "
+            "own \"sha256\" body field -- the identical scoping "
+            "`find-duplicates --sha256` already applies to its own "
+            "report, without touching any other duplicate group elsewhere "
+            "in the catalog (or, with --tag, elsewhere in that tag)."
         )
     )
     resolve_duplicates_parser.add_argument(
