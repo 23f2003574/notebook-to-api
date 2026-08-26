@@ -567,6 +567,24 @@ def _parse_comma_separated_names(value):
     return names or None
 
 
+def _matched_notebooks_summary(data, args, shown_count):
+    """Format the trailing "N notebook(s) matched" summary line shared by
+    `search-functions` and `search-content` below, accounting for
+    --limit/--offset the same "how many of the total am I actually
+    looking at" way `list`'s own identical --limit/--offset handling
+    already does for GET /api/notebooks.
+    """
+    notebook_count = data.get("notebook_count", shown_count)
+
+    if args.limit is not None and (args.offset + shown_count < notebook_count):
+        return (
+            f"Showing {shown_count} of {notebook_count} notebook(s) "
+            f"(offset {args.offset})."
+        )
+
+    return f"{notebook_count} notebook(s) matched."
+
+
 def _extract_dashboard_error_detail(response):
     """The most useful message extractable from a non-2xx `response` from
     any of this file's own dashboard-facing commands (upload, list,
@@ -1396,9 +1414,11 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        params = {"search": args.search}
+        params = {"search": args.search, "offset": args.offset}
         if args.tag:
             params["tag"] = args.tag
+        if args.limit is not None:
+            params["limit"] = args.limit
 
         try:
             response = httpx.get(
@@ -1433,7 +1453,7 @@ def _dispatch_core_command(args):
                     )
                     print(f"{match['filename']}: {function_names}")
 
-                print(f"\n{len(matches)} notebook(s) matched.")
+                print(f"\n{_matched_notebooks_summary(data, args, len(matches))}")
     elif args.command == "search-content":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -1441,9 +1461,11 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        params = {"search": args.search}
+        params = {"search": args.search, "offset": args.offset}
         if args.tag:
             params["tag"] = args.tag
+        if args.limit is not None:
+            params["limit"] = args.limit
 
         try:
             response = httpx.get(
@@ -1477,7 +1499,7 @@ def _dispatch_core_command(args):
                     for cell_match in match["matches"]:
                         print(f"  [{cell_match['cell_index']}] {cell_match['snippet']}")
 
-                print(f"\n{len(matches)} notebook(s) matched.")
+                print(f"\n{_matched_notebooks_summary(data, args, len(matches))}")
     elif args.command == "find-duplicates":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -4809,6 +4831,18 @@ def main():
             "/api/functions' own ?tag=."
         )
     )
+    search_functions_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Cap how many matching notebooks are returned, via GET /api/functions' own ?limit=."
+    )
+    search_functions_parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Skip this many matching notebooks before --limit is applied, via GET /api/functions' own ?offset=."
+    )
     _add_dashboard_url_and_timeout_arguments(search_functions_parser)
     search_functions_parser.add_argument(
         "--json",
@@ -4817,8 +4851,8 @@ def main():
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"search\", \"matches\": [{\"filename\", \"functions\"}, ...], "
-            "\"notebook_count\"}) instead of a human-readable summary, "
-            "for scripting/automation."
+            "\"notebook_count\", \"limit\", \"offset\"}) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 
@@ -4843,6 +4877,24 @@ def main():
             "/api/notebooks/search-content's own ?tag=."
         )
     )
+    search_content_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help=(
+            "Cap how many matching notebooks are returned, via GET "
+            "/api/notebooks/search-content's own ?limit=."
+        )
+    )
+    search_content_parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help=(
+            "Skip this many matching notebooks before --limit is "
+            "applied, via GET /api/notebooks/search-content's own ?offset=."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(search_content_parser)
     search_content_parser.add_argument(
         "--json",
@@ -4852,8 +4904,8 @@ def main():
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"search\", \"matches\": [{\"filename\", \"matches\": "
             "[{\"cell_index\", \"snippet\"}, ...]}, ...], "
-            "\"notebook_count\"}) instead of a human-readable summary, "
-            "for scripting/automation."
+            "\"notebook_count\", \"limit\", \"offset\"}) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 

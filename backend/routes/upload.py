@@ -1764,7 +1764,9 @@ def rename_tag(tag: str, data: dict):
 
 
 @router.get("/functions")
-def search_functions(search: str = None, tag: str = None):
+def search_functions(
+    search: str = None, tag: str = None, limit: int = None, offset: int = 0
+):
     """Find which uploaded notebooks define a function whose name
     contains `search` (case-insensitive), across every notebook in
     UPLOAD_DIR at once.
@@ -1809,6 +1811,20 @@ def search_functions(search: str = None, tag: str = None):
     above, whether or not it happens to carry "tag" -- reading its tags
     sidecar first only to then discard it as unparseable would be wasted
     work either way.
+
+    "limit"/"offset" page the returned "matches" (one entry per matching
+    notebook, each with every one of its own matching functions) the
+    identical way GET /api/notebooks' own "limit"/"offset" already page
+    the notebook catalog -- before this, a catalog with many notebooks
+    defining a commonly-searched name always returned every matching
+    notebook's own entry in one response. Applied last, after every
+    "tag"-matching notebook has already been scanned (still needed in
+    full to compute "notebook_count" correctly); a negative "offset" is
+    rejected with 400 and a non-positive "limit" the same way GET
+    /api/notebooks' own do. "notebook_count" always reflects every
+    matching notebook, never just the current page, the same "totals
+    describe the whole matching set" reasoning GET /api/notebooks/
+    storage's own identically-paginated running totals already follow.
     """
 
     if not search:
@@ -1816,6 +1832,20 @@ def search_functions(search: str = None, tag: str = None):
         raise HTTPException(
             status_code=400,
             detail="search is required"
+        )
+
+    if offset < 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="offset must be a non-negative integer"
+        )
+
+    if limit is not None and limit <= 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="limit must be a positive integer"
         )
 
     upload_root = Path(UPLOAD_DIR)
@@ -1850,11 +1880,19 @@ def search_functions(search: str = None, tag: str = None):
                 "functions": matching_functions,
             })
 
+    notebook_count = len(matches)
+
+    paginated_matches = (
+        matches[offset:offset + limit] if limit is not None else matches[offset:]
+    )
+
     return {
         "status": "success",
         "search": search,
-        "matches": matches,
-        "notebook_count": len(matches),
+        "matches": paginated_matches,
+        "notebook_count": notebook_count,
+        "limit": limit,
+        "offset": offset,
     }
 
 
@@ -2515,7 +2553,9 @@ def resolve_duplicate_notebooks(data: dict = None):
 
 
 @router.get("/notebooks/search-content")
-def search_notebook_content(search: str = None, tag: str = None):
+def search_notebook_content(
+    search: str = None, tag: str = None, limit: int = None, offset: int = 0
+):
     """Find every uploaded notebook with a code cell whose raw source
     contains `search` (case-insensitive), across the whole catalog at
     once.
@@ -2553,6 +2593,18 @@ def search_notebook_content(search: str = None, tag: str = None):
     wanting "which of my *production* notebooks still call this
     deprecated function" previously had to scan every uploaded notebook's
     own code and filter the response down client-side afterward.
+
+    "limit"/"offset" page the returned "matches" (one entry per matching
+    notebook, each with every one of its own matching cells) the
+    identical way GET /api/functions' own "limit"/"offset" already page
+    its own analogous per-notebook "matches" -- before this, a catalog
+    with many notebooks containing a commonly-searched substring always
+    returned every matching notebook's own entry in one response. Applied
+    last, after every "tag"-matching notebook has already been scanned
+    (still needed in full to compute "notebook_count" correctly); a
+    negative "offset" is rejected with 400 and a non-positive "limit" the
+    same way GET /api/notebooks' own do. "notebook_count" always reflects
+    every matching notebook, never just the current page.
     """
 
     if not search:
@@ -2560,6 +2612,20 @@ def search_notebook_content(search: str = None, tag: str = None):
         raise HTTPException(
             status_code=400,
             detail="search is required"
+        )
+
+    if offset < 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="offset must be a non-negative integer"
+        )
+
+    if limit is not None and limit <= 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="limit must be a positive integer"
         )
 
     upload_root = Path(UPLOAD_DIR)
@@ -2611,11 +2677,19 @@ def search_notebook_content(search: str = None, tag: str = None):
                 "matches": cell_matches,
             })
 
+    notebook_count = len(matches)
+
+    paginated_matches = (
+        matches[offset:offset + limit] if limit is not None else matches[offset:]
+    )
+
     return {
         "status": "success",
         "search": search,
-        "matches": matches,
-        "notebook_count": len(matches),
+        "matches": paginated_matches,
+        "notebook_count": notebook_count,
+        "limit": limit,
+        "offset": offset,
     }
 
 

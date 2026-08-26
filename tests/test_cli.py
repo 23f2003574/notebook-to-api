@@ -2944,7 +2944,7 @@ def test_search_functions_command_prints_matching_notebooks(fake_dashboard):
     assert "a.ipynb: train_model" in proc.stdout
     assert "b.ipynb: retrain" in proc.stdout
     assert "2 notebook(s) matched." in proc.stdout
-    assert handler.requests == ["/api/functions?search=train"]
+    assert handler.requests == ["/api/functions?search=train&offset=0"]
 
 
 def test_search_functions_command_sends_tag_query_param(fake_dashboard):
@@ -2959,7 +2959,7 @@ def test_search_functions_command_sends_tag_query_param(fake_dashboard):
     )
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert handler.requests == ["/api/functions?search=train&tag=prod"]
+    assert handler.requests == ["/api/functions?search=train&offset=0&tag=prod"]
 
 
 def test_search_functions_command_reports_no_matches(fake_dashboard):
@@ -2980,6 +2980,31 @@ def test_search_functions_command_reports_no_matches(fake_dashboard):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "No notebooks define a function matching 'nonexistent'." in proc.stdout
+
+
+def test_search_functions_command_passes_limit_and_offset_through(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "search": "train",
+        "matches": [{"filename": "b.ipynb", "functions": [{"name": "retrain"}]}],
+        "notebook_count": 3, "limit": 1, "offset": 1,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        [
+            "search-functions", "train", "--limit", "1", "--offset", "1",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "b.ipynb: retrain" in proc.stdout
+    assert "Showing 1 of 3 notebook(s) (offset 1)." in proc.stdout
+    assert handler.requests == ["/api/functions?search=train&offset=1&limit=1"]
 
 
 def test_search_functions_command_json_flag_emits_the_dashboards_own_response(
@@ -3067,7 +3092,7 @@ def test_search_content_command_prints_matching_notebooks(fake_dashboard):
     assert "a.ipynb:" in proc.stdout
     assert "[0] df = pd.read_csv('x.csv')" in proc.stdout
     assert "1 notebook(s) matched." in proc.stdout
-    assert handler.requests == ["/api/notebooks/search-content?search=read_csv"]
+    assert handler.requests == ["/api/notebooks/search-content?search=read_csv&offset=0"]
 
 
 def test_search_content_command_sends_tag_query_param(fake_dashboard):
@@ -3085,7 +3110,7 @@ def test_search_content_command_sends_tag_query_param(fake_dashboard):
     )
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert handler.requests == ["/api/notebooks/search-content?search=read_csv&tag=prod"]
+    assert handler.requests == ["/api/notebooks/search-content?search=read_csv&offset=0&tag=prod"]
 
 
 def test_search_content_command_reports_no_matches(fake_dashboard):
@@ -3104,6 +3129,33 @@ def test_search_content_command_reports_no_matches(fake_dashboard):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "No notebooks have a code cell matching 'nonexistent'." in proc.stdout
+
+
+def test_search_content_command_passes_limit_and_offset_through(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "search": "read_csv",
+        "matches": [{"filename": "b.ipynb", "matches": [{"cell_index": 0, "snippet": "read_csv(x)"}]}],
+        "notebook_count": 3, "limit": 1, "offset": 1,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        [
+            "search-content", "read_csv", "--limit", "1", "--offset", "1",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "b.ipynb:" in proc.stdout
+    assert "Showing 1 of 3 notebook(s) (offset 1)." in proc.stdout
+    assert handler.requests == [
+        "/api/notebooks/search-content?search=read_csv&offset=1&limit=1"
+    ]
 
 
 def test_search_content_command_json_flag_emits_the_dashboards_own_response(

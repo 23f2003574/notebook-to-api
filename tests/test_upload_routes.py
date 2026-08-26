@@ -2895,6 +2895,73 @@ def test_search_notebook_content_reports_multiple_matching_cells_in_one_notebook
     assert [m["cell_index"] for m in body["matches"][0]["matches"]] == [0, 1]
 
 
+def test_search_notebook_content_limit_and_offset_page_the_matching_notebooks():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("SEARCH_CONTENT_PAGE_MARKER = 1\n")
+
+    for filename in (
+        "search_content_page_a.ipynb",
+        "search_content_page_b.ipynb",
+        "search_content_page_c.ipynb",
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    all_matches = client.get(
+        "/api/notebooks/search-content", params={"search": "SEARCH_CONTENT_PAGE_MARKER"}
+    ).json()["matches"]
+    assert len(all_matches) == 3
+
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={"search": "SEARCH_CONTENT_PAGE_MARKER", "limit": 2},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [m["filename"] for m in body["matches"]] == [
+        m["filename"] for m in all_matches[:2]
+    ]
+    assert body["notebook_count"] == 3
+    assert body["limit"] == 2
+    assert body["offset"] == 0
+
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={"search": "SEARCH_CONTENT_PAGE_MARKER", "offset": 1},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [m["filename"] for m in body["matches"]] == [
+        m["filename"] for m in all_matches[1:]
+    ]
+    assert body["notebook_count"] == 3
+    assert body["offset"] == 1
+
+
+def test_search_notebook_content_rejects_a_negative_offset():
+
+    resp = client.get(
+        "/api/notebooks/search-content", params={"search": "anything", "offset": -1}
+    )
+
+    assert resp.status_code == 400
+
+
+def test_search_notebook_content_rejects_a_non_positive_limit():
+
+    resp = client.get(
+        "/api/notebooks/search-content", params={"search": "anything", "limit": 0}
+    )
+
+    assert resp.status_code == 400
+
+
 def test_diff_notebooks_reports_added_removed_changed_and_unchanged():
 
     old_content = _notebook_bytes(
@@ -5600,6 +5667,8 @@ def test_search_functions_reports_no_matches():
         "search": "this_function_name_does_not_exist_anywhere",
         "matches": [],
         "notebook_count": 0,
+        "limit": None,
+        "offset": 0,
     }
 
 
@@ -5632,6 +5701,73 @@ def test_search_functions_skips_a_malformed_notebook_file():
     assert [m["filename"] for m in resp.json()["matches"]] == ["search_functions_clean.ipynb"]
 
     os.remove(file_path)
+
+
+def test_search_functions_limit_and_offset_page_the_matching_notebooks():
+
+    content = _notebook_bytes(
+        "def search_functions_page_marker() -> int:\n    return 1\n"
+    )
+
+    for filename in (
+        "search_functions_page_a.ipynb",
+        "search_functions_page_b.ipynb",
+        "search_functions_page_c.ipynb",
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    all_matches = client.get(
+        "/api/functions?search=search_functions_page_marker"
+    ).json()["matches"]
+    assert len(all_matches) == 3
+
+    resp = client.get(
+        "/api/functions",
+        params={"search": "search_functions_page_marker", "limit": 2},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [m["filename"] for m in body["matches"]] == [
+        m["filename"] for m in all_matches[:2]
+    ]
+    assert body["notebook_count"] == 3
+    assert body["limit"] == 2
+    assert body["offset"] == 0
+
+    resp = client.get(
+        "/api/functions",
+        params={"search": "search_functions_page_marker", "offset": 1},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [m["filename"] for m in body["matches"]] == [
+        m["filename"] for m in all_matches[1:]
+    ]
+    assert body["notebook_count"] == 3
+    assert body["offset"] == 1
+
+
+def test_search_functions_rejects_a_negative_offset():
+
+    resp = client.get(
+        "/api/functions", params={"search": "anything", "offset": -1}
+    )
+
+    assert resp.status_code == 400
+
+
+def test_search_functions_rejects_a_non_positive_limit():
+
+    resp = client.get(
+        "/api/functions", params={"search": "anything", "limit": 0}
+    )
+
+    assert resp.status_code == 400
 
 
 def test_list_notebooks_reports_tags_for_each_entry():
