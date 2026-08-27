@@ -3929,6 +3929,57 @@ def test_delete_all_notebooks_removes_every_uploaded_notebook():
     assert "bulk_delete_b.ipynb" not in filenames
 
 
+def test_delete_all_notebooks_scoped_by_tag_deletes_only_matching_notebooks():
+
+    _upload_sample_notebook("bulk_delete_tag_match.ipynb")
+    _upload_sample_notebook("bulk_delete_tag_other.ipynb")
+
+    client.put(
+        "/api/notebooks/bulk_delete_tag_match.ipynb/tags",
+        json={"tags": ["bulk-delete-scope"]},
+    )
+
+    delete_resp = client.delete(
+        "/api/notebooks", params={"confirm": "true", "tag": "bulk-delete-scope"}
+    )
+
+    assert delete_resp.status_code == 200
+    body = delete_resp.json()
+    assert body["deleted_filenames"] == ["bulk_delete_tag_match.ipynb"]
+    assert body["deleted_count"] == 1
+
+    list_resp = client.get("/api/notebooks")
+    filenames = {nb["filename"] for nb in list_resp.json()["notebooks"]}
+    assert "bulk_delete_tag_match.ipynb" not in filenames
+    # The untagged notebook is left completely untouched.
+    assert "bulk_delete_tag_other.ipynb" in filenames
+
+
+def test_delete_all_notebooks_scoped_by_an_unknown_tag_deletes_nothing():
+
+    _upload_sample_notebook("bulk_delete_unknown_tag.ipynb")
+
+    delete_resp = client.delete(
+        "/api/notebooks", params={"confirm": "true", "tag": "no-such-tag-anywhere"}
+    )
+
+    assert delete_resp.status_code == 200
+    body = delete_resp.json()
+    assert body["deleted_count"] == 0
+    assert body["deleted_filenames"] == []
+
+    list_resp = client.get("/api/notebooks")
+    filenames = {nb["filename"] for nb in list_resp.json()["notebooks"]}
+    assert "bulk_delete_unknown_tag.ipynb" in filenames
+
+
+def test_delete_all_notebooks_scoped_by_tag_still_requires_confirm_true():
+
+    resp = client.delete("/api/notebooks", params={"tag": "bulk-delete-scope"})
+
+    assert resp.status_code == 400
+
+
 def test_delete_all_notebooks_flags_currently_compiled_notebook_deleted():
 
     content = _notebook_bytes(

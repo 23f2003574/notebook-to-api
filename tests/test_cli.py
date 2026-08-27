@@ -4554,6 +4554,79 @@ def test_delete_command_all_flag_aborts_without_yes_when_declined(
     assert handler.requests == []
 
 
+def test_delete_command_all_flag_sends_tag_query_param(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "deleted_count": 1,
+            "deleted_filenames": ["a.ipynb"],
+            "currently_compiled_notebook_deleted": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "delete", "--all", "--tag", "scratch",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks?confirm=true&tag=scratch"]
+
+
+def test_delete_command_all_flag_with_tag_prompts_with_the_tag_named(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = []
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli",
+            "delete", "--all", "--tag", "scratch",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=str(workdir),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        input="n\n",
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "every notebook tagged 'scratch'" in proc.stdout
+    assert "Aborted." in proc.stdout
+    assert handler.requests == []
+
+
+def test_delete_command_rejects_tag_without_all(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "delete", "nb.ipynb", "--tag", "scratch",
+            "--dashboard-url", "http://127.0.0.1:1", "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "--tag only applies together with --all.")
+
+
 def test_delete_command_rejects_both_filename_and_all(tmp_path):
 
     workdir = tmp_path / "workdir"

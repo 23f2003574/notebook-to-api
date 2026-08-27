@@ -3281,7 +3281,7 @@ def notebook_storage_usage(tag: str = None, limit: int = None, offset: int = 0):
 
 
 @router.delete("/notebooks")
-def delete_all_notebooks(confirm: bool = False):
+def delete_all_notebooks(confirm: bool = False, tag: str = None):
     """Remove every uploaded notebook in UPLOAD_DIR at once.
 
     GET /api/notebooks and DELETE /api/generated already form a
@@ -3327,6 +3327,25 @@ def delete_all_notebooks(confirm: bool = False):
     description, or gain "previous versions" to restore, left behind by a
     completely different, previously-deleted notebook that just happened
     to share its name.
+
+    "tag" (optional) scopes deletion to only notebooks currently carrying
+    that exact tag, the same exact-match GET /api/notebooks?tag= already
+    filters by, and the identical gap "tag" already closes for DELETE
+    /api/notebooks/versions, GET /api/notebooks/duplicates, GET
+    /api/notebooks/search-content, GET /api/functions, GET
+    /api/notebooks/storage, and GET /api/validate-all elsewhere in this
+    file. Before this, wiping just a "scratch" set of notebooks (without
+    touching every other, differently- or un-tagged notebook) meant a
+    separate GET /api/notebooks?tag=scratch to discover their filenames,
+    then feeding that list into POST /api/notebooks/delete-batch by hand
+    -- this does the identical filter-then-delete in one call, still
+    behind the same "?confirm=true" opt-in this endpoint already
+    requires regardless of scope. Applied before a notebook is even
+    considered for deletion, so an out-of-tag notebook (and its own tags/
+    description/version history) is left completely untouched, the same
+    "never touched at all" guarantee GET /api/notebooks?tag= already
+    gives an out-of-tag entry in its own response. Omitted, every
+    notebook is deleted exactly as before "tag" existed.
     """
 
     if not confirm:
@@ -3349,6 +3368,9 @@ def delete_all_notebooks(confirm: bool = False):
     for entry in sorted(upload_root.iterdir()):
 
         if not entry.is_file() or entry.suffix != ".ipynb":
+            continue
+
+        if tag and tag not in _read_notebook_tags(entry.name):
             continue
 
         if compiled_path is not None and entry.resolve() == compiled_path:

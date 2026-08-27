@@ -1897,6 +1897,9 @@ def _dispatch_core_command(args):
                 "uploaded notebook."
             )
 
+        if args.tag and not args.all:
+            raise RuntimeError("--tag only applies together with --all.")
+
         if args.all:
             # DELETE /api/notebooks requires its own ?confirm=true before
             # it does anything (routes/upload.py) -- always passed here
@@ -1904,17 +1907,23 @@ def _dispatch_core_command(args):
             # thing on this side, so the two confirmation steps never
             # double-prompt a caller who already said yes once.
             if not args.yes:
-                answer = input(
-                    f"Delete ALL uploaded notebooks on {dashboard_url}? [y/N] "
+                target = (
+                    f"every notebook tagged '{args.tag}'" if args.tag
+                    else "ALL uploaded notebooks"
                 )
+                answer = input(f"Delete {target} on {dashboard_url}? [y/N] ")
                 if answer.strip().lower() not in ("y", "yes"):
                     print("Aborted.")
                     return
 
+            params = {"confirm": "true"}
+            if args.tag:
+                params["tag"] = args.tag
+
             try:
                 response = httpx.delete(
                     f"{dashboard_url}/api/notebooks",
-                    params={"confirm": "true"},
+                    params=params,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -5475,6 +5484,17 @@ def main():
             "reset the uploads directory before a demo or between CI "
             "runs, without discovering and deleting each filename one at "
             "a time. Mutually exclusive with passing a filename."
+        )
+    )
+    delete_parser.add_argument(
+        "--tag",
+        default=None,
+        help=(
+            "With --all, only delete notebooks currently carrying this "
+            "exact tag, via DELETE /api/notebooks's own ?tag= query "
+            "param, leaving every other notebook untouched. Without "
+            "this, --all deletes every uploaded notebook. Ignored (and "
+            "rejected) without --all."
         )
     )
     delete_parser.add_argument(
