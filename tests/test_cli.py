@@ -6231,6 +6231,36 @@ def test_tags_delete_command_reports_success_with_yes_flag(tmp_path, fake_dashbo
     assert handler.requests == ["/api/tags/scratch"]
 
 
+def test_tags_delete_command_dry_run_skips_confirmation_and_sends_dry_run_param(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": True,
+            "tag": "scratch",
+            "affected_notebooks": ["a.ipynb"],
+            "notebook_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    # No --yes, and no stdin input provided -- would hang/fail on a
+    # confirmation prompt if --dry-run didn't skip it.
+    proc = _run_cli(
+        ["tags", "delete", "scratch", "--dashboard-url", dashboard_url, "--dry-run"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would remove 'scratch' from a.ipynb" in proc.stdout
+    assert handler.requests == ["/api/tags/scratch?dry_run=true"]
+
+
 def test_tags_delete_command_reports_no_notebooks_affected(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
@@ -6645,6 +6675,40 @@ def test_tags_rename_command_reports_success_with_yes_flag(tmp_path, fake_dashbo
     assert "Renamed 'prod' to 'production' on b.ipynb" in proc.stdout
     assert "2 notebook(s) updated" in proc.stdout
     assert handler.requests == ["/api/tags/prod"]
+
+
+def test_tags_rename_command_dry_run_skips_confirmation_and_sends_dry_run_field(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": True,
+            "tag": "prod",
+            "new_tag": "production",
+            "affected_notebooks": ["a.ipynb"],
+            "notebook_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    # No --yes, and no stdin input provided -- would hang/fail on a
+    # confirmation prompt if --dry-run didn't skip it.
+    proc = _run_cli(
+        [
+            "tags", "rename", "prod", "production",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would rename 'prod' to 'production' on a.ipynb" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {"new_tag": "production", "dry_run": True}
 
 
 def test_tags_rename_command_reports_no_notebooks_affected(tmp_path, fake_dashboard):

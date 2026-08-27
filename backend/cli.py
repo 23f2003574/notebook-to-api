@@ -2492,12 +2492,13 @@ def _dispatch_core_command(args):
 
         elif args.tags_command == "delete":
 
-            if not args.yes:
+            if not args.dry_run and not args.yes:
                 # DELETE /api/tags/{tag} (routes/upload.py) has no
                 # confirmation step of its own and affects every notebook
                 # carrying the tag at once -- the same reasoning
                 # `delete`'s own single-filename path and `versions
-                # delete` already prompt for.
+                # delete` already prompt for. Not asked at all under
+                # --dry-run, which never removes anything.
                 answer = input(
                     f"Remove tag '{args.tag}' from every notebook on "
                     f"{dashboard_url}? [y/N] "
@@ -2506,9 +2507,12 @@ def _dispatch_core_command(args):
                     print("Aborted.")
                     return
 
+            params = {"dry_run": True} if args.dry_run else {}
+
             try:
                 response = httpx.delete(
                     f"{dashboard_url}/api/tags/{args.tag}",
+                    params=params,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -2528,12 +2532,13 @@ def _dispatch_core_command(args):
             else:
 
                 affected_notebooks = data.get("affected_notebooks", [])
+                verb = "Would remove" if data.get("dry_run") else "Removed"
 
                 if not affected_notebooks:
                     print(f"No notebooks on {dashboard_url} carry tag '{args.tag}'.")
                 else:
                     for filename in affected_notebooks:
-                        print(f"Removed '{args.tag}' from {filename}")
+                        print(f"{verb} '{args.tag}' from {filename}")
 
                     print(
                         f"\n{data.get('notebook_count', len(affected_notebooks))} "
@@ -2614,11 +2619,12 @@ def _dispatch_core_command(args):
 
         elif args.tags_command == "rename":
 
-            if not args.yes:
+            if not args.dry_run and not args.yes:
                 # PATCH /api/tags/{tag} (routes/upload.py) has no
                 # confirmation step of its own and affects every notebook
                 # carrying the tag at once -- the same reasoning `tags
-                # delete` already prompts for.
+                # delete` already prompts for. Not asked at all under
+                # --dry-run, which never renames anything.
                 answer = input(
                     f"Rename tag '{args.tag}' to '{args.new_tag}' on every "
                     f"notebook on {dashboard_url}? [y/N] "
@@ -2627,10 +2633,14 @@ def _dispatch_core_command(args):
                     print("Aborted.")
                     return
 
+            body = {"new_tag": args.new_tag}
+            if args.dry_run:
+                body["dry_run"] = True
+
             try:
                 response = httpx.patch(
                     f"{dashboard_url}/api/tags/{args.tag}",
-                    json={"new_tag": args.new_tag},
+                    json=body,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -2650,12 +2660,13 @@ def _dispatch_core_command(args):
             else:
 
                 affected_notebooks = data.get("affected_notebooks", [])
+                verb = "Would rename" if data.get("dry_run") else "Renamed"
 
                 if not affected_notebooks:
                     print(f"No notebooks on {dashboard_url} carry tag '{args.tag}'.")
                 else:
                     for filename in affected_notebooks:
-                        print(f"Renamed '{args.tag}' to '{args.new_tag}' on {filename}")
+                        print(f"{verb} '{args.tag}' to '{args.new_tag}' on {filename}")
 
                     print(
                         f"\n{data.get('notebook_count', len(affected_notebooks))} "
@@ -6088,6 +6099,18 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(tags_delete_parser)
     tags_delete_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report which notebooks would be affected, via DELETE "
+            "/api/tags/{tag}'s own ?dry_run= query param, without "
+            "removing the tag from any of them. Skips the confirmation "
+            "prompt --yes would otherwise require, since nothing "
+            "irreversible happens."
+        )
+    )
+    tags_delete_parser.add_argument(
         "--yes",
         action="store_true",
         help=(
@@ -6095,7 +6118,8 @@ def main():
             "this, `tags delete` asks for a y/N confirmation on the "
             "terminal before sending the request -- DELETE /api/tags/{tag} "
             "itself has no confirmation step of its own, and affects "
-            "every notebook carrying the tag at once."
+            "every notebook carrying the tag at once. Ignored under "
+            "--dry-run, which never prompts."
         )
     )
     tags_delete_parser.add_argument(
@@ -6104,8 +6128,9 @@ def main():
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
-            "\"tag\", \"affected_notebooks\", \"notebook_count\"}) instead "
-            "of a human-readable summary, for scripting/automation."
+            "\"dry_run\", \"tag\", \"affected_notebooks\", "
+            "\"notebook_count\"}) instead of a human-readable summary, "
+            "for scripting/automation."
         )
     )
 
@@ -6179,6 +6204,18 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(tags_rename_parser)
     tags_rename_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report which notebooks would be affected, via PATCH "
+            "/api/tags/{tag}'s own \"dry_run\" body field, without "
+            "renaming the tag on any of them. Skips the confirmation "
+            "prompt --yes would otherwise require, since nothing "
+            "irreversible happens."
+        )
+    )
+    tags_rename_parser.add_argument(
         "--yes",
         action="store_true",
         help=(
@@ -6186,7 +6223,8 @@ def main():
             "this, `tags rename` asks for a y/N confirmation on the "
             "terminal before sending the request -- PATCH /api/tags/{tag} "
             "itself has no confirmation step of its own and affects "
-            "every notebook carrying the tag at once."
+            "every notebook carrying the tag at once. Ignored under "
+            "--dry-run, which never prompts."
         )
     )
     tags_rename_parser.add_argument(
@@ -6195,7 +6233,7 @@ def main():
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
-            "\"tag\", \"new_tag\", \"affected_notebooks\", "
+            "\"dry_run\", \"tag\", \"new_tag\", \"affected_notebooks\", "
             "\"notebook_count\"}) instead of a human-readable summary, "
             "for scripting/automation."
         )

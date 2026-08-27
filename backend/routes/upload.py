@@ -1696,7 +1696,7 @@ def list_tags():
 
 
 @router.delete("/tags/{tag}")
-def delete_tag(tag: str):
+def delete_tag(tag: str, dry_run: bool = False):
     """Remove `tag` from every notebook that currently carries it, in one
     call.
 
@@ -1725,6 +1725,20 @@ def delete_tag(tag: str):
     just as clearly as a 404 would, without forcing a caller to special-
     case a status code for what is, structurally, still a successful
     request.
+
+    "dry_run" (optional, default false) reports the exact same
+    "affected_notebooks" a real call would, without removing the tag
+    from a single one of them -- the identical preview DELETE
+    /api/notebooks/versions' own "dry_run" already provides for that
+    endpoint's own catalog-wide scan-then-mutate operation. Unlike POST
+    /api/notebooks/delete-batch's or PUT .../tags' own explicit,
+    caller-supplied "filenames"/"tags", this endpoint discovers which
+    notebooks it will touch by scanning the whole catalog itself -- a
+    caller had no way to see that set in advance before this, short of a
+    separate GET /api/notebooks?tag=<tag> whose own results this
+    endpoint's scan isn't guaranteed to still match by the time the real
+    DELETE runs. The top-level response's own "dry_run" field echoes
+    back whether this call actually removed anything.
     """
 
     upload_root = Path(UPLOAD_DIR)
@@ -1741,13 +1755,15 @@ def delete_tag(tag: str):
         if tag not in notebook_tags:
             continue
 
-        _write_notebook_tags(
-            entry.name, [t for t in notebook_tags if t != tag]
-        )
+        if not dry_run:
+            _write_notebook_tags(
+                entry.name, [t for t in notebook_tags if t != tag]
+            )
         affected_notebooks.append(entry.name)
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "tag": tag,
         "affected_notebooks": affected_notebooks,
         "notebook_count": len(affected_notebooks),
@@ -1996,6 +2012,15 @@ def rename_tag(tag: str, data: dict):
     Every other notebook's tags -- including ones that never carried `tag`
     at all -- are left completely untouched, the same guarantee DELETE
     /api/tags/{tag} already makes.
+
+    "dry_run" (optional, default false, in the request body) reports the
+    exact same "affected_notebooks" a real rename would, without writing
+    a single notebook's own tags -- the identical preview DELETE
+    /api/tags/{tag}'s own "dry_run" already provides for that endpoint's
+    own identical catalog-scan-then-mutate shape, just applied to a
+    rename instead of an outright removal. The top-level response's own
+    "dry_run" field echoes back whether this call actually renamed
+    anything.
     """
 
     new_tag = data.get("new_tag")
@@ -2016,6 +2041,8 @@ def rename_tag(tag: str, data: dict):
             detail="new_tag must be different from the current tag"
         )
 
+    dry_run = bool(data.get("dry_run", False))
+
     upload_root = Path(UPLOAD_DIR)
 
     affected_notebooks = []
@@ -2030,15 +2057,19 @@ def rename_tag(tag: str, data: dict):
         if tag not in notebook_tags:
             continue
 
-        renamed_tags = _validate_and_normalize_tags(
-            [t for t in notebook_tags if t != tag] + [new_tag]
-        )
+        if not dry_run:
 
-        _write_notebook_tags(entry.name, renamed_tags)
+            renamed_tags = _validate_and_normalize_tags(
+                [t for t in notebook_tags if t != tag] + [new_tag]
+            )
+
+            _write_notebook_tags(entry.name, renamed_tags)
+
         affected_notebooks.append(entry.name)
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "tag": tag,
         "new_tag": new_tag,
         "affected_notebooks": affected_notebooks,

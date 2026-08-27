@@ -6578,6 +6578,39 @@ def test_delete_tag_removes_it_from_every_notebook_that_has_it():
     }
 
 
+def test_delete_tag_dry_run_reports_the_plan_without_removing_it():
+
+    _upload_sample_notebook("tags_bulk_delete_dry_run_a.ipynb")
+    _upload_sample_notebook("tags_bulk_delete_dry_run_b.ipynb")
+
+    client.put(
+        "/api/notebooks/tags_bulk_delete_dry_run_a.ipynb/tags",
+        json={"tags": ["scratch-dry-run", "bug"]},
+    )
+    client.put(
+        "/api/notebooks/tags_bulk_delete_dry_run_b.ipynb/tags",
+        json={"tags": ["production"]},
+    )
+
+    delete_resp = client.delete(
+        "/api/tags/scratch-dry-run", params={"dry_run": True}
+    )
+
+    assert delete_resp.status_code == 200
+    body = delete_resp.json()
+    assert body["dry_run"] is True
+    assert body["affected_notebooks"] == ["tags_bulk_delete_dry_run_a.ipynb"]
+    assert body["notebook_count"] == 1
+
+    # Nothing was actually removed.
+    assert client.get(
+        "/api/notebooks/tags_bulk_delete_dry_run_a.ipynb/tags"
+    ).json()["tags"] == ["bug", "scratch-dry-run"]
+    assert "scratch-dry-run" in {
+        entry["tag"] for entry in client.get("/api/tags").json()["tags"]
+    }
+
+
 def test_delete_tag_is_a_no_op_success_when_nothing_carries_it():
 
     resp = client.delete("/api/tags/this-tag-does-not-exist-anywhere")
@@ -6585,6 +6618,7 @@ def test_delete_tag_is_a_no_op_success_when_nothing_carries_it():
     assert resp.status_code == 200
     assert resp.json() == {
         "status": "success",
+        "dry_run": False,
         "tag": "this-tag-does-not-exist-anywhere",
         "affected_notebooks": [],
         "notebook_count": 0,
@@ -6900,6 +6934,40 @@ def test_rename_tag_renames_it_on_every_notebook_that_has_it():
     assert "production" in tag_names
 
 
+def test_rename_tag_dry_run_reports_the_plan_without_renaming_it():
+
+    _upload_sample_notebook("tags_rename_dry_run_a.ipynb")
+    _upload_sample_notebook("tags_rename_dry_run_b.ipynb")
+
+    client.put(
+        "/api/notebooks/tags_rename_dry_run_a.ipynb/tags",
+        json={"tags": ["prod-dry-run", "bug"]},
+    )
+    client.put(
+        "/api/notebooks/tags_rename_dry_run_b.ipynb/tags",
+        json={"tags": ["staging"]},
+    )
+
+    rename_resp = client.patch(
+        "/api/tags/prod-dry-run",
+        json={"new_tag": "production-dry-run", "dry_run": True},
+    )
+
+    assert rename_resp.status_code == 200
+    body = rename_resp.json()
+    assert body["dry_run"] is True
+    assert body["affected_notebooks"] == ["tags_rename_dry_run_a.ipynb"]
+    assert body["notebook_count"] == 1
+
+    # Nothing was actually renamed.
+    assert client.get(
+        "/api/notebooks/tags_rename_dry_run_a.ipynb/tags"
+    ).json()["tags"] == ["bug", "prod-dry-run"]
+    tag_names = {entry["tag"] for entry in client.get("/api/tags").json()["tags"]}
+    assert "prod-dry-run" in tag_names
+    assert "production-dry-run" not in tag_names
+
+
 def test_rename_tag_is_a_no_op_success_when_nothing_carries_it():
 
     resp = client.patch(
@@ -6910,6 +6978,7 @@ def test_rename_tag_is_a_no_op_success_when_nothing_carries_it():
     assert resp.status_code == 200
     assert resp.json() == {
         "status": "success",
+        "dry_run": False,
         "tag": "this-tag-does-not-exist-anywhere",
         "new_tag": "something-else",
         "affected_notebooks": [],
