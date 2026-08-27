@@ -8416,6 +8416,242 @@ def test_copy_notebook_version_overwrite_discards_the_destinations_previous_tags
     os.remove(Path(UPLOAD_DIR) / target)
 
 
+def test_copy_notebook_versions_batch_duplicates_each_version_to_its_own_new_notebook():
+
+    filename = "versions_copy_batch_source.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(versions) == 2
+    version_a, version_b = versions[0]["version_id"], versions[1]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/copy-batch",
+        json={
+            "entries": [
+                {"version_id": version_a, "new_filename": "versions_copy_batch_a.ipynb"},
+                {"version_id": version_b, "new_filename": "versions_copy_batch_b.ipynb"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["dry_run"] is False
+    assert body["filename"] == filename
+    assert body["succeeded_count"] == 2
+    assert body["failed_count"] == 0
+
+    results_by_version = {r["version_id"]: r for r in body["results"]}
+    assert results_by_version[version_a]["status"] == "success"
+    assert results_by_version[version_a]["new_filename"] == "versions_copy_batch_a.ipynb"
+    assert results_by_version[version_b]["status"] == "success"
+    assert results_by_version[version_b]["new_filename"] == "versions_copy_batch_b.ipynb"
+
+    assert client.get("/api/notebooks/versions_copy_batch_a.ipynb").status_code == 200
+    assert client.get("/api/notebooks/versions_copy_batch_b.ipynb").status_code == 200
+    # Source's own version history is untouched.
+    assert len(client.get(f"/api/notebooks/{filename}/versions").json()["versions"]) == 2
+
+
+def test_copy_notebook_versions_batch_reports_a_bad_entry_without_aborting_the_rest():
+
+    filename = "versions_copy_batch_partial.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/copy-batch",
+        json={
+            "entries": [
+                {"version_id": version_id, "new_filename": "versions_copy_batch_good.ipynb"},
+                {"version_id": "does_not_exist.ipynb", "new_filename": "versions_copy_batch_bad.ipynb"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_version = {r["version_id"]: r for r in body["results"]}
+    assert results_by_version[version_id]["status"] == "success"
+    assert results_by_version["does_not_exist.ipynb"]["status"] == "error"
+    assert "not found" in results_by_version["does_not_exist.ipynb"]["detail"]
+
+    assert client.get("/api/notebooks/versions_copy_batch_good.ipynb").status_code == 200
+    assert client.get("/api/notebooks/versions_copy_batch_bad.ipynb").status_code == 404
+
+
+def test_copy_notebook_versions_batch_dry_run_reports_the_plan_without_copying():
+
+    filename = "versions_copy_batch_dry_run.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/copy-batch",
+        json={
+            "entries": [
+                {"version_id": version_id, "new_filename": "versions_copy_batch_dry_run_target.ipynb"},
+            ],
+            "dry_run": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["succeeded_count"] == 1
+
+    # Nothing was actually copied.
+    assert client.get("/api/notebooks/versions_copy_batch_dry_run_target.ipynb").status_code == 404
+
+
+def test_copy_notebook_versions_batch_returns_404_for_missing_notebook():
+
+    resp = client.post(
+        "/api/notebooks/versions_copy_batch_missing_notebook.ipynb/versions/copy-batch",
+        json={"entries": [{"version_id": "whatever.ipynb", "new_filename": "x.ipynb"}]},
+    )
+
+    assert resp.status_code == 404
+
+
+def test_copy_notebook_versions_batch_rejects_a_non_list_entries_value():
+
+    _upload_sample_notebook("versions_copy_batch_bad_value.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/versions_copy_batch_bad_value.ipynb/versions/copy-batch",
+        json={"entries": "not-a-list"},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_copy_notebook_versions_batch_rejects_an_empty_entries_list():
+
+    _upload_sample_notebook("versions_copy_batch_empty.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/versions_copy_batch_empty.ipynb/versions/copy-batch",
+        json={"entries": []},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_copy_notebook_versions_batch_rejects_an_entry_missing_new_filename():
+
+    _upload_sample_notebook("versions_copy_batch_missing_field.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/versions_copy_batch_missing_field.ipynb/versions/copy-batch",
+        json={"entries": [{"version_id": "whatever.ipynb"}]},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_copy_notebook_versions_batch_rejects_more_entries_than_the_configured_maximum(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 1)
+
+    _upload_sample_notebook("versions_copy_batch_too_many.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/versions_copy_batch_too_many.ipynb/versions/copy-batch",
+        json={
+            "entries": [
+                {"version_id": "a.ipynb", "new_filename": "x.ipynb"},
+                {"version_id": "b.ipynb", "new_filename": "y.ipynb"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "at most 1" in resp.json()["detail"]
+
+
 def test_restore_notebook_version_makes_it_the_current_content_again():
 
     filename = "versions_restore.ipynb"

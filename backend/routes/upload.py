@@ -5918,6 +5918,49 @@ def copy_notebook_version(filename: str, version_id: str, data: dict):
 
     versions_dir = _notebook_versions_dir(file_path.name)
 
+    overwrite = bool(data.get("overwrite", False))
+
+    new_filename = _copy_notebook_version_to(
+        file_path, versions_dir, version_id, data.get("new_filename"), overwrite
+    )
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "version_id": version_id,
+        "new_filename": new_filename,
+    }
+
+
+def _copy_notebook_version_to(
+    file_path: Path, versions_dir: Path, version_id, new_filename, overwrite: bool,
+    dry_run: bool = False,
+) -> str:
+    """Copy `version_id` (one of `file_path`'s own snapshotted past
+    versions, in `versions_dir`) to `new_filename` within UPLOAD_DIR,
+    applying the exact same validation and overwrite semantics
+    copy_notebook_version's own docstring above documents.
+
+    Factored out of copy_notebook_version so POST
+    /api/notebooks/{filename}/versions/copy-batch (below) can reuse it
+    once per entry instead of a second, inevitably-drifting copy of this
+    logic -- the identical split _copy_notebook_to already establishes
+    between copy_notebook and its own batch siblings.
+
+    Raises the identical HTTPException copy_notebook_version always
+    raised for each failure mode. copy_notebook_versions_batch instead
+    catches that HTTPException per entry, so one bad entry in a batch
+    doesn't abort every other copy. Returns the validated new_filename on
+    success.
+
+    `dry_run` (default False) runs every check above -- including the
+    destination collision check, still held under _rename_lock_for so a
+    dry-run preview can't itself race a real concurrent copy -- without
+    actually calling shutil.copy2, the same "report what a real batch
+    would do without doing it" preview _copy_notebook_to's own "dry_run"
+    already provides for copying a notebook's current content.
+    """
+
     version_path = _resolve_path_within(
         str(versions_dir), version_id, "notebook version"
     )
@@ -5928,8 +5971,6 @@ def copy_notebook_version(filename: str, version_id: str, data: dict):
             status_code=404,
             detail="Notebook version not found"
         )
-
-    new_filename = data.get("new_filename")
 
     if not isinstance(new_filename, str) or not new_filename:
 
@@ -5958,8 +5999,6 @@ def copy_notebook_version(filename: str, version_id: str, data: dict):
             )
         )
 
-    overwrite = bool(data.get("overwrite", False))
-
     with _rename_lock_for(dest_path.name):
 
         if dest_path.exists() and not overwrite:
@@ -5971,6 +6010,9 @@ def copy_notebook_version(filename: str, version_id: str, data: dict):
                     'Pass "overwrite": true to replace it.'
                 )
             )
+
+        if dry_run:
+            return new_filename
 
         try:
 
@@ -5991,11 +6033,140 @@ def copy_notebook_version(filename: str, version_id: str, data: dict):
         _write_notebook_tags(dest_path.name, [])
         _write_notebook_description(dest_path.name, "")
 
+    return new_filename
+
+
+@router.post("/notebooks/{filename}/versions/copy-batch")
+def copy_notebook_versions_batch(filename: str, data: dict):
+    """Duplicate several of `filename`'s own snapshotted past versions
+    into brand-new notebooks in one call, leaving `filename`'s own
+    current content, tags, and version history completely untouched.
+
+    POST /notebooks/{filename}/versions/{version_id}/copy already does
+    this for one version at a time -- exactly right for that, but
+    branching off several old snapshots at once (e.g. recovering a
+    handful of accidentally-overwritten historical states as independent
+    notebooks after auditing `versions list`, or splitting a few
+    milestones out of one long-lived notebook's history into their own
+    standalone files) meant one POST .../copy call per version_id, each
+    a separate round trip. The identical "one fixed source, several
+    destinations" shape POST /api/notebooks/{filename}/copy-batch already
+    provides for a notebook's *current* content, just sourced from
+    several of its past snapshots instead.
+
+    Takes "entries", a list of {"version_id", "new_filename"} objects
+    (with an optional per-entry "overwrite", default false) -- the same
+    {"version_id", ...} shape POST
+    /api/notebooks/{filename}/versions/delete-batch already establishes
+    for acting on several of one notebook's own versions at once, plus
+    its own per-entry "new_filename"/"overwrite" since, unlike that
+    endpoint's uniform deletion, each entry here names its own
+    independent destination that may or may not already exist.
+
+    Reuses _copy_notebook_version_to (above) -- the exact same
+    validation and overwrite semantics the single-entry POST
+    .../{version_id}/copy itself now calls too -- once per entry, so a
+    version copied this way is indistinguishable from one copied
+    individually. One bad entry (an unknown version_id, an invalid
+    new_filename, or a same-name collision without that entry's own
+    "overwrite": true) doesn't abort the rest of the batch; "results"
+    reports one {"version_id", "new_filename", "status", ...} entry per
+    input entry -- "success" or "error" (the identical HTTPException
+    detail a standalone POST .../copy call would have raised for that
+    same entry). The response is always 200 -- the batch request itself
+    was handled, even if every entry in it failed -- with
+    "succeeded_count"/"failed_count" summarizing "results" the same way
+    every other batch endpoint here already does.
+
+    "dry_run" (optional, default false, applies to every entry alike)
+    reports the exact same per-entry "results" a real batch would --
+    including the 409 an entry's own same-name collision without its own
+    "overwrite": true would raise -- without copying a single byte, the
+    identical preview POST /api/notebooks/copy-batch's own "dry_run"
+    already provides for copying several notebooks' current content at
+    once.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    entries = data.get("entries")
+
+    if not isinstance(entries, list) or not entries:
+
+        raise HTTPException(
+            status_code=400,
+            detail="entries must be a non-empty list of objects"
+        )
+
+    _validate_batch_entry_count(entries)
+
+    for entry in entries:
+
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("version_id"), str)
+            or not isinstance(entry.get("new_filename"), str)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "each entry must be an object with a string "
+                    "'version_id' and a string 'new_filename'"
+                )
+            )
+
+    dry_run = bool(data.get("dry_run", False))
+
+    versions_dir = _notebook_versions_dir(file_path.name)
+
+    results = []
+    succeeded_count = 0
+    failed_count = 0
+
+    for entry in entries:
+
+        version_id = entry["version_id"]
+        new_filename = entry["new_filename"]
+        overwrite = bool(entry.get("overwrite", False))
+
+        try:
+
+            _copy_notebook_version_to(
+                file_path, versions_dir, version_id, new_filename, overwrite,
+                dry_run=dry_run,
+            )
+
+            results.append({
+                "version_id": version_id,
+                "new_filename": new_filename,
+                "status": "success",
+            })
+            succeeded_count += 1
+
+        except HTTPException as exc:
+
+            results.append({
+                "version_id": version_id,
+                "new_filename": new_filename,
+                "status": "error",
+                "detail": exc.detail,
+            })
+            failed_count += 1
+
     return {
         "status": "success",
+        "dry_run": dry_run,
         "filename": filename,
-        "version_id": version_id,
-        "new_filename": new_filename,
+        "results": results,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
     }
 
 

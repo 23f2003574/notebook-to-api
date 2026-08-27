@@ -621,6 +621,29 @@ def _parse_notebook_copy_pair(value):
     return {"filename": filename, "new_filename": new_filename}
 
 
+def _parse_version_copy_pair(value):
+    """Parse one `versions copy-batch` positional argument
+    ("version_id:new_filename") into a {"version_id", "new_filename"}
+    entry matching POST /api/notebooks/{filename}/versions/copy-batch's
+    own "entries" shape -- the same "value:value" pair convention
+    _parse_notebook_copy_pair already established for `copy-many`, just
+    paired with a version_id instead of a source filename.
+    """
+    if ":" not in value:
+        raise argparse.ArgumentTypeError(
+            f"'{value}' must be in version_id:new_filename form"
+        )
+
+    version_id, _, new_filename = value.rpartition(":")
+
+    if not version_id or not new_filename:
+        raise argparse.ArgumentTypeError(
+            f"'{value}' must be in version_id:new_filename form"
+        )
+
+    return {"version_id": version_id, "new_filename": new_filename}
+
+
 def _matched_notebooks_summary(data, args, shown_count):
     """Format the trailing "N notebook(s) matched" summary line shared by
     `search-functions` and `search-content` below, accounting for
@@ -3476,6 +3499,58 @@ def _dispatch_core_command(args):
                     f"Copied version '{args.version_id}' of '{args.filename}' "
                     f"to '{data.get('new_filename', args.new_filename)}' "
                     f"on {dashboard_url}"
+                )
+
+        elif args.versions_command == "copy-batch":
+
+            entries = [
+                {**entry, "overwrite": args.overwrite} for entry in args.entry
+            ]
+
+            body = {"entries": entries}
+            if args.dry_run:
+                body["dry_run"] = True
+
+            try:
+                response = httpx.post(
+                    f"{dashboard_url}/api/notebooks/{args.filename}/versions/copy-batch",
+                    json=body,
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                verb = "Would copy" if data.get("dry_run") else "Copied"
+
+                for result in data.get("results", []):
+
+                    if result["status"] == "success":
+                        print(
+                            f"{verb} version '{result['version_id']}' to "
+                            f"'{result['new_filename']}'"
+                        )
+                    else:
+                        print(
+                            f"Failed to copy version '{result['version_id']}' "
+                            f"to '{result['new_filename']}': {result['detail']}"
+                        )
+
+                print(
+                    f"\n{data.get('succeeded_count', 0)} succeeded, "
+                    f"{data.get('failed_count', 0)} failed"
                 )
 
         elif args.versions_command == "restore":
@@ -6724,6 +6799,67 @@ def main():
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"filename\", \"version_id\", \"new_filename\"}) instead of "
             "a human-readable summary, for scripting/automation."
+        )
+    )
+
+    # versions copy-batch (duplicate several of a notebook's own
+    # snapshotted versions into brand-new notebooks at once, via POST
+    # /api/notebooks/{filename}/versions/copy-batch -- the identical
+    # "one fixed source, several destinations" shape `copy-batch` above
+    # provides for a notebook's current content, just sourced from
+    # several of its past snapshots instead)
+    versions_copy_batch_parser = versions_subparsers.add_parser(
+        "copy-batch",
+        help=(
+            "Duplicate several of a notebook's own snapshotted versions "
+            "into brand-new notebooks at once, via POST "
+            "/api/notebooks/{filename}/versions/copy-batch."
+        )
+    )
+    versions_copy_batch_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    versions_copy_batch_parser.add_argument(
+        "entry", nargs="+", type=_parse_version_copy_pair,
+        help=(
+            "One or more \"version_id:new_filename\" pairs, as reported "
+            "by `versions list`, e.g. "
+            "20240101T000000000000_abcd1234.ipynb:a.ipynb."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(versions_copy_batch_parser)
+    versions_copy_batch_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Replace an existing notebook at any new_filename that "
+            "already exists, mirroring POST "
+            "/api/notebooks/{filename}/versions/copy-batch's own "
+            "per-entry \"overwrite\": true -- applies uniformly to every "
+            "entry given here."
+        )
+    )
+    versions_copy_batch_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report which entries would be copied (and which would "
+            "fail, e.g. a same-name collision without --overwrite), via "
+            "POST /api/notebooks/{filename}/versions/copy-batch's own "
+            "\"dry_run\" body field, without copying anything."
+        )
+    )
+    versions_copy_batch_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"dry_run\", \"filename\", \"results\": [{\"version_id\", "
+            "\"new_filename\", \"status\", ...}, ...], "
+            "\"succeeded_count\", \"failed_count\"}) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 
