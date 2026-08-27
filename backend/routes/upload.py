@@ -3911,7 +3911,55 @@ def rename_notebook(filename: str, data: dict):
     rather than merged with the just-renamed notebook's.
     """
 
-    new_filename = data.get("new_filename")
+    old_path = resolve_upload_path(filename)
+
+    if not old_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    overwrite = bool(data.get("overwrite", False))
+
+    result = _rename_notebook_to(old_path, data.get("new_filename"), overwrite)
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "new_filename": result["new_filename"],
+        "was_currently_compiled": result["was_currently_compiled"],
+    }
+
+
+def _rename_notebook_to(old_path: Path, new_filename, overwrite: bool) -> dict:
+    """Rename `old_path` (an already-verified existing notebook file) to
+    `new_filename` within UPLOAD_DIR, applying the exact same validation,
+    overwrite semantics, sidecar/version-history moves, and
+    compile-metadata update rename_notebook's own docstring above
+    documents.
+
+    Factored out of rename_notebook so POST /api/notebooks/rename-batch
+    (below) can reuse it once per entry instead of a second, inevitably-
+    drifting copy of this logic -- the identical split
+    _copy_notebook_to already establishes between copy_notebook and POST
+    /api/notebooks/{filename}/copy-batch/POST /api/notebooks/copy-batch.
+    rename_notebook itself now just calls this once, unchanged behavior
+    for its own single-destination caller except that a request combining
+    a missing source *and* an invalid new_filename now reports the 404
+    (checked by rename_notebook before calling this) rather than the 400
+    this raises -- the identical, not otherwise observable tradeoff
+    _copy_notebook_to's own docstring already accepts for the same
+    reason: no caller depends on which of two independently-wrong things
+    about the same request gets reported first.
+
+    Raises the identical HTTPException rename_notebook always raised for
+    each failure mode. rename_notebooks_batch instead catches that
+    HTTPException per entry, so one bad entry in a batch doesn't abort
+    every other rename. Returns {"new_filename", "was_currently_compiled"}
+    on success -- including the "renaming onto its own current name" no-op,
+    where "was_currently_compiled" is always False since nothing moved.
+    """
 
     if not isinstance(new_filename, str) or not new_filename:
 
@@ -3927,17 +3975,6 @@ def rename_notebook(filename: str, data: dict):
             detail="new_filename must be a .ipynb notebook"
         )
 
-    overwrite = bool(data.get("overwrite", False))
-
-    old_path = resolve_upload_path(filename)
-
-    if not old_path.is_file():
-
-        raise HTTPException(
-            status_code=404,
-            detail="Notebook file not found"
-        )
-
     new_path = resolve_upload_path(new_filename)
 
     if new_path == old_path:
@@ -3948,8 +3985,6 @@ def rename_notebook(filename: str, data: dict):
         # below (the destination "already exists" precisely because it's
         # the same file). No locking needed either: nothing is written.
         return {
-            "status": "success",
-            "filename": filename,
             "new_filename": new_filename,
             "was_currently_compiled": False,
         }
@@ -4024,11 +4059,132 @@ def rename_notebook(filename: str, data: dict):
                 )
 
         return {
-            "status": "success",
-            "filename": filename,
             "new_filename": new_filename,
             "was_currently_compiled": was_currently_compiled,
         }
+
+
+@router.post("/notebooks/rename-batch")
+def rename_notebooks_batch(data: dict):
+    """Rename a caller-chosen set of *different* notebooks in one call,
+    each to its own new filename.
+
+    PATCH /api/notebooks/{filename} already renames one notebook at a
+    time -- exactly right for that, but reorganizing several unrelated
+    notebooks' own names at once (e.g. applying a new naming convention
+    across a batch of them, or undoing a bulk mis-name) meant one PATCH
+    call per notebook, with no way to submit the whole plan in a single
+    request -- the identical gap POST /api/notebooks/tags-batch, POST
+    /api/notebooks/description-batch, POST /api/notebooks/copy-batch, and
+    POST /api/notebooks/versions/restore-batch already closed for
+    replacing several different notebooks' own tags/description/content/
+    version at once.
+
+    Takes "entries", a list of {"filename", "new_filename"} objects (with
+    an optional per-entry "overwrite", default false) -- the same
+    {"filename", ...} shape those endpoints already establish, each entry
+    carrying its own independent destination and, since one entry's
+    destination may already exist while another's doesn't, its own
+    independent "overwrite" too.
+
+    Reuses _rename_notebook_to (above) -- the exact same validation,
+    overwrite semantics, sidecar/version-history moves, and
+    compile-metadata update every other rename path here already goes
+    through -- once per entry, so a notebook renamed this way is
+    indistinguishable from one renamed individually. One bad entry (an
+    unknown source filename, an invalid new_filename, or a same-name
+    collision without that entry's own "overwrite": true) doesn't abort
+    the rest of the batch; "results" reports one {"filename",
+    "new_filename", "status", ...} entry per input entry -- "success"
+    (with that entry's own "was_currently_compiled") or "error" (the
+    identical HTTPException detail a standalone PATCH call would have
+    raised for that same entry). The response is always 200 -- the batch
+    request itself was handled, even if every entry in it failed -- with
+    "succeeded_count"/"failed_count" summarizing "results" the same way
+    every other batch endpoint here already does.
+
+    Two entries renaming two different source notebooks onto the same
+    destination are each handled independently and safely (still
+    serialized by _rename_lock_for, keyed by destination filename, the
+    identical concurrent-collision protection PATCH
+    /api/notebooks/{filename} itself already relies on) -- whichever
+    entry's own rename runs second simply sees the first's result as an
+    existing destination, and is rejected with the same 409 (or replaces
+    it, given its own "overwrite": true) a standalone second PATCH call
+    would have gotten.
+    """
+
+    entries = data.get("entries")
+
+    if not isinstance(entries, list) or not entries:
+
+        raise HTTPException(
+            status_code=400,
+            detail="entries must be a non-empty list of objects"
+        )
+
+    for entry in entries:
+
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("filename"), str)
+            or not isinstance(entry.get("new_filename"), str)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "each entry must be an object with a string "
+                    "'filename' and a string 'new_filename'"
+                )
+            )
+
+    results = []
+    succeeded_count = 0
+    failed_count = 0
+
+    for entry in entries:
+
+        filename = entry["filename"]
+        new_filename = entry["new_filename"]
+        overwrite = bool(entry.get("overwrite", False))
+
+        try:
+
+            old_path = resolve_upload_path(filename)
+
+            if not old_path.is_file():
+
+                raise HTTPException(
+                    status_code=404,
+                    detail="Notebook file not found"
+                )
+
+            result = _rename_notebook_to(old_path, new_filename, overwrite)
+
+            results.append({
+                "filename": filename,
+                "new_filename": result["new_filename"],
+                "status": "success",
+                "was_currently_compiled": result["was_currently_compiled"],
+            })
+            succeeded_count += 1
+
+        except HTTPException as exc:
+
+            results.append({
+                "filename": filename,
+                "new_filename": new_filename,
+                "status": "error",
+                "detail": exc.detail,
+            })
+            failed_count += 1
+
+    return {
+        "status": "success",
+        "results": results,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
+    }
 
 
 @router.post("/notebooks/{filename}/copy")

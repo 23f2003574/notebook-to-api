@@ -5120,6 +5120,181 @@ def test_rename_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_rename_many_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "rename-many" in proc.stdout
+
+
+def test_rename_many_command_reports_success(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {"filename": "a.ipynb", "new_filename": "a2.ipynb", "status": "success", "was_currently_compiled": False},
+                {"filename": "b.ipynb", "new_filename": "b2.ipynb", "status": "success", "was_currently_compiled": True},
+            ],
+            "succeeded_count": 2,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "rename-many", "a.ipynb:a2.ipynb", "b.ipynb:b2.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Renamed 'a.ipynb' to 'a2.ipynb'" in proc.stdout
+    assert "Renamed 'b.ipynb' to 'b2.ipynb'" in proc.stdout
+    assert "note: this was the notebook backing the currently compiled app." in proc.stdout
+    assert "2 succeeded, 0 failed" in proc.stdout
+    assert handler.requests == ["/api/notebooks/rename-batch"]
+    assert json.loads(handler.bodies[0]) == {
+        "entries": [
+            {"filename": "a.ipynb", "new_filename": "a2.ipynb", "overwrite": False},
+            {"filename": "b.ipynb", "new_filename": "b2.ipynb", "overwrite": False},
+        ]
+    }
+
+
+def test_rename_many_command_reports_a_partial_failure(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {"filename": "a.ipynb", "new_filename": "a2.ipynb", "status": "success", "was_currently_compiled": False},
+                {
+                    "filename": "missing.ipynb", "new_filename": "m2.ipynb",
+                    "status": "error", "detail": "Notebook file not found",
+                },
+            ],
+            "succeeded_count": 1,
+            "failed_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "rename-many", "a.ipynb:a2.ipynb", "missing.ipynb:m2.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Renamed 'a.ipynb' to 'a2.ipynb'" in proc.stdout
+    assert (
+        "Failed to rename 'missing.ipynb' to 'm2.ipynb': "
+        "Notebook file not found" in proc.stdout
+    )
+    assert "1 succeeded, 1 failed" in proc.stdout
+
+
+def test_rename_many_command_passes_the_overwrite_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [{"filename": "a.ipynb", "new_filename": "a2.ipynb", "status": "success", "was_currently_compiled": False}],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "rename-many", "a.ipynb:a2.ipynb",
+            "--dashboard-url", dashboard_url, "--overwrite",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "entries": [{"filename": "a.ipynb", "new_filename": "a2.ipynb", "overwrite": True}]
+    }
+
+
+def test_rename_many_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "results": [{"filename": "a.ipynb", "new_filename": "a2.ipynb", "status": "success", "was_currently_compiled": False}],
+        "succeeded_count": 1,
+        "failed_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "rename-many", "a.ipynb:a2.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_rename_many_command_rejects_a_malformed_entry(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["rename-many", "no-colon-here"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode != 0
+    assert "filename:new_filename" in proc.stderr
+
+
+def test_rename_many_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "rename-many", "a.ipynb:a2.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_copy_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

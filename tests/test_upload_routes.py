@@ -4480,6 +4480,197 @@ def test_rename_notebook_keeps_currently_compiled_tracking_under_the_new_name():
     os.remove(Path(UPLOAD_DIR) / "rename_compiled_target.ipynb")
 
 
+def test_rename_notebooks_batch_renames_each_different_source_to_its_own_new_name():
+
+    content_a = _notebook_bytes("def a() -> int:\n    return 1\n")
+    content_b = _notebook_bytes("def b() -> int:\n    return 2\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("rename_many_a.ipynb", io.BytesIO(content_a), "application/json")},
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("rename_many_b.ipynb", io.BytesIO(content_b), "application/json")},
+    )
+    client.put("/api/notebooks/rename_many_a.ipynb/tags", json={"tags": ["template"]})
+
+    resp = client.post(
+        "/api/notebooks/rename-batch",
+        json={
+            "entries": [
+                {"filename": "rename_many_a.ipynb", "new_filename": "rename_many_a2.ipynb"},
+                {"filename": "rename_many_b.ipynb", "new_filename": "rename_many_b2.ipynb"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["succeeded_count"] == 2
+    assert body["failed_count"] == 0
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["rename_many_a.ipynb"]["status"] == "success"
+    assert results_by_filename["rename_many_a.ipynb"]["new_filename"] == "rename_many_a2.ipynb"
+    assert results_by_filename["rename_many_a.ipynb"]["was_currently_compiled"] is False
+    assert results_by_filename["rename_many_b.ipynb"]["status"] == "success"
+    assert results_by_filename["rename_many_b.ipynb"]["new_filename"] == "rename_many_b2.ipynb"
+
+    assert (Path(UPLOAD_DIR) / "rename_many_a2.ipynb").read_bytes() == content_a
+    assert (Path(UPLOAD_DIR) / "rename_many_b2.ipynb").read_bytes() == content_b
+    assert not (Path(UPLOAD_DIR) / "rename_many_a.ipynb").exists()
+    assert not (Path(UPLOAD_DIR) / "rename_many_b.ipynb").exists()
+    # Tags moved along with the rename.
+    assert client.get(
+        "/api/notebooks/rename_many_a2.ipynb/tags"
+    ).json()["tags"] == ["template"]
+
+
+def test_rename_notebooks_batch_reports_a_bad_entry_without_aborting_the_rest():
+
+    _upload_sample_notebook("rename_many_partial_source.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/rename-batch",
+        json={
+            "entries": [
+                {"filename": "rename_many_partial_source.ipynb", "new_filename": "rename_many_partial_target.ipynb"},
+                {"filename": "does_not_exist.ipynb", "new_filename": "whatever.ipynb"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["rename_many_partial_source.ipynb"]["status"] == "success"
+    assert results_by_filename["does_not_exist.ipynb"]["status"] == "error"
+    assert "not found" in results_by_filename["does_not_exist.ipynb"]["detail"]
+
+    assert (Path(UPLOAD_DIR) / "rename_many_partial_target.ipynb").is_file()
+
+
+def test_rename_notebooks_batch_per_entry_overwrite_does_not_apply_to_other_entries():
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("rename_many_overwrite_source_a.ipynb", io.BytesIO(content), "application/json")},
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("rename_many_overwrite_source_b.ipynb", io.BytesIO(content), "application/json")},
+    )
+    _upload_sample_notebook("rename_many_overwrite_existing_a.ipynb")
+    _upload_sample_notebook("rename_many_overwrite_existing_b.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/rename-batch",
+        json={
+            "entries": [
+                {
+                    "filename": "rename_many_overwrite_source_a.ipynb",
+                    "new_filename": "rename_many_overwrite_existing_a.ipynb",
+                    "overwrite": True,
+                },
+                {
+                    "filename": "rename_many_overwrite_source_b.ipynb",
+                    "new_filename": "rename_many_overwrite_existing_b.ipynb",
+                },
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results = {r["filename"]: r for r in body["results"]}
+    assert results["rename_many_overwrite_source_a.ipynb"]["status"] == "success"
+    assert results["rename_many_overwrite_source_b.ipynb"]["status"] == "error"
+    assert "already exists" in results["rename_many_overwrite_source_b.ipynb"]["detail"]
+
+    assert (Path(UPLOAD_DIR) / "rename_many_overwrite_existing_a.ipynb").read_bytes() == content
+    # The source that failed to rename was left in place.
+    assert (Path(UPLOAD_DIR) / "rename_many_overwrite_source_b.ipynb").is_file()
+
+
+def test_rename_notebooks_batch_keeps_currently_compiled_tracking_under_the_new_name():
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("rename_many_compiled_source.ipynb", io.BytesIO(content), "application/json")},
+    )
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "rename_many_compiled_source.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    resp = client.post(
+        "/api/notebooks/rename-batch",
+        json={
+            "entries": [
+                {
+                    "filename": "rename_many_compiled_source.ipynb",
+                    "new_filename": "rename_many_compiled_target.ipynb",
+                },
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["results"][0]["was_currently_compiled"] is True
+
+    notebooks = {
+        nb["filename"]: nb for nb in client.get("/api/notebooks").json()["notebooks"]
+    }
+    assert notebooks["rename_many_compiled_target.ipynb"]["currently_compiled"] is True
+
+    os.remove(Path(UPLOAD_DIR) / "rename_many_compiled_target.ipynb")
+
+
+def test_rename_notebooks_batch_rejects_a_non_list_entries_value():
+
+    resp = client.post(
+        "/api/notebooks/rename-batch",
+        json={"entries": "not-a-list"},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_rename_notebooks_batch_rejects_an_empty_entries_list():
+
+    resp = client.post(
+        "/api/notebooks/rename-batch",
+        json={"entries": []},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_rename_notebooks_batch_rejects_an_entry_missing_new_filename():
+
+    _upload_sample_notebook("rename_many_missing_field.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/rename-batch",
+        json={"entries": [{"filename": "rename_many_missing_field.ipynb"}]},
+    )
+
+    assert resp.status_code == 400
+
+
 def _upload_sample_notebook(filename):
     resp = client.post(
         "/api/upload",

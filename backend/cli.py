@@ -342,7 +342,7 @@ _CORE_COMMANDS = frozenset({
     "list", "info", "info-batch",
     "search-functions", "search-content", "find-duplicates", "resolve-duplicates", "storage",
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy",
-    "copy-batch", "copy-many", "tags", "prune-versions", "description", "deploy-history",
+    "copy-batch", "copy-many", "rename-many", "tags", "prune-versions", "description", "deploy-history",
     "clear-deploy-history", "compile-history", "clear-compile-history",
     "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
@@ -2166,6 +2166,55 @@ def _dispatch_core_command(args):
             )
             if data.get("was_currently_compiled"):
                 print("  note: this was the notebook backing the currently compiled app.")
+    elif args.command == "rename-many":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        entries = [
+            {**entry, "overwrite": args.overwrite} for entry in args.entry
+        ]
+
+        try:
+            response = httpx.post(
+                f"{dashboard_url}/api/notebooks/rename-batch",
+                json={"entries": entries},
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            for result in data.get("results", []):
+
+                if result["status"] == "success":
+                    print(f"Renamed '{result['filename']}' to '{result['new_filename']}'")
+                    if result.get("was_currently_compiled"):
+                        print("  note: this was the notebook backing the currently compiled app.")
+                else:
+                    print(
+                        f"Failed to rename '{result['filename']}' to "
+                        f"'{result['new_filename']}': {result['detail']}"
+                    )
+
+            print(
+                f"\n{data.get('succeeded_count', 0)} succeeded, "
+                f"{data.get('failed_count', 0)} failed"
+            )
     elif args.command == "copy":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -5595,6 +5644,48 @@ def main():
             "({\"status\", \"filename\", \"new_filename\", "
             "\"was_currently_compiled\"}) instead of a human-readable "
             "summary, for scripting/automation."
+        )
+    )
+
+    # rename-many command (rename several different notebooks at once,
+    # each to its own new name, via POST /api/notebooks/rename-batch --
+    # distinct from `rename` above, which only ever renames one notebook
+    # per call)
+    rename_many_parser = subparsers.add_parser(
+        "rename-many",
+        help=(
+            "Rename several different notebooks at once, each to its own "
+            "new filename, via POST /api/notebooks/rename-batch."
+        )
+    )
+    rename_many_parser.add_argument(
+        "entry", nargs="+", type=_parse_notebook_copy_pair,
+        help=(
+            "One or more \"filename:new_filename\" pairs, e.g. "
+            "a.ipynb:a2.ipynb b.ipynb:b2.ipynb."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(rename_many_parser)
+    rename_many_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Replace an existing notebook at any new_filename that "
+            "already exists, mirroring POST /api/notebooks/rename-batch's "
+            "own per-entry \"overwrite\": true -- applies uniformly to "
+            "every entry given here."
+        )
+    )
+    rename_many_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"results\": [{\"filename\", \"new_filename\", \"status\", "
+            "\"was_currently_compiled\", ...}, ...], \"succeeded_count\", "
+            "\"failed_count\"}) instead of a human-readable summary, for "
+            "scripting/automation."
         )
     )
 
