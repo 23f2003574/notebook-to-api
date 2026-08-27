@@ -2519,6 +2519,21 @@ def test_get_notebooks_info_batch_rejects_an_empty_filenames_list():
     assert resp.status_code == 400
 
 
+def test_get_notebooks_info_batch_rejects_more_filenames_than_the_configured_maximum(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 1)
+
+    resp = client.post(
+        "/api/notebooks/info-batch",
+        json={"filenames": ["a.ipynb", "b.ipynb"]},
+    )
+
+    assert resp.status_code == 400
+    assert "at most 1" in resp.json()["detail"]
+
+
 def test_export_notebooks_zips_the_named_filenames():
 
     content_a = _notebook_bytes(
@@ -4162,6 +4177,21 @@ def test_delete_notebooks_batch_rejects_an_empty_filenames_list():
     assert resp.status_code == 400
 
 
+def test_delete_notebooks_batch_rejects_more_filenames_than_the_configured_maximum(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 1)
+
+    resp = client.post(
+        "/api/notebooks/delete-batch",
+        json={"filenames": ["a.ipynb", "b.ipynb"]},
+    )
+
+    assert resp.status_code == 400
+    assert "at most 1" in resp.json()["detail"]
+
+
 def test_rename_notebook_renames_the_file_on_disk():
 
     content = _notebook_bytes(
@@ -4659,6 +4689,26 @@ def test_rename_notebooks_batch_rejects_an_empty_entries_list():
     assert resp.status_code == 400
 
 
+def test_rename_notebooks_batch_rejects_more_entries_than_the_configured_maximum(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 1)
+
+    resp = client.post(
+        "/api/notebooks/rename-batch",
+        json={
+            "entries": [
+                {"filename": "a.ipynb", "new_filename": "a2.ipynb"},
+                {"filename": "b.ipynb", "new_filename": "b2.ipynb"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "at most 1" in resp.json()["detail"]
+
+
 def test_rename_notebooks_batch_rejects_an_entry_missing_new_filename():
 
     _upload_sample_notebook("rename_many_missing_field.ipynb")
@@ -5100,6 +5150,23 @@ def test_copy_notebook_batch_rejects_an_empty_new_filenames_list():
     assert resp.status_code == 400
 
 
+def test_copy_notebook_batch_rejects_more_new_filenames_than_the_configured_maximum(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 1)
+
+    _upload_sample_notebook("copy_batch_too_many_input.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/copy_batch_too_many_input.ipynb/copy-batch",
+        json={"new_filenames": ["a.ipynb", "b.ipynb"]},
+    )
+
+    assert resp.status_code == 400
+    assert "at most 1" in resp.json()["detail"]
+
+
 def test_copy_notebook_batch_does_not_copy_version_history():
 
     filename = "copy_batch_versions_source.ipynb"
@@ -5272,6 +5339,26 @@ def test_copy_notebooks_batch_rejects_an_empty_entries_list():
     )
 
     assert resp.status_code == 400
+
+
+def test_copy_notebooks_batch_rejects_more_entries_than_the_configured_maximum(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 1)
+
+    resp = client.post(
+        "/api/notebooks/copy-batch",
+        json={
+            "entries": [
+                {"filename": "a.ipynb", "new_filename": "a2.ipynb"},
+                {"filename": "b.ipynb", "new_filename": "b2.ipynb"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "at most 1" in resp.json()["detail"]
 
 
 def test_copy_notebooks_batch_rejects_an_entry_missing_new_filename():
@@ -5582,6 +5669,26 @@ def test_set_notebook_tags_batch_rejects_an_empty_entries_list():
     resp = client.post("/api/notebooks/tags-batch", json={"entries": []})
 
     assert resp.status_code == 400
+
+
+def test_set_notebook_tags_batch_rejects_more_entries_than_the_configured_maximum(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 1)
+
+    resp = client.post(
+        "/api/notebooks/tags-batch",
+        json={
+            "entries": [
+                {"filename": "a.ipynb", "tags": ["x"]},
+                {"filename": "b.ipynb", "tags": ["y"]},
+            ]
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "at most 1" in resp.json()["detail"]
 
 
 def test_set_notebook_tags_batch_rejects_an_entry_missing_a_filename():
@@ -5912,6 +6019,26 @@ def test_set_notebook_description_batch_rejects_an_empty_entries_list():
     resp = client.post("/api/notebooks/description-batch", json={"entries": []})
 
     assert resp.status_code == 400
+
+
+def test_set_notebook_description_batch_rejects_more_entries_than_the_configured_maximum(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 1)
+
+    resp = client.post(
+        "/api/notebooks/description-batch",
+        json={
+            "entries": [
+                {"filename": "a.ipynb", "description": "a"},
+                {"filename": "b.ipynb", "description": "b"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "at most 1" in resp.json()["detail"]
 
 
 def test_set_notebook_description_batch_rejects_an_entry_missing_a_filename():
@@ -6272,6 +6399,21 @@ def test_apply_tag_rejects_an_empty_filenames_list():
     assert resp.status_code == 400
 
 
+def test_apply_tag_rejects_more_filenames_than_the_configured_maximum(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 1)
+
+    resp = client.post(
+        "/api/tags/production/apply",
+        json={"filenames": ["a.ipynb", "b.ipynb"]},
+    )
+
+    assert resp.status_code == 400
+    assert "at most 1" in resp.json()["detail"]
+
+
 def test_apply_tag_rejects_an_empty_tag():
 
     _upload_sample_notebook("tags_apply_empty_tag.ipynb")
@@ -6383,6 +6525,21 @@ def test_remove_tag_batch_rejects_an_empty_filenames_list():
     resp = client.post("/api/tags/production/remove", json={"filenames": []})
 
     assert resp.status_code == 400
+
+
+def test_remove_tag_batch_rejects_more_filenames_than_the_configured_maximum(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 1)
+
+    resp = client.post(
+        "/api/tags/production/remove",
+        json={"filenames": ["a.ipynb", "b.ipynb"]},
+    )
+
+    assert resp.status_code == 400
+    assert "at most 1" in resp.json()["detail"]
 
 
 def test_remove_tag_batch_rejects_an_empty_tag():
@@ -8346,6 +8503,26 @@ def test_restore_notebook_versions_batch_rejects_an_empty_entries_list():
     assert resp.status_code == 400
 
 
+def test_restore_notebook_versions_batch_rejects_more_entries_than_the_configured_maximum(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 1)
+
+    resp = client.post(
+        "/api/notebooks/versions/restore-batch",
+        json={
+            "entries": [
+                {"filename": "a.ipynb", "version_id": "v1.ipynb"},
+                {"filename": "b.ipynb", "version_id": "v2.ipynb"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "at most 1" in resp.json()["detail"]
+
+
 def test_restore_notebook_versions_batch_rejects_an_entry_missing_version_id():
 
     _upload_sample_notebook("versions_restore_batch_missing_field.ipynb")
@@ -8633,6 +8810,25 @@ def test_delete_notebook_versions_batch_rejects_an_empty_version_ids_list():
     )
 
     assert resp.status_code == 400
+
+
+def test_delete_notebook_versions_batch_rejects_more_version_ids_than_the_configured_maximum(
+    monkeypatch,
+):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 1)
+
+    _upload_sample_notebook("versions_delete_batch_too_many.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/versions_delete_batch_too_many.ipynb/versions/delete-batch",
+        json={"version_ids": ["v1.ipynb", "v2.ipynb"]},
+    )
+
+    assert resp.status_code == 400
+    assert "at most 1" in resp.json()["detail"]
 
 
 def test_delete_notebook_version_returns_404_for_missing_notebook():

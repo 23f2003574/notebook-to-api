@@ -199,6 +199,50 @@ MAX_BATCH_UPLOAD_FILES = int(
     os.getenv("NOTEBOOK_API_MAX_BATCH_UPLOAD_FILES", "50")
 )
 
+
+def _validate_batch_entry_count(items, noun="entries"):
+    """Reject a batch request naming more than MAX_BATCH_UPLOAD_FILES
+    `items` at once.
+
+    POST /api/upload/batch and POST /api/notebooks/import already cap how
+    many files a single request can act on, for exactly the reason
+    MAX_BATCH_UPLOAD_FILES's own comment above gives -- an unbounded
+    count "ties up a worker thread for as long as that takes with
+    nothing to cap the total". Every other list-taking batch endpoint in
+    this file (POST /api/tags/{tag}/apply, POST /api/tags/{tag}/remove,
+    POST /api/notebooks/delete-batch, POST /api/notebooks/info-batch,
+    POST /api/notebooks/{filename}/copy-batch, POST
+    /api/notebooks/copy-batch, POST /api/notebooks/rename-batch, POST
+    /api/notebooks/tags-batch, POST /api/notebooks/description-batch,
+    POST /api/notebooks/{filename}/versions/delete-batch, and POST
+    /api/notebooks/versions/restore-batch) had no equivalent cap at all:
+    a single request naming an arbitrarily large "filenames"/"entries"/
+    "version_ids" list could hold a per-destination lock (see
+    _rename_lock_for/_version_lock_for) or perform a per-entry filesystem
+    operation for an unbounded amount of time, with nothing here to
+    refuse it up front the way the two upload-side endpoints already do.
+
+    Reuses the identical MAX_BATCH_UPLOAD_FILES limit (and its own
+    NOTEBOOK_API_MAX_BATCH_UPLOAD_FILES env var) rather than a second,
+    independently-configurable constant -- one dashboard-wide "how big
+    can a single batch request be" knob, applied uniformly regardless of
+    which resource the batch happens to act on.
+
+    `noun` only changes the error message's own wording (e.g.
+    "filenames"/"entries"/"version_ids", matching whichever field name
+    that endpoint's own "must be a non-empty list" 400 already names) --
+    it has no effect on the check itself.
+    """
+    if len(items) > MAX_BATCH_UPLOAD_FILES:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"A batch request accepts at most {MAX_BATCH_UPLOAD_FILES} "
+                f"{noun} at once (got {len(items)})."
+            )
+        )
+
 # Same NOTEBOOK_API_* convention as MAX_UPLOAD_BYTES above, rather than the
 # fixed 600s every `docker build`/`docker push` call in /api/deploy
 # previously hardcoded -- some deploy environments legitimately need
@@ -1764,6 +1808,8 @@ def apply_tag(tag: str, data: dict):
             detail="filenames must be a non-empty list of strings"
         )
 
+    _validate_batch_entry_count(filenames, noun="filenames")
+
     # Validate/normalize the tag itself once, up front, reusing the exact
     # same per-tag rules PUT .../tags already enforces (strip whitespace,
     # reject empty, reject over-length) -- a single-element list in, one
@@ -1867,6 +1913,8 @@ def remove_tag_batch(tag: str, data: dict):
             status_code=400,
             detail="filenames must be a non-empty list of strings"
         )
+
+    _validate_batch_entry_count(filenames, noun="filenames")
 
     # Validated the same way POST /api/tags/{tag}/apply validates the tag
     # it's adding -- once, up front, for the whole batch, since an invalid
@@ -3588,6 +3636,8 @@ def delete_notebooks_batch(data: dict):
             detail="filenames must be a non-empty list of strings"
         )
 
+    _validate_batch_entry_count(filenames, noun="filenames")
+
     dry_run = bool(data.get("dry_run", False))
 
     compiled_path, _, _ = _currently_compiled_notebook_metadata()
@@ -3763,6 +3813,8 @@ def get_notebooks_info_batch(data: dict):
             status_code=400,
             detail="filenames must be a non-empty list of strings"
         )
+
+    _validate_batch_entry_count(filenames, noun="filenames")
 
     compiled_path, compiled_sha256, compiled_at = _currently_compiled_notebook_metadata()
 
@@ -4123,6 +4175,8 @@ def rename_notebooks_batch(data: dict):
             detail="entries must be a non-empty list of objects"
         )
 
+    _validate_batch_entry_count(entries)
+
     for entry in entries:
 
         if (
@@ -4398,6 +4452,8 @@ def copy_notebook_batch(filename: str, data: dict):
             detail="new_filenames must be a non-empty list of strings"
         )
 
+    _validate_batch_entry_count(new_filenames, noun="new_filenames")
+
     overwrite = bool(data.get("overwrite", False))
 
     source_path = resolve_upload_path(filename)
@@ -4501,6 +4557,8 @@ def copy_notebooks_batch(data: dict):
             status_code=400,
             detail="entries must be a non-empty list of objects"
         )
+
+    _validate_batch_entry_count(entries)
 
     for entry in entries:
 
@@ -4695,6 +4753,8 @@ def set_notebook_tags_batch(data: dict):
             detail="entries must be a non-empty list of objects"
         )
 
+    _validate_batch_entry_count(entries)
+
     for entry in entries:
 
         if not isinstance(entry, dict) or not isinstance(entry.get("filename"), str):
@@ -4865,6 +4925,8 @@ def set_notebook_description_batch(data: dict):
             status_code=400,
             detail="entries must be a non-empty list of objects"
         )
+
+    _validate_batch_entry_count(entries)
 
     for entry in entries:
 
@@ -5383,6 +5445,8 @@ def delete_notebook_versions_batch(filename: str, data: dict):
             status_code=400,
             detail="version_ids must be a non-empty list of strings"
         )
+
+    _validate_batch_entry_count(version_ids, noun="version_ids")
 
     dry_run = bool(data.get("dry_run", False))
 
@@ -5924,6 +5988,8 @@ def restore_notebook_versions_batch(data: dict):
             status_code=400,
             detail="entries must be a non-empty list of objects"
         )
+
+    _validate_batch_entry_count(entries)
 
     for entry in entries:
 
