@@ -6882,6 +6882,41 @@ def test_tags_set_batch_command_sends_one_entry_per_notebook(tmp_path, fake_dash
     }
 
 
+def test_tags_set_batch_command_dry_run_sends_dry_run_field(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": True,
+            "results": [
+                {"filename": "a.ipynb", "status": "success", "tags": ["prod"]},
+            ],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "tags", "set-batch",
+            "--entry", "a.ipynb=prod",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "a.ipynb tags would be set to: prod" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "entries": [{"filename": "a.ipynb", "tags": ["prod"]}],
+        "dry_run": True,
+    }
+
+
 def test_tags_set_batch_command_reports_a_partial_failure(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
@@ -7226,6 +7261,41 @@ def test_description_set_batch_command_sends_one_entry_per_notebook(tmp_path, fa
             {"filename": "a.ipynb", "description": "the churn model"},
             {"filename": "b.ipynb", "description": ""},
         ],
+    }
+
+
+def test_description_set_batch_command_dry_run_sends_dry_run_field(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": True,
+            "results": [
+                {"filename": "a.ipynb", "status": "success", "description": "new description"},
+            ],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "description", "set-batch",
+            "--entry", "a.ipynb=new description",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "a.ipynb description would be set to: new description" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "entries": [{"filename": "a.ipynb", "description": "new description"}],
+        "dry_run": True,
     }
 
 

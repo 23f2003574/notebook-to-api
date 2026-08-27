@@ -2708,10 +2708,14 @@ def _dispatch_core_command(args):
                     "tags": _parse_comma_separated_names(tags_str) or [],
                 })
 
+            body = {"entries": entries}
+            if args.dry_run:
+                body["dry_run"] = True
+
             try:
                 response = httpx.post(
                     f"{dashboard_url}/api/notebooks/tags-batch",
-                    json={"entries": entries},
+                    json=body,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -2730,12 +2734,14 @@ def _dispatch_core_command(args):
                 print(json.dumps(data, indent=2))
             else:
 
+                verb = "would be set to" if data.get("dry_run") else "set to"
+
                 for result in data.get("results", []):
 
                     if result["status"] == "success":
                         tags = result.get("tags", [])
                         print(
-                            f"{result['filename']} tags set to: "
+                            f"{result['filename']} tags {verb}: "
                             f"{', '.join(tags) if tags else '(none)'}"
                         )
                     else:
@@ -2824,10 +2830,14 @@ def _dispatch_core_command(args):
 
                 entries.append({"filename": filename, "description": description})
 
+            body = {"entries": entries}
+            if args.dry_run:
+                body["dry_run"] = True
+
             try:
                 response = httpx.post(
                     f"{dashboard_url}/api/notebooks/description-batch",
-                    json={"entries": entries},
+                    json=body,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -2846,12 +2856,14 @@ def _dispatch_core_command(args):
                 print(json.dumps(data, indent=2))
             else:
 
+                verb = "would be set to" if data.get("dry_run") else "set to"
+
                 for result in data.get("results", []):
 
                     if result["status"] == "success":
                         description = result.get("description", "")
                         print(
-                            f"{result['filename']} description set to: "
+                            f"{result['filename']} description {verb}: "
                             f"{description if description else '(cleared)'}"
                         )
                     else:
@@ -6244,14 +6256,25 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(tags_set_batch_parser)
     tags_set_batch_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report the resulting tag set each entry would get (and "
+            "which would fail, e.g. an unknown filename), via POST "
+            "/api/notebooks/tags-batch's own \"dry_run\" body field, "
+            "without replacing a single notebook's own tags."
+        )
+    )
+    tags_set_batch_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
-            "\"results\": [{\"filename\", \"status\", ...}, ...], "
-            "\"succeeded_count\", \"failed_count\"}) instead of a "
-            "human-readable summary, for scripting/automation."
+            "\"dry_run\", \"results\": [{\"filename\", \"status\", "
+            "...}, ...], \"succeeded_count\", \"failed_count\"}) instead "
+            "of a human-readable summary, for scripting/automation."
         )
     )
 
@@ -6340,14 +6363,26 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(description_set_batch_parser)
     description_set_batch_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report the resulting description each entry would get (and "
+            "which would fail, e.g. an unknown filename), via POST "
+            "/api/notebooks/description-batch's own \"dry_run\" body "
+            "field, without replacing a single notebook's own "
+            "description."
+        )
+    )
+    description_set_batch_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
-            "\"results\": [{\"filename\", \"status\", ...}, ...], "
-            "\"succeeded_count\", \"failed_count\"}) instead of a "
-            "human-readable summary, for scripting/automation."
+            "\"dry_run\", \"results\": [{\"filename\", \"status\", "
+            "...}, ...], \"succeeded_count\", \"failed_count\"}) instead "
+            "of a human-readable summary, for scripting/automation."
         )
     )
 

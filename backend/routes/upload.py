@@ -4864,6 +4864,16 @@ def set_notebook_tags_batch(data: dict):
     "success" (with that notebook's resulting tag set) or "error" (a 404
     for an unknown filename, or the same 400 a bad "tags" value alone
     would raise through PUT .../tags directly).
+
+    "dry_run" (optional, default false) reports the exact same per-entry
+    "results" a real batch would -- each entry's own validated,
+    normalized "tags" on success, or the identical "error" a real write
+    would raise -- without replacing a single notebook's own tags, the
+    same preview POST /api/notebooks/copy-batch's own "dry_run" already
+    provides for a batch that, like this one, silently discards an
+    existing value (there, a destination's previous tags/description/
+    version history on "overwrite": true; here, every entry's own
+    previous tag set unconditionally) if a caller gets an entry wrong.
     """
 
     entries = data.get("entries")
@@ -4886,6 +4896,8 @@ def set_notebook_tags_batch(data: dict):
                 detail="each entry must be an object with a string 'filename'"
             )
 
+    dry_run = bool(data.get("dry_run", False))
+
     results = []
     succeeded_count = 0
     failed_count = 0
@@ -4907,7 +4919,8 @@ def set_notebook_tags_batch(data: dict):
 
             tags = _validate_and_normalize_tags(entry.get("tags", []))
 
-            _write_notebook_tags(file_path.name, tags)
+            if not dry_run:
+                _write_notebook_tags(file_path.name, tags)
 
             results.append({
                 "filename": filename,
@@ -4927,6 +4940,7 @@ def set_notebook_tags_batch(data: dict):
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "results": results,
         "succeeded_count": succeeded_count,
         "failed_count": failed_count,
@@ -5037,6 +5051,14 @@ def set_notebook_description_batch(data: dict):
     would raise through PUT .../description directly). Omitting
     "description" from an entry clears it, the same default PUT
     .../description itself already applies.
+
+    "dry_run" (optional, default false) reports the exact same per-entry
+    "results" a real batch would -- each entry's own validated,
+    normalized "description" on success, or the identical "error" a real
+    write would raise -- without replacing a single notebook's own
+    description, the same preview POST /api/notebooks/tags-batch's own
+    "dry_run" already provides for its own identical
+    replace-every-entry-unconditionally batch.
     """
 
     entries = data.get("entries")
@@ -5058,6 +5080,8 @@ def set_notebook_description_batch(data: dict):
                 status_code=400,
                 detail="each entry must be an object with a string 'filename'"
             )
+
+    dry_run = bool(data.get("dry_run", False))
 
     results = []
     succeeded_count = 0
@@ -5082,7 +5106,8 @@ def set_notebook_description_batch(data: dict):
                 entry.get("description", "")
             )
 
-            _write_notebook_description(file_path.name, description)
+            if not dry_run:
+                _write_notebook_description(file_path.name, description)
 
             results.append({
                 "filename": filename,
@@ -5102,6 +5127,7 @@ def set_notebook_description_batch(data: dict):
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "results": results,
         "succeeded_count": succeeded_count,
         "failed_count": failed_count,

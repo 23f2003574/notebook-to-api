@@ -5812,6 +5812,40 @@ def test_set_notebook_tags_batch_sets_each_notebooks_own_distinct_tags():
     ).json()["tags"] == ["production", "v2"]
 
 
+def test_set_notebook_tags_batch_dry_run_reports_the_plan_without_writing():
+
+    _upload_sample_notebook("tags_batch_dry_run.ipynb")
+    client.put(
+        "/api/notebooks/tags_batch_dry_run.ipynb/tags", json={"tags": ["stale"]}
+    )
+
+    resp = client.post(
+        "/api/notebooks/tags-batch",
+        json={
+            "entries": [
+                {"filename": "tags_batch_dry_run.ipynb", "tags": ["production"]},
+                {"filename": "does_not_exist.ipynb", "tags": ["x"]},
+            ],
+            "dry_run": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["tags_batch_dry_run.ipynb"]["status"] == "success"
+    assert results_by_filename["tags_batch_dry_run.ipynb"]["tags"] == ["production"]
+
+    # Nothing was actually written.
+    assert client.get(
+        "/api/notebooks/tags_batch_dry_run.ipynb/tags"
+    ).json()["tags"] == ["stale"]
+
+
 def test_set_notebook_tags_batch_with_an_empty_tags_list_clears_that_entry():
 
     _upload_sample_notebook("tags_batch_clear.ipynb")
@@ -6104,6 +6138,41 @@ def test_set_notebook_description_batch_sets_each_notebooks_own_distinct_descrip
     assert client.get(
         "/api/notebooks/description_batch_a.ipynb/description"
     ).json()["description"] == "The churn model."
+
+
+def test_set_notebook_description_batch_dry_run_reports_the_plan_without_writing():
+
+    _upload_sample_notebook("description_batch_dry_run.ipynb")
+    client.put(
+        "/api/notebooks/description_batch_dry_run.ipynb/description",
+        json={"description": "stale"},
+    )
+
+    resp = client.post(
+        "/api/notebooks/description-batch",
+        json={
+            "entries": [
+                {"filename": "description_batch_dry_run.ipynb", "description": "new description"},
+                {"filename": "does_not_exist.ipynb", "description": "x"},
+            ],
+            "dry_run": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["description_batch_dry_run.ipynb"]["status"] == "success"
+    assert results_by_filename["description_batch_dry_run.ipynb"]["description"] == "new description"
+
+    # Nothing was actually written.
+    assert client.get(
+        "/api/notebooks/description_batch_dry_run.ipynb/description"
+    ).json()["description"] == "stale"
 
 
 def test_set_notebook_description_batch_with_an_empty_description_clears_that_entry():
