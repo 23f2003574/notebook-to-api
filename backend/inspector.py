@@ -606,7 +606,10 @@ def print_notebook_diff(diff):
 DEFAULT_DEV_API_KEY = "notebook-to-api-dev-key"
 
 
-def generate_curl_commands(notebook_path, host="localhost", port=8000, api_key=None):
+def generate_curl_commands(
+    notebook_path, host="localhost", port=8000, api_key=None,
+    only=None, exclude=None,
+):
     """A ready-to-run `curl` command for every function `notebook_path`
     would compile into an endpoint, using each function's own
     "example_payload" (see inspect_notebook_data's "functions" field) as
@@ -640,6 +643,21 @@ def generate_curl_commands(notebook_path, host="localhost", port=8000, api_key=N
     configuration; a caller who has set NOTEBOOK_API_KEY to something
     else needs to pass the matching value here instead.
 
+    `only`/`exclude` restrict which functions get a command at all, via
+    the exact same _filter_functions_by_name (backend/compiler.py) every
+    other function-selecting entry point here already goes through
+    (`compile`, `deploy`, `serve`, `watch`, POST /api/compile, POST
+    /api/app-preview). Before this, `export-curl`/`remote-curl`/POST
+    /api/curl-preview always emitted a command for *every* function a
+    notebook defines, even one a caller's own --only/--exclude compile
+    would never actually expose as an endpoint -- silently wrong output
+    for anyone previewing curl commands for a notebook they intend to
+    compile with either flag, the exact "can't drift from what an actual
+    compile would produce" guarantee every sibling preview endpoint in
+    this file already gives. Raises the identical ValueError
+    _filter_functions_by_name itself raises for both-given or an
+    unrecognized function name.
+
     Returns a list of ready-to-paste (or execute) multi-line command
     strings, one per function, in the same order inspect_notebook_data's
     own "functions" field returns them.
@@ -649,13 +667,15 @@ def generate_curl_commands(notebook_path, host="localhost", port=8000, api_key=N
 
     data = inspect_notebook_data(notebook_path)
 
+    functions = _filter_functions_by_name(data["functions"], only, exclude)
+
     reserved_names = set(data["reserved_name_conflicts"])
 
     base_url = f"http://{host}:{port}"
 
     commands = []
 
-    for func in data["functions"]:
+    for func in functions:
 
         name = func["name"]
 

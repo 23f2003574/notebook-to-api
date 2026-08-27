@@ -1704,6 +1704,81 @@ def test_export_curl_command_reports_a_clean_error_for_a_missing_notebook(tmp_pa
     _assert_clean_cli_error(proc, "No such file or directory")
 
 
+def test_export_curl_command_only_restricts_to_the_named_functions(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n",
+    )
+
+    proc = _run_cli(
+        ["export-curl", str(notebook_path), "--only", "add"], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "(1 request(s))" in proc.stdout
+
+    script = (workdir / "requests.sh").read_text(encoding="utf-8")
+    assert "curl -X POST http://localhost:8000/add" in script
+    assert "curl -X POST http://localhost:8000/subtract" not in script
+
+
+def test_export_curl_command_rejects_only_and_exclude_together(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    proc = _run_cli(
+        [
+            "export-curl", str(notebook_path),
+            "--only", "add", "--exclude", "add",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "only and exclude can't both be given")
+
+
+def test_remote_curl_command_only_restricts_to_the_named_functions(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+                "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-curl", "nb.ipynb", "--dashboard-url", dashboard_url,
+            "--only", "add",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    script = (workdir / "requests.sh").read_text(encoding="utf-8")
+    assert "curl -X POST http://localhost:8000/add" in script
+    assert "curl -X POST http://localhost:8000/subtract" not in script
+
+
 def _json_response(status_code, body):
     """Queue-entry helper for _FakeDashboardHandler.responses: a JSON
     body, encoded and content-typed the way every real dashboard JSON

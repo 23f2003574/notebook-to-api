@@ -7116,6 +7116,15 @@ def curl_preview_endpoint(data: dict):
     snapshotted versions instead of its current content -- e.g. to see
     what an old version would have exposed before restoring it back over
     the notebook's current content.
+
+    "only"/"exclude" and their validation mirror POST /api/compile's own
+    (see its docstring) -- an invalid value gets the identical 400 here
+    that it would there. Before these existed, this endpoint always
+    previewed a command for *every* function the notebook defines, even
+    one a caller's own --only/--exclude compile would never actually
+    expose as an endpoint -- silently wrong output for anyone previewing
+    curl commands ahead of a filtered compile, generate_curl_commands'
+    own docstring now explains in full.
     """
 
     notebook_path = data.get("notebook_path")
@@ -7128,6 +7137,26 @@ def curl_preview_endpoint(data: dict):
         )
 
     version_id = data.get("version_id")
+    only = data.get("only")
+    exclude = data.get("exclude")
+
+    for field_name, field_value in (("only", only), ("exclude", exclude)):
+
+        if field_value is not None and (
+            not isinstance(field_value, list)
+            or not all(isinstance(item, str) for item in field_value)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name} must be a list of strings"
+            )
+
+    if only and exclude:
+
+        raise HTTPException(
+            status_code=400,
+            detail="only and exclude can't both be given -- choose one."
+        )
 
     full_path = _resolve_preview_content_path(notebook_path, version_id)
 
@@ -7167,10 +7196,20 @@ def curl_preview_endpoint(data: dict):
             detail="api_key must be a string"
         )
 
-    with COMPILE_LOCK:
+    try:
 
-        commands = generate_curl_commands(
-            str(full_path), host=host, port=port, api_key=api_key
+        with COMPILE_LOCK:
+
+            commands = generate_curl_commands(
+                str(full_path), host=host, port=port, api_key=api_key,
+                only=only, exclude=exclude,
+            )
+
+    except ValueError as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
         )
 
     return {

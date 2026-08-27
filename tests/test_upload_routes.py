@@ -11702,6 +11702,106 @@ def test_curl_preview_excludes_a_reserved_name_conflict():
     assert resp.json()["commands"] == []
 
 
+def test_curl_preview_only_restricts_to_the_named_functions():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={"file": ("curl_preview_only.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/curl-preview",
+        json={"notebook_path": "curl_preview_only.ipynb", "only": ["add"]},
+    )
+
+    assert resp.status_code == 200
+    commands = resp.json()["commands"]
+    assert len(commands) == 1
+    assert "curl -X POST http://localhost:8000/add" in commands[0]
+
+
+def test_curl_preview_exclude_omits_the_named_functions():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={"file": ("curl_preview_exclude.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/curl-preview",
+        json={"notebook_path": "curl_preview_exclude.ipynb", "exclude": ["subtract"]},
+    )
+
+    assert resp.status_code == 200
+    commands = resp.json()["commands"]
+    assert len(commands) == 1
+    assert "curl -X POST http://localhost:8000/add" in commands[0]
+
+
+def test_curl_preview_rejects_only_and_exclude_together():
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("curl_preview_both.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/curl-preview",
+        json={
+            "notebook_path": "curl_preview_both.ipynb",
+            "only": ["add"], "exclude": ["add"],
+        },
+    )
+
+    assert resp.status_code == 400
+
+
+def test_curl_preview_rejects_an_unknown_only_name():
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("curl_preview_unknown.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/curl-preview",
+        json={"notebook_path": "curl_preview_unknown.ipynb", "only": ["does_not_exist"]},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_curl_preview_rejects_a_non_list_only_value():
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("curl_preview_bad_only.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/curl-preview",
+        json={"notebook_path": "curl_preview_bad_only.ipynb", "only": "add"},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_curl_preview_does_not_touch_generated_dir(monkeypatch, tmp_path):
 
     content = _notebook_bytes(

@@ -1000,8 +1000,11 @@ def _dispatch_core_command(args):
         else:
             generate_sdk(openapi_path, output)
     elif args.command == "export-curl":
+        only = _parse_comma_separated_names(args.only)
+        exclude = _parse_comma_separated_names(args.exclude)
         commands = generate_curl_commands(
-            args.notebook, host=args.host, port=args.port, api_key=args.api_key
+            args.notebook, host=args.host, port=args.port, api_key=args.api_key,
+            only=only, exclude=exclude,
         )
 
         script_content = (
@@ -4129,9 +4132,12 @@ def _dispatch_core_command(args):
             with os.fdopen(remote_notebook_fd, "wb") as f:
                 f.write(response.content)
 
+            only = _parse_comma_separated_names(args.only)
+            exclude = _parse_comma_separated_names(args.exclude)
+
             commands = generate_curl_commands(
                 remote_notebook_path, host=args.host, port=args.port,
-                api_key=args.api_key,
+                api_key=args.api_key, only=only, exclude=exclude,
             )
 
         finally:
@@ -4798,6 +4804,7 @@ def main():
         default=None,
         help="Path to write the generated shell script to. Default: requests.sh"
     )
+    _add_function_selection_arguments(curl_parser)
     curl_parser.add_argument(
         "--json",
         action="store_true",
@@ -7365,6 +7372,7 @@ def main():
         default=None,
         help="Path to write the generated shell script to. Default: requests.sh"
     )
+    _add_function_selection_arguments(remote_curl_parser)
     remote_curl_parser.add_argument(
         "--json",
         action="store_true",

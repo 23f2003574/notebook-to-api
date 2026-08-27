@@ -970,3 +970,55 @@ def test_generate_curl_commands_returns_an_empty_list_for_a_notebook_with_no_fun
     _write_notebook(notebook_path, "x = 1\n")
 
     assert generate_curl_commands(str(notebook_path)) == []
+
+
+def test_generate_curl_commands_only_restricts_to_the_named_functions(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n",
+    )
+
+    commands = generate_curl_commands(str(notebook_path), only=["add"])
+
+    assert len(commands) == 1
+    assert "curl -X POST http://localhost:8000/add" in commands[0]
+
+
+def test_generate_curl_commands_exclude_omits_the_named_functions(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n",
+    )
+
+    commands = generate_curl_commands(str(notebook_path), exclude=["subtract"])
+
+    assert len(commands) == 1
+    assert "curl -X POST http://localhost:8000/add" in commands[0]
+
+
+def test_generate_curl_commands_rejects_only_and_exclude_together(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    with pytest.raises(ValueError):
+        generate_curl_commands(str(notebook_path), only=["add"], exclude=["add"])
+
+
+def test_generate_curl_commands_rejects_an_unknown_only_name(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    with pytest.raises(ValueError):
+        generate_curl_commands(str(notebook_path), only=["does_not_exist"])
