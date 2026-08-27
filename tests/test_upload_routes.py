@@ -10769,6 +10769,139 @@ def test_validate_reports_fail_for_a_reserved_name_conflict_even_without_strict(
     assert body["reserved_name_conflicts"] == ["health_check"]
 
 
+def test_validate_exclude_of_the_conflicting_function_reports_pass():
+
+    content = _notebook_bytes(
+        "def health_check() -> dict:\n    return {}\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "validate_exclude_reserved.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/validate",
+        json={
+            "notebook_path": "validate_exclude_reserved.ipynb",
+            "exclude": ["health_check"],
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "pass"
+    assert body["reserved_name_conflicts"] == []
+
+
+def test_validate_only_without_the_conflicting_function_reports_pass():
+
+    content = _notebook_bytes(
+        "def health_check() -> dict:\n    return {}\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "validate_only_reserved.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/validate",
+        json={
+            "notebook_path": "validate_only_reserved.ipynb",
+            "only": ["add"],
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "pass"
+    assert body["reserved_name_conflicts"] == []
+
+
+def test_validate_only_including_the_conflicting_function_still_reports_fail():
+
+    content = _notebook_bytes(
+        "def health_check() -> dict:\n    return {}\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "validate_only_still_conflicts.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/validate",
+        json={
+            "notebook_path": "validate_only_still_conflicts.ipynb",
+            "only": ["health_check", "add"],
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "fail"
+    assert body["reserved_name_conflicts"] == ["health_check"]
+
+
+def test_validate_rejects_only_and_exclude_together():
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("validate_both.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/validate",
+        json={
+            "notebook_path": "validate_both.ipynb",
+            "only": ["add"], "exclude": ["add"],
+        },
+    )
+
+    assert resp.status_code == 400
+
+
+def test_validate_rejects_an_unknown_only_name():
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("validate_unknown.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/validate",
+        json={"notebook_path": "validate_unknown.ipynb", "only": ["does_not_exist"]},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_validate_does_not_touch_generated_dir(monkeypatch, tmp_path):
 
     content = _notebook_bytes(

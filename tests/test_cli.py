@@ -7404,6 +7404,46 @@ def test_validate_command_fails_on_a_reserved_name_conflict_even_without_strict(
     assert "Validation failed." in proc.stdout
 
 
+def test_validate_command_exclude_of_the_conflicting_function_passes(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def health_check() -> dict:\n    return {}\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    proc = _run_cli(
+        ["validate", str(notebook_path), "--exclude", "health_check"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No issues found." in proc.stdout
+
+
+def test_validate_command_only_including_the_conflicting_function_still_fails(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def health_check() -> dict:\n    return {}\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    proc = _run_cli(
+        ["validate", str(notebook_path), "--only", "health_check,add"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "health_check" in proc.stdout
+
+
 def test_validate_command_json_flag_emits_a_machine_readable_status(tmp_path):
 
     workdir = tmp_path / "workdir"
@@ -7879,6 +7919,38 @@ def test_remote_validate_command_fails_on_a_reserved_name_conflict(
     assert "Reserved name conflicts" in proc.stdout
     assert "health_check" in proc.stdout
     assert "Validation failed." in proc.stdout
+
+
+def test_remote_validate_command_sends_only_and_exclude_body_fields(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "pass",
+            "notebook": "nb.ipynb",
+            "reserved_name_conflicts": [],
+            "skipped_functions": [],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-validate", "nb.ipynb", "--dashboard-url", dashboard_url,
+            "--exclude", "health_check",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "strict": False,
+        "exclude": ["health_check"],
+    }
 
 
 def test_remote_validate_command_json_flag_emits_the_dashboards_own_response(

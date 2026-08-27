@@ -841,8 +841,37 @@ def _dispatch_core_command(args):
         # only the notebook itself.
         data = inspect_notebook_data(notebook_path=args.notebook)
 
+        only = _parse_comma_separated_names(args.only)
+        exclude = _parse_comma_separated_names(args.exclude)
+
         reserved_name_conflicts = data["reserved_name_conflicts"]
         skipped_functions = data["skipped_functions"]
+
+        # Narrows "reserved_name_conflicts" to just the names --only/
+        # --exclude would still actually let through to compile, the
+        # same way compile_notebook_to_api itself already applies
+        # only/exclude *before* generate_fastapi_code's own reserved-name
+        # check (see _filter_functions_by_name, backend/compiler.py) --
+        # without this, `validate --exclude health_check` on a notebook
+        # whose only conflict is "health_check" still reported "fail",
+        # even though the compile it's meant to predict would succeed
+        # cleanly. "skipped_functions" is deliberately left unfiltered,
+        # the same choice `compile --json`'s own identical field already
+        # makes just above: a skipped function was never a candidate to
+        # become an endpoint in the first place, whether or not
+        # only/exclude names it. Raises the identical ValueError
+        # _filter_functions_by_name itself raises for both-given or an
+        # unrecognized function name, caught by this function's own
+        # caller (see CLI_USER_FACING_ERRORS in main()) as a clean
+        # one-line error.
+        if only or exclude:
+            kept_names = {
+                func["name"]
+                for func in _filter_functions_by_name(data["functions"], only, exclude)
+            }
+            reserved_name_conflicts = [
+                name for name in reserved_name_conflicts if name in kept_names
+            ]
 
         has_blocking_issues = bool(reserved_name_conflicts) or (
             args.strict and bool(skipped_functions)
@@ -2909,6 +2938,12 @@ def _dispatch_core_command(args):
         validate_body = {"notebook_path": args.filename, "strict": args.strict}
         if args.version_id:
             validate_body["version_id"] = args.version_id
+        only = _parse_comma_separated_names(args.only)
+        exclude = _parse_comma_separated_names(args.exclude)
+        if only:
+            validate_body["only"] = only
+        if exclude:
+            validate_body["exclude"] = exclude
 
         try:
             response = httpx.post(
@@ -4670,6 +4705,7 @@ def main():
             "always exits 2."
         )
     )
+    _add_function_selection_arguments(validate_parser)
     validate_parser.add_argument(
         "--json",
         action="store_true",
@@ -6367,6 +6403,7 @@ def main():
             "these are reported as a non-fatal warning (exit 1)."
         )
     )
+    _add_function_selection_arguments(remote_validate_parser)
     remote_validate_parser.add_argument(
         "--json",
         action="store_true",

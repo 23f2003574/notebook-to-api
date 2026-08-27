@@ -6629,6 +6629,26 @@ def validate_notebook_endpoint(
     whether an old version would still validate cleanly before POST
     .../versions/{version_id}/restore-ing it back over the notebook's
     current content.
+
+    "only"/"exclude" (validated the same way POST /api/app-preview's own
+    identical fields already are) narrow "reserved_name_conflicts" to
+    just the names that would still actually be compiled under them,
+    the same way compile_notebook_to_api itself already applies
+    only/exclude *before* generate_fastapi_code's own reserved-name
+    check (see _filter_functions_by_name, backend/compiler.py). Before
+    this, a notebook with a reserved-name-conflicting function (e.g. one
+    named "health_check") always reported "status": "fail" here, even
+    for a caller whose own intended compile passes "exclude":
+    ["health_check"] and would succeed cleanly -- this endpoint's own
+    "would this notebook compile cleanly" promise silently didn't hold
+    for a filtered compile, the identical drift POST /api/curl-preview's
+    own missing only/exclude support used to let it happen for. Omitted,
+    every function is considered, exactly as before either existed.
+    "skipped_functions" is deliberately left unfiltered -- the identical
+    choice POST /api/compile's own response already makes for its
+    otherwise-identical "skipped_functions" field, since a skipped
+    function was never a candidate to become an endpoint in the first
+    place, whether or not only/exclude names it.
     """
 
     notebook_path = data.get(
@@ -6644,6 +6664,26 @@ def validate_notebook_endpoint(
 
     strict = bool(data.get("strict", False))
     version_id = data.get("version_id")
+    only = data.get("only")
+    exclude = data.get("exclude")
+
+    for field_name, field_value in (("only", only), ("exclude", exclude)):
+
+        if field_value is not None and (
+            not isinstance(field_value, list)
+            or not all(isinstance(item, str) for item in field_value)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name} must be a list of strings"
+            )
+
+    if only and exclude:
+
+        raise HTTPException(
+            status_code=400,
+            detail="only and exclude can't both be given -- choose one."
+        )
 
     full_path = _resolve_preview_content_path(notebook_path, version_id)
 
@@ -6672,6 +6712,26 @@ def validate_notebook_endpoint(
 
     reserved_name_conflicts = inspection["reserved_name_conflicts"]
     skipped_functions = inspection["skipped_functions"]
+
+    if only or exclude:
+
+        try:
+
+            kept_names = {
+                func["name"]
+                for func in _filter_functions_by_name(inspection["functions"], only, exclude)
+            }
+
+        except ValueError as e:
+
+            raise HTTPException(
+                status_code=400,
+                detail=str(e)
+            )
+
+        reserved_name_conflicts = [
+            name for name in reserved_name_conflicts if name in kept_names
+        ]
 
     has_blocking_issues = bool(reserved_name_conflicts) or (
         strict and bool(skipped_functions)
