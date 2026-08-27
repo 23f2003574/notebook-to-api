@@ -567,6 +567,36 @@ def _parse_comma_separated_names(value):
     return names or None
 
 
+def _parse_notebook_version_pair(value):
+    """Parse one `versions restore-batch` positional argument
+    ("filename:version_id") into a {"filename", "version_id"} entry
+    matching POST /api/notebooks/versions/restore-batch's own "entries"
+    shape.
+
+    A plain argparse.ArgumentTypeError (rather than a raw ValueError) so
+    argparse itself reports a clean "invalid _parse_notebook_version_pair
+    value" usage error for a malformed pair instead of a bare traceback --
+    the same reasoning every other core command's own input validation
+    already fails fast for. Splits on the *last* ":" so a version_id
+    containing no colon of its own (every version_id this dashboard has
+    ever generated, per _snapshot_current_notebook_version in
+    routes/upload.py) round-trips even if a filename somehow did.
+    """
+    if ":" not in value:
+        raise argparse.ArgumentTypeError(
+            f"'{value}' must be in filename:version_id form"
+        )
+
+    filename, _, version_id = value.rpartition(":")
+
+    if not filename or not version_id:
+        raise argparse.ArgumentTypeError(
+            f"'{value}' must be in filename:version_id form"
+        )
+
+    return {"filename": filename, "version_id": version_id}
+
+
 def _matched_notebooks_summary(data, args, shown_count):
     """Format the trailing "N notebook(s) matched" summary line shared by
     `search-functions` and `search-content` below, accounting for
@@ -3323,6 +3353,54 @@ def _dispatch_core_command(args):
                     f"Restored '{data.get('filename', args.filename)}' to "
                     f"version '{data.get('restored_version_id', args.version_id)}' "
                     f"on {dashboard_url}"
+                )
+
+        elif args.versions_command == "restore-batch":
+
+            body = {"entries": args.entry}
+            if args.dry_run:
+                body["dry_run"] = True
+
+            try:
+                response = httpx.post(
+                    f"{dashboard_url}/api/notebooks/versions/restore-batch",
+                    json=body,
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                verb = "Would restore" if data.get("dry_run") else "Restored"
+
+                for result in data.get("results", []):
+
+                    if result["status"] == "success":
+                        print(
+                            f"{verb} '{result['filename']}' to version "
+                            f"'{result['version_id']}'"
+                        )
+                    else:
+                        print(
+                            f"Failed to restore '{result['filename']}' to "
+                            f"version '{result['version_id']}': {result['detail']}"
+                        )
+
+                print(
+                    f"\n{data.get('succeeded_count', 0)} succeeded, "
+                    f"{data.get('failed_count', 0)} failed"
                 )
 
         elif args.versions_command == "diff":
@@ -6362,6 +6440,50 @@ def main():
             "Emit the dashboard's own JSON response "
             "({\"status\", \"filename\", \"restored_version_id\"}) "
             "instead of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    # versions restore-batch (roll back several *different* notebooks at
+    # once, each to its own version_id, via POST
+    # /api/notebooks/versions/restore-batch -- distinct from `restore`
+    # above, which only ever restores one notebook at a time)
+    versions_restore_batch_parser = versions_subparsers.add_parser(
+        "restore-batch",
+        help=(
+            "Roll back several different notebooks at once, each to its "
+            "own snapshotted version, via POST "
+            "/api/notebooks/versions/restore-batch."
+        )
+    )
+    versions_restore_batch_parser.add_argument(
+        "entry", nargs="+", type=_parse_notebook_version_pair,
+        help=(
+            "One or more \"filename:version_id\" pairs, as reported by "
+            "`list`/`versions list`, e.g. "
+            "a.ipynb:20240101T000000000000_abcd1234.ipynb."
+        )
+    )
+    versions_restore_batch_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report which of the given entries would be restored, via "
+            "POST /api/notebooks/versions/restore-batch's own \"dry_run\" "
+            "body field, without restoring anything."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(versions_restore_batch_parser)
+    versions_restore_batch_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"dry_run\", \"results\": [{\"filename\", \"version_id\", "
+            "\"status\", ...}, ...], \"succeeded_count\", "
+            "\"failed_count\"}) instead of a human-readable summary, for "
+            "scripting/automation."
         )
     )
 

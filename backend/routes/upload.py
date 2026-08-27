@@ -5589,6 +5589,149 @@ def restore_notebook_version(filename: str, version_id: str):
     }
 
 
+@router.post("/notebooks/versions/restore-batch")
+def restore_notebook_versions_batch(data: dict):
+    """Roll back a caller-chosen set of *different* notebooks, each to its
+    own specified snapshotted version, in one call.
+
+    POST /api/notebooks/{filename}/versions/{version_id}/restore already
+    restores a single notebook to a single version -- but a caller
+    rolling back several notebooks at once after the same bad event (a
+    batch upload that clobbered more than one notebook, or a deploy built
+    from a bad compile) had no way to do that in one request: one POST
+    .../restore call per notebook, same as before POST
+    /api/notebooks/tags-batch and POST /api/notebooks/description-batch
+    closed the identical gap for replacing several different notebooks'
+    own tags/description at once.
+
+    Takes "entries", a list of {"filename", "version_id"} objects -- the
+    same shape POST /api/notebooks/tags-batch's own docstring already
+    explains for a restore/replace-many-different-things-at-once
+    operation: each entry names its own independent notebook *and* its
+    own independent version_id, unlike the single shared "filenames" POST
+    /api/notebooks/delete-batch takes for one identical operation applied
+    to every one of them.
+
+    "entries" itself (a non-empty list, each element an object with
+    string "filename" and "version_id") is validated once, up front, as a
+    400 covering the whole request, the same split
+    set_notebook_tags_batch's own docstring already establishes between a
+    malformed *shape* (this request's own fault) and a per-entry failure
+    below. Each entry is then restored independently, reusing
+    restore_notebook_version's own snapshot-current-then-copy sequence
+    under that notebook's own _version_lock_for -- so a bad entry (an
+    unknown filename or version_id) doesn't abort the rest of the batch,
+    and two entries naming the same notebook can't interleave their own
+    snapshot-then-copy steps. "results" reports one {"filename",
+    "version_id", "status", ...} entry per input entry -- "success" (with
+    that notebook's own "restored_version_id") or "error" (the same
+    HTTPException detail restoring that one entry on its own would have
+    raised, e.g. a 404 for an unknown filename or version_id) --
+    "succeeded_count"/"failed_count" summarize "results" identically to
+    every other batch endpoint here. The response is always 200: the
+    batch request itself was handled, even if every entry in it failed.
+
+    "dry_run" (optional, default false, in the request body) reports the
+    exact same per-entry "results" a real batch would -- each entry's own
+    "success" or "error" -- without restoring anything, the identical
+    preview POST /api/notebooks/{filename}/versions/delete-batch's own
+    "dry_run" already provides for deleting several versions at once.
+    """
+
+    entries = data.get("entries")
+
+    if not isinstance(entries, list) or not entries:
+
+        raise HTTPException(
+            status_code=400,
+            detail="entries must be a non-empty list of objects"
+        )
+
+    for entry in entries:
+
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("filename"), str)
+            or not isinstance(entry.get("version_id"), str)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "each entry must be an object with a string "
+                    "'filename' and a string 'version_id'"
+                )
+            )
+
+    dry_run = bool(data.get("dry_run", False))
+
+    results = []
+    succeeded_count = 0
+    failed_count = 0
+
+    for entry in entries:
+
+        filename = entry["filename"]
+        version_id = entry["version_id"]
+
+        try:
+
+            file_path = resolve_upload_path(filename)
+
+            if not file_path.is_file():
+
+                raise HTTPException(
+                    status_code=404,
+                    detail="Notebook file not found"
+                )
+
+            versions_dir = _notebook_versions_dir(file_path.name)
+
+            version_path = _resolve_path_within(
+                str(versions_dir), version_id, "notebook version"
+            )
+
+            if not version_path.is_file():
+
+                raise HTTPException(
+                    status_code=404,
+                    detail="Notebook version not found"
+                )
+
+            if not dry_run:
+
+                with _version_lock_for(file_path.name):
+
+                    _snapshot_current_notebook_version(file_path)
+
+                    shutil.copy2(version_path, file_path)
+
+            results.append({
+                "filename": filename,
+                "version_id": version_id,
+                "status": "success",
+                "restored_version_id": version_id,
+            })
+            succeeded_count += 1
+
+        except HTTPException as exc:
+
+            results.append({
+                "filename": filename,
+                "version_id": version_id,
+                "status": "error",
+                "detail": exc.detail,
+            })
+            failed_count += 1
+
+    return {
+        "status": "success",
+        "dry_run": dry_run,
+        "results": results,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
+    }
+
+
 @router.delete("/notebooks/{filename}/versions/{version_id}")
 def delete_notebook_version(filename: str, version_id: str):
     """Permanently discard one of a notebook's snapshotted previous

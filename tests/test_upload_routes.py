@@ -7756,6 +7756,231 @@ def test_restore_notebook_version_returns_404_for_an_unknown_version_id():
     assert resp.status_code == 404
 
 
+def test_restore_notebook_versions_batch_restores_each_notebook_to_its_own_version():
+
+    filename_a = "versions_restore_batch_a.ipynb"
+    filename_b = "versions_restore_batch_b.ipynb"
+
+    original_a = _notebook_bytes("def a1() -> int:\n    return 1\n")
+    original_b = _notebook_bytes("def b1() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename_a, io.BytesIO(original_a), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename_a,
+                io.BytesIO(_notebook_bytes("def a2() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload",
+        files={"file": (filename_b, io.BytesIO(original_b), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename_b,
+                io.BytesIO(_notebook_bytes("def b2() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_a = client.get(f"/api/notebooks/{filename_a}/versions").json()["versions"][0]["version_id"]
+    version_b = client.get(f"/api/notebooks/{filename_b}/versions").json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        "/api/notebooks/versions/restore-batch",
+        json={
+            "entries": [
+                {"filename": filename_a, "version_id": version_a},
+                {"filename": filename_b, "version_id": version_b},
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["dry_run"] is False
+    assert body["succeeded_count"] == 2
+    assert body["failed_count"] == 0
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename[filename_a]["status"] == "success"
+    assert results_by_filename[filename_a]["restored_version_id"] == version_a
+    assert results_by_filename[filename_b]["status"] == "success"
+    assert results_by_filename[filename_b]["restored_version_id"] == version_b
+
+    assert (Path(UPLOAD_DIR) / filename_a).read_bytes() == original_a
+    assert (Path(UPLOAD_DIR) / filename_b).read_bytes() == original_b
+
+
+def test_restore_notebook_versions_batch_itself_snapshots_the_content_it_replaces():
+
+    filename = "versions_restore_batch_undoable.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    second_content = _notebook_bytes("def g() -> int:\n    return 2\n")
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(second_content), "application/json")},
+    )
+
+    first_version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    client.post(
+        "/api/notebooks/versions/restore-batch",
+        json={"entries": [{"filename": filename, "version_id": first_version_id}]},
+    )
+
+    versions_after_restore = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"]
+
+    assert len(versions_after_restore) == 2
+
+
+def test_restore_notebook_versions_batch_reports_a_bad_entry_without_aborting_the_rest():
+
+    filename = "versions_restore_batch_partial.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        "/api/notebooks/versions/restore-batch",
+        json={
+            "entries": [
+                {"filename": filename, "version_id": version_id},
+                {"filename": "does_not_exist.ipynb", "version_id": "whatever.ipynb"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename[filename]["status"] == "success"
+    assert results_by_filename["does_not_exist.ipynb"]["status"] == "error"
+    assert "not found" in results_by_filename["does_not_exist.ipynb"]["detail"]
+
+
+def test_restore_notebook_versions_batch_dry_run_reports_the_plan_without_restoring():
+
+    filename = "versions_restore_batch_dry_run.ipynb"
+
+    original_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(original_content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        "/api/notebooks/versions/restore-batch",
+        json={
+            "entries": [{"filename": filename, "version_id": version_id}],
+            "dry_run": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["succeeded_count"] == 1
+
+    # Nothing was actually restored.
+    current_content = (Path(UPLOAD_DIR) / filename).read_bytes()
+    assert current_content != original_content
+
+
+def test_restore_notebook_versions_batch_rejects_a_non_list_entries_value():
+
+    resp = client.post(
+        "/api/notebooks/versions/restore-batch",
+        json={"entries": "not-a-list"},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_restore_notebook_versions_batch_rejects_an_empty_entries_list():
+
+    resp = client.post(
+        "/api/notebooks/versions/restore-batch",
+        json={"entries": []},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_restore_notebook_versions_batch_rejects_an_entry_missing_version_id():
+
+    _upload_sample_notebook("versions_restore_batch_missing_field.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/versions/restore-batch",
+        json={"entries": [{"filename": "versions_restore_batch_missing_field.ipynb"}]},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_delete_notebook_version_removes_only_that_snapshot():
 
     filename = "versions_delete.ipynb"

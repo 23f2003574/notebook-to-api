@@ -9317,6 +9317,192 @@ def test_versions_delete_batch_command_reports_a_clean_error_when_the_dashboard_
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_versions_restore_batch_command_is_registered():
+
+    proc = _run_cli(["versions", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "restore-batch" in proc.stdout
+
+
+def test_versions_restore_batch_command_reports_success(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": False,
+            "results": [
+                {"filename": "a.ipynb", "version_id": "v1.ipynb", "status": "success", "restored_version_id": "v1.ipynb"},
+                {"filename": "b.ipynb", "version_id": "v2.ipynb", "status": "success", "restored_version_id": "v2.ipynb"},
+            ],
+            "succeeded_count": 2,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "restore-batch", "a.ipynb:v1.ipynb", "b.ipynb:v2.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Restored 'a.ipynb' to version 'v1.ipynb'" in proc.stdout
+    assert "Restored 'b.ipynb' to version 'v2.ipynb'" in proc.stdout
+    assert "2 succeeded, 0 failed" in proc.stdout
+    assert handler.requests == ["/api/notebooks/versions/restore-batch"]
+    assert json.loads(handler.bodies[0]) == {
+        "entries": [
+            {"filename": "a.ipynb", "version_id": "v1.ipynb"},
+            {"filename": "b.ipynb", "version_id": "v2.ipynb"},
+        ]
+    }
+
+
+def test_versions_restore_batch_command_reports_a_partial_failure(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {"filename": "a.ipynb", "version_id": "v1.ipynb", "status": "success", "restored_version_id": "v1.ipynb"},
+                {
+                    "filename": "missing.ipynb", "version_id": "v9.ipynb", "status": "error",
+                    "detail": "Notebook file not found",
+                },
+            ],
+            "succeeded_count": 1,
+            "failed_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "restore-batch", "a.ipynb:v1.ipynb", "missing.ipynb:v9.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Restored 'a.ipynb' to version 'v1.ipynb'" in proc.stdout
+    assert (
+        "Failed to restore 'missing.ipynb' to version 'v9.ipynb': "
+        "Notebook file not found" in proc.stdout
+    )
+    assert "1 succeeded, 1 failed" in proc.stdout
+
+
+def test_versions_restore_batch_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "dry_run": False,
+        "results": [
+            {"filename": "a.ipynb", "version_id": "v1.ipynb", "status": "success", "restored_version_id": "v1.ipynb"},
+        ],
+        "succeeded_count": 1,
+        "failed_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "restore-batch", "a.ipynb:v1.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_versions_restore_batch_command_dry_run_sends_dry_run_field(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": True,
+            "results": [
+                {"filename": "a.ipynb", "version_id": "v1.ipynb", "status": "success", "restored_version_id": "v1.ipynb"},
+            ],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "restore-batch", "a.ipynb:v1.ipynb",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would restore 'a.ipynb' to version 'v1.ipynb'" in proc.stdout
+    assert handler.requests == ["/api/notebooks/versions/restore-batch"]
+    assert json.loads(handler.bodies[0]) == {
+        "entries": [{"filename": "a.ipynb", "version_id": "v1.ipynb"}],
+        "dry_run": True,
+    }
+
+
+def test_versions_restore_batch_command_rejects_a_malformed_entry(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["versions", "restore-batch", "no-colon-here"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode != 0
+    assert "filename:version_id" in proc.stderr
+
+
+def test_versions_restore_batch_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "restore-batch", "a.ipynb:v1.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_versions_clear_command_reports_success_with_yes_flag(
     tmp_path, fake_dashboard
 ):
