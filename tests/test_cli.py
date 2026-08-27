@@ -11584,6 +11584,57 @@ def test_clear_deploy_history_command_reports_a_clean_error_when_the_dashboard_i
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_clear_deploy_history_command_sends_older_than_days_query_param(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "dry_run": False, "deleted_count": 2})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "clear-deploy-history", "--older-than-days", "30",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/deploy/history?older_than_days=30"]
+
+
+def test_clear_deploy_history_command_dry_run_skips_confirmation_and_sends_dry_run_field(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "dry_run": True, "deleted_count": 1})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    # No --yes, and no stdin input provided -- would hang/fail on a
+    # confirmation prompt if --dry-run didn't skip it.
+    proc = _run_cli(
+        [
+            "clear-deploy-history", "--dry-run",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would discard 1 deploy history entr(y/ies)" in proc.stdout
+    assert handler.requests == ["/api/deploy/history?dry_run=true"]
+
+
 def test_compile_history_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())
@@ -11901,6 +11952,57 @@ def test_clear_compile_history_command_reports_a_clean_error_when_the_dashboard_
     )
 
     _assert_clean_cli_error(proc, "Is it running?")
+
+
+def test_clear_compile_history_command_sends_older_than_days_query_param(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "dry_run": False, "deleted_count": 2})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "clear-compile-history", "--older-than-days", "30",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/compile/history?older_than_days=30"]
+
+
+def test_clear_compile_history_command_dry_run_skips_confirmation_and_sends_dry_run_field(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "dry_run": True, "deleted_count": 1})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    # No --yes, and no stdin input provided -- would hang/fail on a
+    # confirmation prompt if --dry-run didn't skip it.
+    proc = _run_cli(
+        [
+            "clear-compile-history", "--dry-run",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would discard 1 compile history entr(y/ies)" in proc.stdout
+    assert handler.requests == ["/api/compile/history?dry_run=true"]
 
 
 def test_status_command_is_registered():

@@ -7505,8 +7505,36 @@ def deploy_history_endpoint(
     }
 
 
+def _deploy_history_entry_is_older_than(entry, cutoff):
+    """Whether `entry`'s own "deployed_at" is older than `cutoff` -- the
+    same "saved_at" vs. cutoff age check prune_all_notebook_versions
+    already applies per version file, just applied to a deploy history
+    entry's own recorded timestamp instead of an on-disk mtime.
+
+    An entry with a missing or unparseable "deployed_at" (never produced
+    by _append_deploy_history_entry itself, but not worth crashing the
+    whole clear over) is treated as not old enough to touch, the same
+    "when in doubt, don't discard" bias DELETE /api/notebooks/versions'
+    own age filter already has by only ever discarding what it can
+    positively confirm is old enough.
+    """
+    deployed_at = entry.get("deployed_at")
+
+    if not deployed_at:
+        return False
+
+    try:
+        return datetime.fromisoformat(deployed_at) < cutoff
+    except ValueError:
+        return False
+
+
 @router.delete("/deploy/history")
-def clear_deploy_history(source_notebook_filename: str = None):
+def clear_deploy_history(
+    source_notebook_filename: str = None,
+    older_than_days: int = None,
+    dry_run: bool = False,
+):
     """Permanently discard this dashboard's deploy history log.
 
     GET /api/deploy/history's own docstring already notes it's read-only
@@ -7541,40 +7569,86 @@ def clear_deploy_history(source_notebook_filename: str = None):
     just one deleted/renamed notebook's now-stale deploy history
     previously had no choice but to wipe every other notebook's history
     along with it. Omitted, this clears the entire log exactly as before.
+
+    "older_than_days", when given, discards only entries whose own
+    "deployed_at" is older than that many days ago -- the identical
+    age-based gap DELETE /api/notebooks/versions' own "older_than_days"
+    already closes for a notebook's version snapshots, just applied to
+    this dashboard's deploy history log instead: before this, reclaiming
+    space from old deploy history while keeping recent entries meant
+    wiping the entire log (there was no way to keep only what's recent).
+    Composes with "source_notebook_filename" -- given both, only entries
+    matching *both* are discarded, the same narrowing every other
+    multi-filter endpoint here already applies. Must be a positive
+    integer; omitted, age plays no part in what's discarded, exactly as
+    before this parameter existed.
+
+    "dry_run" (optional, default false) reports the exact same
+    "deleted_count" a real clear would, without discarding a single
+    entry -- the identical preview DELETE /api/notebooks/versions' own
+    "dry_run" already provides for that endpoint's own irreversible
+    catalog-wide prune.
     """
+
+    if older_than_days is not None and older_than_days <= 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="older_than_days must be a positive integer"
+        )
+
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=older_than_days)
+        if older_than_days is not None else None
+    )
 
     entries = _read_deploy_history()
 
-    if source_notebook_filename is not None:
+    if source_notebook_filename is not None or cutoff is not None:
 
-        remaining = [
-            entry for entry in entries
-            if entry.get("source_notebook_filename") != source_notebook_filename
-        ]
+        def _should_discard(entry):
+
+            if (
+                source_notebook_filename is not None
+                and entry.get("source_notebook_filename") != source_notebook_filename
+            ):
+                return False
+
+            if cutoff is not None and not _deploy_history_entry_is_older_than(entry, cutoff):
+                return False
+
+            return True
+
+        remaining = [entry for entry in entries if not _should_discard(entry)]
         deleted_count = len(entries) - len(remaining)
 
-        if remaining:
+        if not dry_run:
 
-            upload_root = Path(UPLOAD_DIR).resolve()
-            temp_path = upload_root / f".deploy_history.{uuid.uuid4().hex}.part"
+            if remaining:
 
-            with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump({"entries": remaining}, f)
+                upload_root = Path(UPLOAD_DIR).resolve()
+                temp_path = upload_root / f".deploy_history.{uuid.uuid4().hex}.part"
 
-            os.replace(temp_path, _deploy_history_path())
+                with open(temp_path, "w", encoding="utf-8") as f:
+                    json.dump({"entries": remaining}, f)
 
-        else:
-            _deploy_history_path().unlink(missing_ok=True)
+                os.replace(temp_path, _deploy_history_path())
+
+            else:
+                _deploy_history_path().unlink(missing_ok=True)
 
         return {
             "status": "success",
+            "dry_run": dry_run,
             "deleted_count": deleted_count,
         }
 
-    _deploy_history_path().unlink(missing_ok=True)
+    if not dry_run:
+        _deploy_history_path().unlink(missing_ok=True)
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "deleted_count": len(entries),
     }
 
@@ -7692,8 +7766,29 @@ def compile_history_endpoint(
     }
 
 
+def _compile_history_entry_is_older_than(entry, cutoff):
+    """Whether `entry`'s own "compiled_at" is older than `cutoff` -- the
+    exact counterpart _deploy_history_entry_is_older_than already
+    provides for a deploy history entry's own "deployed_at", just applied
+    to a compile history entry's own recorded timestamp instead.
+    """
+    compiled_at = entry.get("compiled_at")
+
+    if not compiled_at:
+        return False
+
+    try:
+        return datetime.fromisoformat(compiled_at) < cutoff
+    except ValueError:
+        return False
+
+
 @router.delete("/compile/history")
-def clear_compile_history(notebook_filename: str = None):
+def clear_compile_history(
+    notebook_filename: str = None,
+    older_than_days: int = None,
+    dry_run: bool = False,
+):
     """Permanently discard this dashboard's compile history log, the exact
     counterpart DELETE /api/deploy/history already provides for this
     dashboard's deploy history.
@@ -7721,40 +7816,77 @@ def clear_compile_history(notebook_filename: str = None):
     already solves for a single notebook's own version snapshots (as
     opposed to DELETE /api/notebooks/versions' own catalog-wide prune).
     Omitted, this clears the entire log exactly as before.
+
+    "older_than_days" and "dry_run" mirror the identical two fields
+    DELETE /api/deploy/history just gained -- discarding only entries
+    whose own "compiled_at" is older than that many days ago (composing
+    with "notebook_filename" the same "only entries matching both" way
+    that endpoint's own two filters already compose), and previewing
+    "deleted_count" without discarding anything, respectively. Before
+    this, reclaiming space from old compile history while keeping recent
+    entries meant wiping the entire log, the identical gap that endpoint
+    docstring already describes for deploy history.
     """
+
+    if older_than_days is not None and older_than_days <= 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="older_than_days must be a positive integer"
+        )
+
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=older_than_days)
+        if older_than_days is not None else None
+    )
 
     entries = _read_compile_history()
 
-    if notebook_filename is not None:
+    if notebook_filename is not None or cutoff is not None:
 
-        remaining = [
-            entry for entry in entries
-            if entry.get("notebook_filename") != notebook_filename
-        ]
+        def _should_discard(entry):
+
+            if (
+                notebook_filename is not None
+                and entry.get("notebook_filename") != notebook_filename
+            ):
+                return False
+
+            if cutoff is not None and not _compile_history_entry_is_older_than(entry, cutoff):
+                return False
+
+            return True
+
+        remaining = [entry for entry in entries if not _should_discard(entry)]
         deleted_count = len(entries) - len(remaining)
 
-        if remaining:
+        if not dry_run:
 
-            upload_root = Path(UPLOAD_DIR).resolve()
-            temp_path = upload_root / f".compile_history.{uuid.uuid4().hex}.part"
+            if remaining:
 
-            with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump({"entries": remaining}, f)
+                upload_root = Path(UPLOAD_DIR).resolve()
+                temp_path = upload_root / f".compile_history.{uuid.uuid4().hex}.part"
 
-            os.replace(temp_path, _compile_history_path())
+                with open(temp_path, "w", encoding="utf-8") as f:
+                    json.dump({"entries": remaining}, f)
 
-        else:
-            _compile_history_path().unlink(missing_ok=True)
+                os.replace(temp_path, _compile_history_path())
+
+            else:
+                _compile_history_path().unlink(missing_ok=True)
 
         return {
             "status": "success",
+            "dry_run": dry_run,
             "deleted_count": deleted_count,
         }
 
-    _compile_history_path().unlink(missing_ok=True)
+    if not dry_run:
+        _compile_history_path().unlink(missing_ok=True)
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "deleted_count": len(entries),
     }
 

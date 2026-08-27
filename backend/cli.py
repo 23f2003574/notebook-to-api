@@ -4140,11 +4140,12 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        if not args.yes:
+        if not args.dry_run and not args.yes:
             # DELETE /api/deploy/history (routes/upload.py) has no
             # confirmation step of its own and is irreversible -- the
             # same reasoning `prune-versions`/`tags delete` already
-            # prompt for.
+            # prompt for. Not asked at all under --dry-run, which never
+            # deletes anything.
             target = (
                 f"the deploy history for {args.source_notebook_filename!r} on "
                 f"{dashboard_url}" if args.source_notebook_filename
@@ -4158,6 +4159,10 @@ def _dispatch_core_command(args):
         params = {}
         if args.source_notebook_filename:
             params["source_notebook_filename"] = args.source_notebook_filename
+        if args.older_than_days is not None:
+            params["older_than_days"] = args.older_than_days
+        if args.dry_run:
+            params["dry_run"] = True
 
         try:
             response = httpx.delete(
@@ -4180,8 +4185,9 @@ def _dispatch_core_command(args):
         if args.json_output:
             print(json.dumps(data, indent=2))
         else:
+            verb = "Would discard" if data.get("dry_run") else "Discarded"
             print(
-                f"Discarded {data.get('deleted_count', 0)} deploy history "
+                f"{verb} {data.get('deleted_count', 0)} deploy history "
                 f"entr(y/ies) on {dashboard_url}"
             )
 
@@ -4250,10 +4256,12 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        if not args.yes:
+        if not args.dry_run and not args.yes:
             # DELETE /api/compile/history (routes/upload.py) has no
             # confirmation step of its own and is irreversible -- the
             # same reasoning `clear-deploy-history` already prompts for.
+            # Not asked at all under --dry-run, which never deletes
+            # anything.
             target = (
                 f"the compile history for {args.notebook_filename!r} on "
                 f"{dashboard_url}" if args.notebook_filename
@@ -4267,6 +4275,10 @@ def _dispatch_core_command(args):
         params = {}
         if args.notebook_filename:
             params["notebook_filename"] = args.notebook_filename
+        if args.older_than_days is not None:
+            params["older_than_days"] = args.older_than_days
+        if args.dry_run:
+            params["dry_run"] = True
 
         try:
             response = httpx.delete(
@@ -4289,8 +4301,9 @@ def _dispatch_core_command(args):
         if args.json_output:
             print(json.dumps(data, indent=2))
         else:
+            verb = "Would discard" if data.get("dry_run") else "Discarded"
             print(
-                f"Discarded {data.get('deleted_count', 0)} compile history "
+                f"{verb} {data.get('deleted_count', 0)} compile history "
                 f"entr(y/ies) on {dashboard_url}"
             )
 
@@ -7186,6 +7199,31 @@ def main():
             "log is discarded."
         )
     )
+    clear_deploy_history_parser.add_argument(
+        "--older-than-days",
+        type=int,
+        dest="older_than_days",
+        help=(
+            "Only discard deploy history entries older than this many "
+            "days, via DELETE /api/deploy/history's own "
+            "?older_than_days= query param. Composes with "
+            "--source-notebook: given both, only entries matching both "
+            "are discarded. Without this, age plays no part in what's "
+            "discarded."
+        )
+    )
+    clear_deploy_history_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report how many entries would be discarded, via DELETE "
+            "/api/deploy/history's own ?dry_run= query param, without "
+            "discarding anything. Skips the confirmation prompt --yes "
+            "would otherwise require, since nothing irreversible "
+            "happens."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(clear_deploy_history_parser)
     clear_deploy_history_parser.add_argument(
         "--yes",
@@ -7195,7 +7233,8 @@ def main():
             "this, `clear-deploy-history` asks for a y/N confirmation on "
             "the terminal before sending the request -- DELETE "
             "/api/deploy/history itself has no confirmation step of its "
-            "own, and is irreversible."
+            "own, and is irreversible. Ignored under --dry-run, which "
+            "never prompts."
         )
     )
     clear_deploy_history_parser.add_argument(
@@ -7204,8 +7243,8 @@ def main():
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
-            "\"deleted_count\"}) instead of a human-readable summary, "
-            "for scripting/automation."
+            "\"dry_run\", \"deleted_count\"}) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 
@@ -7298,6 +7337,30 @@ def main():
             "this, the entire compile history log is discarded."
         )
     )
+    clear_compile_history_parser.add_argument(
+        "--older-than-days",
+        type=int,
+        dest="older_than_days",
+        help=(
+            "Only discard compile history entries older than this many "
+            "days, via DELETE /api/compile/history's own "
+            "?older_than_days= query param. Composes with --notebook: "
+            "given both, only entries matching both are discarded. "
+            "Without this, age plays no part in what's discarded."
+        )
+    )
+    clear_compile_history_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report how many entries would be discarded, via DELETE "
+            "/api/compile/history's own ?dry_run= query param, without "
+            "discarding anything. Skips the confirmation prompt --yes "
+            "would otherwise require, since nothing irreversible "
+            "happens."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(clear_compile_history_parser)
     clear_compile_history_parser.add_argument(
         "--yes",
@@ -7307,7 +7370,8 @@ def main():
             "this, `clear-compile-history` asks for a y/N confirmation on "
             "the terminal before sending the request -- DELETE "
             "/api/compile/history itself has no confirmation step of its "
-            "own, and is irreversible."
+            "own, and is irreversible. Ignored under --dry-run, which "
+            "never prompts."
         )
     )
     clear_compile_history_parser.add_argument(
@@ -7316,7 +7380,7 @@ def main():
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
-            "\"deleted_count\"}) instead of a human-readable summary, "
+            "\"dry_run\", \"deleted_count\"}) instead of a human-readable summary, "
             "for scripting/automation."
         )
     )

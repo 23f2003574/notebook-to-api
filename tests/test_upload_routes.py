@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import nbformat
@@ -11847,7 +11847,7 @@ def test_clear_deploy_history_removes_every_entry(tmp_path, monkeypatch):
     clear_resp = client.delete("/api/deploy/history")
 
     assert clear_resp.status_code == 200
-    assert clear_resp.json() == {"status": "success", "deleted_count": 3}
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 3}
 
     assert client.get("/api/deploy/history").json() == {
         "status": "success",
@@ -11879,7 +11879,7 @@ def test_clear_deploy_history_filters_by_source_notebook_filename(tmp_path, monk
     )
 
     assert clear_resp.status_code == 200
-    assert clear_resp.json() == {"status": "success", "deleted_count": 1}
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 1}
 
     remaining = client.get("/api/deploy/history").json()
     assert remaining["entry_count"] == 2
@@ -11912,7 +11912,7 @@ def test_clear_deploy_history_unknown_source_notebook_filename_deletes_nothing(
     )
 
     assert clear_resp.status_code == 200
-    assert clear_resp.json() == {"status": "success", "deleted_count": 0}
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 0}
     assert client.get("/api/deploy/history").json()["entry_count"] == 1
 
 
@@ -11929,7 +11929,7 @@ def test_clear_deploy_history_is_a_no_op_success_when_nothing_was_ever_deployed(
     resp = client.delete("/api/deploy/history")
 
     assert resp.status_code == 200
-    assert resp.json() == {"status": "success", "deleted_count": 0}
+    assert resp.json() == {"status": "success", "dry_run": False, "deleted_count": 0}
 
 
 def test_clear_deploy_history_does_not_touch_generated_dir_or_notebooks(
@@ -11957,6 +11957,215 @@ def test_clear_deploy_history_does_not_touch_generated_dir_or_notebooks(
     client.delete("/api/deploy/history")
 
     assert (generated_dir_before / "Dockerfile").is_file() == dockerfile_existed_before
+
+
+def test_clear_deploy_history_older_than_days_keeps_recent_entries(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_deploy_history_age_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    now = datetime.now(timezone.utc)
+    old_deployed_at = (now - timedelta(days=40)).isoformat()
+    recent_deployed_at = (now - timedelta(days=1)).isoformat()
+
+    upload_module._append_deploy_history_entry({
+        "deployed_at": old_deployed_at,
+        "tag": "old:0",
+        "platform": None,
+        "pushed": False,
+        "source_notebook_filename": None,
+        "source_notebook_sha256": None,
+    })
+    upload_module._append_deploy_history_entry({
+        "deployed_at": recent_deployed_at,
+        "tag": "recent:0",
+        "platform": None,
+        "pushed": False,
+        "source_notebook_filename": None,
+        "source_notebook_sha256": None,
+    })
+
+    clear_resp = client.delete(
+        "/api/deploy/history", params={"older_than_days": 30}
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 1}
+
+    remaining = client.get("/api/deploy/history").json()
+    assert remaining["entry_count"] == 1
+    assert remaining["entries"][0]["tag"] == "recent:0"
+
+
+def test_clear_deploy_history_composes_older_than_days_with_source_notebook_filename(
+    tmp_path, monkeypatch
+):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_deploy_history_age_and_source_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    now = datetime.now(timezone.utc)
+    old_deployed_at = (now - timedelta(days=40)).isoformat()
+
+    upload_module._append_deploy_history_entry({
+        "deployed_at": old_deployed_at,
+        "tag": "old-other:0",
+        "platform": None,
+        "pushed": False,
+        "source_notebook_filename": "other.ipynb",
+        "source_notebook_sha256": None,
+    })
+    upload_module._append_deploy_history_entry({
+        "deployed_at": old_deployed_at,
+        "tag": "old-target:0",
+        "platform": None,
+        "pushed": False,
+        "source_notebook_filename": "target.ipynb",
+        "source_notebook_sha256": None,
+    })
+
+    clear_resp = client.delete(
+        "/api/deploy/history",
+        params={"older_than_days": 30, "source_notebook_filename": "target.ipynb"},
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 1}
+
+    remaining = client.get("/api/deploy/history").json()
+    assert remaining["entry_count"] == 1
+    assert remaining["entries"][0]["source_notebook_filename"] == "other.ipynb"
+
+
+def test_clear_deploy_history_dry_run_reports_the_plan_without_deleting(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_deploy_history_dry_run_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    upload_module._append_deploy_history_entry({
+        "deployed_at": "2024-01-01T00:00:00+00:00",
+        "tag": "dry-run:0",
+        "platform": None,
+        "pushed": False,
+        "source_notebook_filename": None,
+        "source_notebook_sha256": None,
+    })
+
+    clear_resp = client.delete("/api/deploy/history", params={"dry_run": True})
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "dry_run": True, "deleted_count": 1}
+
+    # Nothing was actually deleted.
+    assert client.get("/api/deploy/history").json()["entry_count"] == 1
+
+
+def test_clear_deploy_history_rejects_a_non_positive_older_than_days(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_deploy_history_bad_age_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    resp = client.delete("/api/deploy/history", params={"older_than_days": 0})
+
+    assert resp.status_code == 400
+
+
+def test_clear_compile_history_older_than_days_keeps_recent_entries(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_compile_history_age_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    now = datetime.now(timezone.utc)
+    old_compiled_at = (now - timedelta(days=40)).isoformat()
+    recent_compiled_at = (now - timedelta(days=1)).isoformat()
+
+    upload_module._append_compile_history_entry({
+        "compiled_at": old_compiled_at,
+        "notebook_filename": "old.ipynb",
+        "source_notebook_sha256": "abc",
+        "only": None,
+        "exclude": None,
+        "endpoint_count": 1,
+        "dependency_count": 0,
+        "skipped_function_count": 0,
+    })
+    upload_module._append_compile_history_entry({
+        "compiled_at": recent_compiled_at,
+        "notebook_filename": "recent.ipynb",
+        "source_notebook_sha256": "def",
+        "only": None,
+        "exclude": None,
+        "endpoint_count": 1,
+        "dependency_count": 0,
+        "skipped_function_count": 0,
+    })
+
+    clear_resp = client.delete(
+        "/api/compile/history", params={"older_than_days": 30}
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 1}
+
+    remaining = client.get("/api/compile/history").json()
+    assert remaining["entry_count"] == 1
+    assert remaining["entries"][0]["notebook_filename"] == "recent.ipynb"
+
+
+def test_clear_compile_history_dry_run_reports_the_plan_without_deleting(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_compile_history_dry_run_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    upload_module._append_compile_history_entry({
+        "compiled_at": "2024-01-01T00:00:00+00:00",
+        "notebook_filename": "dry_run.ipynb",
+        "source_notebook_sha256": "abc",
+        "only": None,
+        "exclude": None,
+        "endpoint_count": 1,
+        "dependency_count": 0,
+        "skipped_function_count": 0,
+    })
+
+    clear_resp = client.delete("/api/compile/history", params={"dry_run": True})
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "dry_run": True, "deleted_count": 1}
+
+    # Nothing was actually deleted.
+    assert client.get("/api/compile/history").json()["entry_count"] == 1
+
+
+def test_clear_compile_history_rejects_a_non_positive_older_than_days(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_compile_history_bad_age_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    resp = client.delete("/api/compile/history", params={"older_than_days": -1})
+
+    assert resp.status_code == 400
 
 
 def test_compile_history_is_empty_before_any_compile(monkeypatch, tmp_path):
@@ -12280,7 +12489,7 @@ def test_clear_compile_history_removes_every_entry(tmp_path, monkeypatch):
     clear_resp = client.delete("/api/compile/history")
 
     assert clear_resp.status_code == 200
-    assert clear_resp.json() == {"status": "success", "deleted_count": 3}
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 3}
     assert client.get("/api/compile/history").json() == {
         "status": "success", "entries": [], "entry_count": 0,
     }
@@ -12311,7 +12520,7 @@ def test_clear_compile_history_filters_by_notebook_filename(tmp_path, monkeypatc
     )
 
     assert clear_resp.status_code == 200
-    assert clear_resp.json() == {"status": "success", "deleted_count": 1}
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 1}
 
     remaining = client.get("/api/compile/history").json()
     assert remaining["entry_count"] == 2
@@ -12344,7 +12553,7 @@ def test_clear_compile_history_unknown_notebook_filename_deletes_nothing(
     )
 
     assert clear_resp.status_code == 200
-    assert clear_resp.json() == {"status": "success", "deleted_count": 0}
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 0}
     assert client.get("/api/compile/history").json()["entry_count"] == 1
 
 
@@ -12361,7 +12570,7 @@ def test_clear_compile_history_is_a_no_op_success_when_nothing_was_ever_compiled
     resp = client.delete("/api/compile/history")
 
     assert resp.status_code == 200
-    assert resp.json() == {"status": "success", "deleted_count": 0}
+    assert resp.json() == {"status": "success", "dry_run": False, "deleted_count": 0}
 
 
 def test_clear_compile_history_does_not_touch_generated_dir_or_notebooks(
