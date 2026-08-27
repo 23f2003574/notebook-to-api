@@ -2807,6 +2807,8 @@ def test_find_duplicate_notebooks_reports_no_groups_when_nothing_duplicated():
         "duplicate_groups": [],
         "group_count": 0,
         "duplicate_notebook_count": 0,
+        "limit": None,
+        "offset": 0,
     }
 
 
@@ -2839,6 +2841,87 @@ def test_find_duplicate_notebooks_reports_multiple_independent_groups():
     body = resp.json()
     assert body["group_count"] == 2
     assert body["duplicate_notebook_count"] == 4
+
+
+def test_find_duplicate_notebooks_limit_paginates_the_groups_but_not_the_totals():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    content_b = _notebook_bytes(
+        "def sub(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    for filename, content in (
+        ("dup_page_group1_a.ipynb", content_a),
+        ("dup_page_group1_b.ipynb", content_a),
+        ("dup_page_group2_a.ipynb", content_b),
+        ("dup_page_group2_b.ipynb", content_b),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    resp = client.get("/api/notebooks/duplicates", params={"limit": 1})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["duplicate_groups"]) == 1
+    # The totals still reflect every matching group, not just this page.
+    assert body["group_count"] == 2
+    assert body["duplicate_notebook_count"] == 4
+    assert body["limit"] == 1
+    assert body["offset"] == 0
+
+    # Groups are sorted by their own sha256, so paging is stable: the
+    # second page's one group is whichever the first page's own group
+    # wasn't.
+    first_page_sha256 = body["duplicate_groups"][0]["sha256"]
+
+    second_page = client.get(
+        "/api/notebooks/duplicates", params={"limit": 1, "offset": 1}
+    ).json()
+
+    assert len(second_page["duplicate_groups"]) == 1
+    assert second_page["duplicate_groups"][0]["sha256"] != first_page_sha256
+
+
+def test_find_duplicate_notebooks_offset_past_the_end_yields_no_groups():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    for filename in ("dup_offset_a.ipynb", "dup_offset_b.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    resp = client.get("/api/notebooks/duplicates", params={"offset": 5})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["duplicate_groups"] == []
+    assert body["group_count"] == 1
+
+
+def test_find_duplicate_notebooks_rejects_a_negative_offset():
+
+    resp = client.get("/api/notebooks/duplicates", params={"offset": -1})
+
+    assert resp.status_code == 400
+
+
+def test_find_duplicate_notebooks_rejects_a_negative_limit():
+
+    resp = client.get("/api/notebooks/duplicates", params={"limit": -1})
+
+    assert resp.status_code == 400
 
 
 def test_find_duplicate_notebooks_scopes_to_a_tag():

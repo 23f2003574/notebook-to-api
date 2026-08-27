@@ -3498,6 +3498,55 @@ def test_find_duplicates_command_sends_sha256_query_param(fake_dashboard):
     assert query["sha256"] == ["abc123"]
 
 
+def test_find_duplicates_command_sends_limit_and_offset_query_params(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "duplicate_groups": [
+                {"sha256": "abc123", "filenames": ["a.ipynb", "b.ipynb"], "size_bytes": 10},
+            ],
+            "group_count": 3, "duplicate_notebook_count": 6,
+            "limit": 1, "offset": 1,
+        })
+    ]
+
+    proc = _run_cli(
+        [
+            "find-duplicates", "--limit", "1", "--offset", "1",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "3 duplicate group(s), 6 notebook(s) total" in proc.stdout
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query["limit"] == ["1"]
+    assert query["offset"] == ["1"]
+
+
+def test_find_duplicates_command_omits_limit_and_offset_query_params_by_default(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "duplicate_groups": [],
+            "group_count": 0, "duplicate_notebook_count": 0,
+            "limit": None, "offset": 0,
+        })
+    ]
+
+    proc = _run_cli(
+        ["find-duplicates", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/duplicates"]
+
+
 def test_find_duplicates_command_reports_a_clean_error_when_the_dashboard_is_unreachable():
 
     proc = _run_cli(

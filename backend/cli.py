@@ -1580,6 +1580,10 @@ def _dispatch_core_command(args):
             params["tag"] = args.tag
         if args.sha256:
             params["sha256"] = args.sha256
+        if args.limit is not None:
+            params["limit"] = args.limit
+        if args.offset:
+            params["offset"] = args.offset
 
         try:
             response = httpx.get(
@@ -5218,6 +5222,18 @@ def main():
             "already match by."
         )
     )
+    find_duplicates_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Cap how many duplicate groups are returned, via GET /api/notebooks/duplicates' own ?limit=."
+    )
+    find_duplicates_parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Skip this many duplicate groups before --limit is applied, via GET /api/notebooks/duplicates' own ?offset=."
+    )
     _add_dashboard_url_and_timeout_arguments(find_duplicates_parser)
     find_duplicates_parser.add_argument(
         "--json",
@@ -5227,8 +5243,8 @@ def main():
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"duplicate_groups\": [{\"sha256\", \"filenames\", "
             "\"size_bytes\"}, ...], \"group_count\", "
-            "\"duplicate_notebook_count\"}) instead of a human-readable "
-            "summary, for scripting/automation."
+            "\"duplicate_notebook_count\", \"limit\", \"offset\"}) "
+            "instead of a human-readable summary, for scripting/automation."
         )
     )
 

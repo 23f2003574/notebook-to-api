@@ -2603,7 +2603,9 @@ def export_notebooks(
 
 
 @router.get("/notebooks/duplicates")
-def find_duplicate_notebooks(tag: str = None, sha256: str = None):
+def find_duplicate_notebooks(
+    tag: str = None, sha256: str = None, limit: int = None, offset: int = 0
+):
     """Group every uploaded notebook by its raw content, reporting only
     the groups with more than one filename -- byte-identical uploads
     sitting in UPLOAD_DIR under different names.
@@ -2665,6 +2667,25 @@ def find_duplicate_notebooks(tag: str = None, sha256: str = None):
     duplicate), simply yields an empty "duplicate_groups" -- not an
     error, the same "no match is a valid, unexceptional outcome" rule
     every other filter in this file already follows.
+
+    "limit" and "offset" close the same gap they already close for GET
+    /api/notebooks, GET /api/functions, and GET
+    /api/notebooks/search-content: without them, this endpoint always
+    returned every matching duplicate group in one response, no matter
+    how many a large, heavily-duplicated catalog has accumulated, with
+    no way to page through them or bound response size. Applied after
+    every group has already been found and sorted by its own "sha256"
+    (this endpoint's own deterministic order, per this docstring's
+    "sorted by their own sha256" note above), so paging stays stable
+    across calls for a given tag/sha256 combination. "group_count" and
+    "duplicate_notebook_count" both keep reporting the *total* matching
+    count -- before "limit"/"offset" are applied, the same "total_count"
+    semantics GET /api/notebooks' own identical pair of fields already
+    has -- so a caller can compute how many pages remain without a
+    separate, unpaginated request just to learn the total. A negative
+    "offset", or a "limit" that isn't a non-negative integer, is
+    rejected with 400, the same way GET /api/notebooks already rejects
+    either.
     """
 
     upload_root = Path(UPLOAD_DIR)
@@ -2699,15 +2720,38 @@ def find_duplicate_notebooks(tag: str = None, sha256: str = None):
             "size_bytes": entries[0].stat().st_size,
         })
 
+    group_count = len(duplicate_groups)
     duplicate_notebook_count = sum(
         len(group["filenames"]) for group in duplicate_groups
     )
 
+    if offset < 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="offset must be a non-negative integer"
+        )
+
+    duplicate_groups = duplicate_groups[offset:]
+
+    if limit is not None:
+
+        if limit < 0:
+
+            raise HTTPException(
+                status_code=400,
+                detail="limit must be a non-negative integer"
+            )
+
+        duplicate_groups = duplicate_groups[:limit]
+
     return {
         "status": "success",
         "duplicate_groups": duplicate_groups,
-        "group_count": len(duplicate_groups),
+        "group_count": group_count,
         "duplicate_notebook_count": duplicate_notebook_count,
+        "limit": limit,
+        "offset": offset,
     }
 
 
