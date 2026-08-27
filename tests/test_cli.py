@@ -5235,6 +5235,38 @@ def test_rename_many_command_passes_the_overwrite_flag_through(tmp_path, fake_da
     }
 
 
+def test_rename_many_command_dry_run_sends_dry_run_field(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": True,
+            "results": [{"filename": "a.ipynb", "new_filename": "a2.ipynb", "status": "success", "was_currently_compiled": False}],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "rename-many", "a.ipynb:a2.ipynb",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would rename 'a.ipynb' to 'a2.ipynb'" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "entries": [{"filename": "a.ipynb", "new_filename": "a2.ipynb", "overwrite": False}],
+        "dry_run": True,
+    }
+
+
 def test_rename_many_command_json_flag_emits_the_dashboards_own_response(
     tmp_path, fake_dashboard
 ):
@@ -5529,6 +5561,35 @@ def test_copy_batch_command_passes_the_overwrite_flag_through(tmp_path, fake_das
     }
 
 
+def test_copy_batch_command_dry_run_sends_dry_run_field(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": True, "filename": "nb.ipynb",
+            "results": [{"new_filename": "a.ipynb", "status": "success"}],
+            "succeeded_count": 1, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "copy-batch", "nb.ipynb", "a.ipynb",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would copy 'nb.ipynb' to 'a.ipynb'" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "new_filenames": ["a.ipynb"], "overwrite": False, "dry_run": True,
+    }
+
+
 def test_copy_batch_command_json_flag_emits_the_dashboards_own_response(
     tmp_path, fake_dashboard
 ):
@@ -5708,6 +5769,38 @@ def test_copy_many_command_passes_the_overwrite_flag_through(tmp_path, fake_dash
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads(handler.bodies[0]) == {
         "entries": [{"filename": "a.ipynb", "new_filename": "a-copy.ipynb", "overwrite": True}]
+    }
+
+
+def test_copy_many_command_dry_run_sends_dry_run_field(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": True,
+            "results": [{"filename": "a.ipynb", "new_filename": "a-copy.ipynb", "status": "success"}],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "copy-many", "a.ipynb:a-copy.ipynb",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would copy 'a.ipynb' to 'a-copy.ipynb'" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "entries": [{"filename": "a.ipynb", "new_filename": "a-copy.ipynb", "overwrite": False}],
+        "dry_run": True,
     }
 
 

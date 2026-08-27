@@ -2177,10 +2177,14 @@ def _dispatch_core_command(args):
             {**entry, "overwrite": args.overwrite} for entry in args.entry
         ]
 
+        body = {"entries": entries}
+        if args.dry_run:
+            body["dry_run"] = True
+
         try:
             response = httpx.post(
                 f"{dashboard_url}/api/notebooks/rename-batch",
-                json={"entries": entries},
+                json=body,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -2199,10 +2203,12 @@ def _dispatch_core_command(args):
             print(json.dumps(data, indent=2))
         else:
 
+            verb = "Would rename" if data.get("dry_run") else "Renamed"
+
             for result in data.get("results", []):
 
                 if result["status"] == "success":
-                    print(f"Renamed '{result['filename']}' to '{result['new_filename']}'")
+                    print(f"{verb} '{result['filename']}' to '{result['new_filename']}'")
                     if result.get("was_currently_compiled"):
                         print("  note: this was the notebook backing the currently compiled app.")
                 else:
@@ -2254,13 +2260,17 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        body = {
+            "new_filenames": args.new_filename,
+            "overwrite": args.overwrite,
+        }
+        if args.dry_run:
+            body["dry_run"] = True
+
         try:
             response = httpx.post(
                 f"{dashboard_url}/api/notebooks/{args.filename}/copy-batch",
-                json={
-                    "new_filenames": args.new_filename,
-                    "overwrite": args.overwrite,
-                },
+                json=body,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -2279,10 +2289,12 @@ def _dispatch_core_command(args):
             print(json.dumps(data, indent=2))
         else:
 
+            verb = "Would copy" if data.get("dry_run") else "Copied"
+
             for result in data.get("results", []):
 
                 if result["status"] == "success":
-                    print(f"Copied '{args.filename}' to '{result['new_filename']}'")
+                    print(f"{verb} '{args.filename}' to '{result['new_filename']}'")
                 else:
                     print(f"Failed to copy to '{result['new_filename']}': {result['detail']}")
 
@@ -2301,10 +2313,14 @@ def _dispatch_core_command(args):
             {**entry, "overwrite": args.overwrite} for entry in args.entry
         ]
 
+        body = {"entries": entries}
+        if args.dry_run:
+            body["dry_run"] = True
+
         try:
             response = httpx.post(
                 f"{dashboard_url}/api/notebooks/copy-batch",
-                json={"entries": entries},
+                json=body,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -2323,10 +2339,12 @@ def _dispatch_core_command(args):
             print(json.dumps(data, indent=2))
         else:
 
+            verb = "Would copy" if data.get("dry_run") else "Copied"
+
             for result in data.get("results", []):
 
                 if result["status"] == "success":
-                    print(f"Copied '{result['filename']}' to '{result['new_filename']}'")
+                    print(f"{verb} '{result['filename']}' to '{result['new_filename']}'")
                 else:
                     print(
                         f"Failed to copy '{result['filename']}' to "
@@ -5677,15 +5695,26 @@ def main():
         )
     )
     rename_many_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report which entries would be renamed (and which would "
+            "fail, e.g. a same-name collision without --overwrite), via "
+            "POST /api/notebooks/rename-batch's own \"dry_run\" body "
+            "field, without renaming anything."
+        )
+    )
+    rename_many_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
-            "\"results\": [{\"filename\", \"new_filename\", \"status\", "
-            "\"was_currently_compiled\", ...}, ...], \"succeeded_count\", "
-            "\"failed_count\"}) instead of a human-readable summary, for "
-            "scripting/automation."
+            "\"dry_run\", \"results\": [{\"filename\", \"new_filename\", "
+            "\"status\", \"was_currently_compiled\", ...}, ...], "
+            "\"succeeded_count\", \"failed_count\"}) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 
@@ -5758,14 +5787,26 @@ def main():
         )
     )
     copy_batch_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report which destinations would be copied to (and which "
+            "would fail, e.g. a same-name collision without --overwrite), "
+            "via POST /api/notebooks/{filename}/copy-batch's own "
+            "\"dry_run\" body field, without copying anything."
+        )
+    )
+    copy_batch_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
-            "\"filename\", \"results\": [{\"new_filename\", \"status\", "
-            "...}, ...], \"succeeded_count\", \"failed_count\"}) instead "
-            "of a human-readable summary, for scripting/automation."
+            "\"dry_run\", \"filename\", \"results\": [{\"new_filename\", "
+            "\"status\", ...}, ...], \"succeeded_count\", "
+            "\"failed_count\"}) instead of a human-readable summary, for "
+            "scripting/automation."
         )
     )
 
@@ -5801,14 +5842,26 @@ def main():
         )
     )
     copy_many_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report which entries would be copied (and which would fail, "
+            "e.g. a same-name collision without --overwrite), via POST "
+            "/api/notebooks/copy-batch's own \"dry_run\" body field, "
+            "without copying anything."
+        )
+    )
+    copy_many_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
-            "\"results\": [{\"filename\", \"new_filename\", \"status\", "
-            "...}, ...], \"succeeded_count\", \"failed_count\"}) instead "
-            "of a human-readable summary, for scripting/automation."
+            "\"dry_run\", \"results\": [{\"filename\", \"new_filename\", "
+            "\"status\", ...}, ...], \"succeeded_count\", "
+            "\"failed_count\"}) instead of a human-readable summary, for "
+            "scripting/automation."
         )
     )
 

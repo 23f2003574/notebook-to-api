@@ -3984,7 +3984,7 @@ def rename_notebook(filename: str, data: dict):
     }
 
 
-def _rename_notebook_to(old_path: Path, new_filename, overwrite: bool) -> dict:
+def _rename_notebook_to(old_path: Path, new_filename, overwrite: bool, dry_run: bool = False) -> dict:
     """Rename `old_path` (an already-verified existing notebook file) to
     `new_filename` within UPLOAD_DIR, applying the exact same validation,
     overwrite semantics, sidecar/version-history moves, and
@@ -4011,6 +4011,15 @@ def _rename_notebook_to(old_path: Path, new_filename, overwrite: bool) -> dict:
     every other rename. Returns {"new_filename", "was_currently_compiled"}
     on success -- including the "renaming onto its own current name" no-op,
     where "was_currently_compiled" is always False since nothing moved.
+
+    `dry_run` (default False) runs every check above -- including the
+    destination collision check and the "was this the currently-compiled
+    notebook" read, still held under _rename_lock_for so a dry-run
+    preview can't itself race a real concurrent rename -- without
+    actually calling os.replace or moving any sidecar/version-history
+    file, the same "report what a real batch would do without doing it"
+    preview _copy_notebook_to's own "dry_run" already provides for a
+    copy.
     """
 
     if not isinstance(new_filename, str) or not new_filename:
@@ -4058,6 +4067,12 @@ def _rename_notebook_to(old_path: Path, new_filename, overwrite: bool) -> dict:
         was_currently_compiled = (
             compiled_path is not None and old_path.resolve() == compiled_path
         )
+
+        if dry_run:
+            return {
+                "new_filename": new_filename,
+                "was_currently_compiled": was_currently_compiled,
+            }
 
         try:
 
@@ -4164,6 +4179,14 @@ def rename_notebooks_batch(data: dict):
     existing destination, and is rejected with the same 409 (or replaces
     it, given its own "overwrite": true) a standalone second PATCH call
     would have gotten.
+
+    "dry_run" (optional, default false, applies to every entry alike)
+    reports the exact same per-entry "results" a real batch would --
+    including each entry's own "was_currently_compiled" and the 409 a
+    same-name collision without that entry's own "overwrite": true would
+    raise -- without renaming a single notebook, the identical preview
+    POST /api/notebooks/copy-batch's own "dry_run" already provides for
+    copying several notebooks at once.
     """
 
     entries = data.get("entries")
@@ -4192,6 +4215,8 @@ def rename_notebooks_batch(data: dict):
                 )
             )
 
+    dry_run = bool(data.get("dry_run", False))
+
     results = []
     succeeded_count = 0
     failed_count = 0
@@ -4213,7 +4238,7 @@ def rename_notebooks_batch(data: dict):
                     detail="Notebook file not found"
                 )
 
-            result = _rename_notebook_to(old_path, new_filename, overwrite)
+            result = _rename_notebook_to(old_path, new_filename, overwrite, dry_run=dry_run)
 
             results.append({
                 "filename": filename,
@@ -4235,6 +4260,7 @@ def rename_notebooks_batch(data: dict):
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "results": results,
         "succeeded_count": succeeded_count,
         "failed_count": failed_count,
@@ -4316,7 +4342,7 @@ def copy_notebook(filename: str, data: dict):
     }
 
 
-def _copy_notebook_to(source_path: Path, new_filename, overwrite: bool) -> str:
+def _copy_notebook_to(source_path: Path, new_filename, overwrite: bool, dry_run: bool = False) -> str:
     """Copy `source_path` (an already-verified existing notebook file) to
     `new_filename` within UPLOAD_DIR, applying the exact same validation,
     overwrite semantics, and tag inheritance copy_notebook's own
@@ -4338,6 +4364,14 @@ def _copy_notebook_to(source_path: Path, new_filename, overwrite: bool) -> str:
     HTTPException per destination, so one bad destination in a batch
     doesn't abort every other copy. Returns the validated new_filename on
     success.
+
+    `dry_run` (default False) runs every check above -- including the
+    "does the destination already exist" collision check, still held
+    under _rename_lock_for so a dry-run preview can't itself race a real
+    concurrent copy -- without actually calling shutil.copy2 or writing
+    anything, the same "report what a real batch would do without doing
+    it" preview POST /api/notebooks/{filename}/versions/delete-batch's
+    own "dry_run" already provides one level down from here.
     """
 
     if not isinstance(new_filename, str) or not new_filename:
@@ -4374,6 +4408,9 @@ def _copy_notebook_to(source_path: Path, new_filename, overwrite: bool) -> str:
                     'Pass "overwrite": true to replace it.'
                 )
             )
+
+        if dry_run:
+            return new_filename
 
         try:
 
@@ -4438,6 +4475,13 @@ def copy_notebook_batch(filename: str, data: dict):
     "overwrite" applies uniformly to every destination, the same single
     flag POST /api/notebooks/{filename}/copy itself takes -- there's no
     per-destination override.
+
+    "dry_run" (optional, default false) reports the exact same per-
+    destination "results" a real batch would -- each destination's own
+    "success" or "error" (including the 409 a same-name collision without
+    "overwrite": true would raise) -- without copying a single byte, the
+    identical preview POST /api/notebooks/{filename}/versions/delete-batch's
+    own "dry_run" already provides for deleting several versions at once.
     """
 
     new_filenames = data.get("new_filenames")
@@ -4455,6 +4499,7 @@ def copy_notebook_batch(filename: str, data: dict):
     _validate_batch_entry_count(new_filenames, noun="new_filenames")
 
     overwrite = bool(data.get("overwrite", False))
+    dry_run = bool(data.get("dry_run", False))
 
     source_path = resolve_upload_path(filename)
 
@@ -4473,7 +4518,7 @@ def copy_notebook_batch(filename: str, data: dict):
 
         try:
 
-            _copy_notebook_to(source_path, new_filename, overwrite)
+            _copy_notebook_to(source_path, new_filename, overwrite, dry_run=dry_run)
 
             results.append({
                 "new_filename": new_filename,
@@ -4492,6 +4537,7 @@ def copy_notebook_batch(filename: str, data: dict):
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "filename": filename,
         "results": results,
         "succeeded_count": succeeded_count,
@@ -4547,6 +4593,13 @@ def copy_notebooks_batch(data: dict):
     if every entry in it failed -- with "succeeded_count"/"failed_count"
     summarizing "results" the same way every other batch endpoint here
     already does.
+
+    "dry_run" (optional, default false, applies to every entry alike)
+    reports the exact same per-entry "results" a real batch would --
+    including the 409 an entry's own same-name collision without its own
+    "overwrite": true would raise -- without copying a single byte, the
+    identical preview POST /api/notebooks/{filename}/copy-batch's own
+    "dry_run" already provides one level up from here.
     """
 
     entries = data.get("entries")
@@ -4575,6 +4628,8 @@ def copy_notebooks_batch(data: dict):
                 )
             )
 
+    dry_run = bool(data.get("dry_run", False))
+
     results = []
     succeeded_count = 0
     failed_count = 0
@@ -4596,7 +4651,7 @@ def copy_notebooks_batch(data: dict):
                     detail="Notebook file not found"
                 )
 
-            _copy_notebook_to(source_path, new_filename, overwrite)
+            _copy_notebook_to(source_path, new_filename, overwrite, dry_run=dry_run)
 
             results.append({
                 "filename": filename,
@@ -4617,6 +4672,7 @@ def copy_notebooks_batch(data: dict):
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "results": results,
         "succeeded_count": succeeded_count,
         "failed_count": failed_count,

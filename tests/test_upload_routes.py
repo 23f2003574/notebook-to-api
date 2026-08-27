@@ -4669,6 +4669,40 @@ def test_rename_notebooks_batch_keeps_currently_compiled_tracking_under_the_new_
     os.remove(Path(UPLOAD_DIR) / "rename_many_compiled_target.ipynb")
 
 
+def test_rename_notebooks_batch_dry_run_reports_the_plan_without_renaming():
+
+    _upload_sample_notebook("rename_many_dry_run_a.ipynb")
+    _upload_sample_notebook("rename_many_dry_run_b.ipynb")
+    _upload_sample_notebook("rename_many_dry_run_conflict.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/rename-batch",
+        json={
+            "entries": [
+                {"filename": "rename_many_dry_run_a.ipynb", "new_filename": "rename_many_dry_run_new.ipynb"},
+                {"filename": "rename_many_dry_run_b.ipynb", "new_filename": "rename_many_dry_run_conflict.ipynb"},
+            ],
+            "dry_run": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results = {r["filename"]: r for r in body["results"]}
+    assert results["rename_many_dry_run_a.ipynb"]["status"] == "success"
+    assert results["rename_many_dry_run_b.ipynb"]["status"] == "error"
+
+    # Nothing was actually renamed.
+    assert (Path(UPLOAD_DIR) / "rename_many_dry_run_a.ipynb").is_file()
+    assert (Path(UPLOAD_DIR) / "rename_many_dry_run_b.ipynb").is_file()
+    assert (Path(UPLOAD_DIR) / "rename_many_dry_run_conflict.ipynb").is_file()
+    assert not (Path(UPLOAD_DIR) / "rename_many_dry_run_new.ipynb").exists()
+
+
 def test_rename_notebooks_batch_rejects_a_non_list_entries_value():
 
     resp = client.post(
@@ -5167,6 +5201,36 @@ def test_copy_notebook_batch_rejects_more_new_filenames_than_the_configured_maxi
     assert "at most 1" in resp.json()["detail"]
 
 
+def test_copy_notebook_batch_dry_run_reports_the_plan_without_copying():
+
+    _upload_sample_notebook("copy_batch_dry_run_source.ipynb")
+    _upload_sample_notebook("copy_batch_dry_run_existing.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/copy_batch_dry_run_source.ipynb/copy-batch",
+        json={
+            "new_filenames": [
+                "copy_batch_dry_run_new.ipynb",
+                "copy_batch_dry_run_existing.ipynb",
+            ],
+            "dry_run": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results = {r["new_filename"]: r for r in body["results"]}
+    assert results["copy_batch_dry_run_new.ipynb"]["status"] == "success"
+    assert results["copy_batch_dry_run_existing.ipynb"]["status"] == "error"
+
+    # Nothing was actually copied.
+    assert not (Path(UPLOAD_DIR) / "copy_batch_dry_run_new.ipynb").exists()
+
+
 def test_copy_notebook_batch_does_not_copy_version_history():
 
     filename = "copy_batch_versions_source.ipynb"
@@ -5371,6 +5435,36 @@ def test_copy_notebooks_batch_rejects_an_entry_missing_new_filename():
     )
 
     assert resp.status_code == 400
+
+
+def test_copy_notebooks_batch_dry_run_reports_the_plan_without_copying():
+
+    _upload_sample_notebook("copy_many_dry_run_a.ipynb")
+    _upload_sample_notebook("copy_many_dry_run_existing.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/copy-batch",
+        json={
+            "entries": [
+                {"filename": "copy_many_dry_run_a.ipynb", "new_filename": "copy_many_dry_run_new.ipynb"},
+                {"filename": "copy_many_dry_run_a.ipynb", "new_filename": "copy_many_dry_run_existing.ipynb"},
+            ],
+            "dry_run": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results = {r["new_filename"]: r for r in body["results"]}
+    assert results["copy_many_dry_run_new.ipynb"]["status"] == "success"
+    assert results["copy_many_dry_run_existing.ipynb"]["status"] == "error"
+
+    # Nothing was actually copied.
+    assert not (Path(UPLOAD_DIR) / "copy_many_dry_run_new.ipynb").exists()
 
 
 def test_copy_notebooks_batch_does_not_copy_version_history():
