@@ -5422,6 +5422,180 @@ def test_copy_batch_command_reports_a_clean_error_when_the_dashboard_is_unreacha
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_copy_many_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "copy-many" in proc.stdout
+
+
+def test_copy_many_command_reports_success(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {"filename": "a.ipynb", "new_filename": "a-copy.ipynb", "status": "success"},
+                {"filename": "b.ipynb", "new_filename": "b-copy.ipynb", "status": "success"},
+            ],
+            "succeeded_count": 2,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "copy-many", "a.ipynb:a-copy.ipynb", "b.ipynb:b-copy.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Copied 'a.ipynb' to 'a-copy.ipynb'" in proc.stdout
+    assert "Copied 'b.ipynb' to 'b-copy.ipynb'" in proc.stdout
+    assert "2 succeeded, 0 failed" in proc.stdout
+    assert handler.requests == ["/api/notebooks/copy-batch"]
+    assert json.loads(handler.bodies[0]) == {
+        "entries": [
+            {"filename": "a.ipynb", "new_filename": "a-copy.ipynb", "overwrite": False},
+            {"filename": "b.ipynb", "new_filename": "b-copy.ipynb", "overwrite": False},
+        ]
+    }
+
+
+def test_copy_many_command_reports_a_partial_failure(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {"filename": "a.ipynb", "new_filename": "a-copy.ipynb", "status": "success"},
+                {
+                    "filename": "missing.ipynb", "new_filename": "m-copy.ipynb",
+                    "status": "error", "detail": "Notebook file not found",
+                },
+            ],
+            "succeeded_count": 1,
+            "failed_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "copy-many", "a.ipynb:a-copy.ipynb", "missing.ipynb:m-copy.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Copied 'a.ipynb' to 'a-copy.ipynb'" in proc.stdout
+    assert (
+        "Failed to copy 'missing.ipynb' to 'm-copy.ipynb': "
+        "Notebook file not found" in proc.stdout
+    )
+    assert "1 succeeded, 1 failed" in proc.stdout
+
+
+def test_copy_many_command_passes_the_overwrite_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [{"filename": "a.ipynb", "new_filename": "a-copy.ipynb", "status": "success"}],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "copy-many", "a.ipynb:a-copy.ipynb",
+            "--dashboard-url", dashboard_url, "--overwrite",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "entries": [{"filename": "a.ipynb", "new_filename": "a-copy.ipynb", "overwrite": True}]
+    }
+
+
+def test_copy_many_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "results": [{"filename": "a.ipynb", "new_filename": "a-copy.ipynb", "status": "success"}],
+        "succeeded_count": 1,
+        "failed_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "copy-many", "a.ipynb:a-copy.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_copy_many_command_rejects_a_malformed_entry(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["copy-many", "no-colon-here"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode != 0
+    assert "filename:new_filename" in proc.stderr
+
+
+def test_copy_many_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "copy-many", "a.ipynb:a-copy.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_tags_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

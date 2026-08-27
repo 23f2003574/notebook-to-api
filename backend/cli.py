@@ -342,7 +342,7 @@ _CORE_COMMANDS = frozenset({
     "list", "info", "info-batch",
     "search-functions", "search-content", "find-duplicates", "resolve-duplicates", "storage",
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy",
-    "copy-batch", "tags", "prune-versions", "description", "deploy-history",
+    "copy-batch", "copy-many", "tags", "prune-versions", "description", "deploy-history",
     "clear-deploy-history", "compile-history", "clear-compile-history",
     "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
@@ -595,6 +595,30 @@ def _parse_notebook_version_pair(value):
         )
 
     return {"filename": filename, "version_id": version_id}
+
+
+def _parse_notebook_copy_pair(value):
+    """Parse one `copy-many` positional argument
+    ("filename:new_filename") into a {"filename", "new_filename"} entry
+    matching POST /api/notebooks/copy-batch's own "entries" shape -- the
+    exact same "filename:value" pair convention
+    _parse_notebook_version_pair already established for `versions
+    restore-batch`, just paired with a destination filename instead of a
+    version_id.
+    """
+    if ":" not in value:
+        raise argparse.ArgumentTypeError(
+            f"'{value}' must be in filename:new_filename form"
+        )
+
+    filename, _, new_filename = value.rpartition(":")
+
+    if not filename or not new_filename:
+        raise argparse.ArgumentTypeError(
+            f"'{value}' must be in filename:new_filename form"
+        )
+
+    return {"filename": filename, "new_filename": new_filename}
 
 
 def _matched_notebooks_summary(data, args, shown_count):
@@ -2212,6 +2236,53 @@ def _dispatch_core_command(args):
                     print(f"Copied '{args.filename}' to '{result['new_filename']}'")
                 else:
                     print(f"Failed to copy to '{result['new_filename']}': {result['detail']}")
+
+            print(
+                f"\n{data.get('succeeded_count', 0)} succeeded, "
+                f"{data.get('failed_count', 0)} failed"
+            )
+    elif args.command == "copy-many":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        entries = [
+            {**entry, "overwrite": args.overwrite} for entry in args.entry
+        ]
+
+        try:
+            response = httpx.post(
+                f"{dashboard_url}/api/notebooks/copy-batch",
+                json={"entries": entries},
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            for result in data.get("results", []):
+
+                if result["status"] == "success":
+                    print(f"Copied '{result['filename']}' to '{result['new_filename']}'")
+                else:
+                    print(
+                        f"Failed to copy '{result['filename']}' to "
+                        f"'{result['new_filename']}': {result['detail']}"
+                    )
 
             print(
                 f"\n{data.get('succeeded_count', 0)} succeeded, "
@@ -5602,6 +5673,49 @@ def main():
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"filename\", \"results\": [{\"new_filename\", \"status\", "
+            "...}, ...], \"succeeded_count\", \"failed_count\"}) instead "
+            "of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    # copy-many command (duplicate several *different* notebooks at once,
+    # each into its own new filename, via POST
+    # /api/notebooks/copy-batch -- the mirror shape `copy-batch` above
+    # deliberately doesn't cover: one fixed source fanned out across
+    # several destinations there, vs. several different sources each with
+    # their own destination here)
+    copy_many_parser = subparsers.add_parser(
+        "copy-many",
+        help=(
+            "Duplicate several different notebooks at once, each into "
+            "its own new filename, via POST /api/notebooks/copy-batch."
+        )
+    )
+    copy_many_parser.add_argument(
+        "entry", nargs="+", type=_parse_notebook_copy_pair,
+        help=(
+            "One or more \"filename:new_filename\" pairs, e.g. "
+            "a.ipynb:a-copy.ipynb b.ipynb:b-copy.ipynb."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(copy_many_parser)
+    copy_many_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Replace an existing notebook at any new_filename that "
+            "already exists, mirroring POST /api/notebooks/copy-batch's "
+            "own per-entry \"overwrite\": true -- applies uniformly to "
+            "every entry given here."
+        )
+    )
+    copy_many_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"results\": [{\"filename\", \"new_filename\", \"status\", "
             "...}, ...], \"succeeded_count\", \"failed_count\"}) instead "
             "of a human-readable summary, for scripting/automation."
         )

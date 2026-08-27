@@ -4287,6 +4287,128 @@ def copy_notebook_batch(filename: str, data: dict):
     }
 
 
+@router.post("/notebooks/copy-batch")
+def copy_notebooks_batch(data: dict):
+    """Duplicate a caller-chosen set of *different* notebooks in one call,
+    each into its own new filename, leaving every source notebook (and
+    whatever it currently backs in GENERATED_DIR) completely untouched.
+
+    POST /api/notebooks/{filename}/copy-batch's own docstring already
+    names the shape it deliberately doesn't cover: it fans one *fixed*
+    source out across several destinations, "the mirror shape" of POST
+    /api/notebooks/delete-batch, POST /api/tags/{tag}/apply, and POST
+    /api/notebooks/info-batch, which each fan out across several
+    *sources* instead. That mirror shape -- several different source
+    notebooks, each copied to its own independent destination, in one
+    call -- was still missing here: seeding several unrelated new
+    notebooks each from its own distinct existing template (e.g. cloning
+    a handful of notebooks into a new project all at once) meant one
+    POST .../copy call per source, with no way to submit the whole plan
+    in a single request. This closes it, the same way POST
+    /api/notebooks/tags-batch, POST /api/notebooks/description-batch, and
+    POST /api/notebooks/versions/restore-batch already closed the
+    identical "several different notebooks, each its own independent
+    value" gap for replacing several notebooks' own tags/description/
+    version at once.
+
+    Takes "entries", a list of {"filename", "new_filename"} objects (with
+    an optional per-entry "overwrite", default false) -- the same
+    {"filename", ...} shape those three endpoints already establish, plus
+    its own "overwrite" here since, unlike POST
+    /api/notebooks/{filename}/copy-batch's single shared source and
+    single shared "overwrite" applied to every destination alike, each
+    entry here names its own independent source *and* destination, so
+    whether that one destination may already exist is its own entry's own
+    business, not a batch-wide setting.
+
+    Reuses _copy_notebook_to (above) -- the exact same validation,
+    overwrite semantics, and tag/description inheritance every other
+    copy path here already goes through -- once per entry, so a notebook
+    copied this way is indistinguishable from one copied individually.
+    One bad entry (an unknown source filename, an invalid new_filename,
+    or a same-name collision without that entry's own "overwrite": true)
+    doesn't abort the rest of the batch; "results" reports one
+    {"filename", "new_filename", "status", ...} entry per input entry --
+    "success" or "error" (the identical HTTPException detail a standalone
+    POST .../copy call would have raised for that same entry). The
+    response is always 200 -- the batch request itself was handled, even
+    if every entry in it failed -- with "succeeded_count"/"failed_count"
+    summarizing "results" the same way every other batch endpoint here
+    already does.
+    """
+
+    entries = data.get("entries")
+
+    if not isinstance(entries, list) or not entries:
+
+        raise HTTPException(
+            status_code=400,
+            detail="entries must be a non-empty list of objects"
+        )
+
+    for entry in entries:
+
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("filename"), str)
+            or not isinstance(entry.get("new_filename"), str)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "each entry must be an object with a string "
+                    "'filename' and a string 'new_filename'"
+                )
+            )
+
+    results = []
+    succeeded_count = 0
+    failed_count = 0
+
+    for entry in entries:
+
+        filename = entry["filename"]
+        new_filename = entry["new_filename"]
+        overwrite = bool(entry.get("overwrite", False))
+
+        try:
+
+            source_path = resolve_upload_path(filename)
+
+            if not source_path.is_file():
+
+                raise HTTPException(
+                    status_code=404,
+                    detail="Notebook file not found"
+                )
+
+            _copy_notebook_to(source_path, new_filename, overwrite)
+
+            results.append({
+                "filename": filename,
+                "new_filename": new_filename,
+                "status": "success",
+            })
+            succeeded_count += 1
+
+        except HTTPException as exc:
+
+            results.append({
+                "filename": filename,
+                "new_filename": new_filename,
+                "status": "error",
+                "detail": exc.detail,
+            })
+            failed_count += 1
+
+    return {
+        "status": "success",
+        "results": results,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
+    }
+
+
 @router.get("/notebooks/{filename}/tags")
 def get_notebook_tags(filename: str):
     """Return the tags currently recorded for a previously uploaded
