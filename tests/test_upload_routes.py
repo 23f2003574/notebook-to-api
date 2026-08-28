@@ -8413,6 +8413,99 @@ def test_export_notebook_versions_succeeds_with_no_version_history():
         assert archive.namelist() == ["versions_export_no_history.ipynb"]
 
 
+def test_export_notebook_versions_version_ids_exports_only_the_chosen_subset():
+
+    filename = "versions_export_subset.ipynb"
+    original_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    middle_content = _notebook_bytes("def g() -> int:\n    return 2\n")
+    current_content = _notebook_bytes("def h() -> int:\n    return 3\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(original_content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(middle_content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(current_content), "application/json")},
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(versions) == 2
+    chosen_version_id = versions[0]["version_id"]
+    other_version_id = versions[1]["version_id"]
+
+    export_resp = client.get(
+        f"/api/notebooks/{filename}/versions/export",
+        params={"version_ids": chosen_version_id},
+    )
+
+    assert export_resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(export_resp.content)) as archive:
+
+        names = set(archive.namelist())
+        # Current content is always included, regardless of version_ids.
+        assert filename in names
+        assert f"versions/{chosen_version_id}" in names
+        assert f"versions/{other_version_id}" not in names
+        assert archive.read(filename) == current_content
+
+
+def test_export_notebook_versions_version_ids_accepts_a_comma_separated_list():
+
+    filename = "versions_export_subset_multi.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")), "application/json")},
+    )
+
+    version_ids = [
+        v["version_id"]
+        for v in client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    ]
+    assert len(version_ids) == 2
+
+    export_resp = client.get(
+        f"/api/notebooks/{filename}/versions/export",
+        params={"version_ids": ",".join(version_ids)},
+    )
+
+    assert export_resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(export_resp.content)) as archive:
+        names = set(archive.namelist())
+        assert names - {filename} == {f"versions/{vid}" for vid in version_ids}
+
+
+def test_export_notebook_versions_version_ids_returns_404_naming_every_unknown_id():
+
+    filename = "versions_export_subset_unknown.ipynb"
+    _upload_sample_notebook(filename)
+
+    export_resp = client.get(
+        f"/api/notebooks/{filename}/versions/export",
+        params={"version_ids": "does-not-exist-a.ipynb,does-not-exist-b.ipynb"},
+    )
+
+    assert export_resp.status_code == 404
+    detail = export_resp.json()["detail"]
+    assert "does-not-exist-a.ipynb" in detail
+    assert "does-not-exist-b.ipynb" in detail
+
+
 def test_export_notebook_versions_returns_404_for_missing_notebook():
 
     resp = client.get(

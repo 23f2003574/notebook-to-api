@@ -5732,7 +5732,7 @@ def list_notebook_versions(filename: str, limit: int = None, offset: int = 0):
 
 
 @router.get("/notebooks/{filename}/versions/export")
-def export_notebook_versions(filename: str):
+def export_notebook_versions(filename: str, version_ids: str = None):
     """Download a previously uploaded notebook's current content together
     with its entire snapshotted version history, bundled into a single
     .zip -- a complete, restorable backup of everything POST
@@ -5779,6 +5779,30 @@ def export_notebook_versions(filename: str):
     notebook with neither set contributes no entry for either, the same
     "empty/absent is a valid state, not an error" reasoning "versions/"
     above already follows.
+
+    "version_ids" (optional, a comma-separated list -- the same format
+    GET /api/notebooks/export's own "filenames" already uses) narrows
+    the bundled history to just those snapshots instead of every one
+    this notebook has -- the identical caller-chosen-subset shape that
+    endpoint already offers for picking which *notebooks* go into a
+    catalog-wide export, just applied here to which *versions* of one
+    notebook go into its own. Before this, archiving only a few
+    known-good snapshots (e.g. release candidates worth keeping) ahead
+    of DELETE .../versions clearing the rest -- without also dragging
+    along every scratch/junk save in between -- meant downloading the
+    *entire* history and discarding the unwanted entries locally, or one
+    GET .../versions/{version_id} call per snapshot actually wanted,
+    losing the one-request convenience this endpoint exists to provide.
+    An unknown version_id is rejected with 404, naming every one that
+    doesn't exist, before a single byte is written to the archive --
+    the identical all-or-nothing "filenames" already gives GET
+    /api/notebooks/export, rather than silently exporting a smaller
+    archive than the caller actually asked for. The notebook's own
+    current content and tags/description are always included regardless
+    -- "version_ids" narrows only which *past* snapshots are bundled,
+    the same way it never had anything to say about the current content
+    even before this. Omitted (the default), every version is bundled,
+    exactly as before this.
     """
 
     file_path = resolve_upload_path(filename)
@@ -5792,18 +5816,53 @@ def export_notebook_versions(filename: str):
 
     versions_dir = _notebook_versions_dir(file_path.name)
 
+    if version_ids:
+
+        requested = [v.strip() for v in version_ids.split(",") if v.strip()]
+
+        if not requested:
+
+            raise HTTPException(
+                status_code=400,
+                detail="version_ids must not be empty"
+            )
+
+        missing = []
+        version_paths = []
+
+        for version_id in requested:
+
+            version_path = _resolve_path_within(
+                str(versions_dir), version_id, "notebook version"
+            )
+
+            if not version_path.is_file():
+                missing.append(version_id)
+            else:
+                version_paths.append(version_path)
+
+        if missing:
+
+            raise HTTPException(
+                status_code=404,
+                detail=f"Notebook version(s) not found: {', '.join(missing)}"
+            )
+
+    else:
+
+        version_paths = (
+            sorted(entry for entry in versions_dir.iterdir() if entry.is_file())
+            if versions_dir.is_dir() else []
+        )
+
     buffer = io.BytesIO()
 
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
 
         archive.write(file_path, filename)
 
-        if versions_dir.is_dir():
-
-            for entry in sorted(versions_dir.iterdir()):
-
-                if entry.is_file():
-                    archive.write(entry, f"versions/{entry.name}")
+        for version_path in version_paths:
+            archive.write(version_path, f"versions/{version_path.name}")
 
         _write_notebook_metadata_to_archive(
             archive, file_path.name, *_notebook_metadata_archive_entry_names()

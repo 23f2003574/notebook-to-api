@@ -3500,9 +3500,14 @@ def _dispatch_core_command(args):
 
         elif args.versions_command == "export":
 
+            params = {}
+            if args.version_ids:
+                params["version_ids"] = ",".join(args.version_ids)
+
             try:
                 response = httpx.get(
                     f"{dashboard_url}/api/notebooks/{args.filename}/versions/export",
+                    params=params,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -7011,6 +7016,23 @@ def main():
     )
     versions_export_parser.add_argument(
         "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    versions_export_parser.add_argument(
+        "--version-id",
+        nargs="+",
+        default=None,
+        dest="version_ids",
+        metavar="VERSION_ID",
+        help=(
+            "Only bundle these specific version snapshots (as reported "
+            "by `versions list`) instead of the notebook's entire "
+            "history, via GET /api/notebooks/{filename}/versions/"
+            "export's own \"version_ids\" query param -- the same "
+            "caller-chosen-subset shape `export-notebooks`' own filename "
+            "arguments already give for picking which notebooks go into "
+            "a catalog-wide export, just applied here to which versions "
+            "of one notebook. Omit to bundle every version, as before."
+        )
     )
     _add_dashboard_url_and_timeout_arguments(versions_export_parser)
     versions_export_parser.add_argument(

@@ -9622,6 +9622,52 @@ def test_versions_export_command_saves_the_zip_to_the_default_path(
     assert handler.requests == ["/api/notebooks/nb.ipynb/versions/export"]
 
 
+def test_versions_export_command_version_id_sends_a_comma_separated_query_param(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "export", "nb.ipynb",
+            "--version-id", "v1.ipynb", "v2.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/nb.ipynb/versions/export?version_ids=v1.ipynb%2Cv2.ipynb"
+    ]
+
+
+def test_versions_export_command_omits_version_ids_query_param_by_default(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["versions", "export", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions/export"]
+
+
 def test_versions_export_command_respects_a_custom_output_path(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
