@@ -4592,6 +4592,8 @@ def _dispatch_core_command(args):
             params["limit"] = args.limit
         if args.offset:
             params["offset"] = args.offset
+        if args.format == "csv":
+            params["format"] = "csv"
 
         try:
             response = httpx.get(
@@ -4608,6 +4610,14 @@ def _dispatch_core_command(args):
                 f"Dashboard rejected the request ({response.status_code}): "
                 f"{_extract_dashboard_error_detail(response)}"
             )
+
+        if args.format == "csv":
+            # The response is CSV, not JSON -- printed as-is (redirect
+            # stdout to a file to save it) rather than run through the
+            # JSON/human-readable branches below, which both assume a
+            # parseable JSON body.
+            print(response.text, end="")
+            return
 
         data = response.json()
 
@@ -8084,6 +8094,21 @@ def main():
             "--limit is applied, via GET /api/compile/history's own "
             "?offset= query param -- e.g. for paging through a compile "
             "history longer than one --limit-sized page."
+        )
+    )
+    compile_history_parser.add_argument(
+        "--format",
+        choices=["json", "csv"],
+        default="json",
+        help=(
+            "Response format to request via GET /api/compile/history's "
+            "own ?format= query param, the same \"json\"/\"csv\" choice "
+            "GET /api/deploy/history's own ?format= already offers for "
+            "its own history log. \"csv\" prints the dashboard's own CSV "
+            "response straight to stdout (redirect it to a file, e.g. "
+            "`> compile_history.csv`). Every filter/--limit/--offset "
+            "above still applies; --json is ignored under --format csv, "
+            "since the response isn't JSON at all."
         )
     )
     _add_dashboard_url_and_timeout_arguments(compile_history_parser)

@@ -9050,6 +9050,7 @@ def compile_history_endpoint(
     source_notebook_sha256: str = None,
     limit: int = None,
     offset: int = 0,
+    format: str = "json",
 ):
     """This dashboard's own past POST /api/compile invocations, most
     recent first -- up to the last MAX_COMPILE_HISTORY_ENTRIES.
@@ -9114,7 +9115,35 @@ def compile_history_endpoint(
     (a dashboard-tracked compile) -- the CLI's own local `compile` never
     touches a dashboard's UPLOAD_DIR at all, so it has nothing to record
     this history into.
+
+    "format" (optional, default "json") returns "csv" instead, the
+    identical "csv"/"json" choice GET /api/deploy/history's own "format"
+    already offers for its own history log -- an operator wanting to
+    open this dashboard's own compile history in a spreadsheet, or feed
+    it into the same CSV-based reporting pipeline a "format": "csv"
+    deploy-history export already would, had this endpoint's own history
+    left out entirely, even though both are the identical "durable
+    history log" shape. Applies to the exact same already-filtered,
+    already-paginated "entries" the "json" response would return, every
+    filter/"offset"/"limit" above composing with "format" identically.
+    Column order is "compiled_at,notebook_filename,
+    source_notebook_sha256,only,exclude,endpoint_count,
+    dependency_count,skipped_function_count" -- every field the "json"
+    response's own "entries" already carry per entry, none renamed or
+    reordered; "only"/"exclude" (each a list, or null when neither was
+    given) are written as a single semicolon-joined cell (empty when
+    null) rather than one CSV column per function name, since the
+    number of named functions varies entry to entry and CSV rows must
+    share one fixed column count. An unrecognized "format" is rejected
+    with 400 before this dashboard's own compile history is even read.
     """
+
+    if format not in ("json", "csv"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="format must be 'json' or 'csv'"
+        )
 
     entries = list(reversed(_read_compile_history()))
 
@@ -9149,6 +9178,38 @@ def compile_history_endpoint(
             )
 
         entries = entries[:limit]
+
+    if format == "csv":
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+
+        writer.writerow([
+            "compiled_at", "notebook_filename", "source_notebook_sha256",
+            "only", "exclude", "endpoint_count", "dependency_count",
+            "skipped_function_count",
+        ])
+
+        for entry in entries:
+
+            writer.writerow([
+                entry.get("compiled_at"),
+                entry.get("notebook_filename"),
+                entry.get("source_notebook_sha256"),
+                ";".join(entry.get("only") or []),
+                ";".join(entry.get("exclude") or []),
+                entry.get("endpoint_count"),
+                entry.get("dependency_count"),
+                entry.get("skipped_function_count"),
+            ])
+
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": 'attachment; filename="compile_history.csv"',
+            },
+        )
 
     return {
         "status": "success",

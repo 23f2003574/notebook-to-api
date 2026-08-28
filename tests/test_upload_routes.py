@@ -14755,6 +14755,60 @@ def test_compile_history_filters_by_notebook_filename(tmp_path, monkeypatch):
     assert body["entry_count"] == 2
 
 
+def test_compile_history_csv_format_returns_a_csv_response(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "compile_history_csv_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    upload_module._append_compile_history_entry({
+        "compiled_at": "2024-01-01T00:00:00+00:00", "notebook_filename": "nb.ipynb",
+        "source_notebook_sha256": "aaa", "only": ["add", "subtract"], "exclude": None,
+        "endpoint_count": 2, "dependency_count": 0, "skipped_function_count": 0,
+    })
+
+    resp = client.get("/api/compile/history", params={"format": "csv"})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert 'attachment; filename="compile_history.csv"' in resp.headers["content-disposition"]
+
+    rows = resp.text.strip().split("\r\n")
+    assert rows[0] == (
+        "compiled_at,notebook_filename,source_notebook_sha256,only,exclude,"
+        "endpoint_count,dependency_count,skipped_function_count"
+    )
+    # "only" is a semicolon-joined cell, not one CSV column per function.
+    assert rows[1] == "2024-01-01T00:00:00+00:00,nb.ipynb,aaa,add;subtract,,2,0,0"
+    assert len(rows) == 2
+
+
+def test_compile_history_csv_format_composes_with_filters(tmp_path, monkeypatch):
+
+    _seed_compile_history_for_filtering(tmp_path, monkeypatch)
+
+    resp = client.get(
+        "/api/compile/history",
+        params={"format": "csv", "notebook_filename": "one.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    rows = resp.text.strip().split("\r\n")
+    assert len(rows) == 3
+    assert rows[1].startswith("2024-01-03T00:00:00+00:00,one.ipynb,ccc,")
+    assert rows[2].startswith("2024-01-01T00:00:00+00:00,one.ipynb,aaa,")
+
+
+def test_compile_history_rejects_an_unknown_format():
+
+    resp = client.get("/api/compile/history", params={"format": "xml"})
+
+    assert resp.status_code == 400
+    assert "format" in resp.json()["detail"]
+
+
 def test_compile_history_filters_by_source_notebook_sha256(tmp_path, monkeypatch):
 
     _seed_compile_history_for_filtering(tmp_path, monkeypatch)
