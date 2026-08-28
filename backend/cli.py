@@ -1134,14 +1134,28 @@ def _dispatch_core_command(args):
                 dockerfile_path = output_dir / "Dockerfile"
                 if not dockerfile_path.is_file():
                     raise FileNotFoundError(f"Dockerfile not found at {dockerfile_path}. Ensure the compiler generated it.")
-                _run_deploy_docker_command(build_args, output_dir, capture_output=True)
-                pushed = False
-                if args.push:
-                    _run_deploy_docker_command(
-                        ["docker", "push", tag], output_dir, capture_output=True
-                    )
-                    pushed = True
-            print(json.dumps({"status": "success", "tag": tag, "pushed": pushed}, indent=2))
+
+                if args.dry_run:
+                    # Compiling (above) already validated the notebook and
+                    # produced a Dockerfile -- everything --dry-run exists
+                    # to check -- without ever invoking `docker build`/
+                    # `docker push` at all. "pushed" reports what a real
+                    # run *would* do with --push, not that anything
+                    # actually happened.
+                    pushed = args.push
+                else:
+                    _run_deploy_docker_command(build_args, output_dir, capture_output=True)
+                    pushed = False
+                    if args.push:
+                        _run_deploy_docker_command(
+                            ["docker", "push", tag], output_dir, capture_output=True
+                        )
+                        pushed = True
+
+            result = {"status": "success", "tag": tag, "pushed": pushed}
+            if args.dry_run:
+                result["dry_run"] = True
+            print(json.dumps(result, indent=2))
         else:
             compile_notebook(
                 notebook_path=args.notebook, output_dir=str(output_dir),
@@ -1152,14 +1166,20 @@ def _dispatch_core_command(args):
             dockerfile_path = output_dir / "Dockerfile"
             if not dockerfile_path.is_file():
                 raise FileNotFoundError(f"Dockerfile not found at {dockerfile_path}. Ensure the compiler generated it.")
-            print(f"Building Docker image '{tag}' from {output_dir} …")
-            _run_deploy_docker_command(build_args, output_dir)
-            print(f"Docker image '{tag}' built successfully.")
 
-            if args.push:
-                print(f"Pushing Docker image '{tag}' …")
-                _run_deploy_docker_command(["docker", "push", tag], output_dir)
-                print(f"Docker image '{tag}' pushed successfully.")
+            if args.dry_run:
+                print(f"Would build Docker image '{tag}' from {output_dir}.")
+                if args.push:
+                    print(f"Would push Docker image '{tag}'.")
+            else:
+                print(f"Building Docker image '{tag}' from {output_dir} …")
+                _run_deploy_docker_command(build_args, output_dir)
+                print(f"Docker image '{tag}' built successfully.")
+
+                if args.push:
+                    print(f"Pushing Docker image '{tag}' …")
+                    _run_deploy_docker_command(["docker", "push", tag], output_dir)
+                    print(f"Docker image '{tag}' pushed successfully.")
     elif args.command == "diff":
         diff = diff_notebook_functions(args.old_notebook, args.new_notebook)
         if args.json_output:
@@ -4369,6 +4389,9 @@ def _dispatch_core_command(args):
         if args.platform:
             body["platform"] = args.platform
 
+        if args.dry_run:
+            body["dry_run"] = True
+
         try:
             response = httpx.post(
                 f"{dashboard_url}/api/deploy", json=body, timeout=args.timeout,
@@ -4388,9 +4411,15 @@ def _dispatch_core_command(args):
         if args.json_output:
             print(json.dumps(data, indent=2))
         else:
-            print(f"Built image '{data.get('tag')}' on {dashboard_url}")
+
+            verb = "Would build" if data.get("dry_run") else "Built"
+            print(f"{verb} image '{data.get('tag')}' on {dashboard_url}")
+
             if data.get("pushed"):
-                print("Pushed to the registry.")
+                print(
+                    "Would push to the registry." if data.get("dry_run")
+                    else "Pushed to the registry."
+                )
     elif args.command == "deploy-history":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -4983,6 +5012,17 @@ def main():
             "when building on one architecture (e.g. Apple Silicon) for a "
             "deploy target that runs another, which almost every cloud "
             "PaaS does (linux/amd64)."
+        )
+    )
+    deploy_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Compile the notebook and confirm a Dockerfile was produced, "
+            "but stop there -- without actually running `docker build`/"
+            "`docker push` -- mirroring POST /api/deploy's own "
+            "\"dry_run\" body field."
         )
     )
     deploy_parser.add_argument(
@@ -7706,6 +7746,18 @@ def main():
             "its source notebook's current content -- POST /api/deploy "
             "rejects a stale build with 409 unless this is set, the same "
             "staleness check `remote-compile` (run again) already clears."
+        )
+    )
+    remote_deploy_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Check whether this deploy would actually go through -- a "
+            "compiled app exists and isn't stale (unless --force) -- via "
+            "POST /api/deploy's own \"dry_run\" body field, without "
+            "running `docker build`/`docker push` or recording a deploy "
+            "history entry."
         )
     )
     # Docker builds routinely run well past this file's other commands'

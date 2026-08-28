@@ -8444,11 +8444,34 @@ def deploy_generated_app(data: dict = None):
     last deployed, with what tag, was it actually pushed" had nothing on
     this dashboard itself to answer that; .compile_metadata.json only
     ever tracks the most recent *compile*, not any deploy.
+
+    "dry_run" (optional, default false) still runs every check above --
+    a compiled app actually exists (404 otherwise) and isn't stale
+    against its source notebook unless "force": true (409 otherwise),
+    both held under the identical COMPILE_LOCK a real deploy already
+    holds for them -- without ever invoking `docker build`/`docker push`
+    or appending a deploy history entry. Every other mutating endpoint in
+    this file already has a "dry_run" of its own; this was the one
+    remaining operation with real, potentially expensive side effects
+    (an actual Docker build, and -- with "push": true -- a push to a
+    registry) and no way to preview it at all. A CI pipeline gating "is
+    this notebook deployable right now" -- Dockerfile present, not stale
+    -- previously had to actually run the build (and eat its cost) just
+    to find out, or reason about GET /api/notebooks' own
+    "notebook_changed_since_compile" field by hand instead of asking this
+    endpoint directly. "tag" and "pushed" report the exact same values a
+    real deploy would have used/produced -- "pushed" reflecting whether a
+    real run would have pushed (not that anything actually was), the same
+    "the field always reports what a real run would produce, only
+    "dry_run" itself signals nothing actually happened" convention every
+    other "dry_run" response in this file already follows.
     """
 
     generated_path = Path(GENERATED_DIR)
 
     data = data or {}
+
+    dry_run = bool(data.get("dry_run", False))
 
     force = bool(data.get("force", False))
 
@@ -8523,6 +8546,15 @@ def deploy_generated_app(data: dict = None):
                     '"force": true to deploy the stale build anyway.'
                 )
             )
+
+        if dry_run:
+
+            return {
+                "status": "success",
+                "dry_run": True,
+                "tag": tag,
+                "pushed": push,
+            }
 
         build_result = _run_docker_command(
             build_args, generated_path

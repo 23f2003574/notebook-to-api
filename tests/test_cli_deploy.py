@@ -794,3 +794,122 @@ def test_deploy_json_flag_reports_pushed_true_after_a_successful_push(tmp_path):
 
     calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
     assert len(calls) == 2
+
+
+def test_deploy_dry_run_does_not_invoke_docker(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker_recording_all_calls(bin_dir, log_path)
+
+    proc = _run_cli(
+        [
+            "deploy", str(notebook_path), "--output", "built_api", "--dry-run",
+        ],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    # Compiling still happens -- that's what --dry-run actually validates.
+    assert (workdir / "built_api" / "app.py").exists()
+    assert (workdir / "built_api" / "Dockerfile").exists()
+
+    assert "Would build Docker image 'built_api:latest'" in proc.stdout
+    # Docker must never have been invoked at all.
+    assert not log_path.exists()
+
+
+def test_deploy_dry_run_reports_would_push_when_requested(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker_recording_all_calls(bin_dir, log_path)
+
+    proc = _run_cli(
+        [
+            "deploy", str(notebook_path), "--output", "built_api",
+            "--push", "--dry-run",
+        ],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would push Docker image 'built_api:latest'" in proc.stdout
+    assert not log_path.exists()
+
+
+def test_deploy_dry_run_json_flag_emits_dry_run_true(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker_recording_all_calls(bin_dir, log_path)
+
+    proc = _run_cli(
+        [
+            "deploy", str(notebook_path), "--output", "built_api",
+            "--dry-run", "--json",
+        ],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    data = json.loads(proc.stdout)
+    assert data == {
+        "status": "success",
+        "tag": "built_api:latest",
+        "pushed": False,
+        "dry_run": True,
+    }
+    assert not log_path.exists()
+
+
+def test_deploy_dry_run_json_flag_reports_pushed_true_when_push_requested(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker_recording_all_calls(bin_dir, log_path)
+
+    proc = _run_cli(
+        [
+            "deploy", str(notebook_path), "--output", "built_api",
+            "--push", "--dry-run", "--json",
+        ],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    data = json.loads(proc.stdout)
+    assert data == {
+        "status": "success",
+        "tag": "built_api:latest",
+        "pushed": True,
+        "dry_run": True,
+    }
+    assert not log_path.exists()

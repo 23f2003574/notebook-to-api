@@ -12298,6 +12298,37 @@ def test_remote_deploy_command_passes_tag_push_platform_and_force_through(
     }
 
 
+def test_remote_deploy_command_dry_run_passes_the_flag_through_and_prints_would_build(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": True,
+            "tag": "myapp:v1", "pushed": True,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-deploy", "--dashboard-url", dashboard_url,
+            "--tag", "myapp:v1", "--push", "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would build image 'myapp:v1'" in proc.stdout
+    assert "Would push to the registry." in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "push": True, "force": False, "tag": "myapp:v1", "dry_run": True,
+    }
+
+
 def test_remote_deploy_command_json_flag_emits_the_dashboards_own_response(
     tmp_path, fake_dashboard
 ):

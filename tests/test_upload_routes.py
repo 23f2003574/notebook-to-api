@@ -13556,6 +13556,116 @@ def test_deploy_endpoint_does_not_push_by_default(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
+def test_deploy_endpoint_dry_run_does_not_invoke_docker(tmp_path, monkeypatch):
+
+    _compile_a_notebook("deploy_dry_run_test.ipynb")
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post("/api/deploy", json={"dry_run": True})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["tag"] == "generated:latest"
+    assert body["pushed"] is False
+
+    # Docker must never have been invoked at all.
+    assert not log_path.exists()
+
+
+def test_deploy_endpoint_dry_run_reports_pushed_true_when_push_was_requested(
+    tmp_path, monkeypatch
+):
+
+    _compile_a_notebook("deploy_dry_run_push_test.ipynb")
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post("/api/deploy", json={"dry_run": True, "push": True})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    # Reports what a *real* deploy would do with "push": true -- even
+    # though this dry run never actually pushed anything.
+    assert body["pushed"] is True
+    assert not log_path.exists()
+
+
+def test_deploy_endpoint_dry_run_still_returns_404_when_nothing_compiled_yet(
+    monkeypatch,
+):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(
+        upload_module, "GENERATED_DIR", "generated_deploy_dry_run_missing_dir"
+    )
+
+    resp = client.post("/api/deploy", json={"dry_run": True})
+
+    assert resp.status_code == 404
+
+
+def test_deploy_endpoint_dry_run_still_returns_409_when_the_compiled_notebook_is_stale(
+    tmp_path, monkeypatch
+):
+
+    filename = "deploy_dry_run_stale_test.ipynb"
+    _compile_a_notebook(filename)
+
+    changed_content = _notebook_bytes(
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+    overwrite_resp = client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(changed_content), "application/json")},
+    )
+    assert overwrite_resp.status_code == 200
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post("/api/deploy", json={"dry_run": True})
+
+    assert resp.status_code == 409
+    assert "edited since the last compile" in resp.json()["detail"]
+    assert not log_path.exists()
+
+
+def test_deploy_endpoint_dry_run_does_not_record_a_history_entry(tmp_path, monkeypatch):
+
+    _compile_a_notebook("deploy_dry_run_history_test.ipynb")
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    entry_count_before = client.get("/api/deploy/history").json()["entry_count"]
+
+    resp = client.post(
+        "/api/deploy", json={"dry_run": True, "tag": "deploy-dry-run-history:latest"}
+    )
+    assert resp.status_code == 200
+
+    history_resp = client.get("/api/deploy/history")
+    assert history_resp.json()["entry_count"] == entry_count_before
+    assert all(
+        entry["tag"] != "deploy-dry-run-history:latest"
+        for entry in history_resp.json()["entries"]
+    )
+
+
 def test_deploy_history_is_empty_before_any_deploy(monkeypatch, tmp_path):
 
     from backend.routes import upload as upload_module
