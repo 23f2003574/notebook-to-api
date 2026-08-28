@@ -6891,6 +6891,44 @@ def test_apply_tag_rejects_an_empty_tag():
     assert resp.status_code == 400
 
 
+def test_apply_tag_dry_run_reports_the_merged_tags_without_writing_them():
+
+    _upload_sample_notebook("tags_apply_dry_run.ipynb")
+    client.put(
+        "/api/notebooks/tags_apply_dry_run.ipynb/tags", json={"tags": ["bug"]}
+    )
+
+    resp = client.post(
+        "/api/tags/production/apply",
+        json={"filenames": ["tags_apply_dry_run.ipynb"], "dry_run": True},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["results"][0]["status"] == "success"
+    assert body["results"][0]["tags"] == ["bug", "production"]
+
+    # The dry run's own predicted merge was never actually written.
+    assert client.get(
+        "/api/notebooks/tags_apply_dry_run.ipynb/tags"
+    ).json()["tags"] == ["bug"]
+
+
+def test_apply_tag_dry_run_still_reports_a_missing_filename_as_an_error():
+
+    resp = client.post(
+        "/api/tags/production/apply",
+        json={"filenames": ["does_not_exist_dry_run.ipynb"], "dry_run": True},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["failed_count"] == 1
+    assert "not found" in body["results"][0]["detail"]
+
+
 def test_remove_tag_batch_removes_it_from_named_notebooks_only():
 
     _upload_sample_notebook("tags_remove_a.ipynb")
@@ -7017,6 +7055,45 @@ def test_remove_tag_batch_rejects_an_empty_tag():
     )
 
     assert resp.status_code == 400
+
+
+def test_remove_tag_batch_dry_run_reports_the_remaining_tags_without_writing_them():
+
+    _upload_sample_notebook("tags_remove_dry_run.ipynb")
+    client.put(
+        "/api/notebooks/tags_remove_dry_run.ipynb/tags",
+        json={"tags": ["production", "bug"]},
+    )
+
+    resp = client.post(
+        "/api/tags/production/remove",
+        json={"filenames": ["tags_remove_dry_run.ipynb"], "dry_run": True},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["results"][0]["status"] == "success"
+    assert body["results"][0]["tags"] == ["bug"]
+
+    # The dry run's own predicted removal was never actually written.
+    assert client.get(
+        "/api/notebooks/tags_remove_dry_run.ipynb/tags"
+    ).json()["tags"] == ["bug", "production"]
+
+
+def test_remove_tag_batch_dry_run_still_reports_a_missing_filename_as_an_error():
+
+    resp = client.post(
+        "/api/tags/production/remove",
+        json={"filenames": ["does_not_exist_dry_run.ipynb"], "dry_run": True},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["failed_count"] == 1
+    assert "not found" in body["results"][0]["detail"]
 
 
 def test_rename_tag_renames_it_on_every_notebook_that_has_it():

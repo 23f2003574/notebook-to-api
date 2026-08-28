@@ -2552,10 +2552,14 @@ def _dispatch_core_command(args):
 
         elif args.tags_command == "apply":
 
+            apply_body = {"filenames": args.filename}
+            if args.dry_run:
+                apply_body["dry_run"] = True
+
             try:
                 response = httpx.post(
                     f"{dashboard_url}/api/tags/{args.tag}/apply",
-                    json={"filenames": args.filename},
+                    json=apply_body,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -2574,10 +2578,12 @@ def _dispatch_core_command(args):
                 print(json.dumps(data, indent=2))
             else:
 
+                verb = "Would tag" if data.get("dry_run") else "Tagged"
+
                 for result in data.get("results", []):
 
                     if result["status"] == "success":
-                        print(f"Tagged {result['filename']} with '{args.tag}'")
+                        print(f"{verb} {result['filename']} with '{args.tag}'")
                     else:
                         print(f"Failed to tag {result['filename']}: {result['detail']}")
 
@@ -2588,10 +2594,14 @@ def _dispatch_core_command(args):
 
         elif args.tags_command == "remove":
 
+            remove_body = {"filenames": args.filename}
+            if args.dry_run:
+                remove_body["dry_run"] = True
+
             try:
                 response = httpx.post(
                     f"{dashboard_url}/api/tags/{args.tag}/remove",
-                    json={"filenames": args.filename},
+                    json=remove_body,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -2610,10 +2620,12 @@ def _dispatch_core_command(args):
                 print(json.dumps(data, indent=2))
             else:
 
+                verb = "Would remove" if data.get("dry_run") else "Removed"
+
                 for result in data.get("results", []):
 
                     if result["status"] == "success":
-                        print(f"Removed '{args.tag}' from {result['filename']}")
+                        print(f"{verb} '{args.tag}' from {result['filename']}")
                     else:
                         print(f"Failed to update {result['filename']}: {result['detail']}")
 
@@ -6164,6 +6176,16 @@ def main():
         "filename", nargs="+",
         help="Filenames of the notebooks to tag, as reported by `list`."
     )
+    tags_apply_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report which of the named notebooks would be tagged, via "
+            "POST /api/tags/{tag}/apply's own \"dry_run\" body field, "
+            "without tagging anything."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(tags_apply_parser)
     tags_apply_parser.add_argument(
         "--json",
@@ -6191,6 +6213,16 @@ def main():
     tags_remove_parser.add_argument(
         "filename", nargs="+",
         help="Filenames of the notebooks to untag, as reported by `list`."
+    )
+    tags_remove_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report which of the named notebooks would be untagged, via "
+            "POST /api/tags/{tag}/remove's own \"dry_run\" body field, "
+            "without removing anything."
+        )
     )
     _add_dashboard_url_and_timeout_arguments(tags_remove_parser)
     tags_remove_parser.add_argument(

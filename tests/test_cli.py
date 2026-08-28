@@ -6433,6 +6433,43 @@ def test_tags_apply_command_reports_a_partial_failure(tmp_path, fake_dashboard):
     assert "1 succeeded, 1 failed" in proc.stdout
 
 
+def test_tags_apply_command_dry_run_passes_the_flag_through_and_prints_would_tag(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": True,
+            "tag": "production",
+            "results": [
+                {"filename": "a.ipynb", "status": "success", "tags": ["production"]},
+            ],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "tags", "apply", "production", "a.ipynb",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would tag a.ipynb with 'production'" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "filenames": ["a.ipynb"],
+        "dry_run": True,
+    }
+
+
 def test_tags_apply_command_json_flag_emits_the_dashboards_own_response(
     tmp_path, fake_dashboard
 ):
@@ -6574,6 +6611,43 @@ def test_tags_remove_command_reports_a_partial_failure(tmp_path, fake_dashboard)
     assert "Removed 'urgent' from a.ipynb" in proc.stdout
     assert "Failed to update missing.ipynb: Notebook file not found" in proc.stdout
     assert "1 succeeded, 1 failed" in proc.stdout
+
+
+def test_tags_remove_command_dry_run_passes_the_flag_through_and_prints_would_remove(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": True,
+            "tag": "production",
+            "results": [
+                {"filename": "a.ipynb", "status": "success", "tags": []},
+            ],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "tags", "remove", "production", "a.ipynb",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would remove 'production' from a.ipynb" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "filenames": ["a.ipynb"],
+        "dry_run": True,
+    }
 
 
 def test_tags_remove_command_json_flag_emits_the_dashboards_own_response(

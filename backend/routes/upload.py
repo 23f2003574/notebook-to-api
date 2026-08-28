@@ -1864,6 +1864,15 @@ def apply_tag(tag: str, data: dict):
     filename in it failed -- with "succeeded_count"/"failed_count"
     summarizing "results" the same way POST /api/upload/batch's own
     identical fields already do.
+
+    "dry_run" (optional, default false, in the request body) reports the
+    exact same per-filename "results" a real batch would -- each
+    filename's own resulting merged "tags" on success, or the identical
+    "error" a real application would raise -- without writing a single
+    notebook's own tags sidecar file, the same preview POST
+    /api/notebooks/tags-batch's own "dry_run" already provides for its own
+    similarly irreversible (overwrites each entry's previous tag set)
+    batch write.
     """
 
     filenames = data.get("filenames")
@@ -1889,6 +1898,8 @@ def apply_tag(tag: str, data: dict):
     # repeated as the same "error" entry for every filename in it.
     tag = _validate_and_normalize_tags([tag])[0]
 
+    dry_run = bool(data.get("dry_run", False))
+
     results = []
     succeeded_count = 0
     failed_count = 0
@@ -1909,7 +1920,8 @@ def apply_tag(tag: str, data: dict):
             existing_tags = _read_notebook_tags(file_path.name)
             merged_tags = _validate_and_normalize_tags(existing_tags + [tag])
 
-            _write_notebook_tags(file_path.name, merged_tags)
+            if not dry_run:
+                _write_notebook_tags(file_path.name, merged_tags)
 
             results.append({
                 "filename": filename,
@@ -1929,6 +1941,7 @@ def apply_tag(tag: str, data: dict):
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "tag": tag,
         "results": results,
         "succeeded_count": succeeded_count,
@@ -1970,6 +1983,14 @@ def remove_tag_batch(tag: str, data: dict):
     the same "nothing to act on is still a valid outcome" reasoning
     DELETE /api/tags/{tag}'s own empty "affected_notebooks" already
     follows for the whole-catalog case.
+
+    "dry_run" (optional, default false, in the request body) reports the
+    exact same per-filename "results" a real batch would -- each
+    filename's own resulting "tags" (with `tag` already removed) on
+    success, or the identical "error" a real removal would raise --
+    without writing a single notebook's own tags sidecar file, the
+    identical preview POST /api/tags/{tag}/apply's own "dry_run" already
+    provides for the add case.
     """
 
     filenames = data.get("filenames")
@@ -1990,6 +2011,8 @@ def remove_tag_batch(tag: str, data: dict):
     # it's adding -- once, up front, for the whole batch, since an invalid
     # `tag` is this request's fault rather than any one filename's.
     tag = _validate_and_normalize_tags([tag])[0]
+
+    dry_run = bool(data.get("dry_run", False))
 
     results = []
     succeeded_count = 0
@@ -2012,7 +2035,8 @@ def remove_tag_batch(tag: str, data: dict):
                 t for t in _read_notebook_tags(file_path.name) if t != tag
             ]
 
-            _write_notebook_tags(file_path.name, remaining_tags)
+            if not dry_run:
+                _write_notebook_tags(file_path.name, remaining_tags)
 
             results.append({
                 "filename": filename,
@@ -2032,6 +2056,7 @@ def remove_tag_batch(tag: str, data: dict):
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "tag": tag,
         "results": results,
         "succeeded_count": succeeded_count,
