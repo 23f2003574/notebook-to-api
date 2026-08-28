@@ -3974,6 +3974,121 @@ def test_diff_notebooks_returns_400_for_a_malformed_notebook():
     assert "'new' notebook" in resp.json()["detail"]
 
 
+def test_diff_notebooks_old_version_compares_a_snapshot_against_the_other_sides_current_content():
+
+    old_original = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    old_current = _notebook_bytes(
+        "def add(a: int, b: int, c: int) -> int:\n    return a + b + c\n"
+    )
+    new_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={"file": ("diff_ov_old.ipynb", io.BytesIO(old_original), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": ("diff_ov_old.ipynb", io.BytesIO(old_current), "application/json")},
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("diff_ov_new.ipynb", io.BytesIO(new_content), "application/json")},
+    )
+
+    old_version_id = client.get(
+        "/api/notebooks/diff_ov_old.ipynb/versions"
+    ).json()["versions"][0]["version_id"]
+
+    # Comparing the *current* content of both notebooks would report
+    # "add" as changed (3-arg vs 2-arg) -- pinning "old" to the
+    # snapshotted version taken *before* that edit instead should report
+    # them as identical.
+    resp = client.get(
+        "/api/notebooks/diff",
+        params={
+            "old": "diff_ov_old.ipynb", "new": "diff_ov_new.ipynb",
+            "old_version": old_version_id,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["old_version"] == old_version_id
+    assert body["new_version"] is None
+    assert body["changed"] == []
+    assert body["unchanged"] == ["add"]
+
+
+def test_diff_notebooks_both_sides_can_be_pinned_to_versions_of_different_notebooks():
+
+    a_v1 = _notebook_bytes("def f() -> int:\n    return 1\n")
+    a_v2 = _notebook_bytes("def f() -> int:\n    return 2\n")
+    b_v1 = _notebook_bytes("def f() -> int:\n    return 1\n")
+    b_v2 = _notebook_bytes("def f() -> int:\n    return 3\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("diff_both_a.ipynb", io.BytesIO(a_v1), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": ("diff_both_a.ipynb", io.BytesIO(a_v2), "application/json")},
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("diff_both_b.ipynb", io.BytesIO(b_v1), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": ("diff_both_b.ipynb", io.BytesIO(b_v2), "application/json")},
+    )
+
+    a_version_id = client.get(
+        "/api/notebooks/diff_both_a.ipynb/versions"
+    ).json()["versions"][0]["version_id"]
+    b_version_id = client.get(
+        "/api/notebooks/diff_both_b.ipynb/versions"
+    ).json()["versions"][0]["version_id"]
+
+    # Both notebooks' own *first* version returned "1" -- identical.
+    resp = client.get(
+        "/api/notebooks/diff",
+        params={
+            "old": "diff_both_a.ipynb", "new": "diff_both_b.ipynb",
+            "old_version": a_version_id, "new_version": b_version_id,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["old_version"] == a_version_id
+    assert body["new_version"] == b_version_id
+    assert body["changed"] == []
+    assert body["unchanged"] == ["f"]
+
+
+def test_diff_notebooks_returns_404_for_an_unknown_old_version():
+
+    _upload_sample_notebook("diff_unknown_version_old.ipynb")
+    _upload_sample_notebook("diff_unknown_version_new.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/diff",
+        params={
+            "old": "diff_unknown_version_old.ipynb",
+            "new": "diff_unknown_version_new.ipynb",
+            "old_version": "does-not-exist.ipynb",
+        },
+    )
+
+    assert resp.status_code == 404
+    assert "diff_unknown_version_old.ipynb" in resp.json()["detail"]
+
+
 def test_delete_notebook_rejects_a_filename_with_an_embedded_null_byte():
 
     resp = client.delete("/api/notebooks/nb%00.ipynb")

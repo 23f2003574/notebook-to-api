@@ -3397,8 +3397,60 @@ def search_notebook_content(
     }
 
 
+def _resolve_diff_side_path(filename: str, version_id: str = None) -> Path:
+    """Resolve one side of a GET /api/notebooks/diff comparison: `filename`'s
+    own current content, or, with `version_id` given, one of its
+    previously snapshotted versions instead.
+
+    The same "current content, or a version_id-pinned snapshot instead"
+    resolution _resolve_preview_content_path (below) already provides for
+    POST /api/validate/.../requirements-preview/.../app-preview/.../curl-
+    preview's own single "notebook_path" -- factored out separately here
+    (rather than reused directly) only because diff_notebooks' own 404
+    message already names the filename that wasn't found ("Notebook file
+    not found: <filename>"), unlike that helper's generic "Notebook file
+    not found", and diff_notebooks calls this once per side with two
+    independent filenames, not once for a single "notebook_path".
+
+    Raises the identical 404 diff_notebooks already raised for a missing
+    `filename` on its own (now also covering an unknown `version_id` once
+    one is given), so a caller pinning either side to a version_id that
+    doesn't exist gets the same clear failure a plain missing filename
+    already does.
+    """
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail=f"Notebook file not found: {filename}"
+        )
+
+    if version_id is None:
+        return file_path
+
+    versions_dir = _notebook_versions_dir(file_path.name)
+
+    version_path = _resolve_path_within(
+        str(versions_dir), version_id, "notebook version"
+    )
+
+    if not version_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail=f"Notebook version not found: {filename} version '{version_id}'"
+        )
+
+    return version_path
+
+
 @router.get("/notebooks/diff")
-def diff_notebooks(old: str = None, new: str = None):
+def diff_notebooks(
+    old: str = None, new: str = None,
+    old_version: str = None, new_version: str = None,
+):
     """Compare the top-level functions two already-uploaded notebooks
     would each compile into endpoints -- entirely server-side, without
     downloading either one, and without compiling either one.
@@ -3424,6 +3476,26 @@ def diff_notebooks(old: str = None, new: str = None):
     UPLOAD_DIR; each is validated (existence, then parseability) before
     diffing, so a 404 or 400 names exactly which of the two is the
     problem rather than a single ambiguous error.
+
+    "old_version"/"new_version" (each optional) pin that side to one of
+    that notebook's own previously snapshotted versions instead of its
+    current content -- the same version-pinning GET
+    /api/notebooks/{filename}/versions/{version_id}/diff already offers,
+    just for either (or both) side(s) of *this* endpoint's own
+    two-independent-notebooks comparison, and not restricted to two
+    versions of the *same* notebook the way that endpoint's own "against"
+    is. Before this, answering "what changed between the version of
+    production.ipynb we deployed last week and what's in staging.ipynb
+    right now" -- comparing two different notebooks where at least one
+    side needs to be pinned to a past snapshot, not either notebook's
+    current content -- had no way to happen server-side at all: a caller
+    had to GET .../versions/{version_id} to download the pinned side
+    locally first, then fall back to the CLI's own local `diff` against a
+    second, separately-downloaded copy of the other side, losing the
+    "entirely server-side, no download" property this endpoint's own
+    docstring already promises for the current-content-only case. Omitted
+    (the default), that side is `old`/`new`'s own current content,
+    exactly as before this.
     """
 
     if not old or not new:
@@ -3433,23 +3505,8 @@ def diff_notebooks(old: str = None, new: str = None):
             detail="old and new are both required"
         )
 
-    old_path = resolve_upload_path(old)
-
-    if not old_path.is_file():
-
-        raise HTTPException(
-            status_code=404,
-            detail=f"Notebook file not found: {old}"
-        )
-
-    new_path = resolve_upload_path(new)
-
-    if not new_path.is_file():
-
-        raise HTTPException(
-            status_code=404,
-            detail=f"Notebook file not found: {new}"
-        )
+    old_path = _resolve_diff_side_path(old, old_version)
+    new_path = _resolve_diff_side_path(new, new_version)
 
     for label, path in (("old", old_path), ("new", new_path)):
 
@@ -3473,6 +3530,8 @@ def diff_notebooks(old: str = None, new: str = None):
         "status": "success",
         "old": old,
         "new": new,
+        "old_version": old_version,
+        "new_version": new_version,
         **diff,
     }
 

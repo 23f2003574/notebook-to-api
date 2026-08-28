@@ -4146,10 +4146,16 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        params = {"old": args.old, "new": args.new}
+        if args.old_version:
+            params["old_version"] = args.old_version
+        if args.new_version:
+            params["new_version"] = args.new_version
+
         try:
             response = httpx.get(
                 f"{dashboard_url}/api/notebooks/diff",
-                params={"old": args.old, "new": args.new},
+                params=params,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -4167,9 +4173,16 @@ def _dispatch_core_command(args):
         if args.json_output:
             print(json.dumps(data, indent=2))
         else:
-            print(
-                f"Comparing '{args.old}' against '{args.new}' on {dashboard_url}"
+
+            old_label = (
+                f"'{args.old}' version '{args.old_version}'" if args.old_version
+                else f"'{args.old}'"
             )
+            new_label = (
+                f"'{args.new}' version '{args.new_version}'" if args.new_version
+                else f"'{args.new}'"
+            )
+            print(f"Comparing {old_label} against {new_label} on {dashboard_url}")
             print_notebook_diff(data)
     elif args.command == "remote-curl":
         # See `upload` above for why these are imported here rather than
@@ -7475,6 +7488,28 @@ def main():
     diff_notebooks_parser.add_argument(
         "new", help="Filename of the notebook to compare it against, as reported by `list`."
     )
+    diff_notebooks_parser.add_argument(
+        "--old-version",
+        default=None,
+        metavar="VERSION_ID",
+        help=(
+            "Pin the baseline side to one of `old`'s own previously "
+            "snapshotted versions (as reported by `versions list`), via "
+            "GET /api/notebooks/diff's own \"old_version\" query param, "
+            "instead of `old`'s current live content."
+        )
+    )
+    diff_notebooks_parser.add_argument(
+        "--new-version",
+        default=None,
+        metavar="VERSION_ID",
+        help=(
+            "Pin the comparison side to one of `new`'s own previously "
+            "snapshotted versions, via GET /api/notebooks/diff's own "
+            "\"new_version\" query param, instead of `new`'s current "
+            "live content."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(diff_notebooks_parser)
     diff_notebooks_parser.add_argument(
         "--json",
@@ -7482,8 +7517,9 @@ def main():
         dest="json_output",
         help=(
             "Emit machine-readable JSON ({\"status\", \"old\", \"new\", "
-            "\"added\", \"removed\", \"changed\", \"unchanged\"}) instead "
-            "of the human-readable report, for scripting/automation."
+            "\"old_version\", \"new_version\", \"added\", \"removed\", "
+            "\"changed\", \"unchanged\"}) instead of the human-readable "
+            "report, for scripting/automation."
         )
     )
 

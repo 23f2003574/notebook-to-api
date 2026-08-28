@@ -11700,6 +11700,46 @@ def test_diff_notebooks_command_reports_added_removed_and_changed_functions(
     assert handler.requests == ["/api/notebooks/diff?old=a.ipynb&new=b.ipynb"]
 
 
+def test_diff_notebooks_command_passes_old_version_and_new_version_through(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "old": "a.ipynb", "new": "b.ipynb",
+            "old_version": "20260101T000000000000_abcd.ipynb",
+            "new_version": "20260102T000000000000_efgh.ipynb",
+            "added": [], "removed": [], "changed": [], "unchanged": ["add"],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "diff-notebooks", "a.ipynb", "b.ipynb",
+            "--old-version", "20260101T000000000000_abcd.ipynb",
+            "--new-version", "20260102T000000000000_efgh.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (
+        "Comparing 'a.ipynb' version '20260101T000000000000_abcd.ipynb' "
+        "against 'b.ipynb' version '20260102T000000000000_efgh.ipynb'"
+    ) in proc.stdout
+    assert handler.requests == [
+        "/api/notebooks/diff?old=a.ipynb&new=b.ipynb"
+        "&old_version=20260101T000000000000_abcd.ipynb"
+        "&new_version=20260102T000000000000_efgh.ipynb"
+    ]
+
+
 def test_diff_notebooks_command_reports_no_changes_for_identical_notebooks(
     tmp_path, fake_dashboard
 ):
