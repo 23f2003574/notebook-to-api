@@ -3884,6 +3884,101 @@ def test_search_notebook_content_rejects_a_non_positive_limit():
     assert resp.status_code == 400
 
 
+def test_search_notebook_content_regex_matches_a_pattern_not_a_literal_substring():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes(
+        "import pandas as pd\n\n"
+        "def load() -> str:\n    df = pd.read_csv('data.csv', index_col=0)\n    return 'done'\n"
+    )
+    content_b = _notebook_bytes(
+        "import pandas as pd\n\n"
+        "def load() -> str:\n    df = pd.read_csv('data.csv')\n    return 'done'\n"
+    )
+
+    for filename, content in (
+        ("search_regex_a.ipynb", content_a),
+        ("search_regex_b.ipynb", content_b),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    # A plain substring for "read_csv(" alone matches both notebooks; the
+    # pattern below only matches the one that also passes "index_col=".
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={"search": r"read_csv\([^)]*index_col=", "regex": "true"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["regex"] is True
+    assert body["notebook_count"] == 1
+    assert body["matches"][0]["filename"] == "search_regex_a.ipynb"
+    assert "index_col" in body["matches"][0]["matches"][0]["snippet"]
+
+
+def test_search_notebook_content_regex_is_case_insensitive():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("def f() -> int:\n    # TODO: fix this\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("search_regex_case.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={"search": "todo:.*fix", "regex": "true"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["notebook_count"] == 1
+
+
+def test_search_notebook_content_regex_false_treats_search_as_a_plain_substring():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "def f() -> int:\n    return 1  # not a real regex a.b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={"file": ("search_no_regex.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    # "a.b" would match "a.b" literally here even without regex=true, so
+    # use a pattern that only matches as a *regex* (any-character "."),
+    # never as a literal substring the source doesn't actually contain.
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={"search": "a.c", "regex": "false"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["regex"] is False
+    assert body["notebook_count"] == 0
+
+
+def test_search_notebook_content_regex_rejects_an_invalid_pattern():
+
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={"search": "(unclosed", "regex": "true"},
+    )
+
+    assert resp.status_code == 400
+    assert "regular expression" in resp.json()["detail"]
+
+
 def test_diff_notebooks_reports_added_removed_changed_and_unchanged():
 
     old_content = _notebook_bytes(

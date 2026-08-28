@@ -3334,6 +3334,44 @@ def test_search_content_command_sends_tag_query_param(fake_dashboard):
     assert handler.requests == ["/api/notebooks/search-content?search=read_csv&offset=0&tag=prod"]
 
 
+def test_search_content_command_sends_regex_query_param(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "search": r"read_csv\(.*index_col=", "regex": True,
+        "matches": [], "notebook_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        [
+            "search-content", r"read_csv\(.*index_col=", "--regex",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/search-content?search=read_csv%5C%28.%2Aindex_col%3D&offset=0&regex=true"
+    ]
+
+
+def test_search_content_command_omits_regex_query_param_by_default(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "search": "read_csv", "matches": [], "notebook_count": 0}
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["search-content", "read_csv", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/search-content?search=read_csv&offset=0"]
+
+
 def test_search_content_command_reports_no_matches(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

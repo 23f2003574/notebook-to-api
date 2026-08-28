@@ -7,6 +7,7 @@ import asyncio
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -3258,7 +3259,8 @@ def resolve_duplicate_notebooks(data: dict = None):
 
 @router.get("/notebooks/search-content")
 def search_notebook_content(
-    search: str = None, tag: str = None, limit: int = None, offset: int = 0
+    search: str = None, tag: str = None, regex: bool = False,
+    limit: int = None, offset: int = 0,
 ):
     """Find every uploaded notebook with a code cell whose raw source
     contains `search` (case-insensitive), across the whole catalog at
@@ -3309,6 +3311,28 @@ def search_notebook_content(
     negative "offset" is rejected with 400 and a non-positive "limit" the
     same way GET /api/notebooks' own do. "notebook_count" always reflects
     every matching notebook, never just the current page.
+
+    "regex" (optional, default false) treats `search` as a
+    case-insensitive Python regular expression instead of a plain
+    substring -- e.g. to find every notebook calling `pd.read_csv(` with
+    an `index_col=` keyword argument, auditing a catalog for a call
+    signature that changed shape across many notebooks (not just a
+    single unchanged literal string a plain substring search already
+    handles), or a hardcoded-secret-shaped pattern a plain substring
+    can't express at all ("a string that looks like an API key", not one
+    specific key). A `search` that isn't a valid pattern under "regex"
+    (see re.compile) is rejected with 400, naming the underlying
+    re.error, before a single notebook is even read -- the request's own
+    fault, not any one notebook's, the same "malformed request input is
+    a whole-request 400" reasoning this file already applies to every
+    other client-supplied value it validates up front. Every match still
+    reports the same {"cell_index", "snippet"} shape "regex": false
+    already does -- "snippet" is still the first *line* the pattern
+    matches within a cell, not the matched substring/group itself, so a
+    caller auditing many matches at once isn't overwhelmed by an
+    unbounded per-match capture. Leaving "regex" false (the default)
+    behaves exactly as before this -- a plain substring search, byte for
+    byte identical to the previous implementation.
     """
 
     if not search:
@@ -3332,9 +3356,24 @@ def search_notebook_content(
             detail="limit must be a positive integer"
         )
 
-    upload_root = Path(UPLOAD_DIR)
+    if regex:
 
-    search_lower = search.lower()
+        try:
+            pattern = re.compile(search, re.IGNORECASE)
+
+        except re.error as e:
+
+            raise HTTPException(
+                status_code=400,
+                detail=f"search is not a valid regular expression: {e}"
+            )
+
+    else:
+
+        pattern = None
+        search_lower = search.lower()
+
+    upload_root = Path(UPLOAD_DIR)
 
     matches = []
 
@@ -3359,16 +3398,31 @@ def search_notebook_content(
 
         for cell_index, cell in enumerate(code_cells):
 
-            if search_lower not in cell.lower():
-                continue
+            if pattern is not None:
 
-            snippet = next(
-                (
-                    line.strip() for line in cell.splitlines()
-                    if search_lower in line.lower()
-                ),
-                "",
-            )
+                if not pattern.search(cell):
+                    continue
+
+                snippet = next(
+                    (
+                        line.strip() for line in cell.splitlines()
+                        if pattern.search(line)
+                    ),
+                    "",
+                )
+
+            else:
+
+                if search_lower not in cell.lower():
+                    continue
+
+                snippet = next(
+                    (
+                        line.strip() for line in cell.splitlines()
+                        if search_lower in line.lower()
+                    ),
+                    "",
+                )
 
             cell_matches.append({
                 "cell_index": cell_index,
@@ -3390,6 +3444,7 @@ def search_notebook_content(
     return {
         "status": "success",
         "search": search,
+        "regex": regex,
         "matches": paginated_matches,
         "notebook_count": notebook_count,
         "limit": limit,
