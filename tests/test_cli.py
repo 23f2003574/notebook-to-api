@@ -11908,6 +11908,71 @@ def test_remote_curl_command_writes_a_script_with_a_command_per_function(
     assert "X-API-Key: notebook-to-api-dev-key" in script
 
 
+def test_remote_curl_command_version_id_fetches_that_version_instead_of_current_content(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-curl", "nb.ipynb", "--dashboard-url", dashboard_url,
+            "--version-id", "20260101T000000000000_abcd1234.ipynb",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (
+        "cURL script for 'nb.ipynb' version "
+        "'20260101T000000000000_abcd1234.ipynb'"
+    ) in proc.stdout
+    assert handler.requests == [
+        "/api/notebooks/nb.ipynb/versions/20260101T000000000000_abcd1234.ipynb"
+    ]
+
+    script = (workdir / "requests.sh").read_text(encoding="utf-8")
+    assert "curl -X POST http://localhost:8000/add" in script
+    assert "nb.ipynb' version '20260101T000000000000_abcd1234.ipynb'" in script
+
+
+def test_remote_curl_command_omits_version_id_from_the_url_by_default(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-curl", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/nb.ipynb"]
+
+
 def test_remote_curl_command_respects_host_port_api_key_and_output(
     tmp_path, fake_dashboard
 ):
