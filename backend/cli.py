@@ -1316,6 +1316,8 @@ def _dispatch_core_command(args):
             params["tags"] = args.tags
         if args.description is not None:
             params["description"] = args.description
+        if args.dry_run:
+            params["dry_run"] = True
 
         try:
 
@@ -1347,6 +1349,9 @@ def _dispatch_core_command(args):
         if args.json_output:
             print(json.dumps(data, indent=2))
         else:
+
+            verb = "Would import" if data.get("dry_run") else "Imported"
+
             for result in data.get("results", []):
 
                 if result.get("status") == "success":
@@ -1357,7 +1362,7 @@ def _dispatch_core_command(args):
                         if restored_version_count else ""
                     )
                     print(
-                        f"Imported '{result.get('filename')}' "
+                        f"{verb} '{result.get('filename')}' "
                         f"(overwritten: {result.get('overwritten')}"
                         f"{versions_suffix})"
                     )
@@ -5092,6 +5097,17 @@ def main():
             "Description to set on every successfully-imported notebook, "
             "via POST /api/notebooks/import's own ?description= query "
             "param."
+        )
+    )
+    import_notebooks_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report which entries in the archive would be imported -- "
+            "and which would fail or collide with an already-uploaded "
+            "notebook -- via POST /api/notebooks/import's own \"dry_run\" "
+            "query param, without importing anything."
         )
     )
     import_notebooks_parser.add_argument(

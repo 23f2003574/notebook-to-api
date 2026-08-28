@@ -683,7 +683,7 @@ def _restore_version_snapshots_from_archive(archive, entry_names, versions_dir):
     return sorted(imported_version_ids)
 
 
-async def _save_uploaded_notebook(file: UploadFile, overwrite: bool) -> dict:
+async def _save_uploaded_notebook(file: UploadFile, overwrite: bool, dry_run: bool = False) -> dict:
     """Validate and save one uploaded notebook, exactly as upload_notebook
     (below) always has -- extracted into its own function so
     upload_notebook and upload_notebooks_batch (below) share this one
@@ -694,6 +694,17 @@ async def _save_uploaded_notebook(file: UploadFile, overwrite: bool) -> dict:
     single-file callers. upload_notebooks_batch instead catches that
     HTTPException per file, so one bad file in a batch doesn't abort every
     other file's own upload.
+
+    `dry_run` (default False, used by POST /api/notebooks/import below)
+    runs every check above -- size, notebook validity (via load_notebook
+    on the streamed-to-disk temp file, so a dry run catches a malformed
+    entry exactly as a real one would), and the same-name collision check,
+    all still held under _upload_lock_for so a preview can't itself race a
+    real concurrent upload of the same filename -- without ever calling
+    os.replace or snapshotting an existing file, the same "report what a
+    real write would do without doing it" preview _copy_notebook_to's own
+    `dry_run` already provides one level down from here. The temp file is
+    always removed before returning, dry run or not.
     """
 
     if not file.filename.endswith(".ipynb"):
@@ -814,6 +825,17 @@ async def _save_uploaded_notebook(file: UploadFile, overwrite: bool) -> dict:
                     "Pass ?overwrite=true to replace it."
                 )
             )
+
+        if dry_run:
+
+            os.remove(temp_path)
+
+            return {
+                "status": "success",
+                "filename": file.filename,
+                "path": str(file_path),
+                "overwritten": overwritten,
+            }
 
         if overwritten:
             _snapshot_current_notebook_version(file_path)
@@ -1024,6 +1046,7 @@ async def import_notebooks(
     overwrite: bool = False,
     tags: str = None,
     description: str = None,
+    dry_run: bool = False,
 ):
     """Upload every .ipynb file bundled inside a single .zip archive --
     the counterpart to GET /api/notebooks/export, which produces exactly
@@ -1120,6 +1143,26 @@ async def import_notebooks(
     validated once, up front (a bad value is a whole-request 400 before
     any entry is read), and never applied to an entry that itself failed
     to import.
+
+    "dry_run" (optional, default false) reports the exact same per-entry
+    "results" a real import would -- each entry's own "success" (with
+    "overwritten" and "restored_version_count" reflecting exactly what a
+    real import would do) or "error" (the identical HTTPException detail
+    a real import of that entry would raise, e.g. 409 for a same-name
+    collision without "overwrite": true, or 400 for a malformed notebook)
+    -- without saving a single notebook, applying "tags"/"description" to
+    one, or restoring a single version snapshot. Every other endpoint in
+    this file that discovers a batch's own affected set for itself before
+    committing to it -- POST /api/notebooks/tags-batch, POST
+    /api/notebooks/{filename}/versions/copy-batch, POST
+    /api/notebooks/copy-batch -- already offers this preview; this
+    endpoint discovers its own batch from the archive itself (unlike a
+    caller-supplied "filenames"/"entries" list, an uploaded .zip's own
+    contents aren't known to the caller until this endpoint reads them)
+    and writes real files on disk, yet previously had no way to preview
+    what an import would do -- e.g. which entries would collide with an
+    already-uploaded notebook -- before every valid entry in the archive
+    was already written.
     """
 
     if not file.filename.endswith(".zip"):
@@ -1221,25 +1264,35 @@ async def import_notebooks(
                 file=io.BytesIO(entry_bytes), filename=filename
             )
 
-            result = await _save_uploaded_notebook(upload_file, overwrite)
+            result = await _save_uploaded_notebook(upload_file, overwrite, dry_run=dry_run)
 
-            if normalized_tags is not None:
+            if normalized_tags is not None and not dry_run:
                 _write_notebook_tags(result["filename"], normalized_tags)
 
-            if normalized_description is not None:
+            if normalized_description is not None and not dry_run:
                 _write_notebook_description(result["filename"], normalized_description)
 
-            file_path = resolve_upload_path(result["filename"])
-            versions_dir = _notebook_versions_dir(file_path.name)
+            entry_version_names = version_entries_by_filename.get(result["filename"], [])
 
-            with _version_lock_for(file_path.name):
-                restored_version_ids = _restore_version_snapshots_from_archive(
-                    archive,
-                    version_entries_by_filename.get(result["filename"], []),
-                    versions_dir,
-                )
+            if dry_run:
 
-            result["restored_version_count"] = len(restored_version_ids)
+                result["restored_version_count"] = len({
+                    os.path.basename(name)
+                    for name in entry_version_names
+                    if os.path.basename(name)
+                })
+
+            else:
+
+                file_path = resolve_upload_path(result["filename"])
+                versions_dir = _notebook_versions_dir(file_path.name)
+
+                with _version_lock_for(file_path.name):
+                    restored_version_ids = _restore_version_snapshots_from_archive(
+                        archive, entry_version_names, versions_dir,
+                    )
+
+                result["restored_version_count"] = len(restored_version_ids)
 
             results.append(result)
             succeeded_count += 1
@@ -1255,6 +1308,7 @@ async def import_notebooks(
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "results": results,
         "succeeded_count": succeeded_count,
         "failed_count": failed_count,

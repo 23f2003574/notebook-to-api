@@ -1567,6 +1567,140 @@ def test_import_notebooks_ignores_version_entries_with_no_matching_notebook_entr
     ).json()["versions"] == []
 
 
+def test_import_notebooks_dry_run_does_not_write_any_file():
+
+    archive_bytes = _zip_bytes({
+        "import_dry_run.ipynb": _notebook_bytes("def f() -> int:\n    return 1\n"),
+    })
+
+    resp = client.post(
+        "/api/notebooks/import",
+        params={"dry_run": "true"},
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["succeeded_count"] == 1
+    assert body["results"][0]["status"] == "success"
+    assert body["results"][0]["filename"] == "import_dry_run.ipynb"
+    assert body["results"][0]["overwritten"] is False
+
+    assert not (Path(UPLOAD_DIR) / "import_dry_run.ipynb").exists()
+
+
+def test_import_notebooks_dry_run_reports_a_collision_without_writing_anything():
+
+    original_content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("import_dry_run_collide.ipynb", io.BytesIO(original_content), "application/json")},
+    )
+
+    archive_bytes = _zip_bytes({
+        "import_dry_run_collide.ipynb": _notebook_bytes("def f() -> int:\n    return 1\n"),
+    })
+
+    resp = client.post(
+        "/api/notebooks/import",
+        params={"dry_run": "true"},
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["failed_count"] == 1
+    assert "already exists" in body["results"][0]["detail"]
+
+    assert (Path(UPLOAD_DIR) / "import_dry_run_collide.ipynb").read_bytes() == original_content
+
+
+def test_import_notebooks_dry_run_reports_an_invalid_entry_without_writing_the_good_one():
+
+    good_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    archive_bytes = _zip_bytes({
+        "import_dry_run_good.ipynb": good_content,
+        "import_dry_run_bad.ipynb": b"not a notebook",
+    })
+
+    resp = client.post(
+        "/api/notebooks/import",
+        params={"dry_run": "true"},
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    good_result, bad_result = body["results"]
+    assert good_result["status"] == "success"
+    assert bad_result["status"] == "error"
+    assert "not a valid Jupyter notebook" in bad_result["detail"]
+
+    assert not (Path(UPLOAD_DIR) / "import_dry_run_good.ipynb").exists()
+    assert not (Path(UPLOAD_DIR) / "import_dry_run_bad.ipynb").exists()
+
+
+def test_import_notebooks_dry_run_does_not_apply_tags_or_description():
+
+    archive_bytes = _zip_bytes({
+        "import_dry_run_tags.ipynb": _notebook_bytes("def f() -> int:\n    return 1\n"),
+    })
+
+    resp = client.post(
+        "/api/notebooks/import",
+        params={"dry_run": "true", "tags": "production", "description": "a preview"},
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["succeeded_count"] == 1
+    assert not (Path(UPLOAD_DIR) / "import_dry_run_tags.ipynb").exists()
+
+
+def test_import_notebooks_dry_run_predicts_restored_version_count_without_restoring():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    original_a = _notebook_bytes("def f() -> int:\n    return 1\n")
+    current_a = _notebook_bytes("def f() -> int:\n    return 2\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("import_dry_run_versions.ipynb", io.BytesIO(original_a), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": ("import_dry_run_versions.ipynb", io.BytesIO(current_a), "application/json")},
+    )
+
+    export_bytes = client.get(
+        "/api/notebooks/export", params={"include_versions": "true"}
+    ).content
+
+    client.delete("/api/notebooks?confirm=true")
+
+    resp = client.post(
+        "/api/notebooks/import",
+        params={"dry_run": "true"},
+        files={"file": ("backup.zip", io.BytesIO(export_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["results"][0]["restored_version_count"] == 1
+
+    assert not (Path(UPLOAD_DIR) / "import_dry_run_versions.ipynb").exists()
+    assert client.get(
+        "/api/notebooks/import_dry_run_versions.ipynb/versions"
+    ).status_code == 404
+
+
 def test_upload_lock_for_returns_the_same_lock_for_the_same_filename():
     """_upload_lock_for must hand back the *same* Lock instance for the
     same filename across separate calls (separate requests, in practice)
