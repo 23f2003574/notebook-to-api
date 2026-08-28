@@ -1567,6 +1567,157 @@ def test_import_notebooks_ignores_version_entries_with_no_matching_notebook_entr
     ).json()["versions"] == []
 
 
+def test_import_notebooks_restores_each_entrys_own_archived_tags_and_description():
+
+    archive_bytes = _zip_bytes({
+        "import_meta_a.ipynb": _notebook_bytes("def f() -> int:\n    return 1\n"),
+        "import_meta_b.ipynb": _notebook_bytes("def g() -> int:\n    return 2\n"),
+        "tags/import_meta_a.ipynb.json": json.dumps(["production", "bug"]),
+        "description/import_meta_a.ipynb.txt": "the first notebook",
+        "tags/import_meta_b.ipynb.json": json.dumps(["staging"]),
+    })
+
+    resp = client.post(
+        "/api/notebooks/import",
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 2
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["import_meta_a.ipynb"]["restored_tags"] == ["bug", "production"]
+    assert results_by_filename["import_meta_a.ipynb"]["restored_description"] == "the first notebook"
+    assert results_by_filename["import_meta_b.ipynb"]["restored_tags"] == ["staging"]
+    assert results_by_filename["import_meta_b.ipynb"]["restored_description"] is None
+
+    assert client.get(
+        "/api/notebooks/import_meta_a.ipynb/tags"
+    ).json()["tags"] == ["bug", "production"]
+    assert client.get(
+        "/api/notebooks/import_meta_a.ipynb/description"
+    ).json()["description"] == "the first notebook"
+    assert client.get(
+        "/api/notebooks/import_meta_b.ipynb/tags"
+    ).json()["tags"] == ["staging"]
+    assert client.get(
+        "/api/notebooks/import_meta_b.ipynb/description"
+    ).json()["description"] == ""
+
+
+def test_import_notebooks_explicit_tags_and_description_override_the_archived_ones():
+
+    archive_bytes = _zip_bytes({
+        "import_meta_override.ipynb": _notebook_bytes("def f() -> int:\n    return 1\n"),
+        "tags/import_meta_override.ipynb.json": json.dumps(["archived"]),
+        "description/import_meta_override.ipynb.txt": "archived description",
+    })
+
+    resp = client.post(
+        "/api/notebooks/import",
+        params={"tags": "explicit", "description": "explicit description"},
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    result = body["results"][0]
+
+    # The explicit query params win -- and since they did, nothing was
+    # actually *restored from the archive* for this entry.
+    assert result["restored_tags"] is None
+    assert result["restored_description"] is None
+
+    assert client.get(
+        "/api/notebooks/import_meta_override.ipynb/tags"
+    ).json()["tags"] == ["explicit"]
+    assert client.get(
+        "/api/notebooks/import_meta_override.ipynb/description"
+    ).json()["description"] == "explicit description"
+
+
+def test_import_notebooks_dry_run_predicts_restored_tags_and_description_without_writing():
+
+    archive_bytes = _zip_bytes({
+        "import_meta_dry_run.ipynb": _notebook_bytes("def f() -> int:\n    return 1\n"),
+        "tags/import_meta_dry_run.ipynb.json": json.dumps(["production"]),
+        "description/import_meta_dry_run.ipynb.txt": "would be restored",
+    })
+
+    resp = client.post(
+        "/api/notebooks/import",
+        params={"dry_run": "true"},
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    result = resp.json()["results"][0]
+    assert result["restored_tags"] == ["production"]
+    assert result["restored_description"] == "would be restored"
+
+    assert not (Path(UPLOAD_DIR) / "import_meta_dry_run.ipynb").exists()
+
+
+def test_export_notebooks_round_trips_each_notebooks_own_tags_and_description():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("export_meta_a.ipynb", io.BytesIO(content), "application/json")},
+    )
+    client.put(
+        "/api/notebooks/export_meta_a.ipynb/tags", json={"tags": ["prod", "bug"]}
+    )
+    client.put(
+        "/api/notebooks/export_meta_a.ipynb/description",
+        json={"description": "tagged and described"},
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("export_meta_untagged.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    export_bytes = client.get("/api/notebooks/export").content
+
+    with zipfile.ZipFile(io.BytesIO(export_bytes)) as archive:
+        assert json.loads(
+            archive.read("tags/export_meta_a.ipynb.json")
+        ) == ["bug", "prod"]
+        assert (
+            archive.read("description/export_meta_a.ipynb.txt").decode("utf-8")
+            == "tagged and described"
+        )
+        # An untagged, undescribed notebook contributes no entries at all.
+        assert "tags/export_meta_untagged.ipynb.json" not in archive.namelist()
+        assert "description/export_meta_untagged.ipynb.txt" not in archive.namelist()
+
+    client.delete("/api/notebooks?confirm=true")
+
+    resp = client.post(
+        "/api/notebooks/import",
+        files={"file": ("backup.zip", io.BytesIO(export_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    results_by_filename = {r["filename"]: r for r in resp.json()["results"]}
+    assert results_by_filename["export_meta_a.ipynb"]["restored_tags"] == ["bug", "prod"]
+    assert (
+        results_by_filename["export_meta_a.ipynb"]["restored_description"]
+        == "tagged and described"
+    )
+
+    assert client.get(
+        "/api/notebooks/export_meta_a.ipynb/tags"
+    ).json()["tags"] == ["bug", "prod"]
+    assert client.get(
+        "/api/notebooks/export_meta_a.ipynb/description"
+    ).json()["description"] == "tagged and described"
+
+
 def test_import_notebooks_dry_run_does_not_write_any_file():
 
     archive_bytes = _zip_bytes({
@@ -2776,7 +2927,8 @@ def test_export_notebooks_by_tag_bundles_only_matching_notebooks():
     assert resp.status_code == 200
 
     with zipfile.ZipFile(io.BytesIO(resp.content)) as archive:
-        assert sorted(archive.namelist()) == ["export_tag_a.ipynb", "export_tag_b.ipynb"]
+        ipynb_entries = [n for n in archive.namelist() if n.endswith(".ipynb")]
+        assert sorted(ipynb_entries) == ["export_tag_a.ipynb", "export_tag_b.ipynb"]
 
 
 def test_export_notebooks_by_tag_returns_404_when_nothing_matches():
@@ -7973,6 +8125,79 @@ def test_import_notebook_versions_round_trips_an_export_archive():
         for v in restored_versions
     }
     assert restored_contents == {original_content, middle_content}
+
+
+def test_export_notebook_versions_round_trips_tags_and_description():
+
+    filename = "versions_meta_round_trip.ipynb"
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+    client.put(f"/api/notebooks/{filename}/tags", json={"tags": ["prod", "bug"]})
+    client.put(
+        f"/api/notebooks/{filename}/description",
+        json={"description": "a described notebook"},
+    )
+
+    export_bytes = client.get(f"/api/notebooks/{filename}/versions/export").content
+
+    with zipfile.ZipFile(io.BytesIO(export_bytes)) as archive:
+        assert json.loads(archive.read("tags.json")) == ["bug", "prod"]
+        assert (
+            archive.read("description.txt").decode("utf-8") == "a described notebook"
+        )
+
+    new_filename = "versions_meta_round_trip_restored.ipynb"
+
+    import_resp = client.post(
+        f"/api/notebooks/{new_filename}/versions/import",
+        files={"file": ("backup.zip", io.BytesIO(export_bytes), "application/zip")},
+    )
+
+    assert import_resp.status_code == 200
+    body = import_resp.json()
+    assert body["restored_tags"] == ["bug", "prod"]
+    assert body["restored_description"] == "a described notebook"
+
+    assert client.get(
+        f"/api/notebooks/{new_filename}/tags"
+    ).json()["tags"] == ["bug", "prod"]
+    assert client.get(
+        f"/api/notebooks/{new_filename}/description"
+    ).json()["description"] == "a described notebook"
+
+
+def test_export_notebook_versions_omits_tags_and_description_entries_when_unset():
+
+    filename = "versions_meta_unset.ipynb"
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+
+    export_bytes = client.get(f"/api/notebooks/{filename}/versions/export").content
+
+    with zipfile.ZipFile(io.BytesIO(export_bytes)) as archive:
+        assert "tags.json" not in archive.namelist()
+        assert "description.txt" not in archive.namelist()
+
+    new_filename = "versions_meta_unset_restored.ipynb"
+
+    import_resp = client.post(
+        f"/api/notebooks/{new_filename}/versions/import",
+        files={"file": ("backup.zip", io.BytesIO(export_bytes), "application/zip")},
+    )
+
+    assert import_resp.status_code == 200
+    body = import_resp.json()
+    assert body["restored_tags"] is None
+    assert body["restored_description"] is None
+    assert client.get(f"/api/notebooks/{new_filename}/tags").json()["tags"] == []
 
 
 def test_import_notebook_versions_succeeds_with_no_version_history():
