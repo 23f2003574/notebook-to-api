@@ -1811,6 +1811,8 @@ def _dispatch_core_command(args):
             params["tag"] = args.tag
         if args.limit is not None:
             params["limit"] = args.limit
+        if args.format == "csv":
+            params["format"] = "csv"
 
         try:
             response = httpx.get(
@@ -1827,6 +1829,14 @@ def _dispatch_core_command(args):
                 f"Dashboard rejected the request ({response.status_code}): "
                 f"{_extract_dashboard_error_detail(response)}"
             )
+
+        if args.format == "csv":
+            # The response is CSV, not JSON -- printed as-is (redirect
+            # stdout to a file to save it) rather than run through the
+            # JSON/human-readable branches below, which both assume a
+            # parseable JSON body.
+            print(response.text, end="")
+            return
 
         data = response.json()
 
@@ -5661,6 +5671,24 @@ def main():
             "Skip this many of the biggest-first notebooks before "
             "--limit is applied, via GET /api/notebooks/storage's own "
             "?offset= query param, for paging past the first --limit."
+        )
+    )
+    storage_parser.add_argument(
+        "--format",
+        choices=["json", "csv"],
+        default="json",
+        help=(
+            "Response format to request via GET /api/notebooks/storage's "
+            "own ?format= query param, the same \"json\"/\"csv\" choice "
+            "`deploy-history`/`compile-history` already offer for their "
+            "own history logs. \"csv\" prints the dashboard's own "
+            "per-notebook CSV response straight to stdout (redirect it "
+            "to a file, e.g. `> notebook_storage.csv`) -- the same "
+            "biggest-first \"notebooks\" rows the \"json\" response's own "
+            "would list, just without the catalog-wide running totals, "
+            "which aren't one more per-notebook row. Every --tag/--limit/"
+            "--offset above still applies; --json is ignored under "
+            "--format csv, since the response isn't JSON at all."
         )
     )
     _add_dashboard_url_and_timeout_arguments(storage_parser)

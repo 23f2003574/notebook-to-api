@@ -4232,6 +4232,75 @@ def test_notebook_storage_reports_per_notebook_and_total_bytes():
     assert entries_by_filename["storage_b.ipynb"]["notebook_bytes"] == len(content_b)
 
 
+def test_notebook_storage_csv_format_returns_a_csv_response():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+    content_b = _notebook_bytes(
+        "def subtract_two_numbers(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    for filename, content in (
+        ("storage_csv_a.ipynb", content_a),
+        ("storage_csv_b.ipynb", content_b),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    resp = client.get("/api/notebooks/storage", params={"format": "csv"})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert 'attachment; filename="notebook_storage.csv"' in resp.headers["content-disposition"]
+
+    rows = resp.text.strip().split("\r\n")
+    assert rows[0] == "filename,notebook_bytes,version_bytes,version_count,total_bytes"
+    # Biggest-first, exactly like the "json" response's own "notebooks".
+    assert rows[1] == f"storage_csv_b.ipynb,{len(content_b)},0,0,{len(content_b)}"
+    assert rows[2] == f"storage_csv_a.ipynb,{len(content_a)},0,0,{len(content_a)}"
+    assert len(rows) == 3
+
+
+def test_notebook_storage_csv_format_composes_with_tag_and_limit():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("storage_csv_tagged.ipynb", io.BytesIO(content), "application/json")},
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("storage_csv_untagged.ipynb", io.BytesIO(content), "application/json")},
+    )
+    client.put(
+        "/api/notebooks/storage_csv_tagged.ipynb/tags", json={"tags": ["prod"]}
+    )
+
+    resp = client.get(
+        "/api/notebooks/storage",
+        params={"format": "csv", "tag": "prod", "limit": 1},
+    )
+
+    assert resp.status_code == 200
+    rows = resp.text.strip().split("\r\n")
+    assert len(rows) == 2
+    assert rows[1].startswith("storage_csv_tagged.ipynb,")
+
+
+def test_notebook_storage_rejects_an_unknown_format():
+
+    resp = client.get("/api/notebooks/storage", params={"format": "xml"})
+
+    assert resp.status_code == 400
+    assert "format" in resp.json()["detail"]
+
+
 def test_notebook_storage_filters_by_tag():
 
     client.delete("/api/notebooks?confirm=true")

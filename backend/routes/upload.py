@@ -3633,7 +3633,9 @@ def diff_notebooks(
 
 
 @router.get("/notebooks/storage")
-def notebook_storage_usage(tag: str = None, limit: int = None, offset: int = 0):
+def notebook_storage_usage(
+    tag: str = None, limit: int = None, offset: int = 0, format: str = "json",
+):
     """How much disk space UPLOAD_DIR is actually using, broken down per
     notebook -- its own current bytes plus everything its snapshotted
     version history (see _notebook_versions_dir/_snapshot_current_notebook_version
@@ -3696,7 +3698,36 @@ def notebook_storage_usage(tag: str = None, limit: int = None, offset: int = 0):
     "tag"-matching notebook, the same "totals describe the whole matching
     set, never just one page of it" reasoning GET /api/notebooks' own
     "total_count" already follows for its identically-paginated list.
+
+    "format" (optional, default "json") returns "csv" instead -- the
+    same "csv"/"json" choice GET /api/deploy/history and GET
+    /api/compile/history's own "format" already offer for their own
+    history logs, just applied here to this dashboard's own disk-usage
+    report instead. This endpoint's own docstring already compares
+    "notebooks"' own biggest-first order to `du -sh | sort -rh` on the
+    command line -- an operator who'd actually pipe that into a
+    spreadsheet or a reporting tool previously had no equivalent for
+    this dashboard's own version of it. Applies to the exact same
+    already-filtered, already-sorted, already-paginated "notebooks" the
+    "json" response would return, so "tag"/"offset"/"limit" compose with
+    "format" identically. Column order is "filename,notebook_bytes,
+    version_bytes,version_count,total_bytes" -- every field each
+    "notebooks" entry already carries, none renamed or reordered. The
+    catalog-wide running totals ("total_notebook_bytes" and friends) are
+    deliberately NOT included as a CSV row of their own: they're a
+    single summary figure over the whole matching set, not one more
+    per-notebook record, and a caller who wants them can always sum the
+    exported "total_bytes" column itself, or just fetch "format": "json"
+    for those five numbers directly. An unrecognized "format" is
+    rejected with 400 before a single notebook is even read.
     """
+
+    if format not in ("json", "csv"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="format must be 'json' or 'csv'"
+        )
 
     if offset < 0:
 
@@ -3758,6 +3789,34 @@ def notebook_storage_usage(tag: str = None, limit: int = None, offset: int = 0):
     paginated_notebooks = (
         notebooks[offset:offset + limit] if limit is not None else notebooks[offset:]
     )
+
+    if format == "csv":
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+
+        writer.writerow([
+            "filename", "notebook_bytes", "version_bytes",
+            "version_count", "total_bytes",
+        ])
+
+        for entry in paginated_notebooks:
+
+            writer.writerow([
+                entry["filename"],
+                entry["notebook_bytes"],
+                entry["version_bytes"],
+                entry["version_count"],
+                entry["total_bytes"],
+            ])
+
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": 'attachment; filename="notebook_storage.csv"',
+            },
+        )
 
     return {
         "status": "success",

@@ -4063,6 +4063,45 @@ def test_storage_command_sends_tag_query_param(fake_dashboard):
     assert handler.requests == ["/api/notebooks/storage?offset=0&tag=prod"]
 
 
+def test_storage_command_format_csv_prints_the_dashboards_raw_csv_response(
+    fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    csv_body = (
+        "filename,notebook_bytes,version_bytes,version_count,total_bytes\r\n"
+        "nb.ipynb,100,0,0,100\r\n"
+    )
+    handler.responses = [_raw_response(200, csv_body.encode("utf-8"), "text/csv")]
+
+    proc = _run_cli(
+        ["storage", "--format", "csv", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout == csv_body.replace("\r\n", "\n")
+    assert handler.requests == ["/api/notebooks/storage?offset=0&format=csv"]
+
+
+def test_storage_command_omits_format_query_param_by_default(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "notebooks": [], "notebook_count": 0,
+        "total_notebook_bytes": 0, "total_version_bytes": 0,
+        "total_version_count": 0, "total_bytes": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["storage", "--dashboard-url", dashboard_url], cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/storage?offset=0"]
+
+
 def test_storage_command_passes_limit_and_offset_through(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
