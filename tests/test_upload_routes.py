@@ -10255,6 +10255,7 @@ def test_clear_notebook_versions_is_a_no_op_success_for_a_notebook_with_no_histo
         "status": "success",
         "dry_run": False,
         "filename": "versions_clear_none.ipynb",
+        "older_than_days": None,
         "deleted_version_ids": [],
         "deleted_count": 0,
     }
@@ -10300,6 +10301,119 @@ def test_clear_notebook_versions_does_not_affect_a_different_notebooks_history()
 
     assert client.get(f"/api/notebooks/{filename_a}/versions").json()["versions"] == []
     assert len(client.get(f"/api/notebooks/{filename_b}/versions").json()["versions"]) == 1
+
+
+def test_clear_notebook_versions_older_than_days_keeps_recent_snapshots():
+
+    filename = "versions_clear_older_than_days.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(versions) == 2
+
+    old_version_id = versions[1]["version_id"]
+    recent_version_id = versions[0]["version_id"]
+    _backdate_notebook_version(filename, old_version_id, days_ago=40)
+
+    resp = client.delete(
+        f"/api/notebooks/{filename}/versions", params={"older_than_days": 30}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["older_than_days"] == 30
+    assert body["deleted_count"] == 1
+    assert body["deleted_version_ids"] == [old_version_id]
+
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert [v["version_id"] for v in remaining] == [recent_version_id]
+
+
+def test_clear_notebook_versions_older_than_days_dry_run_reports_the_plan_without_deleting():
+
+    filename = "versions_clear_older_than_days_dry_run.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+    _backdate_notebook_version(filename, version_id, days_ago=40)
+
+    resp = client.delete(
+        f"/api/notebooks/{filename}/versions",
+        params={"older_than_days": 30, "dry_run": "true"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["deleted_version_ids"] == [version_id]
+
+    # Nothing was actually deleted.
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert [v["version_id"] for v in remaining] == [version_id]
+
+
+def test_clear_notebook_versions_older_than_days_rejects_a_non_positive_value():
+
+    _upload_sample_notebook("versions_clear_older_than_days_invalid.ipynb")
+
+    resp = client.delete(
+        "/api/notebooks/versions_clear_older_than_days_invalid.ipynb/versions",
+        params={"older_than_days": 0},
+    )
+
+    assert resp.status_code == 400
 
 
 def test_notebook_versions_are_pruned_beyond_the_configured_maximum():

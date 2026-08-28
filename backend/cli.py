@@ -3942,6 +3942,11 @@ def _dispatch_core_command(args):
 
         else:  # args.versions_command == "clear"
 
+            age_clause = (
+                f" older than {args.older_than_days} day(s)" if args.older_than_days
+                else ""
+            )
+
             if not args.dry_run and not args.yes:
                 # DELETE /api/notebooks/{filename}/versions
                 # (routes/upload.py) has no confirmation step of its own
@@ -3949,14 +3954,16 @@ def _dispatch_core_command(args):
                 # delete` above already applies. Not asked at all under
                 # --dry-run, which never deletes anything.
                 answer = input(
-                    f"Permanently delete every version of '{args.filename}' "
-                    f"from {dashboard_url}? [y/N] "
+                    f"Permanently delete every version{age_clause} of "
+                    f"'{args.filename}' from {dashboard_url}? [y/N] "
                 )
                 if answer.strip().lower() not in ("y", "yes"):
                     print("Aborted.")
                     return
 
             params = {"dry_run": True} if args.dry_run else {}
+            if args.older_than_days:
+                params["older_than_days"] = args.older_than_days
 
             try:
                 response = httpx.delete(
@@ -7281,6 +7288,21 @@ def main():
     )
     versions_clear_parser.add_argument(
         "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    versions_clear_parser.add_argument(
+        "--older-than-days",
+        type=int,
+        default=None,
+        dest="older_than_days",
+        help=(
+            "Only discard this notebook's own version snapshots saved "
+            "more than this many days ago, via DELETE "
+            "/api/notebooks/{filename}/versions's own \"older_than_days\" "
+            "query param -- the same age-based cutoff `prune-versions` "
+            "already applies catalog-wide, just scoped to this one "
+            "notebook instead of every notebook. Without this, every "
+            "version is discarded regardless of age, as before."
+        )
     )
     versions_clear_parser.add_argument(
         "--dry-run",

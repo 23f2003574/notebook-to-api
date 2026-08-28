@@ -10698,6 +10698,71 @@ def test_versions_clear_command_reports_success_with_yes_flag(
     assert handler.requests == ["/api/notebooks/nb.ipynb/versions"]
 
 
+def test_versions_clear_command_older_than_days_passes_the_param_through_and_prompts(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "older_than_days": 30,
+            "deleted_version_ids": ["v1.ipynb"],
+            "deleted_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli", "versions", "clear", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--older-than-days", "30",
+        ],
+        cwd=str(workdir),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        input="y\n",
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "older than 30 day(s)" in proc.stdout
+    assert "Deleted 1 version(s) of 'nb.ipynb'" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions?older_than_days=30"]
+
+
+def test_versions_clear_command_omits_older_than_days_by_default(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "older_than_days": None,
+            "deleted_version_ids": ["v1.ipynb"],
+            "deleted_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "clear", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions"]
+
+
 def test_versions_clear_command_reports_no_history(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

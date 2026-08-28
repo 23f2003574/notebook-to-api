@@ -5888,7 +5888,9 @@ async def import_notebook_versions(
 
 
 @router.delete("/notebooks/{filename}/versions")
-def clear_notebook_versions(filename: str, dry_run: bool = False):
+def clear_notebook_versions(
+    filename: str, dry_run: bool = False, older_than_days: int = None
+):
     """Permanently discard every one of a notebook's snapshotted previous
     versions at once, without touching the notebook's own current content,
     tags, or currently-compiled status.
@@ -5929,7 +5931,29 @@ def clear_notebook_versions(filename: str, dry_run: bool = False):
     a separate GET .../versions of their own. The top-level response's
     own "dry_run" field echoes back whether this call actually deleted
     anything.
+
+    "older_than_days" (optional) narrows the clear to only this
+    notebook's own versions older than that many days -- the same
+    age-based cutoff DELETE /api/notebooks/versions already applies
+    catalog-wide via its own "older_than_days", just scoped to one
+    notebook instead of every notebook at once. Before this, trimming
+    just one actively-edited notebook's own bloated history down to its
+    recent snapshots meant either discarding the *entire* history via a
+    plain `clear` (losing every recent version too) or first GETting
+    .../versions to find every stale version_id by hand and deleting them
+    one at a time via `versions delete-batch`. Omitted (the default),
+    every version is discarded regardless of age, exactly as before this.
+    A version's own age is its "saved_at" -- the identical on-disk mtime
+    GET .../versions already reports for each entry -- so nothing about
+    what counts as a version's age is redefined here.
     """
+
+    if older_than_days is not None and older_than_days <= 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="older_than_days must be a positive integer"
+        )
 
     file_path = resolve_upload_path(filename)
 
@@ -5944,18 +5968,47 @@ def clear_notebook_versions(filename: str, dry_run: bool = False):
 
     with _version_lock_for(file_path.name):
 
-        deleted_version_ids = sorted(
-            entry.name for entry in versions_dir.iterdir()
-            if entry.is_file()
-        ) if versions_dir.is_dir() else []
+        if older_than_days is None:
 
-        if not dry_run:
-            shutil.rmtree(versions_dir, ignore_errors=True)
+            deleted_version_ids = sorted(
+                entry.name for entry in versions_dir.iterdir()
+                if entry.is_file()
+            ) if versions_dir.is_dir() else []
+
+            if not dry_run:
+                shutil.rmtree(versions_dir, ignore_errors=True)
+
+        else:
+
+            cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+
+            deleted_version_ids = []
+
+            if versions_dir.is_dir():
+
+                for version_file in versions_dir.iterdir():
+
+                    if not version_file.is_file():
+                        continue
+
+                    saved_at = datetime.fromtimestamp(
+                        version_file.stat().st_mtime, tz=timezone.utc
+                    )
+
+                    if saved_at < cutoff:
+
+                        if not dry_run:
+                            version_file.unlink()
+
+                        deleted_version_ids.append(version_file.name)
+
+            deleted_version_ids.sort()
 
     return {
         "status": "success",
         "dry_run": dry_run,
         "filename": filename,
+        "older_than_days": older_than_days,
         "deleted_version_ids": deleted_version_ids,
         "deleted_count": len(deleted_version_ids),
     }
