@@ -2317,7 +2317,8 @@ def rename_tag(tag: str, data: dict):
 
 @router.get("/functions")
 def search_functions(
-    search: str = None, tag: str = None, limit: int = None, offset: int = 0
+    search: str = None, tag: str = None, regex: bool = False,
+    limit: int = None, offset: int = 0,
 ):
     """Find which uploaded notebooks define a function whose name
     contains `search` (case-insensitive), across every notebook in
@@ -2377,6 +2378,21 @@ def search_functions(
     matching notebook, never just the current page, the same "totals
     describe the whole matching set" reasoning GET /api/notebooks/
     storage's own identically-paginated running totals already follow.
+
+    "regex" (optional, default false) treats `search` as a
+    case-insensitive Python regular expression instead of a plain
+    substring against each function's own name -- the identical "regex"
+    GET /api/notebooks/search-content's own "search" field already
+    supports for matching a *cell's* raw source, just applied here to a
+    *function name* instead. Useful for a naming-convention audit a
+    plain substring can't express (e.g. every function name ending in
+    "_v1"/"_v2", to find candidates for a rename sweep before they become
+    public endpoints) rather than one specific, already-known name. A
+    `search` that isn't a valid pattern under "regex" is rejected with
+    400, naming the underlying re.error, before a single notebook is even
+    read. Leaving "regex" false (the default) behaves exactly as before
+    this -- a plain substring match, byte for byte identical to the
+    previous implementation.
     """
 
     if not search:
@@ -2400,9 +2416,24 @@ def search_functions(
             detail="limit must be a positive integer"
         )
 
-    upload_root = Path(UPLOAD_DIR)
+    if regex:
 
-    search_lower = search.lower()
+        try:
+            pattern = re.compile(search, re.IGNORECASE)
+
+        except re.error as e:
+
+            raise HTTPException(
+                status_code=400,
+                detail=f"search is not a valid regular expression: {e}"
+            )
+
+    else:
+
+        pattern = None
+        search_lower = search.lower()
+
+    upload_root = Path(UPLOAD_DIR)
 
     matches = []
 
@@ -2421,10 +2452,18 @@ def search_functions(
         except MALFORMED_NOTEBOOK_ERRORS:
             continue
 
-        matching_functions = [
-            func for func in functions
-            if search_lower in func["name"].lower()
-        ]
+        if pattern is not None:
+
+            matching_functions = [
+                func for func in functions if pattern.search(func["name"])
+            ]
+
+        else:
+
+            matching_functions = [
+                func for func in functions
+                if search_lower in func["name"].lower()
+            ]
 
         if matching_functions:
             matches.append({
@@ -2441,6 +2480,7 @@ def search_functions(
     return {
         "status": "success",
         "search": search,
+        "regex": regex,
         "matches": paginated_matches,
         "notebook_count": notebook_count,
         "limit": limit,

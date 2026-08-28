@@ -7676,6 +7676,7 @@ def test_search_functions_reports_no_matches():
     assert resp.json() == {
         "status": "success",
         "search": "this_function_name_does_not_exist_anywhere",
+        "regex": False,
         "matches": [],
         "notebook_count": 0,
         "limit": None,
@@ -7779,6 +7780,88 @@ def test_search_functions_rejects_a_non_positive_limit():
     )
 
     assert resp.status_code == 400
+
+
+def test_search_functions_regex_matches_a_pattern_not_a_literal_substring():
+
+    content_a = _notebook_bytes(
+        "def train_model_v1(epochs: int) -> str:\n    return 'done'\n"
+    )
+    content_b = _notebook_bytes(
+        "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={"file": ("search_functions_regex_a.ipynb", io.BytesIO(content_a), "application/json")},
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("search_functions_regex_b.ipynb", io.BytesIO(content_b), "application/json")},
+    )
+
+    # A plain substring for "train_model" alone matches both notebooks;
+    # the pattern below only matches the one whose name also ends in a
+    # version suffix.
+    resp = client.get(
+        "/api/functions", params={"search": r"_v\d+$", "regex": "true"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["regex"] is True
+    assert body["notebook_count"] == 1
+    assert body["matches"][0]["filename"] == "search_functions_regex_a.ipynb"
+
+
+def test_search_functions_regex_is_case_insensitive():
+
+    content = _notebook_bytes(
+        "def TrainModel(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={"file": ("search_functions_regex_case.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get(
+        "/api/functions", params={"search": "^trainmodel$", "regex": "true"}
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["notebook_count"] == 1
+
+
+def test_search_functions_regex_false_treats_search_as_a_plain_substring():
+
+    content = _notebook_bytes("def abc() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("search_functions_no_regex.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    # "a.c" would match "abc" as a *regex* (any-character "."), but not
+    # as a literal substring the function name doesn't actually contain.
+    resp = client.get(
+        "/api/functions", params={"search": "a.c", "regex": "false"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["regex"] is False
+    assert body["notebook_count"] == 0
+
+
+def test_search_functions_regex_rejects_an_invalid_pattern():
+
+    resp = client.get(
+        "/api/functions", params={"search": "(unclosed", "regex": "true"}
+    )
+
+    assert resp.status_code == 400
+    assert "regular expression" in resp.json()["detail"]
 
 
 def test_list_notebooks_reports_tags_for_each_entry():

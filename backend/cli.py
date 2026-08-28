@@ -1564,6 +1564,8 @@ def _dispatch_core_command(args):
         params = {"search": args.search, "offset": args.offset}
         if args.tag:
             params["tag"] = args.tag
+        if args.regex:
+            params["regex"] = True
         if args.limit is not None:
             params["limit"] = args.limit
 
@@ -5357,6 +5359,17 @@ def main():
         help=(
             "Only scan notebooks carrying this exact tag, mirroring GET "
             "/api/functions' own ?tag=."
+        )
+    )
+    search_functions_parser.add_argument(
+        "--regex",
+        action="store_true",
+        help=(
+            "Treat `search` as a case-insensitive Python regular "
+            "expression instead of a plain substring, via GET "
+            "/api/functions' own ?regex=true -- e.g. to find every "
+            "function name ending in `_v1`/`_v2` rather than one exact, "
+            "already-known name."
         )
     )
     search_functions_parser.add_argument(

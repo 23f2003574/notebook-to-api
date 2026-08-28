@@ -3183,6 +3183,44 @@ def test_search_functions_command_sends_tag_query_param(fake_dashboard):
     assert handler.requests == ["/api/functions?search=train&offset=0&tag=prod"]
 
 
+def test_search_functions_command_sends_regex_query_param(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "search": r"_v\d+$", "regex": True,
+        "matches": [], "notebook_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        [
+            "search-functions", r"_v\d+$", "--regex",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/functions?search=_v%5Cd%2B%24&offset=0&regex=true"
+    ]
+
+
+def test_search_functions_command_omits_regex_query_param_by_default(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "search": "train", "matches": [], "notebook_count": 0}
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["search-functions", "train", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/functions?search=train&offset=0"]
+
+
 def test_search_functions_command_reports_no_matches(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
