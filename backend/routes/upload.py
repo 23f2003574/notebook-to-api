@@ -4,6 +4,7 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import List
 import asyncio
+import csv
 import io
 import json
 import os
@@ -8715,6 +8716,7 @@ def deploy_history_endpoint(
     pushed: bool = None,
     limit: int = None,
     offset: int = 0,
+    format: str = "json",
 ):
     """This dashboard's own past POST /api/deploy invocations, most
     recent first -- up to the last MAX_DEPLOY_HISTORY_ENTRIES.
@@ -8785,7 +8787,35 @@ def deploy_history_endpoint(
     MAX_DEPLOY_HISTORY_ENTRIES more deploys have happened since, the same
     fixed-window retention _prune_notebook_versions already applies to a
     single notebook's own version snapshots.
+
+    "format" (optional, default "json") returns "csv" instead -- the
+    same "csv"/"json" choice this codebase's own governance audit log
+    export already treats as a legitimate export format for a durable
+    history log like this one, just previously never offered here. An
+    operator wanting to open this dashboard's own deploy history in a
+    spreadsheet for a manual audit, or feed it into an existing
+    reporting pipeline built around CSV, previously had to write its own
+    JSON-to-CSV conversion externally, the same round trip GET
+    /api/notebooks/export's own docstring already describes closing for
+    downloading several notebooks' raw content, just for this endpoint's
+    own tabular history instead. Applies to the exact same
+    already-filtered, already-paginated "entries" the "json" response
+    would return -- every "source_notebook_filename"/"platform"/"tag"/
+    "pushed"/"offset"/"limit" above composes with "format" identically,
+    so a caller can page or narrow a CSV export exactly like a JSON one.
+    Column order is "deployed_at,tag,platform,pushed,
+    source_notebook_filename,source_notebook_sha256" -- every field the
+    "json" response's own "entries" already carry per entry, none
+    renamed or reordered. An unrecognized "format" is rejected with 400
+    before this dashboard's own deploy history is even read.
     """
+
+    if format not in ("json", "csv"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="format must be 'json' or 'csv'"
+        )
 
     entries = list(reversed(_read_deploy_history()))
 
@@ -8829,6 +8859,35 @@ def deploy_history_endpoint(
             )
 
         entries = entries[:limit]
+
+    if format == "csv":
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+
+        writer.writerow([
+            "deployed_at", "tag", "platform", "pushed",
+            "source_notebook_filename", "source_notebook_sha256",
+        ])
+
+        for entry in entries:
+
+            writer.writerow([
+                entry.get("deployed_at"),
+                entry.get("tag"),
+                entry.get("platform"),
+                entry.get("pushed"),
+                entry.get("source_notebook_filename"),
+                entry.get("source_notebook_sha256"),
+            ])
+
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": 'attachment; filename="deploy_history.csv"',
+            },
+        )
 
     return {
         "status": "success",

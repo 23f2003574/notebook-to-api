@@ -14037,6 +14037,71 @@ def test_deploy_history_unknown_source_notebook_sha256_yields_no_entries(
     assert body["entry_count"] == 0
 
 
+def test_deploy_history_csv_format_returns_a_csv_response(tmp_path, monkeypatch):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    resp = client.get("/api/deploy/history", params={"format": "csv"})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert 'attachment; filename="deploy_history.csv"' in resp.headers["content-disposition"]
+
+    rows = resp.text.strip().split("\r\n")
+    assert rows[0] == (
+        "deployed_at,tag,platform,pushed,source_notebook_filename,"
+        "source_notebook_sha256"
+    )
+    # Most-recent-first, exactly like the "json" response.
+    assert rows[1] == "2024-01-03T00:00:00+00:00,filter:c,linux/amd64,False,one.ipynb,ccc"
+    assert rows[2] == "2024-01-02T00:00:00+00:00,filter:b,linux/arm64,False,two.ipynb,bbb"
+    assert rows[3] == "2024-01-01T00:00:00+00:00,filter:a,linux/amd64,True,one.ipynb,aaa"
+    assert len(rows) == 4
+
+
+def test_deploy_history_csv_format_composes_with_filters_and_pagination(
+    tmp_path, monkeypatch
+):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    resp = client.get(
+        "/api/deploy/history",
+        params={"format": "csv", "source_notebook_filename": "one.ipynb", "limit": 1},
+    )
+
+    assert resp.status_code == 200
+    rows = resp.text.strip().split("\r\n")
+    assert len(rows) == 2
+    assert rows[1].startswith("2024-01-03T00:00:00+00:00,filter:c,")
+
+
+def test_deploy_history_csv_format_on_an_empty_history_is_just_the_header(monkeypatch, tmp_path):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "deploy_history_csv_empty_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    resp = client.get("/api/deploy/history", params={"format": "csv"})
+
+    assert resp.status_code == 200
+    rows = resp.text.strip().split("\r\n")
+    assert rows == [
+        "deployed_at,tag,platform,pushed,source_notebook_filename,"
+        "source_notebook_sha256"
+    ]
+
+
+def test_deploy_history_rejects_an_unknown_format():
+
+    resp = client.get("/api/deploy/history", params={"format": "xml"})
+
+    assert resp.status_code == 400
+    assert "format" in resp.json()["detail"]
+
+
 def test_deploy_history_filters_by_platform(tmp_path, monkeypatch):
 
     _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
