@@ -2840,6 +2840,61 @@ def test_compile_metadata_records_an_absolute_path_even_for_a_relative_input(
     assert Path(metadata["source_notebook"]) == notebook_path.resolve()
 
 
+def test_compile_notebook_with_a_source_notebook_path_records_it_but_hashes_the_compiled_content(
+    tmp_path,
+):
+    """compile_notebook's own "source_notebook_path" -- used by POST
+    /api/compile's "version_id" (backend/routes/upload.py) to compile one
+    of a notebook's own previously snapshotted versions without restoring
+    it over the notebook's current content -- must record the *real*
+    notebook as "source_notebook" while hashing the content that actually
+    got compiled (the version snapshot), not the real notebook's own
+    current (different) content.
+    """
+
+    import json
+
+    from backend.compiler import COMPILE_METADATA_FILENAME, hash_notebook_file
+
+    real_notebook = nbformat.v4.new_notebook()
+    real_notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def multiply(a: int, b: int) -> int:\n    return a * b\n"
+        )
+    )
+    real_notebook_path = tmp_path / "nb.ipynb"
+    with open(real_notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(real_notebook, f)
+
+    old_version = nbformat.v4.new_notebook()
+    old_version.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+    old_version_path = tmp_path / "nb_v1.ipynb"
+    with open(old_version_path, "w", encoding="utf-8") as f:
+        nbformat.write(old_version, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(
+        str(old_version_path),
+        str(output_dir),
+        source_notebook_path=str(real_notebook_path),
+    )
+
+    app_code = (output_dir / "app.py").read_text(encoding="utf-8")
+    assert "add" in app_code
+    assert "multiply" not in app_code
+
+    metadata_path = output_dir / COMPILE_METADATA_FILENAME
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    assert metadata["source_notebook"] == str(real_notebook_path.resolve())
+    assert metadata["source_notebook_sha256"] == hash_notebook_file(str(old_version_path))
+    assert metadata["source_notebook_sha256"] != hash_notebook_file(str(real_notebook_path))
+
+
 def test_recompiling_overwrites_the_previous_compile_metadata(tmp_path):
 
     import json

@@ -11562,6 +11562,127 @@ def test_compile_reports_skipped_functions():
     assert {f["name"] for f in body["functions"]} == {"add"}
 
 
+def test_compile_with_version_id_compiles_the_snapshotted_content():
+
+    filename = "compile_version_id.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "def add(a: int, b: int) -> int:\n    return a + b\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "def multiply(a: int, b: int) -> int:\n    return a * b\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(f"/api/notebooks/{filename}/versions").json()["versions"][0]["version_id"]
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": filename, "version_id": version_id}
+    )
+
+    assert compile_resp.status_code == 200
+    body = compile_resp.json()
+    assert body["version_id"] == version_id
+    assert {f["name"] for f in body["functions"]} == {"add"}
+    assert any(ep["path"] == "/add" for ep in body["endpoints"])
+
+    # The notebook's own current content on disk is untouched -- still
+    # "multiply", never overwritten by compiling an old version.
+    current_content = client.get(f"/api/notebooks/{filename}").text
+    assert "def multiply" in current_content
+    assert "def add" not in current_content
+
+
+def test_compile_with_version_id_keeps_the_real_notebook_as_currently_compiled():
+
+    filename = "compile_version_id_metadata.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "def add(a: int, b: int) -> int:\n    return a + b\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "def multiply(a: int, b: int) -> int:\n    return a * b\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(f"/api/notebooks/{filename}/versions").json()["versions"][0]["version_id"]
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": filename, "version_id": version_id}
+    )
+    assert compile_resp.status_code == 200
+
+    notebooks = client.get("/api/notebooks").json()["notebooks"]
+    entry = next(nb for nb in notebooks if nb["filename"] == filename)
+
+    # source_notebook still names the real notebook (not the version
+    # snapshot's own internal path), so it's still recognized as the
+    # currently-compiled one -- but its current content ("multiply")
+    # genuinely differs from what got compiled ("add"), so this correctly
+    # reports it as changed since that compile.
+    assert entry["currently_compiled"] is True
+    assert entry["notebook_changed_since_compile"] is True
+
+
+def test_compile_returns_404_for_an_unknown_version_id():
+
+    filename = "compile_version_id_unknown.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.post(
+        "/api/compile",
+        json={"notebook_path": filename, "version_id": "does-not-exist.ipynb"},
+    )
+
+    assert resp.status_code == 404
+
+
+def test_compile_rejects_a_non_string_version_id():
+
+    filename = "compile_version_id_bad_type.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.post(
+        "/api/compile", json={"notebook_path": filename, "version_id": 123}
+    )
+
+    assert resp.status_code == 400
+
+
 def test_inspect_reports_skipped_functions_before_compiling():
 
     content = _notebook_bytes(

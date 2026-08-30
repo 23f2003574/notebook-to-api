@@ -2953,12 +2953,14 @@ def _dispatch_core_command(args):
 
         # Omitted entirely (rather than sent as null) when unset, so a
         # dashboard's POST /api/compile sees exactly the same request
-        # shape it did before only/exclude existed for callers that never
-        # pass either.
+        # shape it did before only/exclude/version_id existed for callers
+        # that never pass any of them.
         if only:
             request_body["only"] = only
         if exclude:
             request_body["exclude"] = exclude
+        if args.version_id:
+            request_body["version_id"] = args.version_id
 
         try:
             response = httpx.post(
@@ -2981,7 +2983,13 @@ def _dispatch_core_command(args):
         if args.json_output:
             print(json.dumps(data, indent=2))
         else:
-            print(f"Compiled '{data.get('notebook', args.filename)}' on {dashboard_url}")
+            target = (
+                f"'{data.get('notebook', args.filename)}' "
+                f"version '{data['version_id']}'"
+                if data.get("version_id")
+                else f"'{data.get('notebook', args.filename)}'"
+            )
+            print(f"Compiled {target} on {dashboard_url}")
 
             endpoints = data.get("endpoints", [])
 
@@ -6673,14 +6681,15 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(remote_compile_parser)
     _add_function_selection_arguments(remote_compile_parser)
+    _add_version_id_argument(remote_compile_parser, "POST /api/compile")
     remote_compile_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response "
-            "({\"status\", \"notebook\", \"functions\", \"endpoints\", "
-            "\"skipped_functions\", \"dependencies\", "
+            "({\"status\", \"notebook\", \"version_id\", \"functions\", "
+            "\"endpoints\", \"skipped_functions\", \"dependencies\", "
             "\"generated_files\"}) instead of a human-readable summary, "
             "for scripting/automation."
         )

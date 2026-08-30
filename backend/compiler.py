@@ -600,9 +600,25 @@ def hash_notebook_file(notebook_path):
     return hasher.hexdigest()
 
 
-def write_compile_metadata(notebook_path, output_dir):
+def write_compile_metadata(notebook_path, output_dir, content_path=None):
     """Record which notebook produced the app in `output_dir`, its
     content hash at that moment, and when.
+
+    `content_path` (optional) is the file whose *bytes* actually got
+    compiled and should be hashed -- `notebook_path` is always what gets
+    recorded as "source_notebook" and stays the real, currently-uploaded
+    notebook's own path. They differ only when compiling one of a
+    notebook's own previously snapshotted versions (see POST /api/compile's
+    own "version_id", backend/routes/upload.py): "source_notebook" still
+    names the real notebook (so every "currently_compiled"/staleness check
+    already keyed on that path -- _currently_compiled_notebook_metadata
+    and friends -- keeps recognizing it), while the hash reflects the
+    version's own content, not the notebook's current one. That mismatch
+    is exactly the correct, honest outcome: the notebook's current content
+    genuinely differs from what's actually served, so
+    "notebook_changed_since_compile" correctly reports true. Defaults to
+    `notebook_path` -- every existing caller compiling a notebook's own
+    current content keeps hashing exactly what it already did.
 
     Without this, nothing -- on disk or via the API -- recorded which
     notebook a given `generated/` output actually came from. GET
@@ -629,7 +645,7 @@ def write_compile_metadata(notebook_path, output_dir):
 
     metadata = {
         "source_notebook": os.path.abspath(notebook_path),
-        "source_notebook_sha256": hash_notebook_file(notebook_path),
+        "source_notebook_sha256": hash_notebook_file(content_path or notebook_path),
         "compiled_at": (
             datetime.datetime.now(datetime.timezone.utc).isoformat()
         ),
@@ -783,7 +799,8 @@ def compile_notebook_to_api(
     notebook_path,
     output_path,
     only=None,
-    exclude=None
+    exclude=None,
+    source_notebook_path=None,
 ):
 
     # compile_notebook_to_api writes several files to output_dir
@@ -920,7 +937,11 @@ def compile_notebook_to_api(
 
             generate_dockerignore(dockerignore_path)
 
-            write_compile_metadata(notebook_path, output_dir)
+            write_compile_metadata(
+                source_notebook_path or notebook_path,
+                output_dir,
+                content_path=notebook_path,
+            )
 
         except Exception:
 
@@ -940,7 +961,8 @@ def compile_notebook(
     notebook_path,
     output_dir,
     only=None,
-    exclude=None
+    exclude=None,
+    source_notebook_path=None,
 ):
     """
     Convenient wrapper for CLI.
@@ -948,7 +970,8 @@ def compile_notebook(
 
     `only`/`exclude` are passed straight through to
     compile_notebook_to_api -- see _filter_functions_by_name's own
-    docstring for what they do and why.
+    docstring for what they do and why. `source_notebook_path` is passed
+    straight through too -- see write_compile_metadata's own docstring.
     """
 
     output_path = os.path.join(
@@ -960,5 +983,6 @@ def compile_notebook(
         notebook_path,
         output_path,
         only=only,
-        exclude=exclude
+        exclude=exclude,
+        source_notebook_path=source_notebook_path,
     )

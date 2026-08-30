@@ -8033,6 +8033,30 @@ def compile_notebook_endpoint(
     exposed every function as its own endpoint, with no way to keep a
     slow or still-broken function's endpoint out of the compiled app
     short of deleting it from the notebook outright, then re-uploading.
+
+    "version_id" (optional, see _resolve_preview_content_path above)
+    compiles one of "notebook_path"'s own previously snapshotted versions
+    instead of its current content. POST /api/validate,
+    /api/requirements-preview, /api/app-preview, and /api/curl-preview
+    already let a caller check/preview an old version this same way --
+    but actually *serving* one meant first POST
+    .../versions/{version_id}/restore-ing it over the notebook's own
+    current content (permanently overwriting whatever was there, even
+    though that's itself undoable) just to get GENERATED_DIR to reflect
+    it. This compiles the version's own content directly into
+    GENERATED_DIR, with the notebook's current content on disk left
+    completely untouched.
+
+    The compiled app's own .compile_metadata.json still records this
+    notebook (not the version snapshot's own internal path under
+    UPLOAD_DIR/.versions/) as "source_notebook" -- see
+    write_compile_metadata's own docstring -- so every existing
+    "currently_compiled"/staleness check (GET /api/notebooks,
+    /api/health, /api/generated, ...) keeps recognizing this notebook as
+    the one currently served, correctly flagged as changed-since-compile
+    (its current content really does differ from what's now running)
+    until it's recompiled from its current content or this same version
+    again.
     """
 
     notebook_path = data.get(
@@ -8048,6 +8072,14 @@ def compile_notebook_endpoint(
 
     only = data.get("only")
     exclude = data.get("exclude")
+    version_id = data.get("version_id")
+
+    if version_id is not None and not isinstance(version_id, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="version_id must be a string"
+        )
 
     # Mirrors the "tag"/"platform" string-type checks POST /api/deploy
     # already makes on its own client-supplied fields: `only`/`exclude`
@@ -8090,6 +8122,16 @@ def compile_notebook_endpoint(
             detail="Notebook file not found"
         )
 
+    # Only resolved once "notebook_path" itself is confirmed to exist
+    # (the check just above) -- an unknown version_id against a real
+    # notebook gets its own clear 404 ("Notebook version not found") from
+    # _resolve_preview_content_path, rather than the notebook's own
+    # "Notebook file not found" one.
+    content_path = (
+        _resolve_preview_content_path(notebook_path, version_id)
+        if version_id is not None else full_path
+    )
+
     try:
 
         # A cheap up-front validity check (mirroring the identical
@@ -8098,14 +8140,15 @@ def compile_notebook_endpoint(
         # MALFORMED_NOTEBOOK_ERRORS 400 below, rather than surfacing from
         # deep inside compile_notebook as an unrelated-looking failure.
         load_notebook(
-            str(full_path)
+            str(content_path)
         )
 
         compile_notebook(
-            str(full_path),
+            str(content_path),
             GENERATED_DIR,
             only=only,
             exclude=exclude,
+            source_notebook_path=str(full_path),
         )
 
         # inspect_notebook_data (backend/inspector.py) already computes
@@ -8138,7 +8181,7 @@ def compile_notebook_endpoint(
         with COMPILE_LOCK:
 
             data = inspect_notebook_data(
-                str(full_path),
+                str(content_path),
                 GENERATED_DIR
             )
 
@@ -8167,7 +8210,8 @@ def compile_notebook_endpoint(
         _append_compile_history_entry({
             "compiled_at": datetime.now(timezone.utc).isoformat(),
             "notebook_filename": notebook_path,
-            "source_notebook_sha256": hash_notebook_file(str(full_path)),
+            "source_notebook_sha256": hash_notebook_file(str(content_path)),
+            "version_id": version_id,
             "only": only,
             "exclude": exclude,
             "endpoint_count": len(data["endpoints"]),
@@ -8178,6 +8222,7 @@ def compile_notebook_endpoint(
         return {
             "status": "success",
             "notebook": notebook_path,
+            "version_id": version_id,
             "functions": data["functions"],
             "endpoints": data["endpoints"],
             "skipped_functions": data["skipped_functions"],

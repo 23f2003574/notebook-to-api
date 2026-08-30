@@ -7940,6 +7940,43 @@ def test_remote_compile_command_passes_exclude_through_to_the_dashboard(
     }
 
 
+def test_remote_compile_command_passes_the_version_id_flag_through(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebook": "nb.ipynb",
+            "version_id": "v1.ipynb",
+            "functions": [{"name": "add"}],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "skipped_functions": [],
+            "dependencies": [],
+            "generated_files": [],
+            "message": "Notebook compiled successfully",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-compile", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--version-id", "v1.ipynb",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "'nb.ipynb' version 'v1.ipynb'" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "version_id": "v1.ipynb",
+    }
+
+
 def test_remote_compile_command_reports_the_dashboards_error_for_conflicting_only_and_exclude(
     tmp_path, fake_dashboard
 ):
