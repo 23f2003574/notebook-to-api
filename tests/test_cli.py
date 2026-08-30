@@ -11421,6 +11421,43 @@ def test_versions_compare_command_compares_two_versions_via_against(
     ]
 
 
+def test_versions_compare_command_content_flag_passes_the_query_param_and_prints_the_diff(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "version_id": "v1.ipynb",
+            "against": None,
+            "added": [], "removed": [], "changed": [], "unchanged": ["add"],
+            "content_diff": [
+                "--- version 'v1.ipynb'", "+++ current",
+                '+    """docstring only"""',
+            ],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "compare", "nb.ipynb", "v1.ipynb",
+            "--content", "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "docstring only" in proc.stdout
+    assert handler.requests == [
+        "/api/notebooks/nb.ipynb/versions/v1.ipynb/diff?content=true"
+    ]
+
+
 def test_versions_compare_command_json_flag_emits_the_dashboards_own_response(
     tmp_path, fake_dashboard
 ):
@@ -12118,6 +12155,41 @@ def test_diff_notebooks_command_passes_old_version_and_new_version_through(
         "/api/notebooks/diff?old=a.ipynb&new=b.ipynb"
         "&old_version=20260101T000000000000_abcd.ipynb"
         "&new_version=20260102T000000000000_efgh.ipynb"
+    ]
+
+
+def test_diff_notebooks_command_content_flag_passes_the_query_param_and_prints_the_diff(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "old": "a.ipynb", "new": "b.ipynb",
+            "old_version": None, "new_version": None,
+            "added": [], "removed": [], "changed": [], "unchanged": ["add"],
+            "content_diff": [
+                "--- a.ipynb", "+++ b.ipynb", '+    """docstring only"""',
+            ],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "diff-notebooks", "a.ipynb", "b.ipynb",
+            "--content", "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert 'docstring only' in proc.stdout
+    assert handler.requests == [
+        "/api/notebooks/diff?old=a.ipynb&new=b.ipynb&content=true"
     ]
 
 

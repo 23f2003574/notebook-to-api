@@ -4,6 +4,7 @@ import pytest
 from backend.inspector import (
     DEFAULT_DEV_API_KEY,
     diff_notebook_functions,
+    diff_notebook_source,
     generate_curl_commands,
     inspect_notebook,
     inspect_notebook_data,
@@ -842,6 +843,85 @@ def test_diff_notebook_functions_identical_notebooks_report_no_changes(tmp_path)
     assert diff["removed"] == []
     assert diff["changed"] == []
     assert sorted(diff["unchanged"]) == ["add", "subtract"]
+
+
+def test_diff_notebook_source_identical_notebooks_yields_no_lines(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    assert diff_notebook_source(str(notebook_path), str(notebook_path)) == []
+
+
+def test_diff_notebook_source_reports_a_docstring_only_edit(tmp_path):
+    """The one case diff_notebook_functions deliberately does NOT report
+    (see test_diff_notebook_functions_docstring_only_edit_is_not_a_change
+    above) -- diff_notebook_source must still show it, since the code
+    genuinely did change even though the compiled signature didn't.
+    """
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(old_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _write_notebook(
+        new_path,
+        'def add(a: int, b: int) -> int:\n    """Add two numbers."""\n    return a + b\n',
+    )
+
+    diff_lines = diff_notebook_source(str(old_path), str(new_path))
+
+    assert any(line.startswith("+") and "Add two numbers" in line for line in diff_lines)
+
+
+def test_diff_notebook_source_reports_added_and_removed_lines(tmp_path):
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(old_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _write_notebook(new_path, "def multiply(a: int, b: int) -> int:\n    return a * b\n")
+
+    diff_lines = diff_notebook_source(str(old_path), str(new_path))
+
+    removed = [line for line in diff_lines if line.startswith("-") and "def add" in line]
+    added = [line for line in diff_lines if line.startswith("+") and "def multiply" in line]
+    assert removed
+    assert added
+
+
+def test_diff_notebook_source_uses_the_given_labels_not_the_raw_paths(tmp_path):
+
+    old_path = tmp_path / "some" / "internal" / "old.ipynb"
+    new_path = tmp_path / "some" / "internal" / "new.ipynb"
+    old_path.parent.mkdir(parents=True)
+    _write_notebook(old_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _write_notebook(new_path, "def add(a: int, b: int, c: int) -> int:\n    return a + b + c\n")
+
+    diff_lines = diff_notebook_source(
+        str(old_path), str(new_path),
+        old_label="version 'v1'", new_label="current",
+    )
+
+    header = "\n".join(diff_lines[:2])
+    assert "version 'v1'" in header
+    assert "current" in header
+    assert str(old_path) not in header
+    assert str(new_path) not in header
+
+
+def test_diff_notebook_source_defaults_labels_to_the_paths_themselves(tmp_path):
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(old_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _write_notebook(new_path, "def add(a: int, b: int, c: int) -> int:\n    return a + b + c\n")
+
+    diff_lines = diff_notebook_source(str(old_path), str(new_path))
+
+    header = "\n".join(diff_lines[:2])
+    assert str(old_path) in header
+    assert str(new_path) in header
 
 
 def test_print_notebook_diff_reports_no_changes(capsys):

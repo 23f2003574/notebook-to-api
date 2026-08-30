@@ -3874,11 +3874,17 @@ def _dispatch_core_command(args):
 
         elif args.versions_command == "compare":
 
+            compare_params = {}
+            if args.against:
+                compare_params["against"] = args.against
+            if args.content:
+                compare_params["content"] = "true"
+
             try:
                 response = httpx.get(
                     f"{dashboard_url}/api/notebooks/{args.filename}"
                     f"/versions/{args.version_id}/diff",
-                    params={"against": args.against} if args.against else {},
+                    params=compare_params,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -3908,6 +3914,9 @@ def _dispatch_core_command(args):
                     f"{dashboard_url}"
                 )
                 print_notebook_diff(data)
+
+                if args.content and data.get("content_diff"):
+                    print("\n" + "\n".join(data["content_diff"]))
 
         elif args.versions_command == "delete":
 
@@ -4250,6 +4259,8 @@ def _dispatch_core_command(args):
             params["old_version"] = args.old_version
         if args.new_version:
             params["new_version"] = args.new_version
+        if args.content:
+            params["content"] = "true"
 
         try:
             response = httpx.get(
@@ -4283,6 +4294,9 @@ def _dispatch_core_command(args):
             )
             print(f"Comparing {old_label} against {new_label} on {dashboard_url}")
             print_notebook_diff(data)
+
+            if args.content and data.get("content_diff"):
+                print("\n" + "\n".join(data["content_diff"]))
     elif args.command == "remote-curl":
         # See `upload` above for why these are imported here rather than
         # at module scope.
@@ -7605,6 +7619,17 @@ def main():
             "of the notebook's current live content (the default)."
         )
     )
+    versions_compare_parser.add_argument(
+        "--content",
+        action="store_true",
+        help=(
+            "Also request a line-level unified diff of both sides' own "
+            "raw code cell source, via GET .../versions/{version_id}"
+            "/diff's own \"content\" query param -- distinct from the "
+            "structural added/removed/changed-signature report this "
+            "command already prints."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(versions_compare_parser)
     versions_compare_parser.add_argument(
         "--json",
@@ -7612,8 +7637,8 @@ def main():
         dest="json_output",
         help=(
             "Emit machine-readable JSON ({\"added\", \"removed\", "
-            "\"changed\", \"unchanged\"}) instead of the human-readable "
-            "report, for scripting/automation."
+            "\"changed\", \"unchanged\"[, \"content_diff\"]}) instead of "
+            "the human-readable report, for scripting/automation."
         )
     )
 
@@ -7781,6 +7806,18 @@ def main():
             "live content."
         )
     )
+    diff_notebooks_parser.add_argument(
+        "--content",
+        action="store_true",
+        help=(
+            "Also request a line-level unified diff of both sides' own "
+            "raw code cell source, via GET /api/notebooks/diff's own "
+            "\"content\" query param -- distinct from the structural "
+            "added/removed/changed-signature report this command already "
+            "prints, e.g. to actually see what changed in a function's "
+            "own body, not just whether its signature did."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(diff_notebooks_parser)
     diff_notebooks_parser.add_argument(
         "--json",
@@ -7789,8 +7826,8 @@ def main():
         help=(
             "Emit machine-readable JSON ({\"status\", \"old\", \"new\", "
             "\"old_version\", \"new_version\", \"added\", \"removed\", "
-            "\"changed\", \"unchanged\"}) instead of the human-readable "
-            "report, for scripting/automation."
+            "\"changed\", \"unchanged\"[, \"content_diff\"]) instead of "
+            "the human-readable report, for scripting/automation."
         )
     )
 

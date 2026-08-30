@@ -1,3 +1,4 @@
+import difflib
 import json
 import os
 from pathlib import Path
@@ -569,6 +570,83 @@ def diff_notebook_functions(old_notebook_path, new_notebook_path):
         "changed": changed,
         "unchanged": unchanged,
     }
+
+
+def _notebook_source_lines(notebook_path):
+    """Every code cell's own raw source, in on-disk order (the same cells
+    extract_functions_from_code and every other per-cell walk in this
+    file already use), as one flat list of lines -- one "# Cell <n>"
+    marker line ahead of each cell's own lines, so a line in a resulting
+    diff can still be traced back to which cell it came from.
+
+    Used only by diff_notebook_source (below) to build the two sides it
+    diffs; not itself a per-notebook report of any kind.
+    """
+    notebook = load_notebook(notebook_path)
+
+    lines = []
+
+    for i, cell in enumerate(extract_code_cells(notebook)):
+
+        lines.append(f"# Cell {i}")
+        lines.extend(cell.splitlines())
+        lines.append("")
+
+    return lines
+
+
+def diff_notebook_source(
+    old_notebook_path, new_notebook_path, old_label=None, new_label=None
+):
+    """Line-level unified diff of every code cell's own raw source
+    between two notebooks -- the literal text a reviewer would actually
+    want to see, distinct from diff_notebook_functions' own structural
+    added/removed/changed-signature report.
+
+    diff_notebook_functions (above) deliberately only reports whether a
+    function's *compiled API contract* changed -- by its own docstring,
+    "a docstring-only edit does not count as changed", and a plain
+    non-function code cell (a stray `print()`, a constant, a `load_data()`
+    call with no `def`) never shows up there at all, since it was never a
+    function to begin with. A reviewer or CI check that wants to actually
+    see *what changed in the notebook's own code* -- not just whether its
+    compiled endpoints did -- had no way to get that from this project's
+    own API at all: the only route was downloading both notebooks' raw
+    content and diffing them locally, entirely outside it.
+
+    Built with Python's own difflib.unified_diff -- the same three-line-
+    of-context unified diff format `git diff`/`diff -u` produce, so it
+    reads exactly like either and can be piped straight into any tool
+    that already understands that format. Returns a plain list of lines,
+    each with its own trailing newline already stripped (unified_diff's
+    own lineterm="" -- the join below is bridging JSON's own
+    array-of-lines convention, not writing to a text stream) -- an empty
+    list when the two notebooks' code cells are identical line-for-line.
+
+    "old_label"/"new_label" (each optional) are used as unified_diff's
+    own "fromfile"/"tofile" header line, defaulting to
+    "old_notebook_path"/"new_notebook_path" themselves when omitted --
+    callers comparing two of a notebook's own snapshotted versions (see
+    GET /api/notebooks/{filename}/versions/{version_id}/diff,
+    routes/upload.py) pass a human-readable label ("version '<id>'")
+    instead, the same "never leak a raw server-side path" precedent
+    GET /api/config's own docstring already sets for UPLOAD_DIR/
+    GENERATED_DIR: the paths passed in here can be an absolute path
+    under UPLOAD_DIR/.versions/, dashboard-internal layout no API
+    response elsewhere in this project exposes either.
+    """
+    old_lines = _notebook_source_lines(old_notebook_path)
+    new_lines = _notebook_source_lines(new_notebook_path)
+
+    return list(
+        difflib.unified_diff(
+            old_lines,
+            new_lines,
+            fromfile=old_label or old_notebook_path,
+            tofile=new_label or new_notebook_path,
+            lineterm="",
+        )
+    )
 
 
 def print_notebook_diff(diff):

@@ -4115,6 +4115,69 @@ def test_diff_notebooks_reports_added_removed_changed_and_unchanged():
     assert body["unchanged"] == ["unchanged_fn"]
 
 
+def test_diff_notebooks_omits_content_diff_by_default():
+
+    old_content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+    new_content = _notebook_bytes(
+        'def add(a: int, b: int) -> int:\n    """docstring only"""\n    return a + b\n'
+    )
+
+    for filename, content in (
+        ("diff_no_content_old.ipynb", old_content),
+        ("diff_no_content_new.ipynb", new_content),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    resp = client.get(
+        "/api/notebooks/diff",
+        params={"old": "diff_no_content_old.ipynb", "new": "diff_no_content_new.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    assert "content_diff" not in resp.json()
+
+
+def test_diff_notebooks_content_true_reports_a_docstring_only_edit():
+    """The one case the structural "changed"/"unchanged" report deliberately
+    doesn't surface -- content_diff must still show it.
+    """
+
+    old_content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+    new_content = _notebook_bytes(
+        'def add(a: int, b: int) -> int:\n    """docstring only"""\n    return a + b\n'
+    )
+
+    for filename, content in (
+        ("diff_content_old.ipynb", old_content),
+        ("diff_content_new.ipynb", new_content),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    resp = client.get(
+        "/api/notebooks/diff",
+        params={
+            "old": "diff_content_old.ipynb", "new": "diff_content_new.ipynb",
+            "content": "true",
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["unchanged"] == ["add"]
+    assert any(
+        line.startswith("+") and "docstring only" in line
+        for line in body["content_diff"]
+    )
+    assert "diff_content_old.ipynb" in body["content_diff"][0]
+    assert "diff_content_new.ipynb" in body["content_diff"][1]
+
+
 def test_diff_notebooks_requires_both_filenames():
 
     resp = client.get("/api/notebooks/diff", params={"old": "a.ipynb"})
@@ -9070,6 +9133,58 @@ def test_diff_notebook_version_against_current_live_content():
     assert [f["name"] for f in body["removed"]] == ["remove_me"]
     assert [c["name"] for c in body["changed"]] == ["add"]
     assert body["unchanged"] == ["unchanged_fn"]
+    assert "content_diff" not in body
+
+
+def test_diff_notebook_version_content_true_reports_a_line_level_diff_using_friendly_labels():
+
+    filename = "versions_diff_content.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "def add(a: int, b: int) -> int:\n    return a + b\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "def add(a: int, b: int, c: int) -> int:\n    return a + b + c\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions/{version_id}/diff",
+        params={"content": "true"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    content_diff = body["content_diff"]
+    assert any("def add(a: int, b: int, c: int)" in line for line in content_diff)
+
+    # Friendly labels, not the version snapshot's own on-disk path under
+    # UPLOAD_DIR/.versions/.
+    header = "\n".join(content_diff[:2])
+    assert f"version '{version_id}'" in header
+    assert f"the current live content of '{filename}'" in header
+    assert ".versions" not in header
 
 
 def test_diff_notebook_version_against_another_version():

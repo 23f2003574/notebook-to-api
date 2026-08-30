@@ -51,6 +51,7 @@ from backend.inspector import (
     EXCLUDED_GENERATED_FILE_NAMES,
     _extract_notebook_functions,
     diff_notebook_functions,
+    diff_notebook_source,
     generate_curl_commands,
     inspect_notebook_data,
     list_generated_files,
@@ -3614,6 +3615,7 @@ def _resolve_diff_side_path(filename: str, version_id: str = None) -> Path:
 def diff_notebooks(
     old: str = None, new: str = None,
     old_version: str = None, new_version: str = None,
+    content: bool = False,
 ):
     """Compare the top-level functions two already-uploaded notebooks
     would each compile into endpoints -- entirely server-side, without
@@ -3660,6 +3662,15 @@ def diff_notebooks(
     docstring already promises for the current-content-only case. Omitted
     (the default), that side is `old`/`new`'s own current content,
     exactly as before this.
+
+    "content" (optional, default false) additionally returns
+    "content_diff" -- a line-level unified diff of both sides' own raw
+    code cell source, via diff_notebook_source (backend/inspector.py),
+    the same distinct-from-structural-diff report GET
+    /api/notebooks/{filename}/versions/{version_id}/diff's own "content"
+    now offers. Off by default since it's real extra work (and a
+    potentially large response) most callers of this endpoint's existing
+    structural report don't need.
     """
 
     if not old or not new:
@@ -3690,7 +3701,7 @@ def diff_notebooks(
 
     diff = diff_notebook_functions(str(old_path), str(new_path))
 
-    return {
+    response = {
         "status": "success",
         "old": old,
         "new": new,
@@ -3698,6 +3709,18 @@ def diff_notebooks(
         "new_version": new_version,
         **diff,
     }
+
+    if content:
+
+        old_label = f"'{old}' version '{old_version}'" if old_version else old
+        new_label = f"'{new}' version '{new_version}'" if new_version else new
+
+        response["content_diff"] = diff_notebook_source(
+            str(old_path), str(new_path),
+            old_label=old_label, new_label=new_label,
+        )
+
+    return response
 
 
 @router.get("/notebooks/storage")
@@ -6513,7 +6536,9 @@ def inspect_notebook_version(filename: str, version_id: str):
 
 
 @router.get("/notebooks/{filename}/versions/{version_id}/diff")
-def diff_notebook_version(filename: str, version_id: str, against: str = None):
+def diff_notebook_version(
+    filename: str, version_id: str, against: str = None, content: bool = False,
+):
     """Compare the top-level functions a snapshotted version of `filename`
     would compile into endpoints against either another snapshotted
     version (`against`, a version_id) or -- if `against` is omitted --
@@ -6544,6 +6569,16 @@ def diff_notebook_version(filename: str, version_id: str, against: str = None):
     same per-side labeling GET /api/notebooks/diff's own "old"/"new"
     validation already applies -- so a 404 or 400 names exactly which side
     is the problem rather than one ambiguous error covering both.
+
+    "content" (optional, default false) additionally returns
+    "content_diff" -- a line-level unified diff of both sides' own raw
+    code cell source, via diff_notebook_source (backend/inspector.py),
+    reusing the identical per-side labels this endpoint already builds
+    above for its own validation errors, rather than either side's own
+    on-disk path (which, for a version, sits under UPLOAD_DIR/.versions/
+    -- dashboard-internal layout no API response elsewhere in this
+    project exposes). The same distinct-from-structural-diff report GET
+    /api/notebooks/diff's own "content" now offers.
     """
 
     file_path = resolve_upload_path(filename)
@@ -6604,13 +6639,22 @@ def diff_notebook_version(filename: str, version_id: str, against: str = None):
 
     diff = diff_notebook_functions(str(old_path), str(new_path))
 
-    return {
+    response = {
         "status": "success",
         "filename": filename,
         "version_id": version_id,
         "against": against,
         **diff,
     }
+
+    if content:
+
+        response["content_diff"] = diff_notebook_source(
+            str(old_path), str(new_path),
+            old_label=f"version '{version_id}'", new_label=new_label,
+        )
+
+    return response
 
 
 @router.post("/notebooks/{filename}/versions/{version_id}/copy")
