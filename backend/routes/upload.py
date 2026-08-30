@@ -42,6 +42,10 @@ from backend.generator.api_generator import (
     ReservedFunctionNameError,
     generate_fastapi_code,
 )
+from backend.generator.docker_generator import (
+    dockerfile_content,
+    dockerignore_content,
+)
 from backend.inspector import (
     EXCLUDED_GENERATED_DIR_NAMES,
     EXCLUDED_GENERATED_FILE_NAMES,
@@ -7960,6 +7964,57 @@ def curl_preview_endpoint(data: dict):
         "notebook": notebook_path,
         "version_id": version_id,
         "commands": commands,
+    }
+
+
+@router.get("/dockerfile-preview")
+def dockerfile_preview_endpoint():
+    """The exact Dockerfile and .dockerignore text POST /api/compile
+    would write for whatever notebook is next compiled -- without
+    actually compiling anything, or touching GENERATED_DIR (or whatever
+    it currently serves) at all.
+
+    POST /api/requirements-preview, POST /api/app-preview, and POST
+    /api/curl-preview already let a caller preview a compile's other
+    artifacts ahead of time, each keyed to one particular notebook's own
+    cells -- but the Dockerfile isn't: generate_dockerfile (backend/
+    generator/docker_generator.py) only ever depends on this dashboard's
+    own fixed "package_name" (package_name_for_output_dir(GENERATED_DIR),
+    the same directory name every compile targets) and
+    compiling_python_version() (the interpreter this dashboard process is
+    actually running under) -- never on which notebook is being compiled.
+    GET /api/config's own docstring already surfaces
+    "compiling_python_version" and says as much: a caller wanting to know
+    which Python version a compile would target, "to sanity-check a
+    pinned dependency's own wheel availability before compiling", had "no
+    way to ask that short of triggering a real POST /api/compile and
+    reading the resulting Dockerfile (or GET /api/generated/Dockerfile)
+    back afterward" -- mutating GENERATED_DIR, and whatever it currently
+    backs for every other caller of this dashboard, just to answer a
+    question that doesn't require compiling anything at all. This closes
+    that exact gap: no notebook_path needed (no compile's Dockerfile has
+    ever varied by one), a plain no-argument GET rather than a POST with
+    a JSON body, since this needs no input at all.
+
+    Reuses dockerfile_content/dockerignore_content directly -- the same
+    pure string-building helpers generate_dockerfile/generate_dockerignore
+    themselves now call before ever touching disk -- so the "dockerfile"
+    and "dockerignore" fields below can never drift from what an actual
+    compile of any notebook would write to GENERATED_DIR/Dockerfile and
+    GENERATED_DIR/.dockerignore, the same "can't drift from the real
+    thing" guarantee every other preview endpoint in this file already
+    provides for its own artifact.
+    """
+
+    package_name = package_name_for_output_dir(GENERATED_DIR)
+    python_version = compiling_python_version()
+
+    return {
+        "status": "success",
+        "package_name": package_name,
+        "compiling_python_version": python_version,
+        "dockerfile": dockerfile_content(package_name, python_version),
+        "dockerignore": dockerignore_content(),
     }
 
 

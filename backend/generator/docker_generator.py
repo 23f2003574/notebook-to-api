@@ -1,24 +1,21 @@
-def generate_dockerfile(
-    output_path="generated/Dockerfile",
+def dockerfile_content(
     package_name="generated",
     python_version="3.11",
 ):
-    """Write a Dockerfile for the compiled app at `output_path`.
+    """The exact Dockerfile text generate_dockerfile (below) writes to
+    disk, as a pure string -- no filesystem access at all.
 
-    python_version selects the base image's Python ("<major>.<minor>",
-    e.g. "3.12") and should be the interpreter that actually ran the
-    compile -- see compiler.compiling_python_version(), the caller
-    compile_notebook_to_api always passes. requirements.txt's versions are
-    pinned by _pinned_requirement against whatever's installed in *that*
-    interpreter's environment; a fixed base image Python unrelated to it
-    (this previously always hardcoded "3.11" regardless of what compiled
-    the notebook) can silently break `docker build`'s
-    `pip install -r requirements.txt` the moment a pinned package's wheels
-    don't cover that Python version, or fall back to a source build that
-    behaves differently from what was actually resolved and tested
-    locally.
+    Split out from generate_dockerfile so a caller that only wants to
+    know what the Dockerfile *would* contain (see POST
+    /api/dockerfile-preview, backend/routes/upload.py) can get that
+    without a real output_path to write into, or a real compiled output
+    directory backing "package_name" -- the same "answer the question
+    without touching disk" split extract_third_party_imports/
+    resolve_requirements already give write_requirements, and
+    generate_fastapi_code already gives write_generated_api.
     """
-    docker_content = f"""\
+
+    return f"""\
 FROM python:{python_version}-slim
 
 # Python buffers stdout/stderr in blocks (not line-by-line) whenever it
@@ -88,10 +85,57 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \\
 CMD ["sh", "-c", "uvicorn {package_name}.app:app --host 0.0.0.0 --port ${{PORT:-8000}}"]
 """
 
+
+def generate_dockerfile(
+    output_path="generated/Dockerfile",
+    package_name="generated",
+    python_version="3.11",
+):
+    """Write a Dockerfile for the compiled app at `output_path`.
+
+    python_version selects the base image's Python ("<major>.<minor>",
+    e.g. "3.12") and should be the interpreter that actually ran the
+    compile -- see compiler.compiling_python_version(), the caller
+    compile_notebook_to_api always passes. requirements.txt's versions are
+    pinned by _pinned_requirement against whatever's installed in *that*
+    interpreter's environment; a fixed base image Python unrelated to it
+    (this previously always hardcoded "3.11" regardless of what compiled
+    the notebook) can silently break `docker build`'s
+    `pip install -r requirements.txt` the moment a pinned package's wheels
+    don't cover that Python version, or fall back to a source build that
+    behaves differently from what was actually resolved and tested
+    locally.
+    """
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write(docker_content)
+        f.write(dockerfile_content(package_name, python_version))
 
     print(f"Dockerfile generated at: {output_path}")
+
+
+def dockerignore_content():
+    """The exact .dockerignore text generate_dockerignore (below) writes
+    to disk, as a pure string -- no filesystem access at all. See
+    dockerfile_content's own docstring above for why this split exists.
+    """
+
+    return """\
+.git/
+.gitignore
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+env/
+*.ipynb
+.ipynb_checkpoints/
+Dockerfile
+.dockerignore
+openapi.json
+openapi.yaml
+sdk/
+.compile_metadata.json
+"""
 
 
 def generate_dockerignore(output_path="generated/.dockerignore"):
@@ -124,26 +168,7 @@ def generate_dockerignore(output_path="generated/.dockerignore"):
     compiling server*. Left unexcluded, every `deploy`/`docker build`
     baked that server-side path straight into the shipped image.
     """
-    dockerignore_content = """\
-.git/
-.gitignore
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.venv/
-venv/
-env/
-*.ipynb
-.ipynb_checkpoints/
-Dockerfile
-.dockerignore
-openapi.json
-openapi.yaml
-sdk/
-.compile_metadata.json
-"""
-
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write(dockerignore_content)
+        f.write(dockerignore_content())
 
     print(f".dockerignore generated at: {output_path}")

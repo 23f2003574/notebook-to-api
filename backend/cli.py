@@ -347,7 +347,7 @@ _CORE_COMMANDS = frozenset({
     "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
     "status", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
-    "remote-curl", "app-preview",
+    "remote-curl", "app-preview", "dockerfile-preview",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -3292,6 +3292,41 @@ def _dispatch_core_command(args):
                 print("No endpoints would be generated for this notebook.")
             else:
                 print("\n\n".join(commands))
+    elif args.command == "dockerfile-preview":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/dockerfile-preview",
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            print(
+                f"Dockerfile preview for {dashboard_url} "
+                f"(package '{data.get('package_name')}', "
+                f"Python {data.get('compiling_python_version')}):\n"
+            )
+            print(data.get("dockerfile", ""))
+            print(".dockerignore:\n")
+            print(data.get("dockerignore", ""))
     elif args.command == "remote-build":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -6864,6 +6899,33 @@ def main():
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"notebook\", \"version_id\", \"commands\"}) instead of a "
             "human-readable listing, for scripting/automation."
+        )
+    )
+
+    # dockerfile-preview command (preview the Dockerfile/.dockerignore a
+    # compile on a running dashboard would produce, via its own GET
+    # /api/dockerfile-preview -- unlike requirements-preview/app-preview/
+    # curl-preview, takes no notebook argument at all: neither artifact
+    # varies by notebook, only by this dashboard's own configured output
+    # directory name and compiling interpreter)
+    dockerfile_preview_parser = subparsers.add_parser(
+        "dockerfile-preview",
+        help=(
+            "Preview the exact Dockerfile and .dockerignore a compile on "
+            "a running dashboard would produce, via its GET "
+            "/api/dockerfile-preview -- without compiling anything."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(dockerfile_preview_parser)
+    dockerfile_preview_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"package_name\", \"compiling_python_version\", "
+            "\"dockerfile\", \"dockerignore\"}) instead of a "
+            "human-readable preview, for scripting/automation."
         )
     )
 

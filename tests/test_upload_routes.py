@@ -15,9 +15,15 @@ import nbformat
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.compiler import COMPILE_LOCK, COMPILE_METADATA_FILENAME, compiling_python_version
+from backend.compiler import (
+    COMPILE_LOCK,
+    COMPILE_METADATA_FILENAME,
+    compiling_python_version,
+    package_name_for_output_dir,
+)
 from backend.dashboard import app
 from backend.routes.upload import (
+    GENERATED_DIR,
     MAX_NOTEBOOK_VERSIONS,
     UPLOAD_DIR,
     _description_sidecar_path,
@@ -13198,6 +13204,78 @@ def test_curl_preview_returns_404_for_an_unknown_version_id():
     )
 
     assert resp.status_code == 404
+
+
+def test_dockerfile_preview_requires_no_notebook_and_needs_no_body():
+
+    resp = client.get("/api/dockerfile-preview")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert "FROM python:" in body["dockerfile"]
+    assert ".git/" in body["dockerignore"]
+
+
+def test_dockerfile_preview_reports_the_actual_compiling_python_version():
+
+    resp = client.get("/api/dockerfile-preview")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["compiling_python_version"] == compiling_python_version()
+    assert f"FROM python:{compiling_python_version()}-slim" in body["dockerfile"]
+
+
+def test_dockerfile_preview_matches_what_an_actual_compile_writes():
+
+    filename = "dockerfile_preview_match.ipynb"
+    _upload_sample_notebook(filename)
+
+    preview_resp = client.get("/api/dockerfile-preview")
+    assert preview_resp.status_code == 200
+    preview_body = preview_resp.json()
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": filename}
+    )
+    assert compile_resp.status_code == 200
+
+    actual_dockerfile = client.get(
+        "/api/generated/Dockerfile"
+    ).json()["content"]
+    actual_dockerignore = client.get(
+        "/api/generated/.dockerignore"
+    ).json()["content"]
+
+    assert preview_body["dockerfile"] == actual_dockerfile
+    assert preview_body["dockerignore"] == actual_dockerignore
+    assert preview_body["package_name"] == package_name_for_output_dir(GENERATED_DIR)
+
+
+def test_dockerfile_preview_reflects_a_configured_package_name(monkeypatch, tmp_path):
+
+    generated_dir = tmp_path / "my_custom_pkg"
+    monkeypatch.setattr("backend.routes.upload.GENERATED_DIR", str(generated_dir))
+
+    resp = client.get("/api/dockerfile-preview")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["package_name"] == "my_custom_pkg"
+    assert "COPY . my_custom_pkg/" in body["dockerfile"]
+    assert "uvicorn my_custom_pkg.app:app" in body["dockerfile"]
+
+
+def test_dockerfile_preview_does_not_touch_generated_dir(monkeypatch, tmp_path):
+
+    generated_dir = tmp_path / "dockerfile_preview_no_side_effects"
+    monkeypatch.setattr("backend.routes.upload.GENERATED_DIR", str(generated_dir))
+
+    resp = client.get("/api/dockerfile-preview")
+
+    assert resp.status_code == 200
+    assert not generated_dir.exists()
 
 
 def test_inspect_reports_endpoints_and_flags_background_ones_before_compiling():

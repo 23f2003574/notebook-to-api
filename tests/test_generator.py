@@ -2424,3 +2424,59 @@ def test_governance_recommendation_engine():
         parallelism_score=1.0,
     )
     assert spec.governance_recommendations_enabled() is True
+
+
+def test_dockerfile_content_is_a_pure_string_with_no_disk_access(tmp_path, monkeypatch):
+    from backend.generator.docker_generator import dockerfile_content
+
+    # Would fail loudly if dockerfile_content tried to open/write anything --
+    # there's no writable cwd for it to do that in.
+    monkeypatch.chdir(tmp_path)
+
+    content = dockerfile_content(package_name="my_app", python_version="3.12")
+
+    assert content.startswith("FROM python:3.12-slim")
+    assert "COPY . my_app/" in content
+    assert 'CMD ["sh", "-c", "uvicorn my_app.app:app' in content
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_dockerfile_content_defaults_match_generate_dockerfiles_own_defaults():
+    from backend.generator.docker_generator import dockerfile_content
+
+    content = dockerfile_content()
+
+    assert content.startswith("FROM python:3.11-slim")
+    assert "COPY . generated/" in content
+
+
+def test_generate_dockerfile_writes_exactly_what_dockerfile_content_returns(tmp_path):
+    from backend.generator.docker_generator import dockerfile_content, generate_dockerfile
+
+    output_path = tmp_path / "Dockerfile"
+
+    generate_dockerfile(str(output_path), package_name="my_app", python_version="3.13")
+
+    assert output_path.read_text(encoding="utf-8") == dockerfile_content("my_app", "3.13")
+
+
+def test_dockerignore_content_is_a_pure_string_with_no_disk_access(tmp_path, monkeypatch):
+    from backend.generator.docker_generator import dockerignore_content
+
+    monkeypatch.chdir(tmp_path)
+
+    content = dockerignore_content()
+
+    assert ".git/" in content
+    assert ".compile_metadata.json" in content
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_generate_dockerignore_writes_exactly_what_dockerignore_content_returns(tmp_path):
+    from backend.generator.docker_generator import dockerignore_content, generate_dockerignore
+
+    output_path = tmp_path / ".dockerignore"
+
+    generate_dockerignore(str(output_path))
+
+    assert output_path.read_text(encoding="utf-8") == dockerignore_content()
