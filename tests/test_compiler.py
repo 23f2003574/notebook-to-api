@@ -2895,6 +2895,54 @@ def test_compile_notebook_with_a_source_notebook_path_records_it_but_hashes_the_
     assert metadata["source_notebook_sha256"] != hash_notebook_file(str(real_notebook_path))
 
 
+def test_compile_notebook_records_the_given_version_id(tmp_path):
+
+    import json
+
+    from backend.compiler import COMPILE_METADATA_FILENAME
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(
+        str(notebook_path), str(output_dir), version_id="20260101T000000000000_abcd.ipynb",
+    )
+
+    metadata_path = output_dir / COMPILE_METADATA_FILENAME
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    assert metadata["compiled_version_id"] == "20260101T000000000000_abcd.ipynb"
+
+
+def test_compile_notebook_records_a_null_version_id_by_default(tmp_path):
+
+    import json
+
+    from backend.compiler import COMPILE_METADATA_FILENAME
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    metadata_path = output_dir / COMPILE_METADATA_FILENAME
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    assert metadata["compiled_version_id"] is None
+
+
 def test_recompiling_overwrites_the_previous_compile_metadata(tmp_path):
 
     import json

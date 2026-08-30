@@ -1550,20 +1550,28 @@ async def import_notebooks(
 
 
 def _currently_compiled_notebook_metadata():
-    """(resolved path, content sha256, compiled_at) of the notebook that
-    produced the app currently in GENERATED_DIR, if any -- read from the
-    .compile_metadata.json every successful compile writes (see
-    write_compile_metadata in backend/compiler.py). Returns (None, None,
-    None) if nothing has been compiled yet, or if the metadata file is
-    missing/unreadable/corrupt -- list_notebooks should degrade to
-    reporting no notebook as currently compiled rather than 500 over this
-    being informational, best-effort metadata.
+    """(resolved path, content sha256, compiled_at, compiled_version_id)
+    of the notebook that produced the app currently in GENERATED_DIR, if
+    any -- read from the .compile_metadata.json every successful compile
+    writes (see write_compile_metadata in backend/compiler.py). Returns
+    (None, None, None, None) if nothing has been compiled yet, or if the
+    metadata file is missing/unreadable/corrupt -- list_notebooks should
+    degrade to reporting no notebook as currently compiled rather than
+    500 over this being informational, best-effort metadata.
+
+    "compiled_version_id" (added alongside this same docstring's
+    original three-value return, not a separate change) is None for an
+    ordinary compile of a notebook's own current content -- the
+    overwhelmingly common case -- or the version_id POST /api/compile
+    was given, for a compile of one of that notebook's own previously
+    snapshotted versions instead (see write_compile_metadata's own
+    docstring for why this is recorded at all).
     """
 
     metadata_path = Path(GENERATED_DIR) / COMPILE_METADATA_FILENAME
 
     if not metadata_path.is_file():
-        return None, None, None
+        return None, None, None, None
 
     try:
 
@@ -1571,17 +1579,18 @@ def _currently_compiled_notebook_metadata():
             metadata = json.load(f)
 
     except (OSError, ValueError):
-        return None, None, None
+        return None, None, None, None
 
     source_notebook = metadata.get("source_notebook")
 
     if not source_notebook:
-        return None, None, None
+        return None, None, None, None
 
     return (
         Path(source_notebook).resolve(),
         metadata.get("source_notebook_sha256"),
         metadata.get("compiled_at"),
+        metadata.get("compiled_version_id"),
     )
 
 
@@ -1601,7 +1610,7 @@ def _currently_compiled_notebook_is_stale():
     this check can meaningfully flag either way.
     """
 
-    compiled_path, compiled_sha256, _ = _currently_compiled_notebook_metadata()
+    compiled_path, compiled_sha256, _, _ = _currently_compiled_notebook_metadata()
 
     if compiled_path is None or compiled_sha256 is None:
         return False
@@ -2563,13 +2572,21 @@ def search_functions(
     }
 
 
-def _notebook_metadata_entry(entry, compiled_path, compiled_sha256, compiled_at):
+def _notebook_metadata_entry(
+    entry, compiled_path, compiled_sha256, compiled_at, compiled_version_id=None,
+):
     """Build one notebook's own metadata dict -- the exact shape GET
     /api/notebooks' own "notebooks" list already returns per entry (see
     its own docstring for what each field means and why it exists).
     Shared with GET /api/notebooks/{filename}/info below, so a
     single-notebook metadata fetch can never drift from the identical
     entry already embedded in the full list for the same notebook.
+
+    "compiled_version_id" mirrors "compiled_at" -- present only for the
+    currently-compiled entry, null when that compile came from the
+    notebook's own current content rather than one of its previously
+    snapshotted versions (see write_compile_metadata's own docstring,
+    backend/compiler.py, for what a non-null value means).
     """
 
     entry_stat = entry.stat()
@@ -2595,6 +2612,7 @@ def _notebook_metadata_entry(entry, compiled_path, compiled_sha256, compiled_at)
             and hash_notebook_file(entry) != compiled_sha256
         )
         notebook_entry["compiled_at"] = compiled_at
+        notebook_entry["compiled_version_id"] = compiled_version_id
 
     return notebook_entry
 
@@ -2643,6 +2661,16 @@ def list_notebooks(
     running app might be stale (via notebook_changed_since_compile) but
     had no way to tell *how* stale -- e.g. to show "last compiled 3
     minutes ago" -- without a separate, redundant read of the same file.
+
+    The currently-compiled entry also gets "compiled_version_id" --
+    null for an ordinary compile of this notebook's own current content,
+    or the version_id of one of its own previously snapshotted versions
+    POST /api/compile was pinned to instead (see that endpoint's own
+    "version_id" and write_compile_metadata's own docstring, backend/
+    compiler.py). Before this, telling a version-pinned compile apart
+    from an ordinary one meant cross-referencing compile history by
+    "source_notebook_sha256" and hoping nothing else happened to produce
+    the same hash.
 
     "search", "sort", and "order" close a gap that only gets worse as
     UPLOAD_DIR accumulates notebooks over a dashboard's lifetime: before
@@ -2736,17 +2764,17 @@ def list_notebooks(
     "notebooks" the "json" response would return, so every other query
     param here composes with "format" identically. Column order is
     "filename,size_bytes,modified_at,currently_compiled,tags,
-    description,notebook_changed_since_compile,compiled_at" -- every
-    field each "notebooks" entry can carry; "tags" (a list) is joined
-    with ";", the same separator GET /api/compile/history's own CSV
-    already uses for its own list fields ("only"/"exclude"). The last
-    two columns are blank for a notebook that isn't the currently-
-    compiled one -- the same notebooks whose "json" entry simply omits
-    them outright (see _notebook_metadata_entry above) -- rather than
-    left out of the header row itself, so every row has the same fixed
-    column count regardless of which notebooks happen to be on this
-    page. An unrecognized "format" is rejected with 400 before a single
-    notebook is even read.
+    description,notebook_changed_since_compile,compiled_at,
+    compiled_version_id" -- every field each "notebooks" entry can carry;
+    "tags" (a list) is joined with ";", the same separator GET
+    /api/compile/history's own CSV already uses for its own list fields
+    ("only"/"exclude"). The last three columns are blank for a notebook
+    that isn't the currently-compiled one -- the same notebooks whose
+    "json" entry simply omits them outright (see _notebook_metadata_entry
+    above) -- rather than left out of the header row itself, so every row
+    has the same fixed column count regardless of which notebooks happen
+    to be on this page. An unrecognized "format" is rejected with 400
+    before a single notebook is even read.
     """
 
     if format not in ("json", "csv"):
@@ -2786,7 +2814,9 @@ def list_notebooks(
 
     upload_root = Path(UPLOAD_DIR)
 
-    compiled_path, compiled_sha256, compiled_at = _currently_compiled_notebook_metadata()
+    compiled_path, compiled_sha256, compiled_at, compiled_version_id = (
+        _currently_compiled_notebook_metadata()
+    )
 
     # (name, size_bytes, mtime, entry dict) tuples -- name/size_bytes/mtime
     # kept alongside the dict itself so sorting by "size"/"modified" can use
@@ -2823,7 +2853,7 @@ def list_notebooks(
         entry_stat = entry.stat()
 
         notebook_entry = _notebook_metadata_entry(
-            entry, compiled_path, compiled_sha256, compiled_at
+            entry, compiled_path, compiled_sha256, compiled_at, compiled_version_id
         )
 
         entries.append((entry.name, entry_stat.st_size, entry_stat.st_mtime, notebook_entry))
@@ -2851,7 +2881,7 @@ def list_notebooks(
         writer.writerow([
             "filename", "size_bytes", "modified_at", "currently_compiled",
             "tags", "description", "notebook_changed_since_compile",
-            "compiled_at",
+            "compiled_at", "compiled_version_id",
         ])
 
         for notebook_entry in notebooks:
@@ -2865,6 +2895,7 @@ def list_notebooks(
                 notebook_entry["description"],
                 notebook_entry.get("notebook_changed_since_compile", ""),
                 notebook_entry.get("compiled_at", ""),
+                notebook_entry.get("compiled_version_id", ""),
             ])
 
         return StreamingResponse(
@@ -3372,7 +3403,7 @@ def resolve_duplicate_notebooks(data: dict = None):
         if len(filenames) > 1
     ]
 
-    compiled_path, _, _ = _currently_compiled_notebook_metadata()
+    compiled_path, _, _, _ = _currently_compiled_notebook_metadata()
 
     results = []
     succeeded_count = 0
@@ -4071,7 +4102,7 @@ def delete_all_notebooks(confirm: bool = False, tag: str = None):
 
     upload_root = Path(UPLOAD_DIR)
 
-    compiled_path, _, _ = _currently_compiled_notebook_metadata()
+    compiled_path, _, _, _ = _currently_compiled_notebook_metadata()
 
     deleted_filenames = []
     currently_compiled_notebook_deleted = False
@@ -4272,7 +4303,7 @@ def delete_notebook(filename: str):
             detail="Notebook file not found"
         )
 
-    compiled_path, _, _ = _currently_compiled_notebook_metadata()
+    compiled_path, _, _, _ = _currently_compiled_notebook_metadata()
 
     was_currently_compiled = (
         compiled_path is not None and file_path.resolve() == compiled_path
@@ -4373,7 +4404,7 @@ def delete_notebooks_batch(data: dict):
 
     dry_run = bool(data.get("dry_run", False))
 
-    compiled_path, _, _ = _currently_compiled_notebook_metadata()
+    compiled_path, _, _, _ = _currently_compiled_notebook_metadata()
 
     results = []
     succeeded_count = 0
@@ -4489,11 +4520,15 @@ def get_notebook_info(filename: str):
             detail="Notebook file not found"
         )
 
-    compiled_path, compiled_sha256, compiled_at = _currently_compiled_notebook_metadata()
+    compiled_path, compiled_sha256, compiled_at, compiled_version_id = (
+        _currently_compiled_notebook_metadata()
+    )
 
     return {
         "status": "success",
-        **_notebook_metadata_entry(file_path, compiled_path, compiled_sha256, compiled_at),
+        **_notebook_metadata_entry(
+            file_path, compiled_path, compiled_sha256, compiled_at, compiled_version_id
+        ),
     }
 
 
@@ -4549,7 +4584,9 @@ def get_notebooks_info_batch(data: dict):
 
     _validate_batch_entry_count(filenames, noun="filenames")
 
-    compiled_path, compiled_sha256, compiled_at = _currently_compiled_notebook_metadata()
+    compiled_path, compiled_sha256, compiled_at, compiled_version_id = (
+        _currently_compiled_notebook_metadata()
+    )
 
     results = []
     succeeded_count = 0
@@ -4571,7 +4608,8 @@ def get_notebooks_info_batch(data: dict):
             results.append({
                 "status": "success",
                 **_notebook_metadata_entry(
-                    file_path, compiled_path, compiled_sha256, compiled_at
+                    file_path, compiled_path, compiled_sha256, compiled_at,
+                    compiled_version_id,
                 ),
             })
             succeeded_count += 1
@@ -4795,7 +4833,7 @@ def _rename_notebook_to(old_path: Path, new_filename, overwrite: bool, dry_run: 
                 )
             )
 
-        compiled_path, _, _ = _currently_compiled_notebook_metadata()
+        compiled_path, _, _, _ = _currently_compiled_notebook_metadata()
 
         was_currently_compiled = (
             compiled_path is not None and old_path.resolve() == compiled_path
@@ -8326,6 +8364,7 @@ def compile_notebook_endpoint(
             only=only,
             exclude=exclude,
             source_notebook_path=str(full_path),
+            version_id=version_id,
         )
 
         # inspect_notebook_data (backend/inspector.py) already computes
@@ -9056,7 +9095,7 @@ def deploy_generated_app(data: dict = None):
                 detail=f"Docker build failed: {build_result.stderr}"
             )
 
-        compiled_path, compiled_sha256, _ = _currently_compiled_notebook_metadata()
+        compiled_path, compiled_sha256, _, _ = _currently_compiled_notebook_metadata()
 
     response = {
         "status": "success",
@@ -9892,6 +9931,18 @@ def list_generated_files_endpoint(checksums: bool = False):
     "source_notebook_filename", since a notebook can be deleted (this goes
     false) without GENERATED_DIR's own contents changing at all.
 
+    "compiled_version_id" (added alongside this same docstring's original
+    feature, not a separate change) is the same field GET /api/notebooks'
+    own currently-compiled entry now reports -- null for an ordinary
+    compile of "source_notebook_filename"'s own current content, or the
+    version_id of one of that notebook's own previously snapshotted
+    versions POST /api/compile was pinned to instead (see POST
+    /api/compile's own "version_id" and write_compile_metadata's own
+    docstring, backend/compiler.py). Before this, an operator asking
+    "what is actually running right now" from this endpoint alone -- with
+    no separate compile-history lookup -- had no way to tell a
+    version-pinned compile apart from an ordinary one.
+
     "file_details" carries the same filenames as "generated_files" (kept
     for backward compatibility -- and because inspect_notebook_data's own
     "generated_files" field, shared by POST /api/inspect and POST
@@ -9960,7 +10011,9 @@ def list_generated_files_endpoint(checksums: bool = False):
             _bundle_sha256(generated_file_details) if checksums else None
         )
 
-        compiled_path, _, compiled_at = _currently_compiled_notebook_metadata()
+        compiled_path, _, compiled_at, compiled_version_id = (
+            _currently_compiled_notebook_metadata()
+        )
 
     source_notebook_filename = None
     source_notebook_exists = False
@@ -9981,6 +10034,7 @@ def list_generated_files_endpoint(checksums: bool = False):
         "generated_files": generated_files,
         "file_details": generated_file_details,
         "compiled_at": compiled_at,
+        "compiled_version_id": compiled_version_id,
         "source_notebook_filename": source_notebook_filename,
         "source_notebook_exists": source_notebook_exists,
     }
@@ -10167,7 +10221,7 @@ def health_check():
     leaking server-side filesystem layout to whatever's polling it.
     """
 
-    _, _, compiled_at = _currently_compiled_notebook_metadata()
+    _, _, compiled_at, _ = _currently_compiled_notebook_metadata()
 
     compiled_app_present = (Path(GENERATED_DIR) / "app.py").is_file()
 

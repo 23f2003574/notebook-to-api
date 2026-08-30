@@ -2658,7 +2658,8 @@ def test_list_notebooks_csv_format_returns_a_csv_response():
     rows = resp.text.strip().split("\r\n")
     assert rows[0] == (
         "filename,size_bytes,modified_at,currently_compiled,tags,"
-        "description,notebook_changed_since_compile,compiled_at"
+        "description,notebook_changed_since_compile,compiled_at,"
+        "compiled_version_id"
     )
     assert len(rows) == 2
 
@@ -2684,7 +2685,7 @@ def test_list_notebooks_csv_format_leaves_staleness_columns_blank_for_a_non_comp
 
     rows = resp.text.strip().split("\r\n")
     assert rows[1] == "list_csv_no_compile.ipynb," + rows[1].split(",", 1)[1]
-    assert rows[1].endswith(",,")
+    assert rows[1].endswith(",,,")
 
 
 def test_list_notebooks_csv_format_composes_with_tag_and_limit():
@@ -11976,6 +11977,74 @@ def test_compile_with_version_id_keeps_the_real_notebook_as_currently_compiled()
     # reports it as changed since that compile.
     assert entry["currently_compiled"] is True
     assert entry["notebook_changed_since_compile"] is True
+
+
+def test_compile_with_version_id_is_persisted_as_compiled_version_id_everywhere():
+    """.compile_metadata.json's own "compiled_version_id" (written by
+    write_compile_metadata, backend/compiler.py) must be visible from
+    every endpoint that already surfaces the currently-compiled entry's
+    other compile-time fields ("compiled_at", "notebook_changed_since_
+    compile") -- GET /api/notebooks, GET /api/notebooks/{filename}/info,
+    and GET /api/generated -- not just POST /api/compile's own one-time
+    response.
+    """
+
+    filename = "compile_version_id_persisted.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "def add(a: int, b: int) -> int:\n    return a + b\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "def multiply(a: int, b: int) -> int:\n    return a * b\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(f"/api/notebooks/{filename}/versions").json()["versions"][0]["version_id"]
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": filename, "version_id": version_id}
+    )
+    assert compile_resp.status_code == 200
+
+    notebooks = client.get("/api/notebooks").json()["notebooks"]
+    list_entry = next(nb for nb in notebooks if nb["filename"] == filename)
+    assert list_entry["compiled_version_id"] == version_id
+
+    info_entry = client.get(f"/api/notebooks/{filename}/info").json()
+    assert info_entry["compiled_version_id"] == version_id
+
+    generated = client.get("/api/generated").json()
+    assert generated["compiled_version_id"] == version_id
+
+
+def test_list_notebooks_reports_a_null_compiled_version_id_for_an_ordinary_compile():
+
+    filename = "compile_ordinary_version_id.ipynb"
+    _compile_a_notebook(filename)
+
+    notebooks = client.get("/api/notebooks").json()["notebooks"]
+    entry = next(nb for nb in notebooks if nb["filename"] == filename)
+
+    assert entry["compiled_version_id"] is None
+
+    os.remove(Path(UPLOAD_DIR) / filename)
 
 
 def test_compile_returns_404_for_an_unknown_version_id():

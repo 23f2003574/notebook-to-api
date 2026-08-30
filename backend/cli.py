@@ -1465,7 +1465,13 @@ def _dispatch_core_command(args):
                     markers = []
 
                     if notebook.get("currently_compiled"):
-                        markers.append("currently compiled")
+                        if notebook.get("compiled_version_id"):
+                            markers.append(
+                                f"currently compiled from version "
+                                f"'{notebook['compiled_version_id']}'"
+                            )
+                        else:
+                            markers.append("currently compiled")
 
                     if notebook.get("tags"):
                         markers.append(f"tags: {', '.join(notebook['tags'])}")
@@ -4142,7 +4148,11 @@ def _dispatch_core_command(args):
                             "" if data.get("source_notebook_exists")
                             else "  [no longer uploaded]"
                         )
-                        print(f"\nCompiled from: {source}{exists_note}")
+                        version_note = (
+                            f" (version '{data['compiled_version_id']}')"
+                            if data.get("compiled_version_id") else ""
+                        )
+                        print(f"\nCompiled from: {source}{version_note}{exists_note}")
 
         elif args.remote_files_command == "get":
 
@@ -7711,9 +7721,9 @@ def main():
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"generated_files\", \"file_details\", \"compiled_at\", "
-            "\"source_notebook_filename\", \"source_notebook_exists\"[, "
-            "\"bundle_sha256\"]}) instead of a human-readable listing, "
-            "for scripting/automation."
+            "\"compiled_version_id\", \"source_notebook_filename\", "
+            "\"source_notebook_exists\"[, \"bundle_sha256\"]}) instead of "
+            "a human-readable listing, for scripting/automation."
         )
     )
 

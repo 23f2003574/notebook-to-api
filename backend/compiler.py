@@ -600,9 +600,28 @@ def hash_notebook_file(notebook_path):
     return hasher.hexdigest()
 
 
-def write_compile_metadata(notebook_path, output_dir, content_path=None):
+def write_compile_metadata(
+    notebook_path, output_dir, content_path=None, version_id=None
+):
     """Record which notebook produced the app in `output_dir`, its
-    content hash at that moment, and when.
+    content hash at that moment, when, and -- if this compile came from
+    one of that notebook's own previously snapshotted versions rather
+    than its current content -- which one.
+
+    "compiled_version_id" (None for an ordinary compile of a notebook's
+    own current content, the overwhelmingly common case) is the same
+    "version_id" POST /api/compile's own response and compile-history
+    entries already report for a version-pinned compile (see POST
+    /api/compile's own docstring, backend/routes/upload.py) -- but until
+    now that was only ever visible in that one request/response or a
+    compile-history entry, never persisted alongside the compile it
+    actually describes. An operator investigating "what is actually
+    running right now" -- after the fact, possibly a long time later, or
+    from a different process entirely (GET /api/notebooks, GET
+    /api/generated, ...) -- had no way to tell a version-pinned compile
+    apart from an ordinary one short of cross-referencing compile
+    history by "source_notebook_sha256" and hoping nothing else ever
+    produced the same hash.
 
     `content_path` (optional) is the file whose *bytes* actually got
     compiled and should be hashed -- `notebook_path` is always what gets
@@ -649,6 +668,7 @@ def write_compile_metadata(notebook_path, output_dir, content_path=None):
         "compiled_at": (
             datetime.datetime.now(datetime.timezone.utc).isoformat()
         ),
+        "compiled_version_id": version_id,
     }
 
     with open(metadata_path, "w", encoding="utf-8") as f:
@@ -801,6 +821,7 @@ def compile_notebook_to_api(
     only=None,
     exclude=None,
     source_notebook_path=None,
+    version_id=None,
 ):
 
     # compile_notebook_to_api writes several files to output_dir
@@ -941,6 +962,7 @@ def compile_notebook_to_api(
                 source_notebook_path or notebook_path,
                 output_dir,
                 content_path=notebook_path,
+                version_id=version_id,
             )
 
         except Exception:
@@ -963,6 +985,7 @@ def compile_notebook(
     only=None,
     exclude=None,
     source_notebook_path=None,
+    version_id=None,
 ):
     """
     Convenient wrapper for CLI.
@@ -970,8 +993,9 @@ def compile_notebook(
 
     `only`/`exclude` are passed straight through to
     compile_notebook_to_api -- see _filter_functions_by_name's own
-    docstring for what they do and why. `source_notebook_path` is passed
-    straight through too -- see write_compile_metadata's own docstring.
+    docstring for what they do and why. `source_notebook_path`/
+    `version_id` are passed straight through too -- see
+    write_compile_metadata's own docstring.
     """
 
     output_path = os.path.join(
@@ -985,4 +1009,5 @@ def compile_notebook(
         only=only,
         exclude=exclude,
         source_notebook_path=source_notebook_path,
+        version_id=version_id,
     )

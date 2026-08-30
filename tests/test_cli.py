@@ -2791,6 +2791,33 @@ def test_list_command_prints_notebooks_from_the_dashboard(fake_dashboard):
     assert handler.requests == ["/api/notebooks?sort=name&order=asc&offset=0"]
 
 
+def test_list_command_shows_the_compiled_version_id_when_present(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebooks": [
+                {
+                    "filename": "add.ipynb", "size_bytes": 123,
+                    "modified_at": "2026-01-01T00:00:00+00:00",
+                    "currently_compiled": True, "tags": [],
+                    "compiled_version_id": "20260101T000000000000_abcd.ipynb",
+                },
+            ],
+            "total_count": 1, "limit": None, "offset": 0,
+        })
+    ]
+
+    proc = _run_cli(["list", "--dashboard-url", dashboard_url], cwd=Path.cwd())
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (
+        "add.ipynb  (123 bytes)  [currently compiled from version "
+        "'20260101T000000000000_abcd.ipynb']"
+    ) in proc.stdout
+
+
 def test_list_command_passes_the_search_flag_through(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
@@ -11645,6 +11672,39 @@ def test_remote_files_list_command_prints_the_compiled_files(tmp_path, fake_dash
     assert "app.py  (1024 bytes, modified 2026-01-01T00:00:00+00:00)" in proc.stdout
     assert "Compiled from: nb.ipynb" in proc.stdout
     assert handler.requests == ["/api/generated"]
+
+
+def test_remote_files_list_command_shows_the_compiled_version_id_when_present(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "generated_files": ["app.py"],
+            "file_details": [
+                {"filename": "app.py", "size_bytes": 1024, "modified_at": "2026-01-01T00:00:00+00:00"},
+            ],
+            "compiled_at": "2026-01-01T00:00:00+00:00",
+            "compiled_version_id": "20260101T000000000000_abcd.ipynb",
+            "source_notebook_filename": "nb.ipynb",
+            "source_notebook_exists": True,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-files", "list", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (
+        "Compiled from: nb.ipynb (version '20260101T000000000000_abcd.ipynb')"
+        in proc.stdout
+    )
 
 
 def test_remote_files_list_command_checksums_flag_passes_the_query_param_and_prints_hashes(
