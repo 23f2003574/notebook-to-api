@@ -1414,6 +1414,8 @@ def _dispatch_core_command(args):
             params["sha256"] = args.sha256
         if args.limit is not None:
             params["limit"] = args.limit
+        if args.format == "csv":
+            params["format"] = "csv"
 
         try:
             response = httpx.get(
@@ -1428,6 +1430,14 @@ def _dispatch_core_command(args):
                 f"Dashboard rejected the request ({response.status_code}): "
                 f"{_extract_dashboard_error_detail(response)}"
             )
+
+        if args.format == "csv":
+            # The response is CSV, not JSON -- printed as-is (redirect
+            # stdout to a file to save it) rather than run through the
+            # JSON/human-readable branches below, which both assume a
+            # parseable JSON body.
+            print(response.text, end="")
+            return
 
         data = response.json()
 
@@ -5357,6 +5367,24 @@ def main():
             "Number of matching notebooks to skip before --limit is "
             "applied, mirroring GET /api/notebooks' own ?offset= -- e.g. "
             "for paging through a large list. Default: 0."
+        )
+    )
+    list_parser.add_argument(
+        "--format",
+        choices=["json", "csv"],
+        default="json",
+        help=(
+            "Response format to request via GET /api/notebooks' own "
+            "?format= query param, the same \"json\"/\"csv\" choice "
+            "`storage`/`deploy-history`/`compile-history` already offer "
+            "for their own listings. \"csv\" prints the dashboard's own "
+            "per-notebook CSV response straight to stdout (redirect it "
+            "to a file, e.g. `> notebooks.csv`) -- the same "
+            "already-filtered/sorted/paginated notebooks the \"json\" "
+            "response's own \"notebooks\" would list. Every --search/"
+            "--tag/--sort/--order/--limit/--offset above still applies; "
+            "--json is ignored under --format csv, since the response "
+            "isn't JSON at all."
         )
     )
     list_parser.add_argument(

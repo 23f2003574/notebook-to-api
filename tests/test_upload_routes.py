@@ -2511,6 +2511,98 @@ def test_list_notebooks_rejects_a_non_positive_limit():
     assert resp.status_code == 400
 
 
+def test_list_notebooks_rejects_an_unknown_format():
+
+    resp = client.get("/api/notebooks?format=xml")
+
+    assert resp.status_code == 400
+
+
+def test_list_notebooks_csv_format_returns_a_csv_response():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("list_csv_a.ipynb", io.BytesIO(content), "application/json")},
+    )
+    client.put(
+        "/api/notebooks/list_csv_a.ipynb/tags", json={"tags": ["prod", "beta"]}
+    )
+    client.put(
+        "/api/notebooks/list_csv_a.ipynb/description",
+        json={"description": "a sample notebook"},
+    )
+
+    resp = client.get("/api/notebooks", params={"format": "csv"})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert 'attachment; filename="notebooks.csv"' in resp.headers["content-disposition"]
+
+    rows = resp.text.strip().split("\r\n")
+    assert rows[0] == (
+        "filename,size_bytes,modified_at,currently_compiled,tags,"
+        "description,notebook_changed_since_compile,compiled_at"
+    )
+    assert len(rows) == 2
+
+    fields = rows[1].split(",")
+    assert fields[0] == "list_csv_a.ipynb"
+    assert fields[1] == str(len(content))
+    assert fields[3] == "False"
+    assert "beta;prod" in rows[1]
+    assert "a sample notebook" in rows[1]
+
+
+def test_list_notebooks_csv_format_leaves_staleness_columns_blank_for_a_non_compiled_notebook():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+    client.post(
+        "/api/upload",
+        files={"file": ("list_csv_no_compile.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get("/api/notebooks", params={"format": "csv"})
+
+    rows = resp.text.strip().split("\r\n")
+    assert rows[1] == "list_csv_no_compile.ipynb," + rows[1].split(",", 1)[1]
+    assert rows[1].endswith(",,")
+
+
+def test_list_notebooks_csv_format_composes_with_tag_and_limit():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("list_csv_tagged.ipynb", io.BytesIO(content), "application/json")},
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("list_csv_untagged.ipynb", io.BytesIO(content), "application/json")},
+    )
+    client.put(
+        "/api/notebooks/list_csv_tagged.ipynb/tags", json={"tags": ["prod"]}
+    )
+
+    resp = client.get(
+        "/api/notebooks",
+        params={"format": "csv", "tag": "prod", "limit": 1},
+    )
+
+    assert resp.status_code == 200
+    rows = resp.text.strip().split("\r\n")
+    assert len(rows) == 2
+    assert rows[1].startswith("list_csv_tagged.ipynb,")
+
+
 def test_delete_notebook_removes_an_uploaded_file():
 
     content = _notebook_bytes(

@@ -2876,6 +2876,43 @@ def test_list_command_json_flag_emits_the_dashboards_own_response(fake_dashboard
     assert json.loads(proc.stdout) == body
 
 
+def test_list_command_format_csv_prints_the_dashboards_raw_csv_response(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    csv_body = (
+        "filename,size_bytes,modified_at,currently_compiled,tags,"
+        "description,notebook_changed_since_compile,compiled_at\r\n"
+        "nb.ipynb,100,2026-01-01T00:00:00+00:00,False,,,,\r\n"
+    )
+    handler.responses = [_raw_response(200, csv_body.encode("utf-8"), "text/csv")]
+
+    proc = _run_cli(
+        ["list", "--format", "csv", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout == csv_body.replace("\r\n", "\n")
+    assert handler.requests == [
+        "/api/notebooks?sort=name&order=asc&offset=0&format=csv"
+    ]
+
+
+def test_list_command_omits_format_query_param_by_default(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "notebooks": [], "total_count": 0,
+        "limit": None, "offset": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(["list", "--dashboard-url", dashboard_url], cwd=Path.cwd())
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks?sort=name&order=asc&offset=0"]
+
+
 def test_list_command_reports_a_clean_error_when_the_dashboard_is_unreachable():
 
     proc = _run_cli(

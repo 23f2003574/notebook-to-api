@@ -2539,6 +2539,7 @@ def list_notebooks(
     tag: str = None,
     description_search: str = None,
     sha256: str = None,
+    format: str = "json",
 ):
     """List previously uploaded notebooks.
 
@@ -2652,7 +2653,38 @@ def list_notebooks(
     already passed every cheaper filter first. An unknown hash simply
     yields no matching notebooks, not an error, the same as every other
     filter here.
+
+    "format" (optional, default "json") returns "csv" instead -- the
+    same "csv"/"json" choice GET /api/notebooks/storage, GET
+    /api/deploy/history, and GET /api/compile/history's own "format"
+    already offer for their own listings, just applied here to this
+    dashboard's own primary notebook catalog, which -- unlike those
+    three -- had no export of its own at all: an operator wanting this
+    catalog (with its tags/descriptions/staleness) in a spreadsheet had
+    to fetch "format": "json" and reshape it by hand. Applies to the
+    exact same already-filtered, already-sorted, already-paginated
+    "notebooks" the "json" response would return, so every other query
+    param here composes with "format" identically. Column order is
+    "filename,size_bytes,modified_at,currently_compiled,tags,
+    description,notebook_changed_since_compile,compiled_at" -- every
+    field each "notebooks" entry can carry; "tags" (a list) is joined
+    with ";", the same separator GET /api/compile/history's own CSV
+    already uses for its own list fields ("only"/"exclude"). The last
+    two columns are blank for a notebook that isn't the currently-
+    compiled one -- the same notebooks whose "json" entry simply omits
+    them outright (see _notebook_metadata_entry above) -- rather than
+    left out of the header row itself, so every row has the same fixed
+    column count regardless of which notebooks happen to be on this
+    page. An unrecognized "format" is rejected with 400 before a single
+    notebook is even read.
     """
+
+    if format not in ("json", "csv"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="format must be 'json' or 'csv'"
+        )
 
     if sort not in _NOTEBOOK_SORT_KEYS:
 
@@ -2740,6 +2772,38 @@ def list_notebooks(
     )
 
     notebooks = [entry_tuple[3] for entry_tuple in paginated_entries]
+
+    if format == "csv":
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+
+        writer.writerow([
+            "filename", "size_bytes", "modified_at", "currently_compiled",
+            "tags", "description", "notebook_changed_since_compile",
+            "compiled_at",
+        ])
+
+        for notebook_entry in notebooks:
+
+            writer.writerow([
+                notebook_entry["filename"],
+                notebook_entry["size_bytes"],
+                notebook_entry["modified_at"],
+                notebook_entry["currently_compiled"],
+                ";".join(notebook_entry["tags"]),
+                notebook_entry["description"],
+                notebook_entry.get("notebook_changed_since_compile", ""),
+                notebook_entry.get("compiled_at", ""),
+            ])
+
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": 'attachment; filename="notebooks.csv"',
+            },
+        )
 
     return {
         "status": "success",
