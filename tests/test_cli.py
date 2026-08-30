@@ -3454,6 +3454,51 @@ def test_search_functions_command_json_flag_emits_the_dashboards_own_response(
     assert json.loads(proc.stdout) == body
 
 
+def test_search_functions_command_format_csv_prints_the_dashboards_raw_csv_response(
+    fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    csv_body = (
+        "filename,function_name,args,return_type,is_async\r\n"
+        "nb.ipynb,train_model,epochs:int,str,False\r\n"
+    )
+    handler.responses = [_raw_response(200, csv_body.encode("utf-8"), "text/csv")]
+
+    proc = _run_cli(
+        [
+            "search-functions", "train", "--format", "csv",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout == csv_body.replace("\r\n", "\n")
+    assert handler.requests == [
+        "/api/functions?search=train&offset=0&format=csv"
+    ]
+
+
+def test_search_functions_command_omits_format_query_param_by_default(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "search": "train", "regex": False,
+            "matches": [], "notebook_count": 0, "limit": None, "offset": 0,
+        })
+    ]
+
+    proc = _run_cli(
+        ["search-functions", "train", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/functions?search=train&offset=0"]
+
+
 def test_search_functions_command_reports_a_clean_error_for_an_empty_search(
     fake_dashboard
 ):

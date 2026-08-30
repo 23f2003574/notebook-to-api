@@ -2402,7 +2402,7 @@ def rename_tag(tag: str, data: dict):
 @router.get("/functions")
 def search_functions(
     search: str = None, tag: str = None, regex: bool = False,
-    limit: int = None, offset: int = 0,
+    limit: int = None, offset: int = 0, format: str = "json",
 ):
     """Find which uploaded notebooks define a function whose name
     contains `search` (case-insensitive), across every notebook in
@@ -2477,7 +2477,30 @@ def search_functions(
     read. Leaving "regex" false (the default) behaves exactly as before
     this -- a plain substring match, byte for byte identical to the
     previous implementation.
+
+    "format" (optional, default "json") returns "csv" instead -- the
+    same "csv"/"json" choice GET /api/notebooks, GET
+    /api/notebooks/storage, GET /api/deploy/history, and GET
+    /api/compile/history's own "format" already offer for their own
+    listings, just applied here to a function-name search's own matches.
+    Unlike those, "matches" here is one entry per *notebook* (each with
+    its own nested "functions" list) -- flattened to one CSV row per
+    *matching function* instead, since a spreadsheet has no native way to
+    represent a nested list within a single cell. Column order is
+    "filename,function_name,args,return_type,is_async"; "args" (a list of
+    {"name", "type", ...} dicts) is rendered as "name:type" pairs joined
+    with ";" (a bare type-less arg renders as just "name"), the same ";"
+    separator every other CSV export in this file already uses for a
+    list-valued field. An unrecognized "format" is rejected with 400
+    before a single notebook is even read.
     """
+
+    if format not in ("json", "csv"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="format must be 'json' or 'csv'"
+        )
 
     if not search:
 
@@ -2560,6 +2583,40 @@ def search_functions(
     paginated_matches = (
         matches[offset:offset + limit] if limit is not None else matches[offset:]
     )
+
+    if format == "csv":
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+
+        writer.writerow([
+            "filename", "function_name", "args", "return_type", "is_async",
+        ])
+
+        for match in paginated_matches:
+
+            for func in match["functions"]:
+
+                args = ";".join(
+                    f"{arg['name']}:{arg['type']}" if arg.get("type") else arg["name"]
+                    for arg in func.get("args", [])
+                )
+
+                writer.writerow([
+                    match["filename"],
+                    func["name"],
+                    args,
+                    func.get("return_type") or "",
+                    func.get("is_async", False),
+                ])
+
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": 'attachment; filename="functions.csv"',
+            },
+        )
 
     return {
         "status": "success",

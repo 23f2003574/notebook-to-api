@@ -8035,6 +8035,45 @@ def test_search_functions_requires_a_search_value():
     assert resp.status_code == 400
 
 
+def test_search_functions_rejects_an_unknown_format():
+
+    resp = client.get("/api/functions?search=train&format=xml")
+
+    assert resp.status_code == 400
+
+
+def test_search_functions_csv_format_returns_one_row_per_matching_function():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "def train_model(epochs: int, lr: float = 0.01) -> str:\n    return 'done'\n\n"
+        "async def train_async() -> None:\n    pass\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("search_functions_csv.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get("/api/functions", params={"search": "train", "format": "csv"})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert 'attachment; filename="functions.csv"' in resp.headers["content-disposition"]
+
+    rows = resp.text.strip().split("\r\n")
+    assert rows[0] == "filename,function_name,args,return_type,is_async"
+    assert len(rows) == 3
+
+    train_model_row = next(r for r in rows[1:] if "train_model" in r)
+    assert train_model_row.startswith("search_functions_csv.ipynb,train_model,")
+    assert "epochs:int" in train_model_row
+    assert "lr:float" in train_model_row
+
+    train_async_row = next(r for r in rows[1:] if "train_async" in r)
+    assert train_async_row == "search_functions_csv.ipynb,train_async,,None,True"
+
+
 def test_search_functions_skips_a_malformed_notebook_file():
 
     filename = "search_functions_malformed.ipynb"
