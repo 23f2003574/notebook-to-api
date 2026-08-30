@@ -1951,6 +1951,108 @@ def test_upload_command_passes_the_overwrite_flag_through(tmp_path, fake_dashboa
     assert handler.requests == ["/api/upload?overwrite=true"]
 
 
+def test_upload_command_reports_the_sha256(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "path": "/srv/uploads/nb.ipynb", "overwritten": False,
+            "sha256": "a" * 64,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["upload", str(notebook_path), "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"sha256: {'a' * 64}" in proc.stdout
+
+
+def test_upload_command_passes_the_expected_sha256_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "path": "/srv/uploads/nb.ipynb", "overwritten": False,
+            "sha256": "a" * 64,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "upload", str(notebook_path),
+            "--dashboard-url", dashboard_url, "--expected-sha256", "a" * 64,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        f"/api/upload?overwrite=false&expected_sha256={'a' * 64}"
+    ]
+
+
+def test_upload_command_reports_a_clean_error_for_an_expected_sha256_mismatch(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(400, {
+            "detail": "Uploaded content does not match expected_sha256: expected a, got b",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "upload", str(notebook_path),
+            "--dashboard-url", dashboard_url, "--expected-sha256", "a",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "does not match expected_sha256")
+
+
+def test_upload_command_rejects_expected_sha256_with_multiple_notebooks(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_a = workdir / "a.ipynb"
+    notebook_b = workdir / "b.ipynb"
+    _write_notebook(notebook_a)
+    _write_notebook(notebook_b)
+
+    proc = _run_cli(
+        [
+            "upload", str(notebook_a), str(notebook_b),
+            "--expected-sha256", "a" * 64,
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "single notebook")
+
+
 def test_upload_command_passes_the_tags_flag_through(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

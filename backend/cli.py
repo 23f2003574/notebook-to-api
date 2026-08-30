@@ -1196,6 +1196,13 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        if args.expected_sha256 and len(args.notebook) > 1:
+
+            raise ValueError(
+                "--expected-sha256 can only be used when uploading a "
+                "single notebook."
+            )
+
         if len(args.notebook) == 1:
             # Single-file path, unchanged from before `upload` accepted
             # more than one notebook: still hits POST /api/upload
@@ -1209,6 +1216,8 @@ def _dispatch_core_command(args):
                 params["tags"] = args.tags
             if args.description is not None:
                 params["description"] = args.description
+            if args.expected_sha256:
+                params["expected_sha256"] = args.expected_sha256
 
             try:
 
@@ -1244,6 +1253,7 @@ def _dispatch_core_command(args):
                 print(f"Uploaded '{data.get('filename', notebook_path)}' to {dashboard_url}")
                 print(f"  path: {data.get('path')}")
                 print(f"  overwritten: {data.get('overwritten')}")
+                print(f"  sha256: {data.get('sha256')}")
 
         else:
             # Multiple notebooks: POST /api/upload/batch instead of one
@@ -5242,13 +5252,27 @@ def main():
         )
     )
     upload_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "Reject the upload with an error unless the uploaded "
+            "content's own hash matches this value, via POST "
+            "/api/upload's own ?expected_sha256= query param -- e.g. to "
+            "catch a corrupted transfer or the wrong file before it lands "
+            "on the dashboard. Only valid when uploading a single "
+            "notebook."
+        )
+    )
+    upload_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response -- "
-            "{\"status\", \"filename\", \"path\", \"overwritten\"} for a "
-            "single file, or {\"status\", \"results\", "
+            "{\"status\", \"filename\", \"path\", \"overwritten\", "
+            "\"sha256\"} for a single file, or {\"status\", \"results\", "
             "\"succeeded_count\", \"failed_count\"} for multiple -- "
             "instead of a human-readable summary, for scripting/automation."
         )

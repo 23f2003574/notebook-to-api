@@ -521,6 +521,118 @@ def test_upload_reports_overwritten_false_for_a_brand_new_notebook():
     assert resp.json()["overwritten"] is False
 
 
+def test_upload_reports_the_sha256_of_the_uploaded_content():
+
+    import hashlib
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    expected = hashlib.sha256(content).hexdigest()
+
+    resp = client.post(
+        "/api/upload",
+        files={"file": ("upload_sha256.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["sha256"] == expected
+
+
+def test_upload_expected_sha256_matching_succeeds():
+
+    import hashlib
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    expected = hashlib.sha256(content).hexdigest()
+
+    resp = client.post(
+        "/api/upload",
+        params={"expected_sha256": expected},
+        files={"file": ("upload_expected_sha256_match.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["sha256"] == expected
+
+
+def test_upload_expected_sha256_is_case_insensitive():
+
+    import hashlib
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    expected_upper = hashlib.sha256(content).hexdigest().upper()
+
+    resp = client.post(
+        "/api/upload",
+        params={"expected_sha256": expected_upper},
+        files={"file": ("upload_expected_sha256_upper.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    assert resp.status_code == 200
+
+
+def test_upload_expected_sha256_mismatch_is_rejected_and_saves_nothing():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    filename = "upload_expected_sha256_mismatch.ipynb"
+
+    resp = client.post(
+        "/api/upload",
+        params={"expected_sha256": "0" * 64},
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+
+    assert resp.status_code == 400
+    assert "does not match expected_sha256" in resp.json()["detail"]
+    assert not (Path(UPLOAD_DIR) / filename).exists()
+
+
+def test_upload_expected_sha256_mismatch_is_checked_after_notebook_validity():
+
+    resp = client.post(
+        "/api/upload",
+        params={"expected_sha256": "0" * 64},
+        files={
+            "file": (
+                "upload_expected_sha256_malformed.ipynb",
+                io.BytesIO(b"not valid json"),
+                "application/json",
+            )
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "not a valid Jupyter notebook" in resp.json()["detail"]
+
+
+def test_upload_batch_reports_a_sha256_per_successful_file():
+
+    import hashlib
+
+    content_a = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+    content_b = _notebook_bytes("def sub(a: int, b: int) -> int:\n    return a - b\n")
+
+    resp = client.post(
+        "/api/upload/batch",
+        files=[
+            ("files", ("batch_sha256_a.ipynb", io.BytesIO(content_a), "application/json")),
+            ("files", ("batch_sha256_b.ipynb", io.BytesIO(content_b), "application/json")),
+        ],
+    )
+
+    assert resp.status_code == 200
+    results_by_filename = {r["filename"]: r for r in resp.json()["results"]}
+    assert results_by_filename["batch_sha256_a.ipynb"]["sha256"] == hashlib.sha256(content_a).hexdigest()
+    assert results_by_filename["batch_sha256_b.ipynb"]["sha256"] == hashlib.sha256(content_b).hexdigest()
+
+
 def test_upload_tags_sets_the_notebooks_tags_on_success():
 
     content = _notebook_bytes(
@@ -1051,6 +1163,7 @@ def test_upload_batch_continues_past_a_single_invalid_file():
         "filename": "batch_good.ipynb",
         "path": str(resolve_upload_path("batch_good.ipynb")),
         "overwritten": False,
+        "sha256": hashlib.sha256(good_content).hexdigest(),
     }
     assert bad_result["filename"] == "batch_bad.ipynb"
     assert bad_result["status"] == "error"

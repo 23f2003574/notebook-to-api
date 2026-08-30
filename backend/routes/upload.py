@@ -804,7 +804,10 @@ def _read_notebook_metadata_from_archive(
     return tags, description
 
 
-async def _save_uploaded_notebook(file: UploadFile, overwrite: bool, dry_run: bool = False) -> dict:
+async def _save_uploaded_notebook(
+    file: UploadFile, overwrite: bool, dry_run: bool = False,
+    expected_sha256: str = None,
+) -> dict:
     """Validate and save one uploaded notebook, exactly as upload_notebook
     (below) always has -- extracted into its own function so
     upload_notebook and upload_notebooks_batch (below) share this one
@@ -815,6 +818,36 @@ async def _save_uploaded_notebook(file: UploadFile, overwrite: bool, dry_run: bo
     single-file callers. upload_notebooks_batch instead catches that
     HTTPException per file, so one bad file in a batch doesn't abort every
     other file's own upload.
+
+    The returned dict's own "sha256" -- the same hash_notebook_file
+    (backend/compiler.py) already computes for every other content-
+    identity check in this project (GET /api/notebooks?sha256=, GET
+    /api/notebooks/duplicates, ...) -- is the uploaded content's hash as
+    actually written to disk, computed once here and shared by every
+    caller of this function, so upload_notebook/upload_notebooks_batch/
+    import_notebooks never each need their own separate, possibly-
+    drifting read-back-and-hash step just to report what a caller could
+    otherwise only learn from a follow-up GET /api/notebooks?sha256=.
+
+    "expected_sha256" (optional) rejects the upload with 400 if the
+    uploaded content's own hash doesn't match -- e.g. a CI pipeline (or
+    any caller) that already computed a notebook's expected hash locally
+    (before or independent of this upload) catching a corrupted transfer,
+    a stale cached copy, or simply the wrong file, before it ever lands
+    in UPLOAD_DIR, rather than discovering the mismatch only after the
+    fact via a separate GET /api/notebooks?sha256= that comes back empty.
+    Checked only after the file is confirmed to be a syntactically valid
+    notebook (see the load_notebook check below) -- a malformed upload is
+    still reported as that specific, more actionable error, not a bare
+    hash mismatch, regardless of whether "expected_sha256" was given.
+    Compared case-insensitively, since hex digests are conventionally
+    written either way (hash_notebook_file's own hexdigest() is always
+    lowercase, but a caller's own locally-computed value -- `sha256sum`,
+    a browser's SubtleCrypto, ... -- isn't guaranteed to be). Checked
+    even under `dry_run` -- it's a read-only comparison against content
+    already streamed to the temp file, not one of the writes `dry_run`
+    itself exists to skip, so a dry run still reports exactly what a
+    real upload would.
 
     `dry_run` (default False, used by POST /api/notebooks/import below)
     runs every check above -- size, notebook validity (via load_notebook
@@ -925,6 +958,23 @@ async def _save_uploaded_notebook(file: UploadFile, overwrite: bool, dry_run: bo
                 detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
             )
 
+        sha256 = hash_notebook_file(str(temp_path))
+
+        if (
+            expected_sha256 is not None
+            and expected_sha256.lower() != sha256
+        ):
+
+            os.remove(temp_path)
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Uploaded content does not match expected_sha256: "
+                    f"expected {expected_sha256}, got {sha256}"
+                )
+            )
+
         # Re-checked immediately before the swap (rather than trusting the
         # early check above) so the "overwritten" flag in the response stays
         # accurate even if a concurrent request created the file while this
@@ -956,6 +1006,7 @@ async def _save_uploaded_notebook(file: UploadFile, overwrite: bool, dry_run: bo
                 "filename": file.filename,
                 "path": str(file_path),
                 "overwritten": overwritten,
+                "sha256": sha256,
             }
 
         if overwritten:
@@ -968,6 +1019,7 @@ async def _save_uploaded_notebook(file: UploadFile, overwrite: bool, dry_run: bo
             "filename": file.filename,
             "path": str(file_path),
             "overwritten": overwritten,
+            "sha256": sha256,
         }
 
 
@@ -977,6 +1029,7 @@ async def upload_notebook(
     overwrite: bool = False,
     tags: str = None,
     description: str = None,
+    expected_sha256: str = None,
 ):
     """Upload a Jupyter notebook file.
 
@@ -1028,6 +1081,19 @@ async def upload_notebook(
     gives, just for a notebook's freeform description instead of its
     tags. An invalid "description" value is rejected with 400 before the
     file itself is even read, the same way an invalid "tags" already is.
+
+    "expected_sha256" (optional) rejects the upload with 400 if the
+    uploaded content's own hash doesn't match -- see
+    _save_uploaded_notebook's own docstring for exactly when this is
+    checked and why. Every successful response (this endpoint's own, and
+    -- since both are built on _save_uploaded_notebook -- POST
+    /api/upload/batch's and POST /api/notebooks/import's own per-file
+    "results" entries too) now also reports the uploaded content's own
+    "sha256" regardless of whether "expected_sha256" was given, closing a
+    smaller, related gap: before this, learning what a just-uploaded
+    notebook's own content actually hashes to meant a separate GET
+    /api/notebooks?sha256=<guess> round trip (and only if the caller
+    already knew the hash to guess).
     """
 
     normalized_tags = _parse_and_validate_tags_query_param(tags)
@@ -1037,7 +1103,9 @@ async def upload_notebook(
         if description is not None else None
     )
 
-    result = await _save_uploaded_notebook(file, overwrite)
+    result = await _save_uploaded_notebook(
+        file, overwrite, expected_sha256=expected_sha256
+    )
 
     if normalized_tags is not None:
         _write_notebook_tags(result["filename"], normalized_tags)
