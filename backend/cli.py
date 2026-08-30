@@ -1653,6 +1653,8 @@ def _dispatch_core_command(args):
             params["regex"] = True
         if args.limit is not None:
             params["limit"] = args.limit
+        if args.format == "csv":
+            params["format"] = "csv"
 
         try:
             response = httpx.get(
@@ -1669,6 +1671,14 @@ def _dispatch_core_command(args):
                 f"Dashboard rejected the request ({response.status_code}): "
                 f"{_extract_dashboard_error_detail(response)}"
             )
+
+        if args.format == "csv":
+            # The response is CSV, not JSON -- printed as-is (redirect
+            # stdout to a file to save it) rather than run through the
+            # JSON/human-readable branches below, which both assume a
+            # parseable JSON body.
+            print(response.text, end="")
+            return
 
         data = response.json()
 
@@ -5634,6 +5644,24 @@ def main():
         help=(
             "Skip this many matching notebooks before --limit is "
             "applied, via GET /api/notebooks/search-content's own ?offset=."
+        )
+    )
+    search_content_parser.add_argument(
+        "--format",
+        choices=["json", "csv"],
+        default="json",
+        help=(
+            "Response format to request via GET "
+            "/api/notebooks/search-content's own ?format= query param, "
+            "the same \"json\"/\"csv\" choice `search-functions` already "
+            "offers for its own catalog-wide search. \"csv\" prints the "
+            "dashboard's own CSV response straight to stdout (redirect "
+            "it to a file, e.g. `> search_content.csv`) -- one row per "
+            "matching code cell, flattened out of the \"json\" "
+            "response's own per-notebook \"matches\". Every --tag/"
+            "--regex/--limit/--offset above still applies; --json is "
+            "ignored under --format csv, since the response isn't JSON "
+            "at all."
         )
     )
     _add_dashboard_url_and_timeout_arguments(search_content_parser)

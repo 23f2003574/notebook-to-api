@@ -3689,6 +3689,32 @@ def test_search_content_command_json_flag_emits_the_dashboards_own_response(
     assert json.loads(proc.stdout) == body
 
 
+def test_search_content_command_format_csv_prints_the_dashboards_raw_csv_response(
+    fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    csv_body = (
+        "filename,cell_index,snippet\r\n"
+        "nb.ipynb,0,df = pd.read_csv('a.csv')\r\n"
+    )
+    handler.responses = [_raw_response(200, csv_body.encode("utf-8"), "text/csv")]
+
+    proc = _run_cli(
+        [
+            "search-content", "pd.", "--format", "csv",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout == csv_body.replace("\r\n", "\n")
+    assert handler.requests == [
+        "/api/notebooks/search-content?search=pd.&offset=0&format=csv"
+    ]
+
+
 def test_search_content_command_reports_a_clean_error_for_an_empty_search(
     fake_dashboard
 ):

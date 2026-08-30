@@ -3981,6 +3981,39 @@ def test_search_notebook_content_requires_a_search_value():
     assert resp.status_code == 400
 
 
+def test_search_notebook_content_rejects_an_unknown_format():
+
+    resp = client.get("/api/notebooks/search-content?search=foo&format=xml")
+
+    assert resp.status_code == 400
+
+
+def test_search_notebook_content_csv_format_returns_one_row_per_matching_cell():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "import pandas as pd\ndf = pd.read_csv('a.csv')\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("search_content_csv.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get(
+        "/api/notebooks/search-content", params={"search": "pd.", "format": "csv"}
+    )
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert 'attachment; filename="search_content.csv"' in resp.headers["content-disposition"]
+
+    rows = resp.text.strip().split("\r\n")
+    assert rows[0] == "filename,cell_index,snippet"
+    assert len(rows) == 2
+    assert rows[1] == "search_content_csv.ipynb,0,df = pd.read_csv('a.csv')"
+
+
 def test_search_notebook_content_skips_a_malformed_notebook_file():
 
     client.delete("/api/notebooks?confirm=true")

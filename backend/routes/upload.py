@@ -3527,7 +3527,7 @@ def resolve_duplicate_notebooks(data: dict = None):
 @router.get("/notebooks/search-content")
 def search_notebook_content(
     search: str = None, tag: str = None, regex: bool = False,
-    limit: int = None, offset: int = 0,
+    limit: int = None, offset: int = 0, format: str = "json",
 ):
     """Find every uploaded notebook with a code cell whose raw source
     contains `search` (case-insensitive), across the whole catalog at
@@ -3600,7 +3600,25 @@ def search_notebook_content(
     unbounded per-match capture. Leaving "regex" false (the default)
     behaves exactly as before this -- a plain substring search, byte for
     byte identical to the previous implementation.
+
+    "format" (optional, default "json") returns "csv" instead -- the
+    same "csv"/"json" choice GET /api/functions' own "format" already
+    offers for its own catalog-wide search. "matches" here is one entry
+    per *notebook* (each with its own nested per-cell "matches" list) --
+    flattened to one CSV row per *matching cell* instead, the same
+    nested-list-has-no-cell-representation reasoning GET /api/functions'
+    own "format" docstring already gives for flattening to one row per
+    matching function. Column order is "filename,cell_index,snippet". An
+    unrecognized "format" is rejected with 400 before a single notebook
+    is even read.
     """
+
+    if format not in ("json", "csv"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="format must be 'json' or 'csv'"
+        )
 
     if not search:
 
@@ -3707,6 +3725,31 @@ def search_notebook_content(
     paginated_matches = (
         matches[offset:offset + limit] if limit is not None else matches[offset:]
     )
+
+    if format == "csv":
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+
+        writer.writerow(["filename", "cell_index", "snippet"])
+
+        for match in paginated_matches:
+
+            for cell_match in match["matches"]:
+
+                writer.writerow([
+                    match["filename"],
+                    cell_match["cell_index"],
+                    cell_match["snippet"],
+                ])
+
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": 'attachment; filename="search_content.csv"',
+            },
+        )
 
     return {
         "status": "success",
