@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List
 import asyncio
 import csv
+import hashlib
 import io
 import json
 import os
@@ -9767,8 +9768,33 @@ def download_generated_app():
     )
 
 
+def _bundle_sha256(file_details_with_sha256):
+    """A single SHA-256 summarizing an entire compiled bundle -- one hash
+    over every file's own "filename"/"sha256" pair, sorted by filename
+    (already true of `generated_files`/`file_details`'s own order, but
+    re-sorted here defensively so this can never silently depend on
+    caller order) so it's the same value regardless of os.walk's own
+    incidental directory-traversal order.
+
+    Lets a caller compare "is the bundle I fetched via GET /api/download
+    (or built from GET /api/generated/{filename} calls) byte-for-byte the
+    one this dashboard currently has compiled" with one short string,
+    instead of comparing every file's own sha256 one at a time -- the
+    same "one summary value instead of N per-item ones" GET
+    /api/notebooks/storage's own running totals already provide over its
+    own per-notebook entries, just applied to file content hashes instead
+    of byte counts.
+    """
+    hasher = hashlib.sha256()
+
+    for entry in sorted(file_details_with_sha256, key=lambda e: e["filename"]):
+        hasher.update(f"{entry['filename']}:{entry['sha256']}\n".encode("utf-8"))
+
+    return hasher.hexdigest()
+
+
 @router.get("/generated")
-def list_generated_files_endpoint():
+def list_generated_files_endpoint(checksums: bool = False):
     """List the files currently sitting in GENERATED_DIR, without requiring
     a notebook_path -- unlike POST /api/inspect, which can also list this
     same generated_files set, but only alongside a full inspection of a
@@ -9811,33 +9837,60 @@ def list_generated_files_endpoint():
     /api/generated/{filename} call per file just to learn how big each one
     is -- N+1 requests for what "list what's in GENERATED_DIR" should
     answer in one.
+
+    "checksums" (optional, default false) additionally pairs each
+    "file_details" entry with its own "sha256" -- the same
+    hash_notebook_file (backend/compiler.py) already computes for an
+    uploaded notebook's own content, just applied to a compiled output
+    file instead -- and adds a top-level "bundle_sha256" summarizing the
+    whole bundle in one hash (see _bundle_sha256 above). Before this,
+    verifying that a compiled bundle fetched earlier (via GET
+    /api/download, or a series of GET /api/generated/{filename} calls)
+    still byte-for-byte matches what this dashboard currently has
+    compiled meant re-downloading and re-diffing it, the exact
+    "answer a yes/no integrity question without fetching everything
+    again" gap GET /api/notebooks?sha256= already closes for an uploaded
+    notebook's own content. Off by default -- hashing every generated
+    file is real work this endpoint's existing size/mtime listing never
+    needed, most callers of the plain listing don't need either.
     """
 
     with COMPILE_LOCK:
 
         generated_files = list_generated_files(GENERATED_DIR)
 
-        # Stat'd under the same COMPILE_LOCK hold as the listing above --
-        # not a separate, later acquisition -- so a concurrent POST
-        # /api/compile racing in on another thread can't remove or replace
-        # one of these files (see clear_stale_export_artifacts, backend/
-        # compiler.py) in the gap between listing it and stat'ing it,
-        # which would otherwise raise an avoidable FileNotFoundError for
-        # what's supposed to be this endpoint's own safe, read-only
-        # listing step.
+        # Stat'd (and, with "checksums", hashed) under the same
+        # COMPILE_LOCK hold as the listing above -- not a separate, later
+        # acquisition -- so a concurrent POST /api/compile racing in on
+        # another thread can't remove or replace one of these files (see
+        # clear_stale_export_artifacts, backend/compiler.py) in the gap
+        # between listing it and stat'ing/hashing it, which would
+        # otherwise raise an avoidable FileNotFoundError for what's
+        # supposed to be this endpoint's own safe, read-only listing
+        # step.
         generated_file_details = []
 
         for relative_name in generated_files:
 
-            file_stat = (Path(GENERATED_DIR) / relative_name).stat()
+            file_path = Path(GENERATED_DIR) / relative_name
+            file_stat = file_path.stat()
 
-            generated_file_details.append({
+            file_entry = {
                 "filename": relative_name,
                 "size_bytes": file_stat.st_size,
                 "modified_at": datetime.fromtimestamp(
                     file_stat.st_mtime, tz=timezone.utc
                 ).isoformat(),
-            })
+            }
+
+            if checksums:
+                file_entry["sha256"] = hash_notebook_file(str(file_path))
+
+            generated_file_details.append(file_entry)
+
+        bundle_sha256 = (
+            _bundle_sha256(generated_file_details) if checksums else None
+        )
 
         compiled_path, _, compiled_at = _currently_compiled_notebook_metadata()
 
@@ -9855,7 +9908,7 @@ def list_generated_files_endpoint():
         except ValueError:
             source_notebook_filename = None
 
-    return {
+    response = {
         "status": "success",
         "generated_files": generated_files,
         "file_details": generated_file_details,
@@ -9863,6 +9916,11 @@ def list_generated_files_endpoint():
         "source_notebook_filename": source_notebook_filename,
         "source_notebook_exists": source_notebook_exists,
     }
+
+    if checksums:
+        response["bundle_sha256"] = bundle_sha256
+
+    return response
 
 
 @router.delete("/generated")

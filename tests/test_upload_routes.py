@@ -16040,6 +16040,98 @@ def test_list_generated_files_file_details_reports_size_and_modified_at():
     os.remove(Path(UPLOAD_DIR) / filename)
 
 
+def test_list_generated_files_omits_checksums_by_default():
+
+    filename = "list_generated_files_no_checksums_test.ipynb"
+    _compile_a_notebook(filename)
+
+    resp = client.get("/api/generated")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "bundle_sha256" not in body
+    for entry in body["file_details"]:
+        assert "sha256" not in entry
+
+    os.remove(Path(UPLOAD_DIR) / filename)
+
+
+def test_list_generated_files_checksums_true_reports_a_sha256_per_file_and_a_bundle_hash():
+
+    import hashlib
+
+    from backend.routes import upload as upload_module
+
+    filename = "list_generated_files_checksums_test.ipynb"
+    _compile_a_notebook(filename)
+
+    resp = client.get("/api/generated", params={"checksums": "true"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    file_details_by_name = {
+        entry["filename"]: entry for entry in body["file_details"]
+    }
+
+    app_py_path = Path(upload_module.GENERATED_DIR) / "app.py"
+    expected_sha256 = hashlib.sha256(app_py_path.read_bytes()).hexdigest()
+
+    assert file_details_by_name["app.py"]["sha256"] == expected_sha256
+    assert all("sha256" in entry for entry in body["file_details"])
+    assert isinstance(body["bundle_sha256"], str)
+    assert len(body["bundle_sha256"]) == 64
+
+    os.remove(Path(UPLOAD_DIR) / filename)
+
+
+def test_list_generated_files_bundle_sha256_changes_when_a_file_changes():
+
+    filename = "list_generated_files_bundle_hash_changes_test.ipynb"
+    _compile_a_notebook(filename)
+
+    first = client.get("/api/generated", params={"checksums": "true"}).json()
+
+    # Recompile with different content -- app.py's own bytes change.
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def multiply(a: int, b: int) -> int:\n    return a * b\n"
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+    client.post("/api/compile", json={"notebook_path": filename})
+
+    second = client.get("/api/generated", params={"checksums": "true"}).json()
+
+    assert first["bundle_sha256"] != second["bundle_sha256"]
+
+    os.remove(Path(UPLOAD_DIR) / filename)
+
+
+def test_bundle_sha256_is_independent_of_input_order():
+
+    from backend.routes.upload import _bundle_sha256
+
+    entries = [
+        {"filename": "app.py", "sha256": "aaa"},
+        {"filename": "requirements.txt", "sha256": "bbb"},
+    ]
+
+    assert _bundle_sha256(entries) == _bundle_sha256(list(reversed(entries)))
+
+
+def test_bundle_sha256_changes_when_a_files_hash_changes():
+
+    from backend.routes.upload import _bundle_sha256
+
+    entries = [{"filename": "app.py", "sha256": "aaa"}]
+    changed = [{"filename": "app.py", "sha256": "different"}]
+
+    assert _bundle_sha256(entries) != _bundle_sha256(changed)
+
+
 def test_list_generated_files_file_details_excludes_pycache_and_compile_metadata():
 
     from backend.routes import upload as upload_module

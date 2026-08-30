@@ -4087,7 +4087,9 @@ def _dispatch_core_command(args):
 
             try:
                 response = httpx.get(
-                    f"{dashboard_url}/api/generated", timeout=args.timeout,
+                    f"{dashboard_url}/api/generated",
+                    params={"checksums": "true"} if args.checksums else {},
+                    timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
                 raise _dashboard_connection_error(exc, dashboard_url)
@@ -4111,11 +4113,17 @@ def _dispatch_core_command(args):
                     print("No compiled app found on the dashboard.")
                 else:
                     for entry in file_details:
+                        checksum_note = (
+                            f"  sha256:{entry['sha256']}" if args.checksums else ""
+                        )
                         print(
                             f"{entry['filename']}  "
                             f"({entry['size_bytes']} bytes, "
-                            f"modified {entry['modified_at']})"
+                            f"modified {entry['modified_at']}){checksum_note}"
                         )
+
+                    if args.checksums:
+                        print(f"\nBundle sha256: {data.get('bundle_sha256')}")
 
                     source = data.get("source_notebook_filename")
 
@@ -7659,6 +7667,18 @@ def main():
         "list",
         help="List the compiled app's files via GET /api/generated."
     )
+    remote_files_list_parser.add_argument(
+        "--checksums",
+        action="store_true",
+        help=(
+            "Also request each file's own sha256 and the whole bundle's "
+            "own summary sha256, via GET /api/generated's own "
+            "\"checksums\" query param -- e.g. to verify a compiled "
+            "bundle fetched earlier (via `remote-build`, or a series of "
+            "`remote-files get`) still byte-for-byte matches what the "
+            "dashboard currently has compiled, without re-fetching it."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(remote_files_list_parser)
     remote_files_list_parser.add_argument(
         "--json",
@@ -7667,8 +7687,9 @@ def main():
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"generated_files\", \"file_details\", \"compiled_at\", "
-            "\"source_notebook_filename\", \"source_notebook_exists\"}) "
-            "instead of a human-readable listing, for scripting/automation."
+            "\"source_notebook_filename\", \"source_notebook_exists\"[, "
+            "\"bundle_sha256\"]}) instead of a human-readable listing, "
+            "for scripting/automation."
         )
     )
 

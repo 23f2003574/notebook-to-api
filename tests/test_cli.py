@@ -11545,6 +11545,43 @@ def test_remote_files_list_command_prints_the_compiled_files(tmp_path, fake_dash
     assert handler.requests == ["/api/generated"]
 
 
+def test_remote_files_list_command_checksums_flag_passes_the_query_param_and_prints_hashes(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "generated_files": ["app.py"],
+            "file_details": [
+                {
+                    "filename": "app.py", "size_bytes": 1024,
+                    "modified_at": "2026-01-01T00:00:00+00:00",
+                    "sha256": "a" * 64,
+                },
+            ],
+            "compiled_at": "2026-01-01T00:00:00+00:00",
+            "source_notebook_filename": "nb.ipynb",
+            "source_notebook_exists": True,
+            "bundle_sha256": "b" * 64,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-files", "list", "--checksums", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"sha256:{'a' * 64}" in proc.stdout
+    assert f"Bundle sha256: {'b' * 64}" in proc.stdout
+    assert handler.requests == ["/api/generated?checksums=true"]
+
+
 def test_remote_files_list_command_flags_a_missing_source_notebook(
     tmp_path, fake_dashboard
 ):
