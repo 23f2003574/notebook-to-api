@@ -6317,6 +6317,34 @@ def test_copy_command_passes_the_overwrite_flag_through(tmp_path, fake_dashboard
     assert json.loads(handler.bodies[0])["overwrite"] is True
 
 
+def test_copy_command_passes_tags_and_description_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "new_filename": "nb_copy.ipynb",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "copy", "nb.ipynb", "nb_copy.ipynb",
+            "--dashboard-url", dashboard_url,
+            "--tags", "a,b", "--description", "a scratch copy",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    body = json.loads(handler.bodies[0])
+    assert body["tags"] == ["a", "b"]
+    assert body["description"] == "a scratch copy"
+
+
 def test_copy_command_json_flag_emits_the_dashboards_own_response(
     tmp_path, fake_dashboard
 ):
@@ -6489,6 +6517,35 @@ def test_copy_batch_command_passes_the_overwrite_flag_through(tmp_path, fake_das
     assert json.loads(handler.bodies[0]) == {
         "new_filenames": ["a.ipynb"], "overwrite": True,
     }
+
+
+def test_copy_batch_command_passes_tags_and_description_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "results": [{"new_filename": "a.ipynb", "status": "success"}],
+            "succeeded_count": 1, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "copy-batch", "nb.ipynb", "a.ipynb",
+            "--dashboard-url", dashboard_url,
+            "--tags", "scratch", "--description", "batch copy",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    body = json.loads(handler.bodies[0])
+    assert body["tags"] == ["scratch"]
+    assert body["description"] == "batch copy"
 
 
 def test_copy_batch_command_dry_run_sends_dry_run_field(tmp_path, fake_dashboard):

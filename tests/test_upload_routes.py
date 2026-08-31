@@ -6400,6 +6400,54 @@ def test_copy_notebook_overwrite_discards_the_destinations_previous_tags():
     os.remove(Path(UPLOAD_DIR) / "copy_tags_overwrite_target.ipynb")
 
 
+def test_copy_notebook_overrides_tags_and_description_instead_of_inheriting():
+
+    _upload_sample_notebook("copy_override_source.ipynb")
+    client.put(
+        "/api/notebooks/copy_override_source.ipynb/tags", json={"tags": ["production"]}
+    )
+    client.put(
+        "/api/notebooks/copy_override_source.ipynb/description",
+        json={"description": "the prod one"},
+    )
+
+    copy_resp = client.post(
+        "/api/notebooks/copy_override_source.ipynb/copy",
+        json={
+            "new_filename": "copy_override_target.ipynb",
+            "tags": ["scratch"],
+            "description": "a scratch copy",
+        },
+    )
+    assert copy_resp.status_code == 200
+
+    target_info = client.get("/api/notebooks/copy_override_target.ipynb/info").json()
+    assert target_info["tags"] == ["scratch"]
+    assert target_info["description"] == "a scratch copy"
+
+    # The source itself is untouched.
+    source_info = client.get("/api/notebooks/copy_override_source.ipynb/info").json()
+    assert source_info["tags"] == ["production"]
+    assert source_info["description"] == "the prod one"
+
+    os.remove(Path(UPLOAD_DIR) / "copy_override_target.ipynb")
+    _tags_sidecar_path("copy_override_target.ipynb").unlink(missing_ok=True)
+    _description_sidecar_path("copy_override_target.ipynb").unlink(missing_ok=True)
+
+
+def test_copy_notebook_rejects_an_invalid_tags_override():
+
+    _upload_sample_notebook("copy_bad_tags_source.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/copy_bad_tags_source.ipynb/copy",
+        json={"new_filename": "copy_bad_tags_target.ipynb", "tags": "not-a-list"},
+    )
+
+    assert resp.status_code == 400
+    assert not (Path(UPLOAD_DIR) / "copy_bad_tags_target.ipynb").exists()
+
+
 def test_copy_notebook_does_not_copy_version_history():
 
     _upload_sample_notebook("copy_versions_source.ipynb")
@@ -6593,6 +6641,39 @@ def test_copy_notebook_batch_overwrite_applies_to_every_destination():
     body = resp.json()
     assert body["succeeded_count"] == 1
     assert (Path(UPLOAD_DIR) / "copy_batch_overwrite_existing.ipynb").read_bytes() == content
+
+
+def test_copy_notebook_batch_tags_and_description_apply_to_every_destination():
+
+    _upload_sample_notebook("copy_batch_override_source.ipynb")
+    client.put(
+        "/api/notebooks/copy_batch_override_source.ipynb/tags",
+        json={"tags": ["production"]},
+    )
+
+    resp = client.post(
+        "/api/notebooks/copy_batch_override_source.ipynb/copy-batch",
+        json={
+            "new_filenames": [
+                "copy_batch_override_a.ipynb", "copy_batch_override_b.ipynb",
+            ],
+            "tags": ["scratch"],
+            "description": "batch scratch copy",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["succeeded_count"] == 2
+
+    for filename in ("copy_batch_override_a.ipynb", "copy_batch_override_b.ipynb"):
+
+        info = client.get(f"/api/notebooks/{filename}/info").json()
+        assert info["tags"] == ["scratch"]
+        assert info["description"] == "batch scratch copy"
+
+        os.remove(Path(UPLOAD_DIR) / filename)
+        _tags_sidecar_path(filename).unlink(missing_ok=True)
+        _description_sidecar_path(filename).unlink(missing_ok=True)
 
 
 def test_copy_notebook_batch_returns_404_for_missing_source():
@@ -6828,6 +6909,85 @@ def test_copy_notebooks_batch_per_entry_overwrite_does_not_apply_to_other_entrie
     assert "already exists" in results["copy_many_overwrite_existing_b.ipynb"]["detail"]
 
     assert (Path(UPLOAD_DIR) / "copy_many_overwrite_existing_a.ipynb").read_bytes() == content
+
+
+def test_copy_notebooks_batch_per_entry_tags_and_description_do_not_apply_to_other_entries():
+
+    _upload_sample_notebook("copy_many_override_source_a.ipynb")
+    _upload_sample_notebook("copy_many_override_source_b.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/copy-batch",
+        json={
+            "entries": [
+                {
+                    "filename": "copy_many_override_source_a.ipynb",
+                    "new_filename": "copy_many_override_target_a.ipynb",
+                    "tags": ["alpha"],
+                    "description": "entry a",
+                },
+                {
+                    "filename": "copy_many_override_source_b.ipynb",
+                    "new_filename": "copy_many_override_target_b.ipynb",
+                },
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["succeeded_count"] == 2
+
+    info_a = client.get("/api/notebooks/copy_many_override_target_a.ipynb/info").json()
+    assert info_a["tags"] == ["alpha"]
+    assert info_a["description"] == "entry a"
+
+    info_b = client.get("/api/notebooks/copy_many_override_target_b.ipynb/info").json()
+    assert info_b["tags"] == []
+    assert info_b["description"] == ""
+
+    for filename in (
+        "copy_many_override_target_a.ipynb", "copy_many_override_target_b.ipynb",
+    ):
+        os.remove(Path(UPLOAD_DIR) / filename)
+        _tags_sidecar_path(filename).unlink(missing_ok=True)
+        _description_sidecar_path(filename).unlink(missing_ok=True)
+
+
+def test_copy_notebooks_batch_bad_entry_tags_is_reported_without_aborting_the_rest():
+
+    _upload_sample_notebook("copy_many_bad_tags_source_a.ipynb")
+    _upload_sample_notebook("copy_many_bad_tags_source_b.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/copy-batch",
+        json={
+            "entries": [
+                {
+                    "filename": "copy_many_bad_tags_source_a.ipynb",
+                    "new_filename": "copy_many_bad_tags_target_a.ipynb",
+                    "tags": "not-a-list",
+                },
+                {
+                    "filename": "copy_many_bad_tags_source_b.ipynb",
+                    "new_filename": "copy_many_bad_tags_target_b.ipynb",
+                },
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results = {r["new_filename"]: r for r in body["results"]}
+    assert results["copy_many_bad_tags_target_a.ipynb"]["status"] == "error"
+    assert results["copy_many_bad_tags_target_b.ipynb"]["status"] == "success"
+    assert not (Path(UPLOAD_DIR) / "copy_many_bad_tags_target_a.ipynb").exists()
+
+    os.remove(Path(UPLOAD_DIR) / "copy_many_bad_tags_target_b.ipynb")
+    _tags_sidecar_path("copy_many_bad_tags_target_b.ipynb").unlink(missing_ok=True)
+    _description_sidecar_path("copy_many_bad_tags_target_b.ipynb").unlink(missing_ok=True)
 
 
 def test_copy_notebooks_batch_rejects_a_non_list_entries_value():

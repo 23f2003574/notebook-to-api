@@ -5697,11 +5697,18 @@ def copy_notebook(filename: str, data: dict):
 
     A notebook's tags (see PUT /api/notebooks/{filename}/tags) and its
     description (see PUT /api/notebooks/{filename}/description) are both
-    copied along with it: they describe the notebook's *content* (e.g.
-    "production", "v2", "quarterly churn model"), and the copy starts out
-    as an identical copy of that content, so inheriting them is more
-    useful than the copy silently reading back as untagged/undescribed.
-    Its version history (see GET/POST
+    copied along with it by default: they describe the notebook's
+    *content* (e.g. "production", "v2", "quarterly churn model"), and the
+    copy starts out as an identical copy of that content, so inheriting
+    them is more useful than the copy silently reading back as
+    untagged/undescribed. Optional "tags" (a list of strings, validated
+    the same way PUT /api/notebooks/{filename}/tags' own "tags" already
+    is) and "description" (validated the same way PUT
+    /api/notebooks/{filename}/description's own already is) override
+    that inheritance instead -- e.g. copying a "production" notebook into
+    a scratch variant that shouldn't carry the "production" tag along,
+    without a separate PUT .../tags round trip immediately after this
+    call succeeds. Its version history (see GET/POST
     /api/notebooks/{filename}/versions[/{version_id}[/restore]]) is
     deliberately NOT copied, though -- that history belongs to
     `filename`'s own past overwrites, not to content in the abstract, and
@@ -5726,6 +5733,15 @@ def copy_notebook(filename: str, data: dict):
 
     overwrite = bool(data.get("overwrite", False))
 
+    tags = data.get("tags")
+    normalized_tags = _validate_and_normalize_tags(tags) if tags is not None else None
+
+    description = data.get("description")
+    normalized_description = (
+        _validate_and_normalize_description(description)
+        if description is not None else None
+    )
+
     source_path = resolve_upload_path(filename)
 
     if not source_path.is_file():
@@ -5735,7 +5751,10 @@ def copy_notebook(filename: str, data: dict):
             detail="Notebook file not found"
         )
 
-    new_filename = _copy_notebook_to(source_path, data.get("new_filename"), overwrite)
+    new_filename = _copy_notebook_to(
+        source_path, data.get("new_filename"), overwrite,
+        tags=normalized_tags, description=normalized_description,
+    )
 
     return {
         "status": "success",
@@ -5744,11 +5763,22 @@ def copy_notebook(filename: str, data: dict):
     }
 
 
-def _copy_notebook_to(source_path: Path, new_filename, overwrite: bool, dry_run: bool = False) -> str:
+def _copy_notebook_to(
+    source_path: Path, new_filename, overwrite: bool, dry_run: bool = False,
+    tags=None, description=None,
+) -> str:
     """Copy `source_path` (an already-verified existing notebook file) to
     `new_filename` within UPLOAD_DIR, applying the exact same validation,
     overwrite semantics, and tag inheritance copy_notebook's own
     docstring above documents.
+
+    `tags`/`description` (each optional, already validated/normalized by
+    the caller -- see _validate_and_normalize_tags/
+    _validate_and_normalize_description) override the source's own tags/
+    description on the new copy instead of inheriting them, when given.
+    None (the default, for every caller before this) means "inherit from
+    source", preserving the previous unconditional-inheritance behavior
+    exactly.
 
     Factored out of copy_notebook so POST
     /api/notebooks/{filename}/copy-batch (below) can reuse it once per
@@ -5830,9 +5860,14 @@ def _copy_notebook_to(source_path: Path, new_filename, overwrite: bool, dry_run:
         if dest_versions_dir.exists():
             shutil.rmtree(dest_versions_dir)
 
-        _write_notebook_tags(dest_path.name, _read_notebook_tags(source_path.name))
+        _write_notebook_tags(
+            dest_path.name,
+            tags if tags is not None else _read_notebook_tags(source_path.name),
+        )
         _write_notebook_description(
-            dest_path.name, _read_notebook_description(source_path.name)
+            dest_path.name,
+            description if description is not None
+            else _read_notebook_description(source_path.name),
         )
 
     return new_filename
@@ -5876,7 +5911,13 @@ def copy_notebook_batch(filename: str, data: dict):
 
     "overwrite" applies uniformly to every destination, the same single
     flag POST /api/notebooks/{filename}/copy itself takes -- there's no
-    per-destination override.
+    per-destination override. "tags"/"description" (optional, each
+    validated the same way POST /api/notebooks/{filename}/copy's own
+    identical fields already are) apply uniformly too, the same "one
+    shared value across every destination" reasoning "overwrite" already
+    follows here -- overriding the default inheritance from `filename`
+    for every destination alike, since they all come from the same
+    single source.
 
     "dry_run" (optional, default false) reports the exact same per-
     destination "results" a real batch would -- each destination's own
@@ -5903,6 +5944,15 @@ def copy_notebook_batch(filename: str, data: dict):
     overwrite = bool(data.get("overwrite", False))
     dry_run = bool(data.get("dry_run", False))
 
+    tags = data.get("tags")
+    normalized_tags = _validate_and_normalize_tags(tags) if tags is not None else None
+
+    description = data.get("description")
+    normalized_description = (
+        _validate_and_normalize_description(description)
+        if description is not None else None
+    )
+
     source_path = resolve_upload_path(filename)
 
     if not source_path.is_file():
@@ -5920,7 +5970,10 @@ def copy_notebook_batch(filename: str, data: dict):
 
         try:
 
-            _copy_notebook_to(source_path, new_filename, overwrite, dry_run=dry_run)
+            _copy_notebook_to(
+                source_path, new_filename, overwrite, dry_run=dry_run,
+                tags=normalized_tags, description=normalized_description,
+            )
 
             results.append({
                 "new_filename": new_filename,
@@ -5972,14 +6025,21 @@ def copy_notebooks_batch(data: dict):
     version at once.
 
     Takes "entries", a list of {"filename", "new_filename"} objects (with
-    an optional per-entry "overwrite", default false) -- the same
-    {"filename", ...} shape those three endpoints already establish, plus
-    its own "overwrite" here since, unlike POST
+    an optional per-entry "overwrite", default false, and optional
+    per-entry "tags"/"description") -- the same {"filename", ...} shape
+    those three endpoints already establish, plus its own "overwrite"/
+    "tags"/"description" here since, unlike POST
     /api/notebooks/{filename}/copy-batch's single shared source and
-    single shared "overwrite" applied to every destination alike, each
-    entry here names its own independent source *and* destination, so
-    whether that one destination may already exist is its own entry's own
-    business, not a batch-wide setting.
+    single shared "overwrite"/"tags"/"description" applied to every
+    destination alike, each entry here names its own independent source
+    *and* destination, so whether that one destination may already
+    exist -- and what it should be tagged/described as -- is its own
+    entry's own business, not a batch-wide setting. Each entry's own
+    "tags"/"description" is validated the same way POST
+    /api/notebooks/{filename}/copy's own identical fields already are,
+    with an invalid one reported as that entry's own "error" result
+    rather than aborting the rest of the batch, the same "one bad entry"
+    contract every other per-entry field here already follows.
 
     Reuses _copy_notebook_to (above) -- the exact same validation,
     overwrite semantics, and tag/description inheritance every other
@@ -6044,6 +6104,18 @@ def copy_notebooks_batch(data: dict):
 
         try:
 
+            entry_tags = entry.get("tags")
+            normalized_entry_tags = (
+                _validate_and_normalize_tags(entry_tags)
+                if entry_tags is not None else None
+            )
+
+            entry_description = entry.get("description")
+            normalized_entry_description = (
+                _validate_and_normalize_description(entry_description)
+                if entry_description is not None else None
+            )
+
             source_path = resolve_upload_path(filename)
 
             if not source_path.is_file():
@@ -6053,7 +6125,10 @@ def copy_notebooks_batch(data: dict):
                     detail="Notebook file not found"
                 )
 
-            _copy_notebook_to(source_path, new_filename, overwrite, dry_run=dry_run)
+            _copy_notebook_to(
+                source_path, new_filename, overwrite, dry_run=dry_run,
+                tags=normalized_entry_tags, description=normalized_entry_description,
+            )
 
             results.append({
                 "filename": filename,

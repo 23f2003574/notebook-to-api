@@ -2507,10 +2507,16 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        copy_body = {"new_filename": args.new_filename, "overwrite": args.overwrite}
+        if args.tags:
+            copy_body["tags"] = _parse_comma_separated_names(args.tags)
+        if args.description is not None:
+            copy_body["description"] = args.description
+
         try:
             response = httpx.post(
                 f"{dashboard_url}/api/notebooks/{args.filename}/copy",
-                json={"new_filename": args.new_filename, "overwrite": args.overwrite},
+                json=copy_body,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -2543,6 +2549,10 @@ def _dispatch_core_command(args):
             "new_filenames": args.new_filename,
             "overwrite": args.overwrite,
         }
+        if args.tags:
+            body["tags"] = _parse_comma_separated_names(args.tags)
+        if args.description is not None:
+            body["description"] = args.description
         if args.dry_run:
             body["dry_run"] = True
 
@@ -6682,6 +6692,25 @@ def main():
         )
     )
     copy_parser.add_argument(
+        "--tags",
+        help=(
+            "Comma-separated tags for the new copy, via POST "
+            "/api/notebooks/{filename}/copy's own \"tags\" body field -- "
+            "overrides inheriting the source notebook's own tags, which "
+            "is what happens when this is omitted."
+        )
+    )
+    copy_parser.add_argument(
+        "--description",
+        default=None,
+        help=(
+            "Description for the new copy, via POST "
+            "/api/notebooks/{filename}/copy's own \"description\" body "
+            "field -- overrides inheriting the source notebook's own "
+            "description, which is what happens when this is omitted."
+        )
+    )
+    copy_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -6721,6 +6750,26 @@ def main():
             "/api/notebooks/{filename}/copy-batch's own \"overwrite\": "
             "true -- applies uniformly to every destination, the same "
             "single flag `copy` itself takes for its own one destination."
+        )
+    )
+    copy_batch_parser.add_argument(
+        "--tags",
+        help=(
+            "Comma-separated tags applied uniformly to every new copy, "
+            "via POST /api/notebooks/{filename}/copy-batch's own \"tags\" "
+            "body field -- overrides inheriting the source notebook's "
+            "own tags, which is what happens when this is omitted."
+        )
+    )
+    copy_batch_parser.add_argument(
+        "--description",
+        default=None,
+        help=(
+            "Description applied uniformly to every new copy, via POST "
+            "/api/notebooks/{filename}/copy-batch's own \"description\" "
+            "body field -- overrides inheriting the source notebook's "
+            "own description, which is what happens when this is "
+            "omitted."
         )
     )
     copy_batch_parser.add_argument(
