@@ -12813,6 +12813,42 @@ def test_inspect_reports_dependencies_and_generated_files_after_a_compile():
     assert "requirements.txt" in body["generated_files"]
 
 
+def test_inspect_reports_a_private_directive_marked_function_separately():
+    """A function the notebook itself marks "# notebook-to-api: private"
+    must be reported in its own "private_functions" field, and must never
+    show up in "functions"/"endpoints" -- an actual compile of the same
+    notebook would never generate an endpoint for it either.
+    """
+
+    content = _notebook_bytes(
+        "# notebook-to-api: private\n"
+        "def helper(x: int) -> int:\n    return x\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "inspect_private_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/inspect", json={"notebook_path": "inspect_private_test.ipynb"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["private_functions"] == ["helper"]
+    assert [f["name"] for f in body["functions"]] == ["add"]
+    assert [e["path"] for e in body["endpoints"]] == ["/add"]
+
+
 def test_inspect_reports_reserved_name_conflicts_for_a_colliding_function():
     """/api/inspect is the tool's own "preview what compiling this
     notebook will do" step, but had no idea a function named
@@ -13767,6 +13803,69 @@ def test_app_preview_respects_only_and_exclude():
     app_code = resp.json()["app_code"]
     assert "def add(" in app_code
     assert "def subtract(" not in app_code
+
+
+def test_app_preview_never_exposes_a_private_directive_marked_function():
+
+    content = _notebook_bytes(
+        "# notebook-to-api: private\n"
+        "def helper(x: int) -> int:\n    return x\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "app_preview_private.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post(
+        "/api/app-preview",
+        json={"notebook_path": "app_preview_private.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    app_code = resp.json()["app_code"]
+    assert '"/add"' in app_code
+    assert '"/helper"' not in app_code
+
+
+def test_app_preview_returns_400_for_only_naming_a_private_function():
+
+    content = _notebook_bytes(
+        "# notebook-to-api: private\n"
+        "def helper(x: int) -> int:\n    return x\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "app_preview_private_only.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post(
+        "/api/app-preview",
+        json={
+            "notebook_path": "app_preview_private_only.ipynb",
+            "only": ["helper"],
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "notebook-to-api: private" in resp.json()["detail"]
 
 
 def test_app_preview_does_not_touch_generated_dir(monkeypatch, tmp_path):

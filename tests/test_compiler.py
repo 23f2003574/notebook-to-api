@@ -15,8 +15,10 @@ import nbformat
 import pytest
 
 from backend.compiler import (
+    _drop_private_functions,
     _extract_excluded_imports,
     _extract_explicit_requirements,
+    _extract_private_function_names,
     _filter_functions_by_name,
     clear_stale_export_artifacts,
     COMPILE_LOCK,
@@ -1019,6 +1021,116 @@ def test_filter_functions_by_name_rejects_an_unknown_exclude_name():
         )
 
 
+def test_extract_private_function_names_matches_a_directive_immediately_above_a_def():
+
+    code_cells = [
+        "# notebook-to-api: private\ndef helper(x):\n    return x\n"
+    ]
+
+    assert _extract_private_function_names(code_cells) == {"helper"}
+
+
+def test_extract_private_function_names_tolerates_blank_lines_between_directive_and_def():
+
+    code_cells = [
+        "# notebook-to-api: private\n\n\ndef helper(x):\n    return x\n"
+    ]
+
+    assert _extract_private_function_names(code_cells) == {"helper"}
+
+
+def test_extract_private_function_names_matches_an_async_def():
+
+    code_cells = [
+        "# notebook-to-api: private\nasync def helper(x):\n    return x\n"
+    ]
+
+    assert _extract_private_function_names(code_cells) == {"helper"}
+
+
+def test_extract_private_function_names_ignores_a_directive_with_no_following_def():
+
+    code_cells = [
+        "# notebook-to-api: private\nx = 1\n"
+    ]
+
+    assert _extract_private_function_names(code_cells) == set()
+
+
+def test_extract_private_function_names_ignores_an_unrelated_comment():
+
+    code_cells = [
+        "# just a regular comment\ndef add(a, b):\n    return a + b\n"
+    ]
+
+    assert _extract_private_function_names(code_cells) == set()
+
+
+def test_extract_private_function_names_only_marks_the_function_directly_below():
+
+    code_cells = [
+        "def add(a, b):\n    return a + b\n\n"
+        "# notebook-to-api: private\n"
+        "def helper(x):\n    return x\n"
+    ]
+
+    assert _extract_private_function_names(code_cells) == {"helper"}
+
+
+def test_drop_private_functions_removes_the_marked_function():
+
+    functions = [{"name": "add"}, {"name": "helper"}]
+    code_cells = ["# notebook-to-api: private\ndef helper(x):\n    return x\n"]
+
+    filtered, exclude = _drop_private_functions(functions, code_cells)
+
+    assert [f["name"] for f in filtered] == ["add"]
+    assert exclude is None
+
+
+def test_drop_private_functions_with_no_directive_returns_functions_unchanged():
+
+    functions = [{"name": "add"}]
+    code_cells = ["def add(a, b):\n    return a + b\n"]
+
+    filtered, exclude = _drop_private_functions(functions, code_cells, exclude=["add"])
+
+    assert filtered is functions
+    assert exclude == ["add"]
+
+
+def test_drop_private_functions_rejects_only_naming_a_private_function():
+
+    functions = [{"name": "add"}, {"name": "helper"}]
+    code_cells = ["# notebook-to-api: private\ndef helper(x):\n    return x\n"]
+
+    with pytest.raises(ValueError, match='"# notebook-to-api: private"'):
+        _drop_private_functions(functions, code_cells, only=["helper"])
+
+
+def test_drop_private_functions_treats_exclude_naming_a_private_function_as_a_no_op():
+    """Naming an already-private function via `exclude` is redundant, not
+    an error -- _filter_functions_by_name's own "not defined in this
+    notebook" check would otherwise misfire once the function has
+    already been dropped from `functions` by the time it runs.
+    """
+
+    functions = [{"name": "add"}, {"name": "helper"}]
+    code_cells = ["# notebook-to-api: private\ndef helper(x):\n    return x\n"]
+
+    filtered, exclude = _drop_private_functions(
+        functions, code_cells, exclude=["helper"]
+    )
+
+    assert [f["name"] for f in filtered] == ["add"]
+    assert exclude == []
+
+    # The adjusted exclude must still compose cleanly with
+    # _filter_functions_by_name -- no "not defined" error for a name
+    # that's already gone.
+    assert _filter_functions_by_name(filtered, only=None, exclude=exclude) == filtered
+
+
 def test_compile_notebook_with_only_generates_an_endpoint_for_just_that_function(
     tmp_path
 ):
@@ -1075,6 +1187,65 @@ def test_compile_notebook_with_neither_only_nor_exclude_compiles_every_function(
 
     assert '"/add"' in generated_app
     assert '"/subtract"' in generated_app
+
+
+def test_compile_notebook_never_exposes_a_private_directive_marked_function(tmp_path):
+    """A function marked "# notebook-to-api: private" must never get its
+    own endpoint -- but must still be present and callable in the
+    runtime module, since a caller-exposed function may still call it
+    internally, the same "still present, just not its own endpoint"
+    contract --exclude already provides.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "# notebook-to-api: private\n"
+            "def helper(x: int) -> int:\n"
+            "    return x * 2\n\n"
+            "def add(a: int, b: int) -> int:\n"
+            "    return helper(a) + helper(b)\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    generated_app = (output_dir / "app.py").read_text(encoding="utf-8")
+    runtime_module = (
+        output_dir / "runtime" / "notebook_module.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"/add"' in generated_app
+    assert '"/helper"' not in generated_app
+    assert "def helper(" in runtime_module
+
+
+def test_compile_notebook_only_naming_a_private_function_is_a_clean_error(tmp_path):
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "# notebook-to-api: private\n"
+            "def helper(x: int) -> int:\n"
+            "    return x\n\n"
+            "def add(a: int, b: int) -> int:\n"
+            "    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    with pytest.raises(ValueError, match='"# notebook-to-api: private"'):
+        compile_notebook(str(notebook_path), str(output_dir), only=["helper"])
 
 
 def test_compile_notebook_only_and_exclude_together_is_a_clean_error(tmp_path):

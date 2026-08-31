@@ -455,6 +455,108 @@ def _extract_excluded_imports(code_cells):
     return excluded
 
 
+# Recognizes a "# notebook-to-api: private" comment directive immediately
+# above a function definition (blank lines in between are tolerated, the
+# same way a real editor/formatter might leave one) -- see
+# _extract_private_function_names below for what it's for. Unlike
+# REQUIREMENT_DIRECTIVE_PATTERN/EXCLUDE_DIRECTIVE_PATTERN above, this one
+# is positional: it only matches when directly followed by a "def"/"async
+# def" line, since which function it applies to is the entire point.
+PRIVATE_FUNCTION_DIRECTIVE_PATTERN = re.compile(
+    r"^[ \t]*#\s*notebook-to-api:\s*private\s*$"
+    r"(?:\n[ \t]*\n)*"
+    r"\n[ \t]*(?:async\s+)?def\s+(?P<name>[A-Za-z_]\w*)\s*\(",
+    re.MULTILINE,
+)
+
+
+def _extract_private_function_names(code_cells):
+    """Names of every function `code_cells` marks "# notebook-to-api:
+    private" (immediately above its own `def`/`async def` line, see
+    PRIVATE_FUNCTION_DIRECTIVE_PATTERN above), across all cells.
+
+    _filter_functions_by_name's own docstring already spells out the gap
+    this closes: "Every module-level function a notebook defines ...
+    becomes a public API endpoint, with no previous way to opt any of
+    them out" besides an external --only/--exclude flag a caller has to
+    remember to pass on *every* compile/serve/watch/deploy invocation --
+    renaming a helper doesn't help either, since extract_functions_from_code
+    applies no leading-underscore (or any other) naming convention. A
+    notebook author's own internal helper (data loading, validation,
+    formatting, ...) had no way to declare, once, from inside the
+    notebook itself, that it should never become an endpoint at all.
+
+    Returns a set, the same membership-tested shape _extract_excluded_imports
+    above already returns for an import name, for the identical `name in
+    ...`/`name not in ...` filtering _drop_private_functions below (and
+    every direct caller of this function) already needs.
+    """
+    private_names = set()
+
+    for cell in code_cells:
+
+        for match in PRIVATE_FUNCTION_DIRECTIVE_PATTERN.finditer(cell):
+
+            private_names.add(match.group("name"))
+
+    return private_names
+
+
+def _drop_private_functions(functions, code_cells, only=None, exclude=None):
+    """Drop every function `code_cells` marks private (see
+    _extract_private_function_names above) from `functions` -- shared by
+    every entry point that builds a functions list directly from
+    code_cells (compile_notebook_to_api below, and app_preview_endpoint
+    in routes/upload.py) so a private function is dropped identically
+    everywhere, the same "can't drift" guarantee _filter_functions_by_name's
+    own only/exclude handling already provides. Applied before
+    _filter_functions_by_name itself, which has no access to code_cells
+    (only to the already-extracted `functions` list) and so has no way to
+    know which of them a notebook has marked private on its own.
+
+    Returns (filtered_functions, adjusted_exclude): `exclude` has any
+    already-private name filtered back out, so naming an already-private
+    function via --exclude is the harmless no-op it actually is (the same
+    "redundant is not an error" precedent this project's own sha256/tag
+    filters already follow elsewhere) instead of _filter_functions_by_name's
+    "not defined in this notebook" error, which would otherwise be
+    misleading here -- the function *is* defined, just already excluded
+    by directive.
+
+    Raises ValueError -- the same type _filter_functions_by_name's own
+    unknown-name error already raises -- if `only` explicitly names a
+    private function: unlike `exclude` above, that's a direct
+    contradiction of the notebook's own declared intent, not a redundant
+    no-op, and deserves a clearer, more actionable error than the generic
+    "unknown function name" a caller would otherwise get once the
+    function is silently missing from `functions` altogether.
+    """
+    private_names = _extract_private_function_names(code_cells)
+
+    if not private_names:
+        return functions, exclude
+
+    if only:
+
+        conflicting = sorted(set(only) & private_names)
+
+        if conflicting:
+            raise ValueError(
+                f"Function(s) {', '.join(conflicting)} are marked "
+                '"# notebook-to-api: private" in the notebook and can\'t '
+                "be exposed via only/--only. Remove the directive in the "
+                "notebook to expose them."
+            )
+
+    if exclude:
+        exclude = [name for name in exclude if name not in private_names]
+
+    return (
+        [func for func in functions if func["name"] not in private_names],
+        exclude,
+    )
+
+
 def extract_third_party_imports(code_cells):
     """The raw, STANDARD_LIBS-filtered import names `code_cells` (already
     filtered to parseable cells, as compile_notebook_to_api's own
@@ -869,6 +971,17 @@ def compile_notebook_to_api(
             functions.extend(funcs)
 
         functions = deduplicate_functions_by_name(functions)
+
+        # Dropped before _filter_functions_by_name's own only/exclude
+        # handling, so a function the notebook itself marks
+        # "# notebook-to-api: private" never becomes an endpoint
+        # regardless of --only/--exclude -- see _drop_private_functions'
+        # own docstring for why this needs code_cells (not just the
+        # already-extracted `functions` list) and can't simply live
+        # inside _filter_functions_by_name itself.
+        functions, exclude = _drop_private_functions(
+            functions, code_cells, only, exclude
+        )
 
         # Applied before generate_fastapi_code, and before the reserved-
         # name-collision check it performs, so an --only/--exclude typo is

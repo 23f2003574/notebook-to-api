@@ -6,6 +6,7 @@ from pathlib import Path
 from backend.compiler import (
     COMPILE_METADATA_FILENAME,
     _extract_excluded_imports,
+    _extract_private_function_names,
     _filter_functions_by_name,
     distribution_name_for_import,
     STANDARD_LIBS,
@@ -268,6 +269,19 @@ def inspect_notebook(notebook_path, output_dir="generated"):
 
     all_functions = deduplicate_functions_by_name(all_functions)
 
+    # Same "# notebook-to-api: private" directive compile_notebook_to_api
+    # (backend/compiler.py, via _drop_private_functions) already applies
+    # before generating an app.py -- without this, a function the
+    # notebook itself declares should never become an endpoint would
+    # still be reported here as if compiling would expose it.
+    private_function_names = _extract_private_function_names(code_cells)
+
+    if private_function_names:
+        all_functions = [
+            func for func in all_functions
+            if func["name"] not in private_function_names
+        ]
+
     # Same "# notebook-to-api: exclude <import-name>" directive
     # extract_third_party_imports (backend/compiler.py) already applies
     # before write_requirements pins anything -- without this, an import
@@ -289,6 +303,12 @@ def inspect_notebook(notebook_path, output_dir="generated"):
         print("\n⚠ Reserved Name Conflicts (compilation will fail):")
         print("-" * 20)
         for name in reserved_name_conflicts:
+            print(f"- {name}")
+
+    if private_function_names:
+        print("\nPrivate Functions (never exposed as an endpoint):")
+        print("-" * 20)
+        for name in sorted(private_function_names):
             print(f"- {name}")
 
     if skipped_functions:
@@ -396,6 +416,21 @@ def inspect_notebook_data(
 
     all_functions = deduplicate_functions_by_name(all_functions)
 
+    # See the identical comment in inspect_notebook above -- keeps
+    # "functions"/"endpoints"/"reserved_name_conflicts" below (POST
+    # /api/inspect, POST /api/validate, POST /api/compile's own response,
+    # print_compile_summary, and generate_curl_commands below, which all
+    # read them through this one function) from drifting out of sync
+    # with what compile_notebook_to_api (backend/compiler.py, via
+    # _drop_private_functions) actually exposes.
+    private_function_names = _extract_private_function_names(code_cells)
+
+    if private_function_names:
+        all_functions = [
+            func for func in all_functions
+            if func["name"] not in private_function_names
+        ]
+
     # See the identical comment in inspect_notebook above -- keeps this
     # "dependencies" field (POST /api/inspect, POST /api/validate, POST
     # /api/compile's own response, and print_compile_summary below, which
@@ -413,6 +448,7 @@ def inspect_notebook_data(
         "skipped_functions": _aggregate_skipped_functions(
             code_cells, {func["name"] for func in all_functions}
         ),
+        "private_functions": sorted(private_function_names),
     }
 
 
@@ -464,6 +500,14 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
         )
         for skipped in data["skipped_functions"]:
             print(f"  {skipped['name']}: {skipped['reason']}")
+
+    if data["private_functions"]:
+        print(
+            f"\nPrivate {len(data['private_functions'])} function(s) "
+            "(never exposed as an endpoint):"
+        )
+        for name in data["private_functions"]:
+            print(f"  {name}")
 
 
 def _extract_notebook_functions(notebook_path):

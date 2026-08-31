@@ -34,6 +34,7 @@ from nbformat import ValidationError as NotebookValidationError
 from backend.compiler import (
     COMPILE_LOCK,
     COMPILE_METADATA_FILENAME,
+    _drop_private_functions,
     _extract_explicit_requirements,
     _filter_functions_by_name,
     compile_notebook,
@@ -8435,10 +8436,11 @@ def app_preview_endpoint(data: dict):
     Reuses the exact same function-building steps compile_notebook_to_api
     itself performs, in the same order (extract_code_cells ->
     is_parseable_python filter -> extract_functions_from_code ->
-    deduplicate_functions_by_name -> _filter_functions_by_name via
-    "only"/"exclude" -> generate_fastapi_code), stopping right before its
-    write phase -- so "app_code" here can never drift from what an actual
-    compile of the same notebook (with the same only/exclude) would write
+    deduplicate_functions_by_name -> _drop_private_functions ->
+    _filter_functions_by_name via "only"/"exclude" -> generate_fastapi_code),
+    stopping right before its write phase -- so "app_code" here can never
+    drift from what an actual compile of the same notebook (with the
+    same only/exclude) would write
     to app.py. generate_fastapi_code (backend/generator/api_generator.py)
     is a pure function -- it returns a string and writes nothing to disk
     on its own -- so nothing here ever touches GENERATED_DIR, needs
@@ -8510,6 +8512,10 @@ def app_preview_endpoint(data: dict):
             functions.extend(extract_functions_from_code(cell))
 
         functions = deduplicate_functions_by_name(functions)
+
+        functions, exclude = _drop_private_functions(
+            functions, code_cells, only, exclude
+        )
 
         functions = _filter_functions_by_name(functions, only, exclude)
 

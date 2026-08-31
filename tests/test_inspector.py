@@ -495,6 +495,95 @@ def test_inspect_notebook_report_omits_an_excluded_import(tmp_path, capsys):
     assert "- nbformat" in dependencies_section
 
 
+def test_inspect_notebook_data_omits_a_private_directive_marked_function(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: private\n"
+        "def helper(x: int) -> int:\n    return x\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    assert [f["name"] for f in data["functions"]] == ["add"]
+    assert data["private_functions"] == ["helper"]
+    assert [e["path"] for e in data["endpoints"]] == ["/add"]
+
+
+def test_inspect_notebook_data_private_functions_is_empty_for_a_clean_notebook(
+    tmp_path,
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    assert data["private_functions"] == []
+
+
+def test_inspect_notebook_report_omits_a_private_directive_marked_function(
+    tmp_path, capsys
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: private\n"
+        "def helper(x: int) -> int:\n    return x\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    inspect_notebook(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "Private Functions (never exposed as an endpoint):" in output
+    assert "- helper" in output
+    functions_section = output.split("Functions Found:")[1].split("Dependencies:")[0]
+    assert "helper" not in functions_section
+    assert "add(" in functions_section
+
+
+def test_inspect_notebook_omits_the_private_section_for_a_clean_notebook(
+    tmp_path, capsys
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    inspect_notebook(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "Private Functions" not in output
+
+
+def test_print_compile_summary_omits_a_private_directive_marked_function(
+    tmp_path, capsys
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: private\n"
+        "def helper(x: int) -> int:\n    return x\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    print_compile_summary(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "POST /add" in output
+    assert "POST /helper" not in output
+    assert "Private 1 function(s) (never exposed as an endpoint):" in output
+    assert "  helper" in output
+
+
 def test_inspect_notebook_data_dependencies_resolves_the_actual_distribution_name(
     tmp_path,
 ):
@@ -1273,6 +1362,23 @@ def test_generate_curl_commands_excludes_a_reserved_name_conflict(tmp_path):
     assert len(commands) == 1
     assert "/add" in commands[0]
     assert not any("/health_check" in c for c in commands)
+
+
+def test_generate_curl_commands_excludes_a_private_directive_marked_function(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: private\n"
+        "def helper(x: int) -> int:\n    return x\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    commands = generate_curl_commands(str(notebook_path))
+
+    assert len(commands) == 1
+    assert "/add" in commands[0]
+    assert not any("/helper" in c for c in commands)
 
 
 def test_generate_curl_commands_returns_an_empty_list_for_a_notebook_with_no_functions(
