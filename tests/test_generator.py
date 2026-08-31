@@ -4,9 +4,35 @@ import types
 import pytest
 
 from backend.generator.api_generator import (
+    GENERATED_APP_ENV_VARS,
     generate_fastapi_code,
     ReservedFunctionNameError,
 )
+
+
+def test_generated_app_env_vars_default_matches_the_actual_generated_code():
+    """GENERATED_APP_ENV_VARS (read back by GET /api/env-vars-preview,
+    backend/routes/upload.py) must be the single source of truth
+    generate_fastapi_code's own os.getenv(...) calls are built from --
+    not a second, independently-maintained copy of the same five
+    defaults that could silently drift out of sync with what a compiled
+    app.py actually falls back to.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+    code = generate_fastapi_code(functions)
+
+    assert {entry["name"] for entry in GENERATED_APP_ENV_VARS} == {
+        "NOTEBOOK_API_KEY",
+        "NOTEBOOK_API_ALLOWED_ORIGINS",
+        "NOTEBOOK_API_MAX_REQUEST_BYTES",
+        "NOTEBOOK_API_TASK_TTL_SECONDS",
+        "NOTEBOOK_API_MAX_TASKS",
+    }
+
+    for entry in GENERATED_APP_ENV_VARS:
+        assert f'os.getenv("{entry["name"]}", "{entry["default"]}")' in code
+        assert entry["description"]
 
 
 def _register_fake_notebook_module(monkeypatch, package_name="generated"):

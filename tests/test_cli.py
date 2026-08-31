@@ -9536,6 +9536,98 @@ def test_dockerfile_preview_command_reports_a_clean_error_when_the_dashboard_is_
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_env_vars_preview_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "env-vars-preview" in proc.stdout
+
+
+def test_env_vars_preview_command_prints_each_env_var(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "environment_variables": [
+                {
+                    "name": "NOTEBOOK_API_KEY",
+                    "default": "notebook-to-api-dev-key",
+                    "description": "Accepted X-API-Key values.",
+                },
+                {
+                    "name": "NOTEBOOK_API_MAX_TASKS",
+                    "default": "10000",
+                    "description": "Maximum pending background tasks.",
+                },
+            ],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["env-vars-preview", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "NOTEBOOK_API_KEY (default: 'notebook-to-api-dev-key')" in proc.stdout
+    assert "Accepted X-API-Key values." in proc.stdout
+    assert "NOTEBOOK_API_MAX_TASKS (default: '10000')" in proc.stdout
+    assert "Maximum pending background tasks." in proc.stdout
+    assert handler.requests == ["/api/env-vars-preview"]
+
+
+def test_env_vars_preview_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "environment_variables": [
+            {
+                "name": "NOTEBOOK_API_KEY",
+                "default": "notebook-to-api-dev-key",
+                "description": "Accepted X-API-Key values.",
+            },
+        ],
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["env-vars-preview", "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_env_vars_preview_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "env-vars-preview",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_remote_build_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

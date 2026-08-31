@@ -348,7 +348,7 @@ _CORE_COMMANDS = frozenset({
     "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
     "status", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
-    "remote-curl", "app-preview", "dockerfile-preview",
+    "remote-curl", "app-preview", "dockerfile-preview", "env-vars-preview",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -3426,6 +3426,37 @@ def _dispatch_core_command(args):
             print(data.get("dockerfile", ""))
             print(".dockerignore:\n")
             print(data.get("dockerignore", ""))
+    elif args.command == "env-vars-preview":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/env-vars-preview",
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"Environment variables recognized by a compiled app on {dashboard_url}:\n")
+            for env_var in data.get("environment_variables", []):
+                print(f"{env_var['name']} (default: {env_var['default']!r})")
+                print(f"  {env_var['description']}\n")
     elif args.command == "remote-build":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -7162,6 +7193,33 @@ def main():
             "\"package_name\", \"compiling_python_version\", "
             "\"dockerfile\", \"dockerignore\"}) instead of a "
             "human-readable preview, for scripting/automation."
+        )
+    )
+
+    # env-vars-preview command (preview the environment variables a
+    # compiled app on a running dashboard would recognize, via its own
+    # GET /api/env-vars-preview -- like dockerfile-preview above, takes
+    # no notebook argument at all: none of these vary by notebook, only
+    # by generate_fastapi_code's own fixed GENERATED_APP_ENV_VARS)
+    env_vars_preview_parser = subparsers.add_parser(
+        "env-vars-preview",
+        help=(
+            "Preview the environment variables a compiled app on a "
+            "running dashboard would recognize (name, default, and what "
+            "it controls), via its GET /api/env-vars-preview -- without "
+            "compiling anything."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(env_vars_preview_parser)
+    env_vars_preview_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"environment_variables\": [{\"name\", \"default\", "
+            "\"description\"}, ...]}) instead of a human-readable "
+            "preview, for scripting/automation."
         )
     )
 

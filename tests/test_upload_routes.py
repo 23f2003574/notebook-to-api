@@ -14021,6 +14021,88 @@ def test_dockerfile_preview_does_not_touch_generated_dir(monkeypatch, tmp_path):
     assert not generated_dir.exists()
 
 
+def test_env_vars_preview_requires_no_notebook_and_needs_no_body():
+
+    resp = client.get("/api/env-vars-preview")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+
+    env_vars = {entry["name"]: entry for entry in body["environment_variables"]}
+    assert set(env_vars) == {
+        "NOTEBOOK_API_KEY",
+        "NOTEBOOK_API_ALLOWED_ORIGINS",
+        "NOTEBOOK_API_MAX_REQUEST_BYTES",
+        "NOTEBOOK_API_TASK_TTL_SECONDS",
+        "NOTEBOOK_API_MAX_TASKS",
+    }
+    assert env_vars["NOTEBOOK_API_KEY"]["default"] == "notebook-to-api-dev-key"
+    assert env_vars["NOTEBOOK_API_ALLOWED_ORIGINS"]["default"] == "*"
+    assert env_vars["NOTEBOOK_API_MAX_REQUEST_BYTES"]["default"] == str(10 * 1024 * 1024)
+    assert env_vars["NOTEBOOK_API_TASK_TTL_SECONDS"]["default"] == "3600"
+    assert env_vars["NOTEBOOK_API_MAX_TASKS"]["default"] == "10000"
+
+    for entry in body["environment_variables"]:
+        assert entry["description"]
+
+
+def test_env_vars_preview_matches_what_an_actual_compiled_app_reads():
+    """Every default GET /api/env-vars-preview reports for a
+    NOTEBOOK_API_* variable must be the exact same default the actually
+    compiled app.py falls back to when that variable is unset -- both
+    read from generate_fastapi_code's own GENERATED_APP_ENV_VARS, so
+    they can never drift apart.
+    """
+
+    filename = "env_vars_preview_match.ipynb"
+    _upload_sample_notebook(filename)
+
+    preview_body = client.get("/api/env-vars-preview").json()
+    env_vars = {entry["name"]: entry for entry in preview_body["environment_variables"]}
+
+    compile_resp = client.post("/api/compile", json={"notebook_path": filename})
+    assert compile_resp.status_code == 200
+
+    generated_app = client.get("/api/generated/app.py").json()["content"]
+
+    assert (
+        f'os.getenv("NOTEBOOK_API_KEY", "{env_vars["NOTEBOOK_API_KEY"]["default"]}")'
+        in generated_app
+    )
+    assert (
+        'os.getenv("NOTEBOOK_API_ALLOWED_ORIGINS", '
+        f'"{env_vars["NOTEBOOK_API_ALLOWED_ORIGINS"]["default"]}")'
+        in generated_app
+    )
+    assert (
+        'os.getenv("NOTEBOOK_API_MAX_REQUEST_BYTES", '
+        f'"{env_vars["NOTEBOOK_API_MAX_REQUEST_BYTES"]["default"]}")'
+        in generated_app
+    )
+    assert (
+        'os.getenv("NOTEBOOK_API_TASK_TTL_SECONDS", '
+        f'"{env_vars["NOTEBOOK_API_TASK_TTL_SECONDS"]["default"]}")'
+        in generated_app
+    )
+    assert (
+        'os.getenv("NOTEBOOK_API_MAX_TASKS", '
+        f'"{env_vars["NOTEBOOK_API_MAX_TASKS"]["default"]}")'
+        in generated_app
+    )
+
+
+def test_env_vars_preview_does_not_touch_generated_dir(monkeypatch, tmp_path):
+
+    generated_dir = tmp_path / "env_vars_preview_no_side_effects"
+    monkeypatch.setattr("backend.routes.upload.GENERATED_DIR", str(generated_dir))
+
+    resp = client.get("/api/env-vars-preview")
+
+    assert resp.status_code == 200
+    assert not generated_dir.exists()
+
+
 def test_inspect_reports_endpoints_and_flags_background_ones_before_compiling():
     """Mirrors test_compile_endpoints_flag_background_functions_as_async
     above, but for /api/inspect: before this fix, that classification was

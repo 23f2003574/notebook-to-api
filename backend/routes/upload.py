@@ -40,6 +40,7 @@ from backend.compiler import (
     update_compile_metadata_source_notebook,
 )
 from backend.generator.api_generator import (
+    GENERATED_APP_ENV_VARS,
     ReservedFunctionNameError,
     generate_fastapi_code,
 )
@@ -8387,6 +8388,56 @@ def dockerfile_preview_endpoint():
         "compiling_python_version": python_version,
         "dockerfile": dockerfile_content(package_name, python_version),
         "dockerignore": dockerignore_content(),
+    }
+
+
+@router.get("/env-vars-preview")
+def env_vars_preview_endpoint():
+    """Every environment variable a compiled app itself recognizes to
+    configure a runtime limit or credential -- name, default value, and
+    what it controls -- without compiling anything, or touching
+    GENERATED_DIR at all.
+
+    generate_fastapi_code (backend/generator/api_generator.py) embeds five
+    of these (NOTEBOOK_API_KEY, NOTEBOOK_API_ALLOWED_ORIGINS,
+    NOTEBOOK_API_MAX_REQUEST_BYTES, NOTEBOOK_API_TASK_TTL_SECONDS,
+    NOTEBOOK_API_MAX_TASKS) as os.getenv(...) calls directly into every
+    compiled app.py -- but, unlike this dashboard's own equivalent limits
+    (see GET /api/config), nothing ever surfaced what they even are short
+    of reading the generated app.py's own source (or this generator's)
+    line by line. An operator writing a docker-compose.yml, a Kubernetes
+    manifest, or a plain .env file for a notebook they didn't compile
+    themselves -- and have no reason to have read either file -- had no
+    way to discover any of this except by trial and error against a
+    running deploy.
+
+    Like GET /api/dockerfile-preview (whose own Dockerfile similarly never
+    varies by notebook), takes no notebook_path: none of these five
+    depends on which notebook is compiled, only on generate_fastapi_code's
+    own fixed GENERATED_APP_ENV_VARS -- so this is a plain no-argument GET,
+    and its own response would be identical whether or not any notebook
+    has ever been compiled on this dashboard at all.
+
+    Reuses GENERATED_APP_ENV_VARS (backend/generator/api_generator.py)
+    directly -- the exact same list codegen itself now builds every one of
+    its own os.getenv(name, default) calls from (see
+    _generated_app_env_var_default there) -- so "environment_variables"
+    below can never drift from what a real compile's own app.py would
+    actually read, the same "can't drift from the real thing" guarantee
+    GET /api/dockerfile-preview's own docstring already gives for its
+    artifact.
+
+    Deliberately omits $PORT: unlike the five above, it's read by the
+    Dockerfile's own CMD/HEALTHCHECK (see dockerfile_content, backend/
+    generator/docker_generator.py), never by the compiled app.py itself --
+    already visible in GET /api/dockerfile-preview's own "dockerfile"
+    field, so repeating it here would just be a second, driftable copy of
+    the same fact.
+    """
+
+    return {
+        "status": "success",
+        "environment_variables": GENERATED_APP_ENV_VARS,
     }
 
 

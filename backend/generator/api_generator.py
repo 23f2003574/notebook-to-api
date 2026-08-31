@@ -57,6 +57,78 @@ LONG_RUNNING_KEYWORDS = [
     "scrape",
 ]
 
+# Every environment variable the generated app itself reads to configure a
+# runtime limit or credential -- one single source of truth codegen below
+# builds its own os.getenv(name, default) calls from (see
+# _generated_app_env_var_default), so GET /api/env-vars-preview
+# (routes/upload.py) can never drift from what a real compile's own
+# app.py would actually read, the same "can't drift from the real thing"
+# guarantee dockerfile_content/dockerignore_content (backend/generator/
+# docker_generator.py) already provide for their own artifact.
+GENERATED_APP_ENV_VARS = [
+    {
+        "name": "NOTEBOOK_API_KEY",
+        "default": "notebook-to-api-dev-key",
+        "description": (
+            "Comma-separated list of API keys accepted on the X-API-Key "
+            "header every generated endpoint requires (see "
+            "verify_api_key) -- a list, not a single value, so a key can "
+            "be rotated with zero downtime: add the new key alongside "
+            "the old one, restart, let clients switch over, then remove "
+            "the old key and restart again."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_ALLOWED_ORIGINS",
+        "default": "*",
+        "description": (
+            "Comma-separated list of origins allowed to call this API "
+            "from a browser (CORSMiddleware's own allow_origins). "
+            "Unset, every origin is allowed -- safe here since every "
+            "request is authenticated via X-API-Key, never a cookie."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_MAX_REQUEST_BYTES",
+        "default": str(10 * 1024 * 1024),
+        "description": (
+            "Maximum accepted request body size in bytes -- a request "
+            "declaring a larger Content-Length is rejected with 413 "
+            "before its body is even read."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_TASK_TTL_SECONDS",
+        "default": "3600",
+        "description": (
+            "How long a background task's own result stays in TASKS "
+            "after completing/failing before it's evicted."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_MAX_TASKS",
+        "default": "10000",
+        "description": (
+            "Maximum number of background tasks pending at once -- a "
+            "new one submitted while at this limit is rejected with 503 "
+            "until some already-tracked tasks are evicted."
+        ),
+    },
+]
+
+
+def _generated_app_env_var_default(name):
+    """The default value GENERATED_APP_ENV_VARS declares for `name`,
+    embedded into the matching os.getenv(name, default) call generated
+    below -- see GENERATED_APP_ENV_VARS' own docstring for why codegen
+    reads it from there instead of repeating the literal a second time.
+    """
+    return next(
+        entry["default"] for entry in GENERATED_APP_ENV_VARS
+        if entry["name"] == name
+    )
+
+
 def _call_arg_expr(arg):
     """Render a single argument for the notebook_module.<fn>(...) call.
 
@@ -263,7 +335,8 @@ def generate_fastapi_code(functions, package_name="generated"):
     lines.append(
         'ALLOWED_ORIGINS = ['
         'o.strip() for o in os.getenv('
-        '"NOTEBOOK_API_ALLOWED_ORIGINS", "*"'
+        '"NOTEBOOK_API_ALLOWED_ORIGINS", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_ALLOWED_ORIGINS")}"'
         ').split(",") if o.strip()'
         '] or ["*"]'
     )
@@ -293,7 +366,7 @@ def generate_fastapi_code(functions, package_name="generated"):
     lines.append(
         'MAX_REQUEST_BODY_BYTES = int(os.getenv('
         '"NOTEBOOK_API_MAX_REQUEST_BYTES", '
-        f'"{10 * 1024 * 1024}"'
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_MAX_REQUEST_BYTES")}"'
         '))'
     )
     lines.append("")
@@ -332,7 +405,7 @@ def generate_fastapi_code(functions, package_name="generated"):
     lines.append(
         'TASK_TTL_SECONDS = int(os.getenv('
         '"NOTEBOOK_API_TASK_TTL_SECONDS", '
-        '"3600"'
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_TASK_TTL_SECONDS")}"'
         '))'
     )
     # _evict_expired_tasks bounds TASKS' *long-term* growth (nothing
@@ -348,7 +421,7 @@ def generate_fastapi_code(functions, package_name="generated"):
     lines.append(
         'MAX_PENDING_TASKS = int(os.getenv('
         '"NOTEBOOK_API_MAX_TASKS", '
-        '"10000"'
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_MAX_TASKS")}"'
         '))'
     )
     lines.append(
@@ -367,7 +440,7 @@ def generate_fastapi_code(functions, package_name="generated"):
         'API_KEYS = tuple('
         'k.strip() for k in os.getenv('
         '"NOTEBOOK_API_KEY", '
-        '"notebook-to-api-dev-key"'
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_KEY")}"'
         ').split(",") if k.strip()'
         ')'
     )
