@@ -28,6 +28,7 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
         "NOTEBOOK_API_MAX_REQUEST_BYTES",
         "NOTEBOOK_API_TASK_TTL_SECONDS",
         "NOTEBOOK_API_MAX_TASKS",
+        "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE",
     }
 
     for entry in GENERATED_APP_ENV_VARS:

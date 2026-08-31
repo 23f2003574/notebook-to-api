@@ -3694,6 +3694,171 @@ print("API_KEY_ROTATION_E2E_OK")
     assert "API_KEY_ROTATION_E2E_OK" in proc.stdout
 
 
+def test_compiler_pipeline_rate_limiting_disabled_by_default(tmp_path):
+    """NOTEBOOK_API_RATE_LIMIT_PER_MINUTE defaults to "0", which must
+    mean unlimited (the previous, pre-rate-limiting behavior) rather than
+    "zero requests allowed" -- a request volume well past any real
+    per-minute limit still succeeds every time, and /auth/info reports
+    the feature as off.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n"
+                            "    return a + b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+payload = {{"a": 1, "b": 2}}
+
+for _ in range(25):
+    resp = client.post("/add", json=payload, headers=headers)
+    assert resp.status_code == 200, resp.text
+
+info = client.get("/auth/info").json()
+assert info["rate_limiting"] is False, info
+assert info["rate_limit_per_minute"] is None, info
+
+print("RATE_LIMIT_DISABLED_BY_DEFAULT_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "RATE_LIMIT_DISABLED_BY_DEFAULT_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_rate_limit_returns_429_once_exceeded(tmp_path):
+    """NOTEBOOK_API_RATE_LIMIT_PER_MINUTE, once set, caps how many
+    requests a single API key may make per rolling 60s window -- the
+    (N+1)th request within the window must be rejected with 429 and a
+    Retry-After header, while a *different* key's own window is
+    unaffected (tracked independently per key, not globally).
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n"
+                            "    return a + b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import os
+import sys
+
+os.environ["NOTEBOOK_API_KEY"] = "key-a, key-b"
+os.environ["NOTEBOOK_API_RATE_LIMIT_PER_MINUTE"] = "2"
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+payload = {{"a": 1, "b": 2}}
+headers_a = {{"X-API-Key": "key-a"}}
+headers_b = {{"X-API-Key": "key-b"}}
+
+first = client.post("/add", json=payload, headers=headers_a)
+assert first.status_code == 200, first.text
+
+second = client.post("/add", json=payload, headers=headers_a)
+assert second.status_code == 200, second.text
+
+third = client.post("/add", json=payload, headers=headers_a)
+assert third.status_code == 429, third.text
+assert "Retry-After" in third.headers, third.headers
+assert int(third.headers["Retry-After"]) >= 1, third.headers
+
+other_key = client.post("/add", json=payload, headers=headers_b)
+assert other_key.status_code == 200, other_key.text
+
+info = client.get("/auth/info").json()
+assert info["rate_limiting"] is True, info
+assert info["rate_limit_per_minute"] == 2, info
+
+print("RATE_LIMIT_429_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "RATE_LIMIT_429_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_typing_generic_and_enum_params_work_end_to_end(tmp_path):
     """Confirmed exploitable before this fix: a parameter typed with a
     typing-module generic (List[float], Optional[str], Dict[str, Any]) or

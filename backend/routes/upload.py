@@ -8398,21 +8398,21 @@ def env_vars_preview_endpoint():
     what it controls -- without compiling anything, or touching
     GENERATED_DIR at all.
 
-    generate_fastapi_code (backend/generator/api_generator.py) embeds five
+    generate_fastapi_code (backend/generator/api_generator.py) embeds six
     of these (NOTEBOOK_API_KEY, NOTEBOOK_API_ALLOWED_ORIGINS,
     NOTEBOOK_API_MAX_REQUEST_BYTES, NOTEBOOK_API_TASK_TTL_SECONDS,
-    NOTEBOOK_API_MAX_TASKS) as os.getenv(...) calls directly into every
-    compiled app.py -- but, unlike this dashboard's own equivalent limits
-    (see GET /api/config), nothing ever surfaced what they even are short
-    of reading the generated app.py's own source (or this generator's)
-    line by line. An operator writing a docker-compose.yml, a Kubernetes
-    manifest, or a plain .env file for a notebook they didn't compile
-    themselves -- and have no reason to have read either file -- had no
-    way to discover any of this except by trial and error against a
-    running deploy.
+    NOTEBOOK_API_MAX_TASKS, NOTEBOOK_API_RATE_LIMIT_PER_MINUTE) as
+    os.getenv(...) calls directly into every compiled app.py -- but,
+    unlike this dashboard's own equivalent limits (see GET /api/config),
+    nothing ever surfaced what they even are short of reading the
+    generated app.py's own source (or this generator's) line by line. An
+    operator writing a docker-compose.yml, a Kubernetes manifest, or a
+    plain .env file for a notebook they didn't compile themselves -- and
+    have no reason to have read either file -- had no way to discover any
+    of this except by trial and error against a running deploy.
 
     Like GET /api/dockerfile-preview (whose own Dockerfile similarly never
-    varies by notebook), takes no notebook_path: none of these five
+    varies by notebook), takes no notebook_path: none of these six
     depends on which notebook is compiled, only on generate_fastapi_code's
     own fixed GENERATED_APP_ENV_VARS -- so this is a plain no-argument GET,
     and its own response would be identical whether or not any notebook
@@ -8427,7 +8427,7 @@ def env_vars_preview_endpoint():
     GET /api/dockerfile-preview's own docstring already gives for its
     artifact.
 
-    Deliberately omits $PORT: unlike the five above, it's read by the
+    Deliberately omits $PORT: unlike the six above, it's read by the
     Dockerfile's own CMD/HEALTHCHECK (see dockerfile_content, backend/
     generator/docker_generator.py), never by the compiled app.py itself --
     already visible in GET /api/dockerfile-preview's own "dockerfile"

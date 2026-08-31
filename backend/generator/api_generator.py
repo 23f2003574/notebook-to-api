@@ -114,6 +114,18 @@ GENERATED_APP_ENV_VARS = [
             "until some already-tracked tasks are evicted."
         ),
     },
+    {
+        "name": "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE",
+        "default": "0",
+        "description": (
+            "Maximum requests a single API key may make per rolling "
+            "60-second window before being rejected with 429 (and a "
+            "Retry-After header). Tracked independently per configured "
+            "key, so one key being throttled never affects another. 0 "
+            "(the default) disables rate limiting entirely, preserving "
+            "the previous unbounded behavior."
+        ),
+    },
 ]
 
 
@@ -446,6 +458,55 @@ def generate_fastapi_code(functions, package_name="generated"):
     )
     lines.append("API_KEY_HEADER_NAME = 'X-API-Key'")
     lines.append("")
+    # Tracked per API key (not globally, and not per-IP): a shared global
+    # counter would let one heavy, legitimate key starve every other
+    # key's own quota, and this app has no reliable notion of client
+    # identity below the API key layer anyway (a proxy/load balancer in
+    # front of it can make every request appear to come from the same
+    # IP). API_KEYS is a small, fixed set fully known at startup, so
+    # _RATE_LIMIT_WINDOWS below never grows past len(API_KEYS) entries --
+    # unlike TASKS (which needs its own TTL-based eviction above), a
+    # matching eviction scheme isn't needed here.
+    lines.append(
+        'RATE_LIMIT_PER_MINUTE = int(os.getenv('
+        '"NOTEBOOK_API_RATE_LIMIT_PER_MINUTE", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_RATE_LIMIT_PER_MINUTE")}"'
+        '))'
+    )
+    lines.append("RATE_LIMIT_WINDOW_SECONDS = 60")
+    lines.append("_RATE_LIMIT_WINDOWS = {}")
+    lines.append("")
+    lines.append("def _enforce_rate_limit(api_key):")
+    lines.append("    # RATE_LIMIT_PER_MINUTE <= 0 (the default) means rate")
+    lines.append("    # limiting is disabled entirely -- no window is even")
+    lines.append("    # tracked, so this is a no-op on the hot path for every")
+    lines.append("    # deployment that never opts into it.")
+    lines.append("    if RATE_LIMIT_PER_MINUTE <= 0:")
+    lines.append("        return")
+    lines.append("    now = time.time()")
+    lines.append("    window_start, count = _RATE_LIMIT_WINDOWS.get(api_key, (now, 0))")
+    lines.append("    # Fixed window, not sliding: once RATE_LIMIT_WINDOW_SECONDS")
+    lines.append("    # has elapsed since this key's window opened, it resets to a")
+    lines.append("    # fresh window rather than decaying the count gradually --")
+    lines.append("    # the same lazy, no-background-thread eviction style")
+    lines.append("    # _evict_expired_tasks above already uses for TASKS.")
+    lines.append("    if now - window_start >= RATE_LIMIT_WINDOW_SECONDS:")
+    lines.append("        window_start, count = now, 0")
+    lines.append("    count += 1")
+    lines.append("    _RATE_LIMIT_WINDOWS[api_key] = (window_start, count)")
+    lines.append("    if count > RATE_LIMIT_PER_MINUTE:")
+    lines.append("        retry_after = max(")
+    lines.append("            1, int(RATE_LIMIT_WINDOW_SECONDS - (now - window_start))")
+    lines.append("        )")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=429,")
+    lines.append("            detail=(")
+    lines.append("                f'Rate limit exceeded: {RATE_LIMIT_PER_MINUTE} '")
+    lines.append("                f'requests per {RATE_LIMIT_WINDOW_SECONDS}s per API key'")
+    lines.append("            ),")
+    lines.append("            headers={'Retry-After': str(retry_after)},")
+    lines.append("        )")
+    lines.append("")
     lines.append("def _evict_expired_tasks():")
     lines.append("    # TASKS is an in-memory dict with no automatic eviction anywhere")
     lines.append("    # else in this app -- without this, a long-running deployment")
@@ -480,6 +541,14 @@ def generate_fastapi_code(functions, package_name="generated"):
     lines.append("            status_code=401,")
     lines.append("            detail='Invalid API key'")
     lines.append("        )")
+    lines.append("    # Rate limiting only ever applies once a request has already")
+    lines.append("    # authenticated as a specific key -- an invalid/missing key")
+    lines.append("    # already gets rejected with 401 above, before it could consume")
+    lines.append("    # any key's own quota. x_api_key itself (not a separately")
+    lines.append("    # re-matched entry from API_KEYS) is the right identity to key")
+    lines.append("    # on: the any(...) check above already proved it's exactly")
+    lines.append("    # equal to one of them.")
+    lines.append("    _enforce_rate_limit(x_api_key)")
     lines.append("")
     lines.append("from fastapi.openapi.utils import get_openapi")
     lines.append("")
@@ -649,7 +718,8 @@ def generate_fastapi_code(functions, package_name="generated"):
     lines.append("        'authentication': 'api_key',")
     lines.append("        'header': API_KEY_HEADER_NAME,")
     lines.append("        'environment_variable': 'NOTEBOOK_API_KEY',")
-    lines.append("        'rate_limiting': False,")
+    lines.append("        'rate_limiting': RATE_LIMIT_PER_MINUTE > 0,")
+    lines.append("        'rate_limit_per_minute': RATE_LIMIT_PER_MINUTE or None,")
     lines.append("        'key_rotation': True,")
     lines.append("        'configured_keys': len(API_KEYS),")
     lines.append(

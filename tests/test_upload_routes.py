@@ -14036,12 +14036,14 @@ def test_env_vars_preview_requires_no_notebook_and_needs_no_body():
         "NOTEBOOK_API_MAX_REQUEST_BYTES",
         "NOTEBOOK_API_TASK_TTL_SECONDS",
         "NOTEBOOK_API_MAX_TASKS",
+        "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE",
     }
     assert env_vars["NOTEBOOK_API_KEY"]["default"] == "notebook-to-api-dev-key"
     assert env_vars["NOTEBOOK_API_ALLOWED_ORIGINS"]["default"] == "*"
     assert env_vars["NOTEBOOK_API_MAX_REQUEST_BYTES"]["default"] == str(10 * 1024 * 1024)
     assert env_vars["NOTEBOOK_API_TASK_TTL_SECONDS"]["default"] == "3600"
     assert env_vars["NOTEBOOK_API_MAX_TASKS"]["default"] == "10000"
+    assert env_vars["NOTEBOOK_API_RATE_LIMIT_PER_MINUTE"]["default"] == "0"
 
     for entry in body["environment_variables"]:
         assert entry["description"]
