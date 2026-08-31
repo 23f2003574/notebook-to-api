@@ -348,7 +348,7 @@ _CORE_COMMANDS = frozenset({
     "remote-compile", "remote-build",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
     "status", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
-    "remote-curl", "app-preview", "dockerfile-preview", "env-vars-preview",
+    "remote-curl", "app-preview", "dockerfile-preview", "docker-compose-preview", "env-vars-preview",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -3476,6 +3476,38 @@ def _dispatch_core_command(args):
             print(data.get("dockerfile", ""))
             print(".dockerignore:\n")
             print(data.get("dockerignore", ""))
+    elif args.command == "docker-compose-preview":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/docker-compose-preview",
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            print(
+                f"docker-compose.yml preview for {dashboard_url} "
+                f"(package '{data.get('package_name')}'):\n"
+            )
+            print(data.get("docker_compose", ""))
     elif args.command == "env-vars-preview":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -7332,6 +7364,31 @@ def main():
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"package_name\", \"compiling_python_version\", "
             "\"dockerfile\", \"dockerignore\"}) instead of a "
+            "human-readable preview, for scripting/automation."
+        )
+    )
+
+    # docker-compose-preview command (preview the docker-compose.yml a
+    # compile on a running dashboard would produce, via its own GET
+    # /api/docker-compose-preview -- takes no notebook argument, the same
+    # reason dockerfile-preview above doesn't: neither the Dockerfile nor
+    # this varies by notebook)
+    docker_compose_preview_parser = subparsers.add_parser(
+        "docker-compose-preview",
+        help=(
+            "Preview the exact docker-compose.yml a compile on a running "
+            "dashboard would produce, via its GET "
+            "/api/docker-compose-preview -- without compiling anything."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(docker_compose_preview_parser)
+    docker_compose_preview_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"package_name\", \"docker_compose\"}) instead of a "
             "human-readable preview, for scripting/automation."
         )
     )

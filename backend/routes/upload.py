@@ -52,6 +52,7 @@ from backend.generator.api_generator import (
 from backend.generator.docker_generator import (
     dockerfile_content,
     dockerignore_content,
+    docker_compose_content,
 )
 from backend.inspector import (
     EXCLUDED_GENERATED_DIR_NAMES,
@@ -8749,6 +8750,45 @@ def dockerfile_preview_endpoint():
         "compiling_python_version": python_version,
         "dockerfile": dockerfile_content(package_name, python_version),
         "dockerignore": dockerignore_content(),
+    }
+
+
+@router.get("/docker-compose-preview")
+def docker_compose_preview_endpoint():
+    """The exact docker-compose.yml text POST /api/compile now also
+    writes into GENERATED_DIR on every compile (alongside the Dockerfile/
+    .dockerignore) -- without actually compiling anything, or touching
+    GENERATED_DIR at all.
+
+    Like GET /api/dockerfile-preview above (whose own Dockerfile
+    similarly never varies by notebook), takes no notebook_path:
+    docker_compose_content only ever depends on this dashboard's own
+    fixed "package_name" (the same package_name_for_output_dir(
+    GENERATED_DIR) GET /api/dockerfile-preview already reuses) and
+    GENERATED_APP_ENV_VARS (backend/generator/api_generator.py) -- never
+    on which notebook is being compiled.
+
+    Reuses docker_compose_content directly -- the same pure string-
+    building helper generate_docker_compose itself now calls before ever
+    touching disk -- so "docker_compose" below can never drift from what
+    an actual compile writes to GENERATED_DIR/docker-compose.yml, the
+    same "can't drift from the real thing" guarantee GET
+    /api/dockerfile-preview/GET /api/env-vars-preview already provide for
+    their own artifacts. Passing GENERATED_APP_ENV_VARS straight through
+    also means this response's own "environment:" list is exactly what
+    GET /api/env-vars-preview already reports back, just rendered as a
+    ready-to-use compose file instead of a name/default/description list
+    a caller would otherwise have to transcribe into one by hand.
+    """
+
+    package_name = package_name_for_output_dir(GENERATED_DIR)
+
+    return {
+        "status": "success",
+        "package_name": package_name,
+        "docker_compose": docker_compose_content(
+            package_name, GENERATED_APP_ENV_VARS
+        ),
     }
 
 

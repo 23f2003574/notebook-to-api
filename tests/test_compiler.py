@@ -28,7 +28,12 @@ from backend.compiler import (
     STANDARD_LIBS,
     THIS_TOOLS_OWN_PACKAGE_NAME,
 )
-from backend.generator.docker_generator import generate_dockerfile, generate_dockerignore
+from backend.generator.docker_generator import (
+    docker_compose_content,
+    generate_dockerfile,
+    generate_dockerignore,
+    generate_docker_compose,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -443,6 +448,130 @@ def test_generate_dockerignore_excludes_compile_metadata(tmp_path):
     assert ".compile_metadata.json" in dockerignore
 
 
+def test_generate_dockerignore_excludes_docker_compose(tmp_path):
+    """docker-compose.yml (generate_docker_compose, backend/generator/
+    docker_generator.py) is now written into the same output directory
+    as the compiled app on every compile too -- a purely local-dev/
+    deploy-tooling convenience file the running app never reads at
+    runtime, the identical "never read by the app, so it shouldn't ship
+    in the image" reasoning this .dockerignore already applies to
+    openapi.json/openapi.yaml/sdk/.
+    """
+
+    output_path = tmp_path / ".dockerignore"
+
+    generate_dockerignore(str(output_path))
+
+    dockerignore = output_path.read_text(encoding="utf-8")
+    assert "docker-compose.yml" in dockerignore
+
+
+def test_docker_compose_content_matches_generate_docker_composes_own_output(tmp_path):
+    """docker_compose_content is the pure string generate_docker_compose
+    itself writes to disk -- see dockerfile_content's own docstring for
+    why this split exists. Confirms the two can't drift apart, the same
+    "preview matches the real write" guarantee already covered for
+    dockerfile_content/generate_dockerfile above.
+    """
+
+    env_vars = [
+        {"name": "NOTEBOOK_API_KEY", "default": "dev-key", "description": "..."},
+    ]
+
+    output_path = tmp_path / "docker-compose.yml"
+
+    generate_docker_compose(str(output_path), "myapp", env_vars)
+
+    assert (
+        output_path.read_text(encoding="utf-8")
+        == docker_compose_content("myapp", env_vars)
+    )
+
+
+def test_docker_compose_content_uses_the_given_package_name_as_the_service_name():
+
+    content = docker_compose_content("myapp", [])
+
+    assert "services:" in content
+    assert "  myapp:" in content
+    assert "    build: ." in content
+
+
+def test_docker_compose_content_maps_port_on_both_sides_via_the_port_env_var():
+    """The Dockerfile's own CMD/HEALTHCHECK bind/probe whatever $PORT is
+    set to at container start (see dockerfile_content above) -- the
+    compose file's own port mapping must track the exact same variable
+    on *both* sides (host and container), or a caller overriding $PORT
+    would map traffic to a container port the app never actually bound
+    to.
+    """
+
+    content = docker_compose_content("generated", [])
+
+    assert '"${PORT:-8000}:${PORT:-8000}"' in content
+    assert "PORT=${PORT:-8000}" in content
+
+
+def test_docker_compose_content_lists_every_env_var_with_its_own_default():
+
+    env_vars = [
+        {"name": "NOTEBOOK_API_KEY", "default": "dev-key", "description": "..."},
+        {"name": "NOTEBOOK_API_MAX_TASKS", "default": "10000", "description": "..."},
+    ]
+
+    content = docker_compose_content("generated", env_vars)
+
+    assert "NOTEBOOK_API_KEY=${NOTEBOOK_API_KEY:-dev-key}" in content
+    assert "NOTEBOOK_API_MAX_TASKS=${NOTEBOOK_API_MAX_TASKS:-10000}" in content
+
+
+def test_docker_compose_content_with_no_env_vars_still_maps_port():
+    """An empty env_vars list (or None) must still produce a valid,
+    usable compose file -- just with nothing beyond PORT in its own
+    "environment:" section -- rather than a malformed file missing the
+    "environment:" key's own required list entirely.
+    """
+
+    content = docker_compose_content("generated", [])
+
+    assert "environment:\n      - PORT=${PORT:-8000}\n" in content
+
+    content_none = docker_compose_content("generated", None)
+
+    assert content_none == content
+
+
+def test_compiler_pipeline_generates_a_docker_compose_file(tmp_path):
+    """Confirmed missing before this feature: a compiled app had a
+    Dockerfile but nothing to actually run it with beyond a hand-typed
+    `docker run` -- POST /api/compile (and the CLI's own `compile`) now
+    also writes a ready-to-use docker-compose.yml alongside it, on every
+    compile, the same way the Dockerfile/.dockerignore already are.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    compose_path = output_dir / "docker-compose.yml"
+    assert compose_path.is_file()
+
+    compose = compose_path.read_text(encoding="utf-8")
+    assert "services:\n  generated:\n    build: .\n" in compose
+    assert "NOTEBOOK_API_KEY=${NOTEBOOK_API_KEY:-notebook-to-api-dev-key}" in compose
+    assert "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE=${NOTEBOOK_API_RATE_LIMIT_PER_MINUTE:-0}" in compose
+
+
 def test_compiler_pipeline_dockerignore_excludes_a_real_exported_openapi_and_sdk(
     tmp_path,
 ):
@@ -510,6 +639,12 @@ generate_python_sdk(
     # "source_notebook" field is the compiling server's own filesystem
     # path.
     assert is_ignored(".compile_metadata.json")
+    # docker-compose.yml (generate_docker_compose) is a real file
+    # compile_notebook above already wrote alongside the Dockerfile --
+    # a local-dev/deploy-tooling convenience file the running app never
+    # reads, so it must be ignored the same way.
+    assert (output_dir / "docker-compose.yml").is_file()
+    assert is_ignored("docker-compose.yml")
     # The actually-deployable artifacts must NOT be swept up by the same
     # patterns.
     assert not is_ignored("app.py")

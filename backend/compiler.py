@@ -50,13 +50,15 @@ from backend.parser.ast_parser import (
 )
 
 from backend.generator.api_generator import (
+    GENERATED_APP_ENV_VARS,
     generate_fastapi_code,
     write_generated_api
 )
 
 from backend.generator.docker_generator import (
     generate_dockerfile,
-    generate_dockerignore
+    generate_dockerignore,
+    generate_docker_compose
 )
 
 
@@ -957,6 +959,15 @@ def compile_notebook_to_api(
             )
 
             generate_dockerignore(dockerignore_path)
+
+            docker_compose_path = os.path.join(
+                output_dir,
+                "docker-compose.yml"
+            )
+
+            generate_docker_compose(
+                docker_compose_path, package_name, GENERATED_APP_ENV_VARS
+            )
 
             write_compile_metadata(
                 source_notebook_path or notebook_path,

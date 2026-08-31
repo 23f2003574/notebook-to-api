@@ -112,6 +112,88 @@ def generate_dockerfile(
     print(f"Dockerfile generated at: {output_path}")
 
 
+def docker_compose_content(package_name="generated", env_vars=None):
+    """The exact docker-compose.yml text generate_docker_compose (below)
+    writes to disk, as a pure string -- no filesystem access at all. See
+    dockerfile_content's own docstring above for why this split exists.
+
+    Before this, a compiled app had a Dockerfile but nothing to actually
+    run it with beyond a hand-typed `docker run` -- an operator who
+    wanted a one-command `docker compose up` (e.g. for local smoke-
+    testing before a real deploy, or as a starting point for a real
+    compose-based deployment) had to write every one of these lines
+    themselves: the host<->container $PORT mapping the Dockerfile's own
+    CMD/HEALTHCHECK already require (see dockerfile_content above), and
+    every NOTEBOOK_API_* variable the compiled app itself reads (see
+    api_generator.py) -- discoverable via GET /api/env-vars-preview, but
+    still meant transcribing by hand into a compose file, one entry at a
+    time, with nothing to catch a typo'd name or a stale default the
+    moment either drifted from what the app would actually read.
+
+    `env_vars` is GENERATED_APP_ENV_VARS (backend/generator/
+    api_generator.py) -- the exact same list generate_fastapi_code's own
+    os.getenv(name, default) calls are themselves built from (see
+    _generated_app_env_var_default there) and GET /api/env-vars-preview
+    already reads back unmodified -- so the "environment:" section below
+    can never list a variable the compiled app doesn't actually
+    recognize, or a default that's drifted from what it would actually
+    fall back to. Passed in rather than imported directly here to avoid
+    a circular import: compiler.py (the caller of generate_docker_compose
+    below) already imports both this module and api_generator.py, but
+    api_generator.py has no reason of its own to import this module back.
+
+    Each entry becomes "NAME=${NAME:-default}", a plain compose
+    environment-list entry -- not a fixed value, but a shell-style
+    default that still lets an operator override any one of them for a
+    real deployment (a `.env` file alongside this one, or the calling
+    shell's own environment) without editing this generated file, the
+    same "configurable without editing generated code" precedent
+    dockerfile_content's own $PORT interpolation already sets for the
+    Dockerfile itself. "PORT" -- read by the Dockerfile's own CMD/
+    HEALTHCHECK, not by the compiled app itself (see GET
+    /api/env-vars-preview's own docstring for why it's deliberately
+    excluded from GENERATED_APP_ENV_VARS) -- gets the identical
+    treatment here, driving both sides of the host:container port
+    mapping so the exposed port always matches whatever the container
+    itself actually bound to.
+    """
+
+    env_vars = env_vars or []
+
+    environment_lines = "\n".join(
+        f"      - {entry['name']}=${{{entry['name']}:-{entry['default']}}}"
+        for entry in env_vars
+    )
+
+    return (
+        "services:\n"
+        f"  {package_name}:\n"
+        "    build: .\n"
+        "    ports:\n"
+        '      - "${PORT:-8000}:${PORT:-8000}"\n'
+        "    environment:\n"
+        "      - PORT=${PORT:-8000}\n"
+        f"{environment_lines}\n"
+    )
+
+
+def generate_docker_compose(
+    output_path="generated/docker-compose.yml",
+    package_name="generated",
+    env_vars=None,
+):
+    """Write a docker-compose.yml for the compiled app at `output_path`,
+    alongside the Dockerfile/.dockerignore generate_dockerfile/
+    generate_dockerignore already write there on every compile -- see
+    docker_compose_content's own docstring above for why this exists and
+    what it contains.
+    """
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(docker_compose_content(package_name, env_vars))
+
+    print(f"docker-compose.yml generated at: {output_path}")
+
+
 def dockerignore_content():
     """The exact .dockerignore text generate_dockerignore (below) writes
     to disk, as a pure string -- no filesystem access at all. See
@@ -131,6 +213,7 @@ env/
 .ipynb_checkpoints/
 Dockerfile
 .dockerignore
+docker-compose.yml
 openapi.json
 openapi.yaml
 sdk/

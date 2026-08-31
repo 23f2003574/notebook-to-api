@@ -14343,6 +14343,63 @@ def test_dockerfile_preview_does_not_touch_generated_dir(monkeypatch, tmp_path):
     assert not generated_dir.exists()
 
 
+def test_docker_compose_preview_requires_no_notebook_and_needs_no_body():
+
+    resp = client.get("/api/docker-compose-preview")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert "services:" in body["docker_compose"]
+    assert "NOTEBOOK_API_KEY=${NOTEBOOK_API_KEY:-notebook-to-api-dev-key}" in body["docker_compose"]
+
+
+def test_docker_compose_preview_matches_what_an_actual_compile_writes():
+
+    filename = "docker_compose_preview_match.ipynb"
+    _upload_sample_notebook(filename)
+
+    preview_resp = client.get("/api/docker-compose-preview")
+    assert preview_resp.status_code == 200
+    preview_body = preview_resp.json()
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": filename}
+    )
+    assert compile_resp.status_code == 200
+
+    actual_docker_compose = client.get(
+        "/api/generated/docker-compose.yml"
+    ).json()["content"]
+
+    assert preview_body["docker_compose"] == actual_docker_compose
+    assert preview_body["package_name"] == package_name_for_output_dir(GENERATED_DIR)
+
+
+def test_docker_compose_preview_reflects_a_configured_package_name(monkeypatch, tmp_path):
+
+    generated_dir = tmp_path / "my_custom_pkg"
+    monkeypatch.setattr("backend.routes.upload.GENERATED_DIR", str(generated_dir))
+
+    resp = client.get("/api/docker-compose-preview")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["package_name"] == "my_custom_pkg"
+    assert "  my_custom_pkg:\n" in body["docker_compose"]
+
+
+def test_docker_compose_preview_does_not_touch_generated_dir(monkeypatch, tmp_path):
+
+    generated_dir = tmp_path / "docker_compose_preview_no_side_effects"
+    monkeypatch.setattr("backend.routes.upload.GENERATED_DIR", str(generated_dir))
+
+    resp = client.get("/api/docker-compose-preview")
+
+    assert resp.status_code == 200
+    assert not generated_dir.exists()
+
+
 def test_env_vars_preview_requires_no_notebook_and_needs_no_body():
 
     resp = client.get("/api/env-vars-preview")
