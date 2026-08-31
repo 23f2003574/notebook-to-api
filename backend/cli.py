@@ -2637,9 +2637,12 @@ def _dispatch_core_command(args):
 
         elif args.tags_command == "list":
 
+            params = {"format": "csv"} if args.format == "csv" else {}
+
             try:
                 response = httpx.get(
                     f"{dashboard_url}/api/tags",
+                    params=params,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -2651,6 +2654,13 @@ def _dispatch_core_command(args):
                     f"Dashboard rejected the request ({response.status_code}): "
                     f"{_extract_dashboard_error_detail(response)}"
                 )
+
+            if args.format == "csv":
+                # The response is CSV, not JSON -- printed as-is, the
+                # same "redirect it to a file" convention `find-
+                # duplicates --format csv` already establishes.
+                print(response.text, end="")
+                return
 
             data = response.json()
 
@@ -3249,6 +3259,8 @@ def _dispatch_core_command(args):
             params["tag"] = args.tag
         if args.limit is not None:
             params["limit"] = args.limit
+        if args.format == "csv":
+            params["format"] = "csv"
 
         try:
             response = httpx.get(
@@ -3265,6 +3277,16 @@ def _dispatch_core_command(args):
                 f"Dashboard rejected the request ({response.status_code}): "
                 f"{_extract_dashboard_error_detail(response)}"
             )
+
+        if args.format == "csv":
+            # The response is CSV, not JSON -- printed as-is, the same
+            # "redirect it to a file" convention `find-duplicates
+            # --format csv` already establishes. Exits 0 unconditionally:
+            # this mode is for archiving/reporting, not CI gating -- use
+            # the default JSON/human mode (whose own pass_count/
+            # warn_count/fail_count drive the exit code below) for that.
+            print(response.text, end="")
+            return
 
         data = response.json()
         results = data.get("results", [])
@@ -3626,6 +3648,8 @@ def _dispatch_core_command(args):
             params = {"offset": args.offset}
             if args.limit is not None:
                 params["limit"] = args.limit
+            if args.format == "csv":
+                params["format"] = "csv"
 
             try:
                 response = httpx.get(
@@ -3642,6 +3666,13 @@ def _dispatch_core_command(args):
                     f"Dashboard rejected the request ({response.status_code}): "
                     f"{_extract_dashboard_error_detail(response)}"
                 )
+
+            if args.format == "csv":
+                # The response is CSV, not JSON -- printed as-is, the
+                # same "redirect it to a file" convention `find-
+                # duplicates --format csv` already establishes.
+                print(response.text, end="")
+                return
 
             data = response.json()
 
@@ -6747,6 +6778,22 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(tags_list_parser)
     tags_list_parser.add_argument(
+        "--format",
+        choices=["json", "csv"],
+        default="json",
+        dest="format",
+        help=(
+            "Response format to request via GET /api/tags' own ?format= "
+            "query param, the same \"json\"/\"csv\" choice "
+            "`list`/`find-duplicates`/`storage` already offer for their "
+            "own listings. \"csv\" prints the dashboard's own "
+            "\"tag,notebook_count\" CSV response straight to stdout "
+            "(redirect it to a file, e.g. `> tags.csv`); --json is "
+            "ignored under --format csv, since the response isn't JSON "
+            "at all."
+        )
+    )
+    tags_list_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -7250,6 +7297,27 @@ def main():
         )
     )
     validate_all_parser.add_argument(
+        "--format",
+        choices=["json", "csv"],
+        default="json",
+        dest="format",
+        help=(
+            "Response format to request via GET /api/validate-all's own "
+            "?format= query param, the same \"json\"/\"csv\" choice "
+            "`list`/`find-duplicates`/`storage` already offer for their "
+            "own listings. \"csv\" prints the dashboard's own "
+            "\"filename,status,reserved_name_conflicts,skipped_functions,"
+            "detail\" CSV response straight to stdout (redirect it to a "
+            "file, e.g. for a CI job's own audit trail); --json is "
+            "ignored under --format csv, since the response isn't JSON "
+            "at all -- and this command always exits 0 under --format "
+            "csv, since it's meant for archiving/reporting, not CI "
+            "gating (use the default JSON/human mode, whose own exit "
+            "code already reflects pass_count/warn_count/fail_count, for "
+            "that)."
+        )
+    )
+    validate_all_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -7520,6 +7588,22 @@ def main():
         )
     )
     _add_dashboard_url_and_timeout_arguments(versions_list_parser)
+    versions_list_parser.add_argument(
+        "--format",
+        choices=["json", "csv"],
+        default="json",
+        dest="format",
+        help=(
+            "Response format to request via GET "
+            "/api/notebooks/{filename}/versions's own ?format= query "
+            "param, the same \"json\"/\"csv\" choice `list`/`find-"
+            "duplicates`/`storage` already offer for their own listings. "
+            "\"csv\" prints the dashboard's own \"version_id,size_bytes,"
+            "saved_at\" CSV response straight to stdout (redirect it to a "
+            "file); --json is ignored under --format csv, since the "
+            "response isn't JSON at all."
+        )
+    )
     versions_list_parser.add_argument(
         "--json",
         action="store_true",

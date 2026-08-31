@@ -2311,7 +2311,7 @@ def _validate_and_normalize_description(description) -> str:
 
 
 @router.get("/tags")
-def list_tags():
+def list_tags(format: str = "json"):
     """The distinct tags currently in use across every uploaded notebook,
     each with how many notebooks currently carry it, sorted alphabetically.
 
@@ -2334,7 +2334,22 @@ def list_tags():
     contribute nothing here, the same way they already contribute an
     empty "tags": [] to their own GET /api/notebooks entry rather than
     raising or being skipped.
+
+    "format" (optional, default "json") returns "csv" instead -- the same
+    "csv"/"json" choice GET /api/notebooks/storage and every other
+    catalog-wide report in this file already offer, just applied here to
+    this dashboard's own tag catalog instead. Column order is
+    "tag,notebook_count", every field each "tags" entry already carries.
+    An unrecognized "format" is rejected with 400 before a single
+    notebook is even read.
     """
+
+    if format not in ("json", "csv"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="format must be 'json' or 'csv'"
+        )
 
     upload_root = Path(UPLOAD_DIR)
 
@@ -2352,6 +2367,24 @@ def list_tags():
         {"tag": tag, "notebook_count": count}
         for tag, count in sorted(counts.items())
     ]
+
+    if format == "csv":
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+
+        writer.writerow(["tag", "notebook_count"])
+
+        for entry in tags:
+            writer.writerow([entry["tag"], entry["notebook_count"]])
+
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": 'attachment; filename="tags.csv"',
+            },
+        )
 
     return {
         "status": "success",
@@ -6358,7 +6391,9 @@ def set_notebook_description_batch(data: dict):
 
 
 @router.get("/notebooks/{filename}/versions")
-def list_notebook_versions(filename: str, limit: int = None, offset: int = 0):
+def list_notebook_versions(
+    filename: str, limit: int = None, offset: int = 0, format: str = "json",
+):
     """List a previously uploaded notebook's snapshotted previous
     versions, newest first.
 
@@ -6385,7 +6420,23 @@ def list_notebook_versions(filename: str, limit: int = None, offset: int = 0):
     versions exist in total (before "offset"/"limit" are applied), so a
     caller can tell whether it has reached the end of a notebook's own
     history without a separate, unpaginated request.
+
+    "format" (optional, default "json") returns "csv" instead -- the same
+    "csv"/"json" choice every catalog-wide report in this file already
+    offers, just applied here to one notebook's own version history.
+    Applies to the exact same already-paginated "versions" the "json"
+    response would return, so "limit"/"offset" compose with "format"
+    identically. Column order is "version_id,size_bytes,saved_at", every
+    field each "versions" entry already carries. An unrecognized "format"
+    is rejected with 400 before "filename" is even resolved.
     """
+
+    if format not in ("json", "csv"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="format must be 'json' or 'csv'"
+        )
 
     file_path = resolve_upload_path(filename)
 
@@ -6436,6 +6487,29 @@ def list_notebook_versions(filename: str, limit: int = None, offset: int = 0):
     paginated_versions = (
         versions[offset:offset + limit] if limit is not None else versions[offset:]
     )
+
+    if format == "csv":
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+
+        writer.writerow(["version_id", "size_bytes", "saved_at"])
+
+        for entry in paginated_versions:
+
+            writer.writerow([
+                entry["version_id"], entry["size_bytes"], entry["saved_at"],
+            ])
+
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{filename}_versions.csv"'
+                ),
+            },
+        )
 
     return {
         "status": "success",
@@ -8181,7 +8255,8 @@ def validate_notebook_endpoint(
 
 @router.get("/validate-all")
 def validate_all_notebooks(
-    strict: bool = False, tag: str = None, limit: int = None, offset: int = 0
+    strict: bool = False, tag: str = None, limit: int = None, offset: int = 0,
+    format: str = "json",
 ):
     """Run the identical pass/warn/fail check POST /api/validate already
     performs for one notebook, across every notebook already uploaded to
@@ -8233,7 +8308,32 @@ def validate_all_notebooks(
     never just the current page, the same "totals describe the whole
     matching set" reasoning GET /api/notebooks/storage's own identically-
     paginated running totals already follow.
+
+    "format" (optional, default "json") returns "csv" instead -- the same
+    "csv"/"json" choice every catalog-wide report in this file already
+    offers, applied here to feed a CI job's own audit trail or a
+    spreadsheet straight from this endpoint instead of reshaping the JSON
+    response by hand. Applies to the exact same already-filtered,
+    already-paginated "results" the "json" response would return, so
+    "strict"/"tag"/"limit"/"offset" compose with "format" identically.
+    Column order is "filename,status,reserved_name_conflicts,
+    skipped_functions,detail" -- one row per notebook (not one per
+    conflict/skipped function): "reserved_name_conflicts" is every
+    conflicting name joined with "; ", and "skipped_functions" is every
+    "<name>: <reason>" joined the same way, so a notebook with several of
+    either still fits in a single row instead of the "duplicates"/
+    "functions" CSVs' own one-row-per-leaf-entry convention, which would
+    otherwise repeat "filename"/"status" across rows for no benefit here.
+    An unrecognized "format" is rejected with 400 before a single
+    notebook is even read.
     """
+
+    if format not in ("json", "csv"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="format must be 'json' or 'csv'"
+        )
 
     if offset < 0:
 
@@ -8323,6 +8423,37 @@ def validate_all_notebooks(
     paginated_results = (
         results[offset:offset + limit] if limit is not None else results[offset:]
     )
+
+    if format == "csv":
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+
+        writer.writerow([
+            "filename", "status", "reserved_name_conflicts",
+            "skipped_functions", "detail",
+        ])
+
+        for entry in paginated_results:
+
+            writer.writerow([
+                entry["filename"],
+                entry["status"],
+                "; ".join(entry["reserved_name_conflicts"]),
+                "; ".join(
+                    f"{skipped['name']}: {skipped['reason']}"
+                    for skipped in entry["skipped_functions"]
+                ),
+                entry["detail"] or "",
+            ])
+
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": 'attachment; filename="validate_all.csv"',
+            },
+        )
 
     return {
         "status": "success",

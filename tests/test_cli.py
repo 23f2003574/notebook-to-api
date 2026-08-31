@@ -6857,6 +6857,27 @@ def test_tags_list_command_json_flag_emits_the_dashboards_own_response(
     assert data["tags"] == [{"tag": "prod", "notebook_count": 3}]
 
 
+def test_tags_list_command_format_csv_prints_the_dashboards_raw_csv_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    csv_body = "tag,notebook_count\r\nprod,3\r\n"
+    handler.responses = [_raw_response(200, csv_body.encode("utf-8"), "text/csv")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["tags", "list", "--format", "csv", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout == csv_body.replace("\r\n", "\n")
+    assert handler.requests == ["/api/tags?format=csv"]
+
+
 def test_tags_delete_command_reports_success_with_yes_flag(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
@@ -9139,6 +9160,32 @@ def test_validate_all_command_reports_no_notebooks(tmp_path, fake_dashboard):
     assert "No notebooks to validate" in proc.stdout
 
 
+def test_validate_all_command_format_csv_prints_the_dashboards_raw_csv_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    csv_body = (
+        "filename,status,reserved_name_conflicts,skipped_functions,detail\r\n"
+        "a.ipynb,pass,,,\r\n"
+    )
+    handler.responses = [_raw_response(200, csv_body.encode("utf-8"), "text/csv")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["validate-all", "--format", "csv", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    # --format csv always exits 0 -- it's for archiving/reporting, not
+    # the default JSON/human mode's own CI-gating exit code.
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout == csv_body.replace("\r\n", "\n")
+    assert handler.requests == ["/api/validate-all?strict=false&offset=0&format=csv"]
+
+
 def test_validate_all_command_passes_limit_and_offset_through(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
@@ -10181,6 +10228,30 @@ def test_versions_list_command_reports_no_saved_versions(tmp_path, fake_dashboar
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "No saved versions for 'nb.ipynb'." in proc.stdout
+
+
+def test_versions_list_command_format_csv_prints_the_dashboards_raw_csv_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    csv_body = "version_id,size_bytes,saved_at\r\nv1.ipynb,10,2026-01-01T00:00:00+00:00\r\n"
+    handler.responses = [_raw_response(200, csv_body.encode("utf-8"), "text/csv")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "list", "nb.ipynb",
+            "--format", "csv", "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout == csv_body.replace("\r\n", "\n")
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions?offset=0&format=csv"]
 
 
 def test_versions_list_command_json_flag_emits_the_dashboards_own_response(

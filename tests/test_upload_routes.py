@@ -7843,6 +7843,37 @@ def test_list_tags_are_sorted_alphabetically():
     assert {"zeta", "alpha", "mu"}.issubset(set(tag_names))
 
 
+def test_list_tags_csv_format_returns_a_csv_response():
+
+    _upload_sample_notebook("tags_csv_a.ipynb")
+    _upload_sample_notebook("tags_csv_b.ipynb")
+
+    client.put(
+        "/api/notebooks/tags_csv_a.ipynb/tags", json={"tags": ["csvtag"]}
+    )
+    client.put(
+        "/api/notebooks/tags_csv_b.ipynb/tags", json={"tags": ["csvtag"]}
+    )
+
+    resp = client.get("/api/tags", params={"format": "csv"})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert 'attachment; filename="tags.csv"' in resp.headers["content-disposition"]
+
+    rows = resp.text.strip().split("\r\n")
+    assert rows[0] == "tag,notebook_count"
+    assert "csvtag,2" in rows
+
+
+def test_list_tags_rejects_an_unknown_format():
+
+    resp = client.get("/api/tags", params={"format": "xml"})
+
+    assert resp.status_code == 400
+    assert "format" in resp.json()["detail"]
+
+
 def test_delete_tag_removes_it_from_every_notebook_that_has_it():
 
     _upload_sample_notebook("tags_bulk_delete_a.ipynb")
@@ -9068,6 +9099,73 @@ def test_list_notebook_versions_rejects_a_non_positive_limit():
     )
 
     assert resp.status_code == 400
+
+
+def test_list_notebook_versions_csv_format_returns_a_csv_response():
+
+    filename = "versions_csv.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    json_versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(json_versions) == 1
+
+    resp = client.get(f"/api/notebooks/{filename}/versions", params={"format": "csv"})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert (
+        f'attachment; filename="{filename}_versions.csv"'
+        in resp.headers["content-disposition"]
+    )
+
+    rows = resp.text.strip().split("\r\n")
+    assert rows[0] == "version_id,size_bytes,saved_at"
+    assert len(rows) == 2
+    version = json_versions[0]
+    assert rows[1] == f"{version['version_id']},{version['size_bytes']},{version['saved_at']}"
+
+
+def test_list_notebook_versions_csv_format_returns_404_for_missing_notebook():
+
+    resp = client.get(
+        "/api/notebooks/does_not_exist_versions_csv.ipynb/versions",
+        params={"format": "csv"},
+    )
+
+    assert resp.status_code == 404
+
+
+def test_list_notebook_versions_rejects_an_unknown_format():
+
+    _upload_sample_notebook("versions_list_bad_format.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/versions_list_bad_format.ipynb/versions",
+        params={"format": "xml"},
+    )
+
+    assert resp.status_code == 400
+    assert "format" in resp.json()["detail"]
 
 
 def test_overwriting_a_notebook_snapshots_the_previous_content():
@@ -13450,6 +13548,88 @@ def test_validate_all_reports_pass_warn_and_fail_across_the_catalog():
     assert results_by_filename["validate_all_fail.ipynb"]["reserved_name_conflicts"] == [
         "health_check"
     ]
+
+
+def test_validate_all_csv_format_returns_a_csv_response():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    clean_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    warn_content = _notebook_bytes(
+        "def unsupported(a, **kwargs):\n    return a\n\n"
+        "def sub(a: int, b: int) -> int:\n    return a - b\n"
+    )
+    fail_content = _notebook_bytes(
+        "def health_check() -> dict:\n    return {}\n"
+    )
+
+    for filename, content in (
+        ("validate_all_csv_pass.ipynb", clean_content),
+        ("validate_all_csv_warn.ipynb", warn_content),
+        ("validate_all_csv_fail.ipynb", fail_content),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    resp = client.get("/api/validate-all", params={"format": "csv"})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert 'attachment; filename="validate_all.csv"' in resp.headers["content-disposition"]
+
+    rows = resp.text.strip().split("\r\n")
+    assert rows[0] == "filename,status,reserved_name_conflicts,skipped_functions,detail"
+
+    by_filename = {row.split(",", 1)[0]: row for row in rows[1:]}
+
+    assert by_filename["validate_all_csv_pass.ipynb"] == "validate_all_csv_pass.ipynb,pass,,,"
+    assert by_filename["validate_all_csv_fail.ipynb"] == (
+        "validate_all_csv_fail.ipynb,fail,health_check,,"
+    )
+    assert "unsupported: " in by_filename["validate_all_csv_warn.ipynb"]
+    assert by_filename["validate_all_csv_warn.ipynb"].startswith(
+        "validate_all_csv_warn.ipynb,warn,,"
+    )
+
+
+def test_validate_all_csv_format_composes_with_tag_and_strict():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    warn_content = _notebook_bytes(
+        "def unsupported(a, **kwargs):\n    return a\n\n"
+        "def sub(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={"file": ("validate_all_csv_tagged.ipynb", io.BytesIO(warn_content), "application/json")},
+    )
+    client.put(
+        "/api/notebooks/validate_all_csv_tagged.ipynb/tags", json={"tags": ["prod"]}
+    )
+
+    resp = client.get(
+        "/api/validate-all",
+        params={"format": "csv", "tag": "prod", "strict": "true"},
+    )
+
+    assert resp.status_code == 200
+    rows = resp.text.strip().split("\r\n")
+    assert len(rows) == 2
+    assert rows[1].startswith("validate_all_csv_tagged.ipynb,fail,")
+
+
+def test_validate_all_rejects_an_unknown_format():
+
+    resp = client.get("/api/validate-all", params={"format": "xml"})
+
+    assert resp.status_code == 400
+    assert "format" in resp.json()["detail"]
 
 
 def test_validate_all_filters_by_tag():
