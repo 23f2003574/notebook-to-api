@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.testclient import TestClient
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import List
@@ -7,6 +8,7 @@ from urllib.parse import urljoin, urlsplit
 import asyncio
 import csv
 import hashlib
+import importlib
 import io
 import ipaddress
 import json
@@ -8887,6 +8889,17 @@ def compile_notebook_endpoint(
     (its current content really does differ from what's now running)
     until it's recompiled from its current content or this same version
     again.
+
+    "smoke_test" (optional, default false) additionally imports the just-
+    written "<package_name>.app" in this dashboard process itself and
+    calls its own GET /health, adding a "smoke_test":
+    {"passed", "status_code", "detail"} field to the response -- see
+    _run_compile_smoke_test's own docstring for exactly what this catches
+    (and its caveat) that every purely-static check this endpoint already
+    performs can't. Off by default: importing and actually running the
+    compiled app has a real cost this endpoint didn't previously pay on
+    every compile, and a caller not asking for it sees this response
+    completely unchanged.
     """
 
     notebook_path = data.get(
@@ -8903,6 +8916,7 @@ def compile_notebook_endpoint(
     only = data.get("only")
     exclude = data.get("exclude")
     version_id = data.get("version_id")
+    smoke_test = bool(data.get("smoke_test", False))
 
     if version_id is not None and not isinstance(version_id, str):
 
@@ -9050,7 +9064,7 @@ def compile_notebook_endpoint(
             "skipped_function_count": len(data["skipped_functions"]),
         })
 
-        return {
+        response = {
             "status": "success",
             "notebook": notebook_path,
             "version_id": version_id,
@@ -9061,6 +9075,24 @@ def compile_notebook_endpoint(
             "generated_files": data["generated_files"],
             "message": "Notebook compiled successfully"
         }
+
+        if smoke_test:
+
+            # Held for the same reason export-openapi's identical
+            # import-then-read already does (see its own comment above):
+            # without it, a concurrent POST /api/compile for a
+            # *different* notebook racing in this exact window could
+            # rewrite GENERATED_DIR out from under this import, or run
+            # clear_stale_export_artifacts against it mid-import.
+            with COMPILE_LOCK:
+
+                package_name = package_name_for_output_dir(GENERATED_DIR)
+
+                _evict_compiled_app_from_module_cache(package_name)
+
+                response["smoke_test"] = _run_compile_smoke_test(package_name)
+
+        return response
 
     except ReservedFunctionNameError as e:
 
@@ -9142,6 +9174,71 @@ def _evict_compiled_app_from_module_cache(package_name):
 
         if name == package_name or name.startswith(prefix):
             del sys.modules[name]
+
+
+def _run_compile_smoke_test(package_name):
+    """Actually import the just-compiled "<package_name>.app" module and
+    call its own GET /health in-process, to catch a class of failure
+    nothing else at compile time can: every check POST /api/compile
+    already performs (the reserved-name-collision check, inspect_notebook_data's
+    own AST-level parsing) is purely static -- none of them actually
+    execute a single line of the generated Python source. A bug in
+    generate_fastapi_code itself (this project's own commit history has
+    fixed more than one "confirmed exploitable" SyntaxError from an
+    unescaped quote embedded in a hand-written f-string there) can still
+    write a syntactically-broken app.py that every one of those static
+    checks passes cleanly, only to fail the moment anything -- `deploy`'s
+    own `docker build`, or a real `uvicorn <package>.app:app` -- actually
+    tries to run it.
+
+    Returns {"passed": bool, "status_code": int | None, "detail": str |
+    None} -- never raises. A failed smoke test does not mean the compile
+    itself failed: every file compile_notebook_to_api wrote is still on
+    disk exactly as it was, and still what POST /api/deploy would build
+    from -- this is a diagnostic on top of an already-successful compile,
+    not a retroactive verdict on it.
+
+    Caveat, spelled out here since it's easy to misread a failure as a
+    codegen bug when it isn't one: this imports the compiled app inside
+    *this dashboard process's own* Python environment, not inside a
+    fresh container built from the requirements.txt this same compile
+    just pinned. A dependency genuinely only ever installed in the
+    deploy target's own image (never on the machine running this
+    dashboard) will legitimately fail this smoke test even though a real
+    `docker build`/deploy would succeed against it. A passing smoke test
+    is a strong signal; a failing one is only ever a prompt to check
+    why, not proof the compile itself is broken.
+    """
+    try:
+
+        module = importlib.import_module(f"{package_name}.app")
+        app = module.app
+
+    except Exception as e:
+
+        return {
+            "passed": False,
+            "status_code": None,
+            "detail": f"Compiled app failed to import: {e}",
+        }
+
+    try:
+
+        response = TestClient(app).get("/health")
+
+    except Exception as e:
+
+        return {
+            "passed": False,
+            "status_code": None,
+            "detail": f"Compiled app raised handling GET /health: {e}",
+        }
+
+    return {
+        "passed": response.status_code == 200,
+        "status_code": response.status_code,
+        "detail": None if response.status_code == 200 else response.text,
+    }
 
 
 @router.post("/export-openapi")

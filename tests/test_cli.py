@@ -8408,6 +8408,81 @@ def test_remote_compile_command_reports_success(tmp_path, fake_dashboard):
     assert json.loads(handler.bodies[0]) == {"notebook_path": "nb.ipynb"}
 
 
+def test_remote_compile_command_passes_smoke_test_through_to_the_dashboard(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebook": "nb.ipynb",
+            "functions": [{"name": "add"}],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "skipped_functions": [],
+            "dependencies": [],
+            "generated_files": ["app.py"],
+            "message": "Notebook compiled successfully",
+            "smoke_test": {"passed": True, "status_code": 200, "detail": None},
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-compile", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--smoke-test",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Smoke test: passed" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "smoke_test": True,
+    }
+
+
+def test_remote_compile_command_exits_1_when_the_smoke_test_fails(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebook": "nb.ipynb",
+            "functions": [{"name": "add"}],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "skipped_functions": [],
+            "dependencies": [],
+            "generated_files": ["app.py"],
+            "message": "Notebook compiled successfully",
+            "smoke_test": {
+                "passed": False, "status_code": None,
+                "detail": "Compiled app failed to import: boom",
+            },
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-compile", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--smoke-test",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "Smoke test: FAILED" in proc.stdout
+    assert "boom" in proc.stdout
+
+
 def test_remote_compile_command_passes_only_through_to_the_dashboard(
     tmp_path, fake_dashboard
 ):

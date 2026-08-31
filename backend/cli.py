@@ -3102,6 +3102,8 @@ def _dispatch_core_command(args):
             request_body["exclude"] = exclude
         if args.version_id:
             request_body["version_id"] = args.version_id
+        if args.smoke_test:
+            request_body["smoke_test"] = True
 
         try:
             response = httpx.post(
@@ -3151,6 +3153,20 @@ def _dispatch_core_command(args):
 
             if dependencies:
                 print(f"\nDependencies: {', '.join(dependencies)}")
+
+            smoke_test = data.get("smoke_test")
+
+            if smoke_test is not None:
+                if smoke_test["passed"]:
+                    print("\nSmoke test: passed (GET /health responded 200)")
+                else:
+                    print(
+                        "\nSmoke test: FAILED -- "
+                        f"{smoke_test.get('detail')}"
+                    )
+
+        if data.get("smoke_test") is not None and not data["smoke_test"]["passed"]:
+            sys.exit(1)
     elif args.command == "remote-validate":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -7113,6 +7129,21 @@ def main():
     _add_function_selection_arguments(remote_compile_parser)
     _add_version_id_argument(remote_compile_parser, "POST /api/compile")
     remote_compile_parser.add_argument(
+        "--smoke-test",
+        action="store_true",
+        dest="smoke_test",
+        help=(
+            "After compiling, actually import the compiled app on the "
+            "dashboard itself and call its own GET /health, via POST "
+            "/api/compile's own \"smoke_test\" body field -- catches a "
+            "class of failure (a codegen bug producing syntactically "
+            "broken Python, say) no purely static check can. This "
+            "command exits 1 if the smoke test fails, even though the "
+            "compile itself still succeeded and every file it wrote is "
+            "still on disk."
+        )
+    )
+    remote_compile_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -7120,8 +7151,9 @@ def main():
             "Emit the dashboard's own JSON response "
             "({\"status\", \"notebook\", \"version_id\", \"functions\", "
             "\"endpoints\", \"skipped_functions\", \"dependencies\", "
-            "\"generated_files\"}) instead of a human-readable summary, "
-            "for scripting/automation."
+            "\"generated_files\"}, plus \"smoke_test\" when --smoke-test "
+            "is given) instead of a human-readable summary, for "
+            "scripting/automation."
         )
     )
 

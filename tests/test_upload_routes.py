@@ -12746,6 +12746,157 @@ def test_compile_returns_400_not_500_for_a_malformed_notebook_file():
     assert "not a valid Jupyter notebook" in resp.json()["detail"]
 
 
+def test_compile_without_smoke_test_omits_the_field():
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "smoke_test_omitted.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/compile", json={"notebook_path": "smoke_test_omitted.ipynb"}
+    )
+
+    assert resp.status_code == 200
+    assert "smoke_test" not in resp.json()
+
+
+def test_compile_smoke_test_passes_for_a_healthy_compile():
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "smoke_test_pass.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/compile",
+        json={"notebook_path": "smoke_test_pass.ipynb", "smoke_test": True},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["smoke_test"] == {
+        "passed": True,
+        "status_code": 200,
+        "detail": None,
+    }
+
+
+def test_compile_smoke_test_reflects_a_recompile_within_the_same_process():
+    """The compiled app is imported fresh every time -- a second compile
+    exposing a different function must be reflected by a second smoke
+    test too, not a module-cache-stale import of the first compile (the
+    identical staleness _evict_compiled_app_from_module_cache's own
+    docstring already documents for export-openapi).
+    """
+
+    first = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "smoke_test_recompile.ipynb",
+                io.BytesIO(first),
+                "application/json",
+            )
+        },
+    )
+
+    first_resp = client.post(
+        "/api/compile",
+        json={"notebook_path": "smoke_test_recompile.ipynb", "smoke_test": True},
+    )
+    assert first_resp.status_code == 200
+    assert first_resp.json()["smoke_test"]["passed"] is True
+
+    second = _notebook_bytes("def multiply(a: int, b: int) -> int:\n    return a * b\n")
+
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                "smoke_test_recompile.ipynb",
+                io.BytesIO(second),
+                "application/json",
+            )
+        },
+    )
+
+    second_resp = client.post(
+        "/api/compile",
+        json={"notebook_path": "smoke_test_recompile.ipynb", "smoke_test": True},
+    )
+    assert second_resp.status_code == 200
+    assert second_resp.json()["smoke_test"]["passed"] is True
+
+
+def test_compile_smoke_test_fails_cleanly_when_the_compiled_app_cannot_import(
+    monkeypatch,
+):
+    """A codegen bug that writes a syntactically-broken app.py must be
+    reported back as a failed smoke test, not crash the whole endpoint --
+    the compile itself already succeeded (every file is really on disk),
+    so this is a diagnostic, not a fatal error.
+    """
+    from backend.routes import upload as upload_module
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "smoke_test_broken.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "smoke_test_broken.ipynb"}
+    )
+    assert compile_resp.status_code == 200
+
+    app_path = Path(GENERATED_DIR) / "app.py"
+    original = app_path.read_text(encoding="utf-8")
+    app_path.write_text(original + "\nthis is not valid python(((\n", encoding="utf-8")
+
+    try:
+
+        package_name = package_name_for_output_dir(GENERATED_DIR)
+        upload_module._evict_compiled_app_from_module_cache(package_name)
+
+        result = upload_module._run_compile_smoke_test(package_name)
+
+        assert result["passed"] is False
+        assert result["status_code"] is None
+        assert "failed to import" in result["detail"]
+
+    finally:
+        app_path.write_text(original, encoding="utf-8")
+        upload_module._evict_compiled_app_from_module_cache(
+            package_name_for_output_dir(GENERATED_DIR)
+        )
+
+
 def test_inspect_returns_400_not_500_for_valid_json_missing_required_notebook_keys():
     """Distinct failure mode from the invalid-JSON case above: valid JSON
     that isn't a valid notebook (e.g. no "cells" key) raises nbformat's
