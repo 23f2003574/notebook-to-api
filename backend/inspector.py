@@ -572,6 +572,144 @@ def diff_notebook_functions(old_notebook_path, new_notebook_path):
     }
 
 
+def classify_notebook_diff(diff):
+    """Classify a diff_notebook_functions report by whether it would
+    break an existing caller of the compiled API, on top of the raw
+    "added"/"removed"/"changed"/"unchanged" report itself.
+
+    Before this, every diff endpoint/command (GET /api/notebooks/diff,
+    GET /api/notebooks/{filename}/versions/{version_id}/diff, `diff`,
+    `remote-diff`, `diff-notebooks`, `versions diff`, `versions compare`)
+    already answered "what changed", but a caller wanting to answer "is
+    this change safe to deploy" had to interpret "removed"/"changed"
+    itself -- `diff --json`'s own help text even suggests doing exactly
+    that by hand ("failing a CI check when 'removed' or 'changed' is
+    non-empty"), even though "changed" also includes purely additive,
+    non-breaking edits (e.g. a new parameter with a default) that never
+    should fail such a check.
+
+    Returns {"compatible", "breaking_changes"}, meant to be merged into
+    diff's own dict (`diff.update(classify_notebook_diff(diff))`), not
+    replace it -- "added"/"removed"/"changed"/"unchanged" remain the
+    source of truth for what changed; this only adds a verdict on top,
+    the same "extra fields alongside the existing report" approach GET
+    /api/notebooks/diff's own "content_diff" already takes.
+
+    A function present in "removed" is always breaking: an existing
+    caller's request to that endpoint now 404s.
+
+    A function present in "changed" is broken down parameter-by-parameter
+    (matched by name, not position -- the generated endpoint's request
+    body is a Pydantic model keyed by parameter name, so reordering two
+    parameters, or moving one from positional to keyword-only, changes
+    neither the JSON shape callers send nor what this reports):
+      - a parameter present in the old signature but missing from the new
+        one ("removed_parameter") -- an existing caller's request, valid
+        before, now includes a field the endpoint no longer accepts.
+      - a parameter that had a default and no longer does
+        ("parameter_became_required") -- an existing caller's request that
+        omitted it, valid before, is now missing a required field.
+      - a new parameter with no default ("required_parameter_added") --
+        the same "existing request now misses a required field" break,
+        just for a parameter that didn't exist at all before.
+      - a parameter whose type annotation changed on both sides
+        ("parameter_type_changed") -- a value valid for the old type may
+        no longer validate against the new one.
+      - a changed return type ("return_type_changed") -- an existing
+        caller's own response parsing may no longer match what the
+        endpoint actually returns.
+
+    Deliberately NOT breaking, and so never added to "breaking_changes":
+      - a function present in "added": a new endpoint no existing caller
+        could already have been depending on.
+      - a new parameter that has a default: an existing caller's request,
+        missing that field entirely, still validates exactly as before.
+      - a "changed" entry whose only difference is sync/async-ness
+        (already reported under "changed" by diff_notebook_functions --
+        see _function_signature_key -- but is an internal implementation
+        detail invisible to an HTTP caller).
+    """
+    breaking_changes = []
+
+    for func in diff["removed"]:
+        breaking_changes.append({
+            "type": "removed_endpoint",
+            "name": func["name"],
+            "detail": f"Endpoint '{func['name']}' was removed.",
+        })
+
+    for entry in diff["changed"]:
+
+        name = entry["name"]
+        old_args = {arg["name"]: arg for arg in entry["old"].get("args", [])}
+        new_args = {arg["name"]: arg for arg in entry["new"].get("args", [])}
+
+        for arg_name, old_arg in old_args.items():
+
+            new_arg = new_args.get(arg_name)
+
+            if new_arg is None:
+                breaking_changes.append({
+                    "type": "removed_parameter",
+                    "name": name,
+                    "detail": f"Parameter '{arg_name}' was removed from '{name}'.",
+                })
+                continue
+
+            if old_arg.get("has_default") and not new_arg.get("has_default"):
+                breaking_changes.append({
+                    "type": "parameter_became_required",
+                    "name": name,
+                    "detail": (
+                        f"Parameter '{arg_name}' of '{name}' lost its "
+                        "default and is now required."
+                    ),
+                })
+
+            old_type = old_arg.get("type")
+            new_type = new_arg.get("type")
+
+            if old_type is not None and new_type is not None and old_type != new_type:
+                breaking_changes.append({
+                    "type": "parameter_type_changed",
+                    "name": name,
+                    "detail": (
+                        f"Parameter '{arg_name}' of '{name}' changed type "
+                        f"from '{old_type}' to '{new_type}'."
+                    ),
+                })
+
+        for arg_name, new_arg in new_args.items():
+
+            if arg_name not in old_args and not new_arg.get("has_default"):
+                breaking_changes.append({
+                    "type": "required_parameter_added",
+                    "name": name,
+                    "detail": (
+                        f"New required parameter '{arg_name}' was added "
+                        f"to '{name}'."
+                    ),
+                })
+
+        old_return = entry["old"].get("return_type")
+        new_return = entry["new"].get("return_type")
+
+        if old_return != new_return:
+            breaking_changes.append({
+                "type": "return_type_changed",
+                "name": name,
+                "detail": (
+                    f"'{name}' return type changed from '{old_return}' "
+                    f"to '{new_return}'."
+                ),
+            })
+
+    return {
+        "compatible": not breaking_changes,
+        "breaking_changes": breaking_changes,
+    }
+
+
 def _notebook_source_lines(notebook_path):
     """Every code cell's own raw source, in on-disk order (the same cells
     extract_functions_from_code and every other per-cell walk in this
@@ -653,6 +791,12 @@ def print_notebook_diff(diff):
     """Print diff_notebook_functions' own report in the same
     human-readable style print_compile_summary/inspect_notebook already
     use elsewhere in this file.
+
+    If `diff` also carries classify_notebook_diff's own "compatible"/
+    "breaking_changes" fields (every diff-producing endpoint/command now
+    merges those in), also prints a compatibility verdict after the
+    added/removed/changed report above. A plain diff_notebook_functions
+    dict (no such keys) prints exactly as before this existed.
     """
     if diff["added"]:
         print(f"\n+ Added {len(diff['added'])} endpoint(s):")
@@ -671,6 +815,17 @@ def print_notebook_diff(diff):
 
     if not (diff["added"] or diff["removed"] or diff["changed"]):
         print("\nNo changes to the compiled API surface.")
+
+    if "compatible" in diff:
+        if diff["compatible"]:
+            print("\nNo breaking changes to the compiled API's contract.")
+        else:
+            print(
+                f"\n! {len(diff['breaking_changes'])} breaking change(s) "
+                "to the compiled API's contract:"
+            )
+            for change in diff["breaking_changes"]:
+                print(f"  ! {change['detail']}")
 
 # The generated app's own default API key (see write_app_config /
 # verify_api_key in generator/api_generator.py: `API_KEYS` defaults to

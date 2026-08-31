@@ -51,6 +51,7 @@ from backend.inspector import (
     EXCLUDED_GENERATED_DIR_NAMES,
     EXCLUDED_GENERATED_FILE_NAMES,
     _extract_notebook_functions,
+    classify_notebook_diff,
     diff_notebook_functions,
     diff_notebook_source,
     generate_curl_commands,
@@ -3871,6 +3872,12 @@ def diff_notebooks(
     now offers. Off by default since it's real extra work (and a
     potentially large response) most callers of this endpoint's existing
     structural report don't need.
+
+    Also always includes "compatible" and "breaking_changes" -- a verdict
+    on whether "added"/"removed"/"changed" above would break an existing
+    caller of the compiled API, via classify_notebook_diff (backend/
+    inspector.py). See that function's own docstring for exactly what
+    counts as breaking.
     """
 
     if not old or not new:
@@ -3900,6 +3907,7 @@ def diff_notebooks(
             )
 
     diff = diff_notebook_functions(str(old_path), str(new_path))
+    diff.update(classify_notebook_diff(diff))
 
     response = {
         "status": "success",
@@ -6786,6 +6794,10 @@ def diff_notebook_version(
     -- dashboard-internal layout no API response elsewhere in this
     project exposes). The same distinct-from-structural-diff report GET
     /api/notebooks/diff's own "content" now offers.
+
+    Also always includes "compatible" and "breaking_changes", the same
+    classify_notebook_diff (backend/inspector.py) verdict GET
+    /api/notebooks/diff's own identical fields already provide.
     """
 
     file_path = resolve_upload_path(filename)
@@ -6845,6 +6857,7 @@ def diff_notebook_version(
             )
 
     diff = diff_notebook_functions(str(old_path), str(new_path))
+    diff.update(classify_notebook_diff(diff))
 
     response = {
         "status": "success",

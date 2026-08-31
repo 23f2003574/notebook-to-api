@@ -4260,6 +4260,38 @@ def test_diff_notebooks_reports_added_removed_changed_and_unchanged():
     assert [f["name"] for f in body["removed"]] == ["remove_me"]
     assert [c["name"] for c in body["changed"]] == ["add"]
     assert body["unchanged"] == ["unchanged_fn"]
+    assert body["compatible"] is False
+    breaking_types = {c["type"] for c in body["breaking_changes"]}
+    assert "removed_endpoint" in breaking_types
+    assert "required_parameter_added" in breaking_types
+
+
+def test_diff_notebooks_reports_compatible_when_nothing_would_break_callers():
+
+    old_content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+    new_content = _notebook_bytes(
+        "def add(a: int, b: int, c: int = 0) -> int:\n    return a + b + c\n"
+    )
+
+    for filename, content in (
+        ("diff_compat_old.ipynb", old_content),
+        ("diff_compat_new.ipynb", new_content),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    resp = client.get(
+        "/api/notebooks/diff",
+        params={"old": "diff_compat_old.ipynb", "new": "diff_compat_new.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["compatible"] is True
+    assert body["breaking_changes"] == []
 
 
 def test_diff_notebooks_omits_content_diff_by_default():
@@ -9320,6 +9352,51 @@ def test_diff_notebook_version_against_current_live_content():
     assert [c["name"] for c in body["changed"]] == ["add"]
     assert body["unchanged"] == ["unchanged_fn"]
     assert "content_diff" not in body
+    assert body["compatible"] is False
+    breaking_types = {c["type"] for c in body["breaking_changes"]}
+    assert "removed_endpoint" in breaking_types
+    assert "required_parameter_added" in breaking_types
+
+
+def test_diff_notebook_version_reports_compatible_when_nothing_would_break_callers():
+
+    filename = "versions_diff_compatible.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "def add(a: int, b: int) -> int:\n    return a + b\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "def add(a: int, b: int, c: int = 0) -> int:\n    return a + b + c\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.get(f"/api/notebooks/{filename}/versions/{version_id}/diff")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["compatible"] is True
+    assert body["breaking_changes"] == []
 
 
 def test_diff_notebook_version_content_true_reports_a_line_level_diff_using_friendly_labels():

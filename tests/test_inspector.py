@@ -3,6 +3,7 @@ import pytest
 
 from backend.inspector import (
     DEFAULT_DEV_API_KEY,
+    classify_notebook_diff,
     diff_notebook_functions,
     diff_notebook_source,
     generate_curl_commands,
@@ -845,6 +846,195 @@ def test_diff_notebook_functions_identical_notebooks_report_no_changes(tmp_path)
     assert sorted(diff["unchanged"]) == ["add", "subtract"]
 
 
+def test_classify_notebook_diff_removed_function_is_breaking(tmp_path):
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(
+        old_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n",
+    )
+    _write_notebook(new_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification["compatible"] is False
+    assert classification["breaking_changes"] == [{
+        "type": "removed_endpoint",
+        "name": "subtract",
+        "detail": "Endpoint 'subtract' was removed.",
+    }]
+
+
+def test_classify_notebook_diff_added_function_is_not_breaking(tmp_path):
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(old_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _write_notebook(
+        new_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def multiply(a: int, b: int) -> int:\n    return a * b\n",
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification == {"compatible": True, "breaking_changes": []}
+
+
+def test_classify_notebook_diff_new_required_parameter_is_breaking(tmp_path):
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(old_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _write_notebook(
+        new_path, "def add(a: int, b: int, c: int) -> int:\n    return a + b + c\n"
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification["compatible"] is False
+    assert classification["breaking_changes"] == [{
+        "type": "required_parameter_added",
+        "name": "add",
+        "detail": "New required parameter 'c' was added to 'add'.",
+    }]
+
+
+def test_classify_notebook_diff_new_optional_parameter_is_not_breaking(tmp_path):
+    """The one case test_diff_notebook_functions_reports_a_changed_signature
+    above already exercises for diff_notebook_functions itself -- a new
+    parameter *with* a default doesn't change what an existing caller's
+    already-valid request looks like, so it must not be reported as
+    breaking here even though diff_notebook_functions still reports the
+    function as "changed".
+    """
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(old_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _write_notebook(
+        new_path,
+        "def add(a: int, b: int, c: int = 0) -> int:\n    return a + b + c\n",
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification == {"compatible": True, "breaking_changes": []}
+
+
+def test_classify_notebook_diff_removed_parameter_is_breaking(tmp_path):
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(
+        old_path, "def add(a: int, b: int, c: int = 0) -> int:\n    return a + b + c\n"
+    )
+    _write_notebook(new_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification["compatible"] is False
+    assert classification["breaking_changes"] == [{
+        "type": "removed_parameter",
+        "name": "add",
+        "detail": "Parameter 'c' was removed from 'add'.",
+    }]
+
+
+def test_classify_notebook_diff_parameter_became_required_is_breaking(tmp_path):
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(
+        old_path, "def add(a: int, b: int = 0) -> int:\n    return a + b\n"
+    )
+    _write_notebook(new_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification["compatible"] is False
+    assert classification["breaking_changes"] == [{
+        "type": "parameter_became_required",
+        "name": "add",
+        "detail": "Parameter 'b' of 'add' lost its default and is now required.",
+    }]
+
+
+def test_classify_notebook_diff_parameter_type_change_is_breaking(tmp_path):
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(old_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _write_notebook(new_path, "def add(a: str, b: int) -> int:\n    return a + b\n")
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification["compatible"] is False
+    assert classification["breaking_changes"] == [{
+        "type": "parameter_type_changed",
+        "name": "add",
+        "detail": "Parameter 'a' of 'add' changed type from 'int' to 'str'.",
+    }]
+
+
+def test_classify_notebook_diff_return_type_change_is_breaking(tmp_path):
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(old_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _write_notebook(new_path, "def add(a: int, b: int) -> str:\n    return str(a + b)\n")
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification["compatible"] is False
+    assert classification["breaking_changes"] == [{
+        "type": "return_type_changed",
+        "name": "add",
+        "detail": "'add' return type changed from 'int' to 'str'.",
+    }]
+
+
+def test_classify_notebook_diff_async_only_change_is_not_breaking(tmp_path):
+    """test_diff_notebook_functions_async_change_is_reported_as_changed
+    above already confirms diff_notebook_functions reports this as
+    "changed" -- but sync/async-ness is invisible to an HTTP caller, so
+    it must not count as a breaking change here.
+    """
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(old_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _write_notebook(
+        new_path, "async def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification == {"compatible": True, "breaking_changes": []}
+
+
+def test_classify_notebook_diff_no_changes_is_compatible(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    diff = diff_notebook_functions(str(notebook_path), str(notebook_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification == {"compatible": True, "breaking_changes": []}
+
+
 def test_diff_notebook_source_identical_notebooks_yields_no_lines(tmp_path):
 
     notebook_path = tmp_path / "nb.ipynb"
@@ -950,6 +1140,49 @@ def test_print_notebook_diff_prints_added_removed_and_changed(capsys):
     assert "POST /subtract" in output
     assert "Changed 1 endpoint(s):" in output
     assert "POST /add" in output
+
+
+def test_print_notebook_diff_omits_compatibility_verdict_without_those_keys(capsys):
+    """A plain diff_notebook_functions dict -- no "compatible"/
+    "breaking_changes" merged in -- must print exactly as before
+    classify_notebook_diff existed.
+    """
+
+    print_notebook_diff(
+        {"added": [], "removed": [], "changed": [], "unchanged": ["add"]}
+    )
+
+    output = capsys.readouterr().out
+    assert "breaking change" not in output
+    assert "compiled API's contract" not in output
+
+
+def test_print_notebook_diff_prints_compatible_verdict(capsys):
+
+    print_notebook_diff({
+        "added": [], "removed": [], "changed": [], "unchanged": ["add"],
+        "compatible": True, "breaking_changes": [],
+    })
+
+    output = capsys.readouterr().out
+    assert "No breaking changes to the compiled API's contract." in output
+
+
+def test_print_notebook_diff_prints_breaking_changes(capsys):
+
+    print_notebook_diff({
+        "added": [], "removed": [{"name": "subtract"}], "changed": [], "unchanged": [],
+        "compatible": False,
+        "breaking_changes": [{
+            "type": "removed_endpoint",
+            "name": "subtract",
+            "detail": "Endpoint 'subtract' was removed.",
+        }],
+    })
+
+    output = capsys.readouterr().out
+    assert "1 breaking change(s) to the compiled API's contract:" in output
+    assert "Endpoint 'subtract' was removed." in output
 
 
 def test_generate_curl_commands_returns_one_command_per_function(tmp_path):

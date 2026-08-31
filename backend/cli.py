@@ -20,6 +20,7 @@ from backend.compiler import compile_notebook, _filter_functions_by_name
 # Import inspector for analysis
 from backend.inspector import (
     DEFAULT_DEV_API_KEY,
+    classify_notebook_diff,
     diff_notebook_functions,
     generate_curl_commands,
     inspect_notebook,
@@ -1182,10 +1183,13 @@ def _dispatch_core_command(args):
                     print(f"Docker image '{tag}' pushed successfully.")
     elif args.command == "diff":
         diff = diff_notebook_functions(args.old_notebook, args.new_notebook)
+        diff.update(classify_notebook_diff(diff))
         if args.json_output:
             print(json.dumps(diff, indent=2))
         else:
             print_notebook_diff(diff)
+        if args.fail_on_breaking and not diff["compatible"]:
+            sys.exit(1)
     elif args.command == "upload":
         # Imported here, not at module scope, the same deferred-import
         # convention export-openapi/export-sdk's own dynamic imports
@@ -3887,6 +3891,7 @@ def _dispatch_core_command(args):
                     f.write(new_content)
 
                 diff = diff_notebook_functions(old_path, new_path)
+                diff.update(classify_notebook_diff(diff))
 
             finally:
                 os.remove(old_path)
@@ -3907,6 +3912,9 @@ def _dispatch_core_command(args):
                     f"{dashboard_url}"
                 )
                 print_notebook_diff(diff)
+
+            if args.fail_on_breaking and not diff["compatible"]:
+                sys.exit(1)
 
         elif args.versions_command == "compare":
 
@@ -3953,6 +3961,9 @@ def _dispatch_core_command(args):
 
                 if args.content and data.get("content_diff"):
                     print("\n" + "\n".join(data["content_diff"]))
+
+            if args.fail_on_breaking and not data.get("compatible", True):
+                sys.exit(1)
 
         elif args.versions_command == "delete":
 
@@ -4283,6 +4294,7 @@ def _dispatch_core_command(args):
             # --overwrite` would move the world in: what an overwrite is
             # about to change on the dashboard, not the reverse.
             diff = diff_notebook_functions(remote_notebook_path, local_notebook_path)
+            diff.update(classify_notebook_diff(diff))
 
         finally:
             os.remove(remote_notebook_path)
@@ -4295,6 +4307,8 @@ def _dispatch_core_command(args):
                 f"'{args.filename}' on {dashboard_url}"
             )
             print_notebook_diff(diff)
+        if args.fail_on_breaking and not diff["compatible"]:
+            sys.exit(1)
     elif args.command == "diff-notebooks":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -4345,6 +4359,9 @@ def _dispatch_core_command(args):
 
             if args.content and data.get("content_diff"):
                 print("\n" + "\n".join(data["content_diff"]))
+
+        if args.fail_on_breaking and not data.get("compatible", True):
+            sys.exit(1)
     elif args.command == "remote-curl":
         # See `upload` above for why these are imported here rather than
         # at module scope.
@@ -5224,9 +5241,21 @@ def main():
         dest="json_output",
         help=(
             "Emit machine-readable JSON ({\"added\", \"removed\", "
-            "\"changed\", \"unchanged\"}) instead of the human-readable "
-            "report, for scripting/automation -- e.g. failing a CI check "
-            "when \"removed\" or \"changed\" is non-empty."
+            "\"changed\", \"unchanged\", \"compatible\", "
+            "\"breaking_changes\"}) instead of the human-readable report, "
+            "for scripting/automation."
+        )
+    )
+    diff_parser.add_argument(
+        "--fail-on-breaking",
+        action="store_true",
+        help=(
+            "Exit with status 1 if classify_notebook_diff (backend/"
+            "inspector.py) finds any breaking change between the two "
+            "notebooks -- a removed endpoint, a removed or newly-required "
+            "parameter, a parameter type change, or a return type change "
+            "-- after printing the report. Purely additive changes (a new "
+            "endpoint, a new parameter with a default) never trigger this."
         )
     )
 
@@ -7677,8 +7706,20 @@ def main():
         dest="json_output",
         help=(
             "Emit machine-readable JSON ({\"added\", \"removed\", "
-            "\"changed\", \"unchanged\"}) instead of the human-readable "
-            "report, for scripting/automation."
+            "\"changed\", \"unchanged\", \"compatible\", "
+            "\"breaking_changes\"}) instead of the human-readable report, "
+            "for scripting/automation."
+        )
+    )
+    versions_diff_parser.add_argument(
+        "--fail-on-breaking",
+        action="store_true",
+        help=(
+            "Exit with status 1 if classify_notebook_diff finds any "
+            "breaking change between the two sides -- e.g. to refuse a "
+            "`versions restore` that would break an existing caller. See "
+            "`diff --fail-on-breaking`'s own help for exactly what counts "
+            "as breaking."
         )
     )
 
@@ -7734,8 +7775,18 @@ def main():
         dest="json_output",
         help=(
             "Emit machine-readable JSON ({\"added\", \"removed\", "
-            "\"changed\", \"unchanged\"[, \"content_diff\"]}) instead of "
+            "\"changed\", \"unchanged\", \"compatible\", "
+            "\"breaking_changes\"[, \"content_diff\"]}) instead of "
             "the human-readable report, for scripting/automation."
+        )
+    )
+    versions_compare_parser.add_argument(
+        "--fail-on-breaking",
+        action="store_true",
+        help=(
+            "Exit with status 1 if GET .../versions/{version_id}/diff's "
+            "own \"compatible\" field is false -- see `diff --fail-on-"
+            "breaking`'s own help for exactly what counts as breaking."
         )
     )
 
@@ -7867,10 +7918,21 @@ def main():
         dest="json_output",
         help=(
             "Emit machine-readable JSON ({\"added\", \"removed\", "
-            "\"changed\", \"unchanged\"}) instead of the human-readable "
-            "report, for scripting/automation -- e.g. refusing to "
-            "`upload --overwrite` when \"removed\" or \"changed\" is "
-            "non-empty and hasn't been reviewed."
+            "\"changed\", \"unchanged\", \"compatible\", "
+            "\"breaking_changes\"}) instead of the human-readable report, "
+            "for scripting/automation."
+        )
+    )
+    remote_diff_parser.add_argument(
+        "--fail-on-breaking",
+        action="store_true",
+        help=(
+            "Exit with status 1 if classify_notebook_diff finds any "
+            "breaking change between the two notebooks -- e.g. to refuse "
+            "`upload --overwrite` when the local file would break an "
+            "existing caller of the already-uploaded notebook's compiled "
+            "API. See `diff --fail-on-breaking`'s own help for exactly "
+            "what counts as breaking."
         )
     )
 
@@ -7936,8 +7998,18 @@ def main():
         help=(
             "Emit machine-readable JSON ({\"status\", \"old\", \"new\", "
             "\"old_version\", \"new_version\", \"added\", \"removed\", "
-            "\"changed\", \"unchanged\"[, \"content_diff\"]) instead of "
+            "\"changed\", \"unchanged\", \"compatible\", "
+            "\"breaking_changes\"[, \"content_diff\"]) instead of "
             "the human-readable report, for scripting/automation."
+        )
+    )
+    diff_notebooks_parser.add_argument(
+        "--fail-on-breaking",
+        action="store_true",
+        help=(
+            "Exit with status 1 if GET /api/notebooks/diff's own "
+            "\"compatible\" field is false -- see `diff --fail-on-"
+            "breaking`'s own help for exactly what counts as breaking."
         )
     )
 

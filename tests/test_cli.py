@@ -1581,6 +1581,54 @@ def test_diff_command_json_flag_emits_machine_readable_output(tmp_path):
     assert data["removed"] == []
     assert data["changed"] == []
     assert data["unchanged"] == ["add"]
+    assert data["compatible"] is True
+    assert data["breaking_changes"] == []
+
+
+def test_diff_command_fail_on_breaking_exits_nonzero_for_a_breaking_change(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+    _write_notebook_with_function(
+        old_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    _write_notebook_with_function(
+        new_path, "def add(a: int, b: int, c: int) -> int:\n    return a + b + c\n"
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--fail-on-breaking"], cwd=workdir
+    )
+
+    assert proc.returncode == 1
+    assert "breaking change(s)" in proc.stdout
+    assert "New required parameter 'c' was added to 'add'." in proc.stdout
+
+
+def test_diff_command_fail_on_breaking_exits_zero_when_compatible(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+    _write_notebook_with_function(
+        old_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    _write_notebook_with_function(
+        new_path,
+        "def add(a: int, b: int, c: int = 0) -> int:\n    return a + b + c\n",
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--fail-on-breaking"], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No breaking changes to the compiled API's contract." in proc.stdout
 
 
 def test_diff_command_reports_a_clean_error_for_a_missing_notebook(tmp_path):
@@ -11511,7 +11559,10 @@ def test_versions_diff_command_json_flag_emits_machine_readable_output(
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     data = json.loads(proc.stdout)
-    assert data == {"added": [], "removed": [], "changed": [], "unchanged": ["add"]}
+    assert data == {
+        "added": [], "removed": [], "changed": [], "unchanged": ["add"],
+        "compatible": True, "breaking_changes": [],
+    }
 
 
 def test_versions_diff_command_reports_a_clean_error_for_a_missing_version(
@@ -12386,6 +12437,44 @@ def test_diff_notebooks_command_reports_added_removed_and_changed_functions(
     assert "Changed 1 endpoint(s):" in proc.stdout
     assert "POST /add" in proc.stdout
     assert handler.requests == ["/api/notebooks/diff?old=a.ipynb&new=b.ipynb"]
+
+
+def test_diff_notebooks_command_fail_on_breaking_exits_nonzero_when_incompatible(
+    tmp_path, fake_dashboard
+):
+    """diff-notebooks is server-backed -- unlike `diff`, it never calls
+    classify_notebook_diff itself, it just trusts GET /api/notebooks/diff's
+    own "compatible" field (merged in by classify_notebook_diff there).
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "old": "a.ipynb", "new": "b.ipynb",
+            "added": [], "removed": [{"name": "subtract"}], "changed": [], "unchanged": [],
+            "compatible": False,
+            "breaking_changes": [{
+                "type": "removed_endpoint",
+                "name": "subtract",
+                "detail": "Endpoint 'subtract' was removed.",
+            }],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "diff-notebooks", "a.ipynb", "b.ipynb",
+            "--fail-on-breaking", "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1
+    assert "Endpoint 'subtract' was removed." in proc.stdout
 
 
 def test_diff_notebooks_command_passes_old_version_and_new_version_through(
