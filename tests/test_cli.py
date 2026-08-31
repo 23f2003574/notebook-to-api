@@ -4034,6 +4034,48 @@ def test_find_duplicates_command_omits_limit_and_offset_query_params_by_default(
     assert handler.requests == ["/api/notebooks/duplicates"]
 
 
+def test_find_duplicates_command_format_csv_prints_the_dashboards_raw_csv_response(
+    fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    csv_body = (
+        "sha256,filename,size_bytes\r\n"
+        "abc123,nb1.ipynb,42\r\n"
+        "abc123,nb2.ipynb,42\r\n"
+    )
+    handler.responses = [_raw_response(200, csv_body.encode("utf-8"), "text/csv")]
+
+    proc = _run_cli(
+        ["find-duplicates", "--format", "csv", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout == csv_body.replace("\r\n", "\n")
+    assert handler.requests == ["/api/notebooks/duplicates?format=csv"]
+
+
+def test_find_duplicates_command_omits_format_query_param_by_default(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "duplicate_groups": [],
+            "group_count": 0, "duplicate_notebook_count": 0,
+            "limit": None, "offset": 0,
+        })
+    ]
+
+    proc = _run_cli(
+        ["find-duplicates", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/duplicates"]
+
+
 def test_find_duplicates_command_reports_a_clean_error_when_the_dashboard_is_unreachable():
 
     proc = _run_cli(

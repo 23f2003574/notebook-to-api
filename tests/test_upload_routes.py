@@ -3291,6 +3291,90 @@ def test_find_duplicate_notebooks_groups_byte_identical_uploads():
     assert len(group["sha256"]) == 64
 
 
+def test_find_duplicate_notebooks_csv_format_returns_one_row_per_filename():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    content_b = _notebook_bytes(
+        "def sub(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    for filename, content in (
+        ("dup_csv_a1.ipynb", content_a),
+        ("dup_csv_a2.ipynb", content_a),
+        ("dup_csv_b1.ipynb", content_b),
+        ("dup_csv_unique.ipynb", content_b + b" "),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    resp = client.get("/api/notebooks/duplicates", params={"format": "csv"})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert 'attachment; filename="duplicates.csv"' in resp.headers["content-disposition"]
+
+    rows = resp.text.strip().split("\r\n")
+    assert rows[0] == "sha256,filename,size_bytes"
+    assert len(rows) == 3
+
+    sha256 = rows[1].split(",")[0]
+    assert rows[1] == f"{sha256},dup_csv_a1.ipynb,{len(content_a)}"
+    assert rows[2] == f"{sha256},dup_csv_a2.ipynb,{len(content_a)}"
+
+
+def test_find_duplicate_notebooks_csv_format_respects_limit_and_offset():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes("def a() -> int:\n    return 1\n")
+    content_b = _notebook_bytes("def b() -> int:\n    return 2\n")
+
+    for filename, content in (
+        ("dup_csv_page_a1.ipynb", content_a),
+        ("dup_csv_page_a2.ipynb", content_a),
+        ("dup_csv_page_b1.ipynb", content_b),
+        ("dup_csv_page_b2.ipynb", content_b),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    unpaginated_groups = client.get("/api/notebooks/duplicates").json()["duplicate_groups"]
+    assert len(unpaginated_groups) == 2
+    second_group = unpaginated_groups[1]
+
+    resp = client.get(
+        "/api/notebooks/duplicates",
+        params={"format": "csv", "limit": 1, "offset": 1},
+    )
+
+    assert resp.status_code == 200
+    rows = resp.text.strip().split("\r\n")
+    assert rows[0] == "sha256,filename,size_bytes"
+    # Groups are sorted by "sha256" (the same order the unpaginated JSON
+    # call above already reports them in); offset=1 skips the first group
+    # entirely, limit=1 keeps only the second -- so only that group's own
+    # two filenames appear, never the first group's.
+    assert len(rows) == 3
+    for filename in second_group["filenames"]:
+        assert any(row.startswith(f"{second_group['sha256']},{filename},") for row in rows[1:])
+
+
+def test_find_duplicate_notebooks_rejects_an_invalid_format():
+
+    resp = client.get("/api/notebooks/duplicates", params={"format": "xml"})
+
+    assert resp.status_code == 400
+    assert "format must be" in resp.json()["detail"]
+
+
 def test_find_duplicate_notebooks_reports_no_groups_when_nothing_duplicated():
 
     client.delete("/api/notebooks?confirm=true")

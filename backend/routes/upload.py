@@ -3166,7 +3166,8 @@ def export_notebooks(
 
 @router.get("/notebooks/duplicates")
 def find_duplicate_notebooks(
-    tag: str = None, sha256: str = None, limit: int = None, offset: int = 0
+    tag: str = None, sha256: str = None, limit: int = None, offset: int = 0,
+    format: str = "json",
 ):
     """Group every uploaded notebook by its raw content, reporting only
     the groups with more than one filename -- byte-identical uploads
@@ -3248,7 +3249,27 @@ def find_duplicate_notebooks(
     "offset", or a "limit" that isn't a non-negative integer, is
     rejected with 400, the same way GET /api/notebooks already rejects
     either.
+
+    "format" ("json" default, or "csv") returns the identical
+    already-filtered/sorted/paginated "duplicate_groups" as a downloadable
+    CSV instead, the same "json"/"csv" choice GET /api/notebooks, GET
+    /api/functions, GET /api/notebooks/search-content, and GET
+    /api/notebooks/storage already offer for their own listings -- before
+    this, auditing duplicates in a spreadsheet (or attaching a report to a
+    cleanup ticket) meant reshaping the JSON response by hand. One row per
+    "filename" within a group (not one row per group), the same
+    one-row-per-leaf-entry flattening GET /api/functions' own "functions"
+    CSV already applies to its own per-notebook list of matches -- a
+    caller wanting one row per group can still reconstruct that by
+    grouping the CSV's own "sha256" column back together.
     """
+
+    if format not in ("json", "csv"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="format must be 'json' or 'csv'"
+        )
 
     upload_root = Path(UPLOAD_DIR)
 
@@ -3306,6 +3327,29 @@ def find_duplicate_notebooks(
             )
 
         duplicate_groups = duplicate_groups[:limit]
+
+    if format == "csv":
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+
+        writer.writerow(["sha256", "filename", "size_bytes"])
+
+        for group in duplicate_groups:
+
+            for filename in group["filenames"]:
+
+                writer.writerow([
+                    group["sha256"], filename, group["size_bytes"],
+                ])
+
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": 'attachment; filename="duplicates.csv"',
+            },
+        )
 
     return {
         "status": "success",

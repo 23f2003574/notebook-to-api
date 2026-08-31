@@ -1749,6 +1749,8 @@ def _dispatch_core_command(args):
             params["limit"] = args.limit
         if args.offset:
             params["offset"] = args.offset
+        if args.format == "csv":
+            params["format"] = "csv"
 
         try:
             response = httpx.get(
@@ -1765,6 +1767,14 @@ def _dispatch_core_command(args):
                 f"Dashboard rejected the request ({response.status_code}): "
                 f"{_extract_dashboard_error_detail(response)}"
             )
+
+        if args.format == "csv":
+            # The response is CSV, not JSON -- printed as-is (redirect
+            # stdout to a file to save it) rather than run through the
+            # JSON/human-readable branches below, which both assume a
+            # parseable JSON body.
+            print(response.text, end="")
+            return
 
         data = response.json()
 
@@ -5781,6 +5791,24 @@ def main():
         help="Skip this many duplicate groups before --limit is applied, via GET /api/notebooks/duplicates' own ?offset=."
     )
     _add_dashboard_url_and_timeout_arguments(find_duplicates_parser)
+    find_duplicates_parser.add_argument(
+        "--format",
+        choices=["json", "csv"],
+        default="json",
+        help=(
+            "Response format to request via GET /api/notebooks/duplicates' "
+            "own ?format= query param, the same \"json\"/\"csv\" choice "
+            "`list`/`search-functions`/`search-content`/`storage` already "
+            "offer for their own listings. \"csv\" prints the dashboard's "
+            "own \"sha256,filename,size_bytes\" CSV response (one row per "
+            "filename within a group) straight to stdout (redirect it to a "
+            "file, e.g. `> duplicates.csv`) -- the same already-filtered/"
+            "paginated duplicate groups the \"json\" response's own "
+            "\"duplicate_groups\" would list. Every --tag/--sha256/--limit/"
+            "--offset above still applies; --json is ignored under "
+            "--format csv, since the response isn't JSON at all."
+        )
+    )
     find_duplicates_parser.add_argument(
         "--json",
         action="store_true",
