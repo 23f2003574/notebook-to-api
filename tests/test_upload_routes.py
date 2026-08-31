@@ -8868,6 +8868,158 @@ def test_list_notebooks_unknown_sha256_yields_no_notebooks():
     assert notebooks == []
 
 
+def test_list_notebooks_filters_by_modified_after_and_before():
+
+    resp_older = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "modified_filter_older.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    assert resp_older.status_code == 200
+
+    older_path = Path(UPLOAD_DIR) / "modified_filter_older.ipynb"
+    older_stat = older_path.stat()
+    os.utime(older_path, (older_stat.st_atime, older_stat.st_mtime - 7200))
+
+    resp_newer = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "modified_filter_newer.ipynb",
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    assert resp_newer.status_code == 200
+
+    older_modified_at = client.get(
+        "/api/notebooks/modified_filter_older.ipynb/info"
+    ).json()["modified_at"]
+    newer_modified_at = client.get(
+        "/api/notebooks/modified_filter_newer.ipynb/info"
+    ).json()["modified_at"]
+
+    # modified_after excludes the older entry, keeps the newer one.
+    notebooks = client.get(
+        "/api/notebooks",
+        params={"search": "modified_filter_", "modified_after": newer_modified_at},
+    ).json()["notebooks"]
+    assert [nb["filename"] for nb in notebooks] == ["modified_filter_newer.ipynb"]
+
+    # modified_before excludes the newer entry, keeps the older one.
+    notebooks = client.get(
+        "/api/notebooks",
+        params={"search": "modified_filter_", "modified_before": older_modified_at},
+    ).json()["notebooks"]
+    assert [nb["filename"] for nb in notebooks] == ["modified_filter_older.ipynb"]
+
+    # Both bounds together, wide enough to include both.
+    notebooks = client.get(
+        "/api/notebooks",
+        params={
+            "search": "modified_filter_",
+            "modified_after": older_modified_at,
+            "modified_before": newer_modified_at,
+        },
+    ).json()["notebooks"]
+    assert sorted(nb["filename"] for nb in notebooks) == [
+        "modified_filter_newer.ipynb", "modified_filter_older.ipynb",
+    ]
+
+
+def test_list_notebooks_modified_after_is_inclusive():
+
+    resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "modified_inclusive.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    assert resp.status_code == 200
+
+    modified_at = client.get(
+        "/api/notebooks/modified_inclusive.ipynb/info"
+    ).json()["modified_at"]
+
+    notebooks = client.get(
+        "/api/notebooks",
+        params={
+            "search": "modified_inclusive",
+            "modified_after": modified_at,
+            "modified_before": modified_at,
+        },
+    ).json()["notebooks"]
+
+    assert [nb["filename"] for nb in notebooks] == ["modified_inclusive.ipynb"]
+
+
+def test_list_notebooks_rejects_modified_after_later_than_modified_before():
+
+    resp = client.get(
+        "/api/notebooks",
+        params={
+            "modified_after": "2026-06-01T00:00:00+00:00",
+            "modified_before": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "modified_after" in resp.json()["detail"]
+
+
+def test_list_notebooks_rejects_a_malformed_modified_after():
+
+    resp = client.get("/api/notebooks", params={"modified_after": "not-a-date"})
+
+    assert resp.status_code == 400
+    assert "modified_after" in resp.json()["detail"]
+
+
+def test_list_notebooks_rejects_a_malformed_modified_before():
+
+    resp = client.get("/api/notebooks", params={"modified_before": "not-a-date"})
+
+    assert resp.status_code == 400
+    assert "modified_before" in resp.json()["detail"]
+
+
+def test_list_notebooks_modified_after_naive_value_is_treated_as_utc():
+
+    resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "modified_naive.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    assert resp.status_code == 200
+
+    modified_at = client.get(
+        "/api/notebooks/modified_naive.ipynb/info"
+    ).json()["modified_at"]
+    naive_modified_at = modified_at.split("+")[0]
+
+    notebooks = client.get(
+        "/api/notebooks",
+        params={"search": "modified_naive", "modified_after": naive_modified_at},
+    ).json()["notebooks"]
+
+    assert [nb["filename"] for nb in notebooks] == ["modified_naive.ipynb"]
+
+
 def test_list_notebooks_description_search_is_case_insensitive():
 
     _upload_sample_notebook("desc_search_case.ipynb")

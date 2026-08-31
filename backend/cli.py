@@ -1534,6 +1534,10 @@ def _dispatch_core_command(args):
             params["description_search"] = args.description_search
         if args.sha256:
             params["sha256"] = args.sha256
+        if args.modified_after:
+            params["modified_after"] = args.modified_after
+        if args.modified_before:
+            params["modified_before"] = args.modified_before
         if args.limit is not None:
             params["limit"] = args.limit
         if args.format == "csv":
@@ -5760,6 +5764,32 @@ def main():
             "--source-sha256` already filter by, so a hash read back "
             "from either history command can be checked against what's "
             "still in the catalog today."
+        )
+    )
+    list_parser.add_argument(
+        "--modified-after",
+        default=None,
+        dest="modified_after",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only list notebooks modified on or after this ISO 8601 "
+            "datetime (e.g. 2026-01-01T00:00:00+00:00), mirroring GET "
+            "/api/notebooks' own ?modified_after= -- a value with no UTC "
+            "offset is assumed to already be UTC. Composes with "
+            "--modified-before to bound a window; rejected if later than "
+            "--modified-before."
+        )
+    )
+    list_parser.add_argument(
+        "--modified-before",
+        default=None,
+        dest="modified_before",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only list notebooks modified on or before this ISO 8601 "
+            "datetime, mirroring GET /api/notebooks' own "
+            "?modified_before= -- the complementary bound to "
+            "--modified-after."
         )
     )
     list_parser.add_argument(

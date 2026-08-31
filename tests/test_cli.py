@@ -3204,6 +3204,50 @@ def test_list_command_passes_the_sha256_flag_through(fake_dashboard):
     ]
 
 
+def test_list_command_passes_modified_after_and_before_through(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebooks": [], "total_count": 0,
+            "limit": None, "offset": 0,
+        })
+    ]
+
+    proc = _run_cli(
+        [
+            "list", "--dashboard-url", dashboard_url,
+            "--modified-after", "2026-01-01T00:00:00+00:00",
+            "--modified-before", "2026-06-01T00:00:00+00:00",
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks?sort=name&order=asc&offset=0"
+        "&modified_after=2026-01-01T00%3A00%3A00%2B00%3A00"
+        "&modified_before=2026-06-01T00%3A00%3A00%2B00%3A00"
+    ]
+
+
+def test_list_command_reports_the_dashboards_error_for_an_invalid_modified_after(
+    fake_dashboard,
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(400, {"detail": "modified_after must be an ISO 8601 datetime"})
+    ]
+
+    proc = _run_cli(
+        ["list", "--dashboard-url", dashboard_url, "--modified-after", "not-a-date"],
+        cwd=Path.cwd(),
+    )
+
+    _assert_clean_cli_error(proc, "modified_after must be an ISO 8601 datetime")
+
+
 def test_list_command_passes_offset_through(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

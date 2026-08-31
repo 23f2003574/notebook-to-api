@@ -3074,6 +3074,39 @@ def _notebook_metadata_entry(
     return notebook_entry
 
 
+def _parse_iso_datetime_query_param(value, field_name):
+    """Parse `value` (a caller-supplied ISO 8601 datetime string, or
+    None) into a timezone-aware datetime, or None if `value` itself is
+    None -- shared by GET /api/notebooks' own "modified_after"/
+    "modified_before" below so both are parsed/validated identically.
+
+    A naive value (no offset/"Z") is assumed to already be UTC, the same
+    timezone _notebook_metadata_entry's own "modified_at" field is always
+    rendered in (datetime.fromtimestamp(..., tz=timezone.utc)) -- so a
+    caller comparing this endpoint's own "modified_at" output back
+    against these query params, unchanged, compares correctly without
+    having to append an explicit offset itself.
+
+    Raises HTTPException(400) naming `field_name` for a value that isn't
+    a valid ISO 8601 datetime at all, rather than silently treating a
+    typo'd value as "no filter" -- the same "fail loudly on a malformed
+    filter" precedent every other query-param validation in this file
+    already follows.
+    """
+    if value is None:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field_name} must be an ISO 8601 datetime"
+        )
+
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
 @router.get("/notebooks")
 def list_notebooks(
     search: str = None,
@@ -3084,6 +3117,8 @@ def list_notebooks(
     tag: str = None,
     description_search: str = None,
     sha256: str = None,
+    modified_after: str = None,
+    modified_before: str = None,
     format: str = "json",
 ):
     """List previously uploaded notebooks.
@@ -3209,6 +3244,27 @@ def list_notebooks(
     yields no matching notebooks, not an error, the same as every other
     filter here.
 
+    "modified_after"/"modified_before" (each an optional ISO 8601
+    datetime, see _parse_iso_datetime_query_param above) narrow the
+    catalog to notebooks whose own "modified_at" falls on or after/on or
+    before that instant -- inclusive on both ends, composing with each
+    other and every other filter here identically (applied alongside
+    "search"/"tag"/"description_search", before "sha256", the same
+    "cheap filters before the one real per-notebook work" ordering
+    "sha256" itself already follows). Before this, answering "which
+    notebooks changed in the last N days" (a cleanup sweep, an audit
+    ahead of a backup) meant fetching the entire catalog via GET
+    /api/notebooks?sort=modified and inspecting each entry's own
+    "modified_at" by hand, since there was no way to narrow to a window
+    server-side at all -- the identical gap "sort"/"order" already closed
+    for *ordering* by "modified_at", just never for *filtering* by it. A
+    naive value (no UTC offset) is assumed to already be UTC, matching
+    "modified_at"'s own rendering, so a value copied straight from an
+    earlier response's own "modified_at" field always means what it
+    looks like it means. "modified_after" later than "modified_before"
+    is rejected with 400 -- a window that can never match anything is a
+    caller error worth surfacing, not a silently empty result.
+
     "format" (optional, default "json") returns "csv" instead -- the
     same "csv"/"json" choice GET /api/notebooks/storage, GET
     /api/deploy/history, and GET /api/compile/history's own "format"
@@ -3269,6 +3325,18 @@ def list_notebooks(
             detail="limit must be a positive integer"
         )
 
+    modified_after_dt = _parse_iso_datetime_query_param(modified_after, "modified_after")
+    modified_before_dt = _parse_iso_datetime_query_param(modified_before, "modified_before")
+
+    if (
+        modified_after_dt is not None and modified_before_dt is not None
+        and modified_after_dt > modified_before_dt
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="modified_after must not be later than modified_before"
+        )
+
     upload_root = Path(UPLOAD_DIR)
 
     compiled_path, compiled_sha256, compiled_at, compiled_version_id = (
@@ -3304,10 +3372,22 @@ def list_notebooks(
         ):
             continue
 
+        entry_stat = entry.stat()
+
+        if modified_after_dt is not None or modified_before_dt is not None:
+
+            entry_modified_at = datetime.fromtimestamp(
+                entry_stat.st_mtime, tz=timezone.utc
+            )
+
+            if modified_after_dt is not None and entry_modified_at < modified_after_dt:
+                continue
+
+            if modified_before_dt is not None and entry_modified_at > modified_before_dt:
+                continue
+
         if sha256 and hash_notebook_file(entry) != sha256:
             continue
-
-        entry_stat = entry.stat()
 
         notebook_entry = _notebook_metadata_entry(
             entry, compiled_path, compiled_sha256, compiled_at, compiled_version_id
