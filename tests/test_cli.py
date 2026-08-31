@@ -1497,6 +1497,42 @@ def test_watch_command_rejects_a_negative_debounce(tmp_path):
     _assert_clean_cli_error(proc, "--debounce must be zero or positive")
 
 
+def test_serve_command_accepts_on_change_flag(tmp_path):
+    """Wiring-only check, mirroring test_serve_command_accepts_debounce_flag
+    above: argparse itself accepts --on-change (reaching the
+    missing-notebook error, not an "unrecognized arguments" one).
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "serve", str(workdir / "does-not-exist.ipynb"),
+            "--on-change", "pytest -x",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_watch_command_accepts_on_change_flag(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "watch", str(workdir / "does-not-exist.ipynb"),
+            "--on-change", "pytest -x",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
 def test_diff_command_is_registered():
     """Same subparser/dispatch-branch mismatch gap test_deploy_command_is_registered
     (test_cli_deploy.py) and test_watch_command_is_registered (above)

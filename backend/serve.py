@@ -9,6 +9,51 @@ from backend.compiler import compile_notebook, package_name_for_output_dir
 from backend.inspector import print_compile_summary
 
 
+def run_on_change_hook(on_change):
+    """Run `on_change` (a shell command string) via a real shell, letting
+    its own stdout/stderr flow straight through to this process' own --
+    the same "just let the child inherit our terminal, it's a foreground
+    dev workflow" choice `deploy`'s own `docker build`/`docker push`
+    subprocess calls already make, rather than capturing and re-printing
+    it after the fact.
+
+    Shared by serve_notebook/watch_notebook's own initial compile and
+    NotebookChangeHandler's own every-recompile call, so a hook behaves
+    identically (the same header/footer, the same "a failing hook is
+    reported, never raised") regardless of which one triggered it.
+
+    Never raises: a failing hook (a non-zero exit, or the command itself
+    not existing at all) is reported to stdout, exactly like a failing
+    compile already is, rather than crashing the whole `serve`/`watch`
+    session over a check that's informational, not load-bearing --
+    `serve`/`watch`'s entire reason to exist (a live, running dev server
+    a developer keeps working against) doesn't stop just because the
+    latest save happened to fail its own hook.
+
+    shell=True (not shlex.split + shell=False) deliberately supports a
+    caller passing more than one command chained with "&&"/"|" -- the
+    exact kind of ad-hoc, one-off check this hook exists for (e.g.
+    `--on-change "pytest -x && curl -f localhost:8000/health"`), the
+    same tradeoff any other "run a shell command a caller supplies"
+    dev-tool feature already accepts.
+    """
+    print(f"\n🪝 Running on-change hook: {on_change}")
+
+    try:
+
+        result = subprocess.run(on_change, shell=True)
+
+    except Exception as e:
+
+        print(f"🪝 On-change hook failed to start: {e}\n")
+        return
+
+    if result.returncode == 0:
+        print("🪝 On-change hook succeeded.\n")
+    else:
+        print(f"🪝 On-change hook exited with code {result.returncode}.\n")
+
+
 class NotebookChangeHandler(FileSystemEventHandler):
     """Watches for changes to the notebook and recompiles when modified.
 
@@ -51,7 +96,7 @@ class NotebookChangeHandler(FileSystemEventHandler):
 
     def __init__(
         self, notebook_path, output_dir, only=None, exclude=None,
-        debounce_seconds=1.0,
+        debounce_seconds=1.0, on_change=None,
     ):
         """debounce_seconds (default 1.0, previously hardcoded to exactly
         this value with no way to change it) is how long
@@ -64,12 +109,24 @@ class NotebookChangeHandler(FileSystemEventHandler):
         os.replace-style save (the common case this default already
         covers) can now be shortened instead of paying the fixed 1s tax
         on every edit-recompile cycle.
+
+        on_change: An optional shell command (a string, run via a real
+        shell -- see run_on_change_hook below) to run after every
+        *successful* recompile this handler triggers. Before this, the
+        only feedback a live `serve`/`watch` session gave after a save
+        was print_compile_summary's own static report of what got
+        compiled -- there was no way to also run something that actually
+        exercises the freshly compiled app (a test suite, a curl smoke
+        check, a linter) without leaving `serve`/`watch` running in one
+        terminal and manually re-running that command in another, by
+        hand, after every single save.
         """
         self.notebook_path = notebook_path
         self.output_dir = output_dir
         self.only = only
         self.exclude = exclude
         self.debounce_seconds = debounce_seconds
+        self.on_change = on_change
         self.last_compile_time = time.time()
 
     def on_modified(self, event):
@@ -130,13 +187,15 @@ class NotebookChangeHandler(FileSystemEventHandler):
                     self.notebook_path, self.output_dir,
                     only=self.only, exclude=self.exclude,
                 )
+                if self.on_change:
+                    run_on_change_hook(self.on_change)
             except Exception as e:
                 print(f"❌ Compilation error: {e}\n")
 
 
 def serve_notebook(
     notebook_path, output_dir="generated", port=8000, host="0.0.0.0",
-    only=None, exclude=None, debounce_seconds=1.0,
+    only=None, exclude=None, debounce_seconds=1.0, on_change=None,
 ):
     """
     Serve a notebook as a live API with hot recompilation.
@@ -177,6 +236,11 @@ def serve_notebook(
         debounce_seconds: How long NotebookChangeHandler waits after the
             last recompile before triggering another one (default 1.0)
             -- see its own docstring for why this is configurable.
+        on_change: An optional shell command run (via run_on_change_hook
+            above) after the initial compile and after every subsequent
+            successful recompile -- see NotebookChangeHandler's own
+            docstring for exactly what this is for and why it didn't
+            exist before.
     """
 
     # Initial compilation
@@ -184,12 +248,14 @@ def serve_notebook(
     compile_notebook(notebook_path, output_dir, only=only, exclude=exclude)
     print("✅ Initial compilation complete.")
     print_compile_summary(notebook_path, output_dir, only=only, exclude=exclude)
+    if on_change:
+        run_on_change_hook(on_change)
 
     # Set up file watcher
     observer = Observer()
     handler = NotebookChangeHandler(
         notebook_path, output_dir, only=only, exclude=exclude,
-        debounce_seconds=debounce_seconds,
+        debounce_seconds=debounce_seconds, on_change=on_change,
     )
 
     # Watch the directory containing the notebook
@@ -346,7 +412,7 @@ def serve_notebook(
 
 def watch_notebook(
     notebook_path, output_dir="generated", only=None, exclude=None,
-    debounce_seconds=1.0,
+    debounce_seconds=1.0, on_change=None,
 ):
     """Compile a notebook once, then keep recompiling it on every save --
     without also starting a live API server the way `serve` does.
@@ -375,17 +441,22 @@ def watch_notebook(
             accept. Mutually exclusive with `only`.
         debounce_seconds: Same debounce_seconds serve_notebook already
             accepts -- see NotebookChangeHandler's own docstring.
+        on_change: Same on_change serve_notebook already accepts -- see
+            NotebookChangeHandler's own docstring for exactly what this
+            runs and when.
     """
 
     print("📝 Initial compilation...")
     compile_notebook(notebook_path, output_dir, only=only, exclude=exclude)
     print("✅ Initial compilation complete.")
     print_compile_summary(notebook_path, output_dir, only=only, exclude=exclude)
+    if on_change:
+        run_on_change_hook(on_change)
 
     observer = Observer()
     handler = NotebookChangeHandler(
         notebook_path, output_dir, only=only, exclude=exclude,
-        debounce_seconds=debounce_seconds,
+        debounce_seconds=debounce_seconds, on_change=on_change,
     )
 
     notebook_dir = Path(notebook_path).parent.resolve()

@@ -527,6 +527,32 @@ def _add_debounce_argument(parser):
     )
 
 
+def _add_on_change_argument(parser):
+    """Add --on-change to `parser` -- shared by the `serve` and `watch`
+    subparsers below, the same way _add_debounce_argument already shares
+    --debounce between them.
+    """
+    parser.add_argument(
+        "--on-change",
+        default=None,
+        dest="on_change",
+        metavar="COMMAND",
+        help=(
+            "Shell command to run (via run_on_change_hook, backend/"
+            "serve.py) after the initial compile and after every "
+            "subsequent successful recompile -- e.g. `--on-change "
+            "\"pytest -x\"` to re-run a test suite against the freshly "
+            "compiled app on every save, without leaving this command "
+            "running in one terminal and re-running that command by hand "
+            "in another after each one. Its own stdout/stderr are "
+            "printed directly to this terminal; a non-zero exit is "
+            "reported, never treated as this command's own failure -- "
+            "the live server/watch session keeps running regardless. "
+            "Not run at all if a recompile itself fails."
+        )
+    )
+
+
 def _add_version_id_argument(parser, endpoint):
     """Add --version-id to `parser` -- shared by `remote-validate`,
     `requirements-preview`, `app-preview`, and `curl-preview` below, so
@@ -1106,6 +1132,7 @@ def _dispatch_core_command(args):
         serve_notebook(
             args.notebook, args.output, args.port, args.host,
             only=only, exclude=exclude, debounce_seconds=args.debounce_seconds,
+            on_change=args.on_change,
         )
     elif args.command == "watch":
         if args.debounce_seconds < 0:
@@ -1114,7 +1141,7 @@ def _dispatch_core_command(args):
         exclude = _parse_comma_separated_names(args.exclude)
         watch_notebook(
             args.notebook, args.output, only=only, exclude=exclude,
-            debounce_seconds=args.debounce_seconds,
+            debounce_seconds=args.debounce_seconds, on_change=args.on_change,
         )
     elif args.command == "deploy":
         output_dir = Path(args.output)
@@ -5352,6 +5379,7 @@ def main():
     )
     _add_function_selection_arguments(serve_parser)
     _add_debounce_argument(serve_parser)
+    _add_on_change_argument(serve_parser)
 
     # watch command (recompile on save, no live API server)
     watch_parser = subparsers.add_parser(
@@ -5366,6 +5394,7 @@ def main():
     )
     _add_function_selection_arguments(watch_parser)
     _add_debounce_argument(watch_parser)
+    _add_on_change_argument(watch_parser)
 
     # deploy command (compile + build a Docker image)
     deploy_parser = subparsers.add_parser(

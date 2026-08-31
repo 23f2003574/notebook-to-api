@@ -1,4 +1,5 @@
 import subprocess
+import sys
 
 import pytest
 
@@ -99,7 +100,8 @@ def _reset_fakes():
 def _run_serve(
     monkeypatch, notebook_path, output_dir, port=None, host=None,
     compiled_calls=None, summary_calls=None, only=None, exclude=None,
-    only_exclude_calls=None, debounce_seconds=None,
+    only_exclude_calls=None, debounce_seconds=None, on_change=None,
+    hook_calls=None,
 ):
     """serve_notebook only returns because time.sleep is patched to raise
     KeyboardInterrupt on its first call inside the `while True` loop --
@@ -127,6 +129,9 @@ def _run_serve(
     if only_exclude_calls is None:
         only_exclude_calls = []
 
+    if hook_calls is None:
+        hook_calls = []
+
     def fake_compile_notebook(nb_path, out_dir, only=None, exclude=None):
         compiled_calls.append((nb_path, out_dir))
         only_exclude_calls.append((only, exclude))
@@ -134,10 +139,14 @@ def _run_serve(
     def fake_print_compile_summary(nb_path, out_dir, only=None, exclude=None):
         summary_calls.append((nb_path, out_dir))
 
+    def fake_run_on_change_hook(command):
+        hook_calls.append(command)
+
     monkeypatch.setattr(serve_module, "compile_notebook", fake_compile_notebook)
     monkeypatch.setattr(
         serve_module, "print_compile_summary", fake_print_compile_summary
     )
+    monkeypatch.setattr(serve_module, "run_on_change_hook", fake_run_on_change_hook)
     monkeypatch.setattr(serve_module, "Observer", _FakeObserver)
     monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
     monkeypatch.setattr(serve_module.time, "sleep", _raise_keyboard_interrupt)
@@ -153,6 +162,8 @@ def _run_serve(
         kwargs["exclude"] = exclude
     if debounce_seconds is not None:
         kwargs["debounce_seconds"] = debounce_seconds
+    if on_change is not None:
+        kwargs["on_change"] = on_change
 
     serve_module.serve_notebook(str(notebook_path), str(output_dir), **kwargs)
 
@@ -424,6 +435,47 @@ def test_serve_notebook_passes_debounce_seconds_to_the_change_handler(
     assert handler.debounce_seconds == 5.0
 
 
+def test_serve_notebook_runs_the_on_change_hook_after_the_initial_compile(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    hook_calls = []
+
+    _run_serve(
+        monkeypatch, notebook_path, output_dir,
+        on_change="pytest -x", hook_calls=hook_calls,
+    )
+
+    assert hook_calls == ["pytest -x"]
+
+
+def test_serve_notebook_does_not_run_a_hook_when_none_is_given(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    hook_calls = []
+
+    _run_serve(monkeypatch, notebook_path, output_dir, hook_calls=hook_calls)
+
+    assert hook_calls == []
+
+
+def test_serve_notebook_passes_on_change_to_the_change_handler(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir, on_change="pytest -x")
+
+    handler, _path, _recursive = _FakeObserver.instances[0].scheduled[0]
+    assert handler.on_change == "pytest -x"
+
+
 def test_serve_notebook_prints_a_compile_summary_after_the_initial_compile(tmp_path, monkeypatch):
     """Before this, `serve`'s initial compile gave no feedback at all
     about what had actually been generated -- just "Initial compilation
@@ -619,6 +671,7 @@ def test_serve_notebook_stops_and_joins_the_observer_when_the_server_dies(tmp_pa
 def _run_watch(
     monkeypatch, notebook_path, output_dir, compiled_calls=None, summary_calls=None,
     only=None, exclude=None, only_exclude_calls=None, debounce_seconds=None,
+    on_change=None, hook_calls=None,
 ):
     """watch_notebook only returns because time.sleep is patched to raise
     KeyboardInterrupt on its first call inside the `while True` loop,
@@ -641,6 +694,9 @@ def _run_watch(
     if only_exclude_calls is None:
         only_exclude_calls = []
 
+    if hook_calls is None:
+        hook_calls = []
+
     def fake_compile_notebook(nb_path, out_dir, only=None, exclude=None):
         compiled_calls.append((nb_path, out_dir))
         only_exclude_calls.append((only, exclude))
@@ -648,10 +704,14 @@ def _run_watch(
     def fake_print_compile_summary(nb_path, out_dir, only=None, exclude=None):
         summary_calls.append((nb_path, out_dir))
 
+    def fake_run_on_change_hook(command):
+        hook_calls.append(command)
+
     monkeypatch.setattr(serve_module, "compile_notebook", fake_compile_notebook)
     monkeypatch.setattr(
         serve_module, "print_compile_summary", fake_print_compile_summary
     )
+    monkeypatch.setattr(serve_module, "run_on_change_hook", fake_run_on_change_hook)
     monkeypatch.setattr(serve_module, "Observer", _FakeObserver)
     monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
     monkeypatch.setattr(serve_module.time, "sleep", _raise_keyboard_interrupt)
@@ -663,6 +723,8 @@ def _run_watch(
         kwargs["exclude"] = exclude
     if debounce_seconds is not None:
         kwargs["debounce_seconds"] = debounce_seconds
+    if on_change is not None:
+        kwargs["on_change"] = on_change
 
     serve_module.watch_notebook(str(notebook_path), str(output_dir), **kwargs)
 
@@ -735,6 +797,35 @@ def test_watch_notebook_passes_debounce_seconds_to_the_change_handler(
 
     handler, _path, _recursive = _FakeObserver.instances[0].scheduled[0]
     assert handler.debounce_seconds == 0.2
+
+
+def test_watch_notebook_runs_the_on_change_hook_after_the_initial_compile(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    hook_calls = []
+
+    _run_watch(
+        monkeypatch, notebook_path, output_dir,
+        on_change="pytest -x", hook_calls=hook_calls,
+    )
+
+    assert hook_calls == ["pytest -x"]
+
+
+def test_watch_notebook_passes_on_change_to_the_change_handler(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_watch(monkeypatch, notebook_path, output_dir, on_change="pytest -x")
+
+    handler, _path, _recursive = _FakeObserver.instances[0].scheduled[0]
+    assert handler.on_change == "pytest -x"
 
 
 def test_watch_notebook_prints_a_compile_summary_after_the_initial_compile(
@@ -1137,6 +1228,112 @@ def test_notebook_change_handler_does_not_print_a_summary_when_recompilation_fai
     handler.on_modified(event)  # must not raise
 
     assert summary_calls == []
+
+
+def test_notebook_change_handler_runs_the_on_change_hook_after_a_successful_recompile(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out, **kwargs: None)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    hook_calls = []
+    monkeypatch.setattr(
+        serve_module, "run_on_change_hook", lambda command: hook_calls.append(command)
+    )
+
+    handler = serve_module.NotebookChangeHandler(
+        str(notebook_path), str(output_dir), on_change="pytest -x"
+    )
+    handler.last_compile_time = 0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_modified(event)
+
+    assert hook_calls == ["pytest -x"]
+
+
+def test_notebook_change_handler_does_not_run_a_hook_when_none_is_given(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out, **kwargs: None)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    hook_calls = []
+    monkeypatch.setattr(
+        serve_module, "run_on_change_hook", lambda command: hook_calls.append(command)
+    )
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_modified(event)
+
+    assert hook_calls == []
+
+
+def test_notebook_change_handler_does_not_run_the_hook_when_recompilation_fails(
+    tmp_path, monkeypatch
+):
+    """The hook exists to check something about a *successfully* compiled
+    app (a test suite, a smoke check) -- running it against a compile
+    that just failed would either crash against a stale/missing app or
+    produce a misleading result, so it must be skipped entirely, the same
+    way print_compile_summary already is above.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    def fake_compile_notebook(nb, out, **kwargs):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(serve_module, "compile_notebook", fake_compile_notebook)
+
+    hook_calls = []
+    monkeypatch.setattr(
+        serve_module, "run_on_change_hook", lambda command: hook_calls.append(command)
+    )
+
+    handler = serve_module.NotebookChangeHandler(
+        str(notebook_path), str(output_dir), on_change="pytest -x"
+    )
+    handler.last_compile_time = 0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_modified(event)  # must not raise
+
+    assert hook_calls == []
+
+
+def test_run_on_change_hook_reports_success(capsys):
+
+    serve_module.run_on_change_hook(f"{sys.executable} -c 'pass'")
+
+    output = capsys.readouterr().out
+    assert "Running on-change hook" in output
+    assert "succeeded" in output
+
+
+def test_run_on_change_hook_reports_a_non_zero_exit_without_raising(capsys):
+
+    serve_module.run_on_change_hook(
+        f"{sys.executable} -c 'import sys; sys.exit(3)'"
+    )  # must not raise
+
+    output = capsys.readouterr().out
+    assert "exited with code 3" in output
 
 
 def test_notebook_change_handler_ignores_a_different_notebook_file(tmp_path, monkeypatch):
