@@ -726,6 +726,36 @@ def _filename_from_content_disposition(response, default):
     return header[start:end] or default
 
 
+def _default_dashboard_url():
+    """The CLI's own default --dashboard-url, for every dashboard-facing
+    subcommand that doesn't get an explicit one.
+
+    Reads NOTEBOOK_API_DASHBOARD_URL if set, falling back to the same
+    "http://localhost:8001" literal every dashboard-facing subparser
+    already defaulted to -- the same "already independently configurable
+    via its own NOTEBOOK_API_* environment variable" convention
+    dashboard_host()/dashboard_port() (backend/dashboard.py) already
+    establish for the dashboard server's own bind address, just for this
+    CLI's own client-side counterpart of it.
+
+    Before this, every one of this CLI's ~30 dashboard-facing commands
+    (upload, list, download, remote-diff, deploy, ...) defaulted its own
+    --dashboard-url to that hardcoded literal, with no way to point a
+    whole scripted workflow -- a CI pipeline running several of them
+    against a shared staging dashboard, say, or simply a developer whose
+    dashboard doesn't run on the default port -- at a different one
+    without repeating an explicit --dashboard-url on every single
+    invocation, or wrapping every call in a shell alias/function that
+    does it by hand.
+
+    An explicit --dashboard-url on any one call still always wins over
+    this: argparse's own `default=` is only ever consulted when the flag
+    itself is omitted, so this changes nothing for a script that already
+    passes --dashboard-url explicitly.
+    """
+    return os.getenv("NOTEBOOK_API_DASHBOARD_URL", "http://localhost:8001")
+
+
 def _add_dashboard_url_and_timeout_arguments(parser, default_timeout=30.0):
     """Add --dashboard-url and --timeout to `parser` -- shared by every
     dashboard-facing subparser below (upload, list, download), so their
@@ -734,12 +764,13 @@ def _add_dashboard_url_and_timeout_arguments(parser, default_timeout=30.0):
     """
     parser.add_argument(
         "--dashboard-url",
-        default="http://localhost:8001",
+        default=_default_dashboard_url(),
         dest="dashboard_url",
         help=(
             "Base URL of the running dashboard API (default: "
             "http://localhost:8001, matching dashboard_port()'s own "
-            "default in backend/dashboard.py)."
+            "default in backend/dashboard.py -- or "
+            "$NOTEBOOK_API_DASHBOARD_URL if set)."
         )
     )
     parser.add_argument(

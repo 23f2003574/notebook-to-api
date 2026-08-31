@@ -2839,6 +2839,57 @@ def test_list_command_prints_notebooks_from_the_dashboard(fake_dashboard):
     assert handler.requests == ["/api/notebooks?sort=name&order=asc&offset=0"]
 
 
+def test_dashboard_url_defaults_from_environment_variable(fake_dashboard, monkeypatch):
+    """Every dashboard-facing command's own --dashboard-url now defaults
+    to $NOTEBOOK_API_DASHBOARD_URL when set, the same "already
+    independently configurable via its own NOTEBOOK_API_* environment
+    variable" convention dashboard_host()/dashboard_port() (backend/
+    dashboard.py) already establish server-side -- `list` (already
+    exercised against a real --dashboard-url just above) is exercised
+    here with no --dashboard-url flag at all, relying entirely on the
+    environment variable to reach the fake dashboard.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebooks": [], "total_count": 0,
+            "limit": None, "offset": 0,
+        })
+    ]
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_URL", dashboard_url)
+
+    proc = _run_cli(["list"], cwd=Path.cwd())
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks?sort=name&order=asc&offset=0"]
+
+
+def test_dashboard_url_explicit_flag_overrides_environment_variable(
+    fake_dashboard, monkeypatch
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebooks": [], "total_count": 0,
+            "limit": None, "offset": 0,
+        })
+    ]
+
+    # Points the environment default at a port nothing is listening on --
+    # if the explicit --dashboard-url below were ignored in favor of
+    # this, the request would fail to connect instead of reaching the
+    # fake dashboard.
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_URL", "http://127.0.0.1:1")
+
+    proc = _run_cli(["list", "--dashboard-url", dashboard_url], cwd=Path.cwd())
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks?sort=name&order=asc&offset=0"]
+
+
 def test_list_command_shows_the_compiled_version_id_when_present(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
