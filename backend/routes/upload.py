@@ -10146,6 +10146,8 @@ def deploy_history_endpoint(
     platform: str = None,
     tag: str = None,
     pushed: bool = None,
+    deployed_after: str = None,
+    deployed_before: str = None,
     limit: int = None,
     offset: int = 0,
     format: str = "json",
@@ -10200,6 +10202,22 @@ def deploy_history_endpoint(
     Composes with every other filter here identically; an unknown or
     never-deployed hash simply yields no matching entries, not an error.
 
+    "deployed_after"/"deployed_before" (each an optional ISO 8601
+    datetime, see _parse_iso_datetime_query_param -- the same parsing
+    GET /api/notebooks' own "modified_after"/"modified_before" already
+    use) narrow to entries whose own "deployed_at" falls on or after/on
+    or before that instant, inclusive on both ends -- composing with
+    every filter above identically. Before this, answering "what got
+    deployed last week" (an incident review, an audit) meant fetching
+    the entire log and inspecting each entry's own "deployed_at" by
+    hand, the identical gap GET /api/notebooks' own "modified_after"/
+    "modified_before" just closed for the notebook catalog's own
+    "modified_at". A naive value (no UTC offset) is assumed to already
+    be UTC, matching how "deployed_at" itself is always rendered
+    (datetime.now(timezone.utc).isoformat()). "deployed_after" later
+    than "deployed_before" is rejected with 400, the same way it
+    already is there.
+
     "offset" (default 0) is how many of the (already-filtered) entries,
     still most-recent-first, to skip before "limit" is applied -- the
     identical pagination GET /api/notebooks' own "offset" already
@@ -10249,6 +10267,18 @@ def deploy_history_endpoint(
             detail="format must be 'json' or 'csv'"
         )
 
+    deployed_after_dt = _parse_iso_datetime_query_param(deployed_after, "deployed_after")
+    deployed_before_dt = _parse_iso_datetime_query_param(deployed_before, "deployed_before")
+
+    if (
+        deployed_after_dt is not None and deployed_before_dt is not None
+        and deployed_after_dt > deployed_before_dt
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="deployed_after must not be later than deployed_before"
+        )
+
     entries = list(reversed(_read_deploy_history()))
 
     if source_notebook_filename is not None:
@@ -10271,6 +10301,24 @@ def deploy_history_endpoint(
 
     if pushed is not None:
         entries = [entry for entry in entries if entry.get("pushed") == pushed]
+
+    if deployed_after_dt is not None or deployed_before_dt is not None:
+
+        filtered_entries = []
+
+        for entry in entries:
+
+            entry_deployed_at = datetime.fromisoformat(entry["deployed_at"])
+
+            if deployed_after_dt is not None and entry_deployed_at < deployed_after_dt:
+                continue
+
+            if deployed_before_dt is not None and entry_deployed_at > deployed_before_dt:
+                continue
+
+            filtered_entries.append(entry)
+
+        entries = filtered_entries
 
     if offset < 0:
 
@@ -10480,6 +10528,8 @@ def clear_deploy_history(
 def compile_history_endpoint(
     notebook_filename: str = None,
     source_notebook_sha256: str = None,
+    compiled_after: str = None,
+    compiled_before: str = None,
     limit: int = None,
     offset: int = 0,
     format: str = "json",
@@ -10540,6 +10590,17 @@ def compile_history_endpoint(
     filter here; an unknown or never-compiled hash simply yields no
     matching entries, not an error, the same as "notebook_filename".
 
+    "compiled_after"/"compiled_before" (each an optional ISO 8601
+    datetime, see _parse_iso_datetime_query_param) narrow to entries
+    whose own "compiled_at" falls on or after/on or before that instant,
+    inclusive on both ends -- the identical filter GET /api/deploy/
+    history's own "deployed_after"/"deployed_before" already provide for
+    "deployed_at", just applied here to this endpoint's own "compiled_at"
+    instead. A naive value (no UTC offset) is assumed to already be UTC,
+    matching how "compiled_at" itself is always rendered.
+    "compiled_after" later than "compiled_before" is rejected with 400,
+    the same way it already is there.
+
     Deliberately read-only, the same reasoning GET /api/deploy/history's
     own docstring already gives: this dashboard's compile history is a
     record of what already happened, not something a caller edits or
@@ -10577,6 +10638,18 @@ def compile_history_endpoint(
             detail="format must be 'json' or 'csv'"
         )
 
+    compiled_after_dt = _parse_iso_datetime_query_param(compiled_after, "compiled_after")
+    compiled_before_dt = _parse_iso_datetime_query_param(compiled_before, "compiled_before")
+
+    if (
+        compiled_after_dt is not None and compiled_before_dt is not None
+        and compiled_after_dt > compiled_before_dt
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="compiled_after must not be later than compiled_before"
+        )
+
     entries = list(reversed(_read_compile_history()))
 
     if notebook_filename is not None:
@@ -10590,6 +10663,24 @@ def compile_history_endpoint(
             entry for entry in entries
             if entry.get("source_notebook_sha256") == source_notebook_sha256
         ]
+
+    if compiled_after_dt is not None or compiled_before_dt is not None:
+
+        filtered_entries = []
+
+        for entry in entries:
+
+            entry_compiled_at = datetime.fromisoformat(entry["compiled_at"])
+
+            if compiled_after_dt is not None and entry_compiled_at < compiled_after_dt:
+                continue
+
+            if compiled_before_dt is not None and entry_compiled_at > compiled_before_dt:
+                continue
+
+            filtered_entries.append(entry)
+
+        entries = filtered_entries
 
     if offset < 0:
 

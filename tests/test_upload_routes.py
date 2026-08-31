@@ -16343,6 +16343,52 @@ def test_deploy_history_filters_by_pushed(tmp_path, monkeypatch):
     assert [e["tag"] for e in not_pushed_body["entries"]] == ["filter:c", "filter:b"]
 
 
+def test_deploy_history_filters_by_deployed_after_and_before(tmp_path, monkeypatch):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    after_body = client.get(
+        "/api/deploy/history", params={"deployed_after": "2024-01-02T00:00:00+00:00"}
+    ).json()
+    assert [e["tag"] for e in after_body["entries"]] == ["filter:c", "filter:b"]
+
+    before_body = client.get(
+        "/api/deploy/history", params={"deployed_before": "2024-01-02T00:00:00+00:00"}
+    ).json()
+    assert [e["tag"] for e in before_body["entries"]] == ["filter:b", "filter:a"]
+
+    window_body = client.get(
+        "/api/deploy/history",
+        params={
+            "deployed_after": "2024-01-02T00:00:00+00:00",
+            "deployed_before": "2024-01-02T00:00:00+00:00",
+        },
+    ).json()
+    assert [e["tag"] for e in window_body["entries"]] == ["filter:b"]
+
+
+def test_deploy_history_rejects_deployed_after_later_than_deployed_before():
+
+    resp = client.get(
+        "/api/deploy/history",
+        params={
+            "deployed_after": "2026-06-01T00:00:00+00:00",
+            "deployed_before": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "deployed_after" in resp.json()["detail"]
+
+
+def test_deploy_history_rejects_a_malformed_deployed_after():
+
+    resp = client.get("/api/deploy/history", params={"deployed_after": "not-a-date"})
+
+    assert resp.status_code == 400
+    assert "deployed_after" in resp.json()["detail"]
+
+
 def test_deploy_history_respects_limit(tmp_path, monkeypatch):
 
     _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
@@ -16941,6 +16987,48 @@ def test_compile_history_filters_by_notebook_filename(tmp_path, monkeypatch):
 
     assert [e["source_notebook_sha256"] for e in body["entries"]] == ["ccc", "aaa"]
     assert body["entry_count"] == 2
+
+
+def test_compile_history_filters_by_compiled_after_and_before(tmp_path, monkeypatch):
+
+    _seed_compile_history_for_filtering(tmp_path, monkeypatch)
+
+    after_body = client.get(
+        "/api/compile/history", params={"compiled_after": "2024-01-02T00:00:00+00:00"}
+    ).json()
+    assert [e["notebook_filename"] for e in after_body["entries"]] == [
+        "one.ipynb", "two.ipynb",
+    ]
+
+    before_body = client.get(
+        "/api/compile/history", params={"compiled_before": "2024-01-02T00:00:00+00:00"}
+    ).json()
+    assert [e["notebook_filename"] for e in before_body["entries"]] == [
+        "two.ipynb", "one.ipynb",
+    ]
+
+    window_body = client.get(
+        "/api/compile/history",
+        params={
+            "compiled_after": "2024-01-02T00:00:00+00:00",
+            "compiled_before": "2024-01-02T00:00:00+00:00",
+        },
+    ).json()
+    assert [e["notebook_filename"] for e in window_body["entries"]] == ["two.ipynb"]
+
+
+def test_compile_history_rejects_compiled_after_later_than_compiled_before():
+
+    resp = client.get(
+        "/api/compile/history",
+        params={
+            "compiled_after": "2026-06-01T00:00:00+00:00",
+            "compiled_before": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "compiled_after" in resp.json()["detail"]
 
 
 def test_compile_history_csv_format_returns_a_csv_response(tmp_path, monkeypatch):

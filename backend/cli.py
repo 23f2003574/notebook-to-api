@@ -4851,6 +4851,10 @@ def _dispatch_core_command(args):
             params["tag"] = args.tag
         if args.pushed is not None:
             params["pushed"] = args.pushed
+        if args.deployed_after:
+            params["deployed_after"] = args.deployed_after
+        if args.deployed_before:
+            params["deployed_before"] = args.deployed_before
         if args.limit is not None:
             params["limit"] = args.limit
         if args.offset:
@@ -4977,6 +4981,10 @@ def _dispatch_core_command(args):
             params["notebook_filename"] = args.notebook_filename
         if args.source_notebook_sha256:
             params["source_notebook_sha256"] = args.source_notebook_sha256
+        if args.compiled_after:
+            params["compiled_after"] = args.compiled_after
+        if args.compiled_before:
+            params["compiled_before"] = args.compiled_before
         if args.limit is not None:
             params["limit"] = args.limit
         if args.offset:
@@ -8830,6 +8838,28 @@ def main():
         help="Only show deploys that were not pushed to a registry."
     )
     deploy_history_parser.add_argument(
+        "--deployed-after",
+        default=None,
+        dest="deployed_after",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only show deploys on or after this ISO 8601 datetime, via "
+            "GET /api/deploy/history's own ?deployed_after= -- a value "
+            "with no UTC offset is assumed to already be UTC. Composes "
+            "with --deployed-before to bound a window."
+        )
+    )
+    deploy_history_parser.add_argument(
+        "--deployed-before",
+        default=None,
+        dest="deployed_before",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only show deploys on or before this ISO 8601 datetime, via "
+            "GET /api/deploy/history's own ?deployed_before=."
+        )
+    )
+    deploy_history_parser.add_argument(
         "--limit",
         type=int,
         help=(
@@ -8980,6 +9010,28 @@ def main():
             "uploads by) rather than its current filename, so it still "
             "finds a compile after the notebook was later renamed or "
             "overwritten."
+        )
+    )
+    compile_history_parser.add_argument(
+        "--compiled-after",
+        default=None,
+        dest="compiled_after",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only show compiles on or after this ISO 8601 datetime, via "
+            "GET /api/compile/history's own ?compiled_after= -- a value "
+            "with no UTC offset is assumed to already be UTC. Composes "
+            "with --compiled-before to bound a window."
+        )
+    )
+    compile_history_parser.add_argument(
+        "--compiled-before",
+        default=None,
+        dest="compiled_before",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only show compiles on or before this ISO 8601 datetime, via "
+            "GET /api/compile/history's own ?compiled_before=."
         )
     )
     compile_history_parser.add_argument(

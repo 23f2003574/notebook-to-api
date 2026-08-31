@@ -14149,6 +14149,36 @@ def test_deploy_history_command_sends_filter_and_limit_query_params(tmp_path, fa
     }
 
 
+def test_deploy_history_command_sends_deployed_after_and_before_query_params(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "entries": [], "entry_count": 0})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "deploy-history",
+            "--deployed-after", "2026-01-01T00:00:00+00:00",
+            "--deployed-before", "2026-06-01T00:00:00+00:00",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query == {
+        "deployed_after": ["2026-01-01T00:00:00+00:00"],
+        "deployed_before": ["2026-06-01T00:00:00+00:00"],
+    }
+
+
 def test_deploy_history_command_sends_source_sha256_query_param(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
@@ -14619,6 +14649,36 @@ def test_compile_history_command_sends_notebook_and_limit_query_params(
 
     query = urllib.parse.parse_qs(request_path.split("?", 1)[1])
     assert query == {"notebook_filename": ["nb.ipynb"], "limit": ["5"]}
+
+
+def test_compile_history_command_sends_compiled_after_and_before_query_params(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "entries": [], "entry_count": 0})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "compile-history",
+            "--compiled-after", "2026-01-01T00:00:00+00:00",
+            "--compiled-before", "2026-06-01T00:00:00+00:00",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query == {
+        "compiled_after": ["2026-01-01T00:00:00+00:00"],
+        "compiled_before": ["2026-06-01T00:00:00+00:00"],
+    }
 
 
 def test_compile_history_command_sends_source_sha256_query_param(
