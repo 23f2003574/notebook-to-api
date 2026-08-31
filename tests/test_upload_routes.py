@@ -1,4 +1,5 @@
 import hashlib
+import http.server
 import io
 import json
 import os
@@ -13,6 +14,7 @@ from pathlib import Path
 
 import nbformat
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from backend.compiler import (
@@ -1969,6 +1971,326 @@ def test_import_notebooks_dry_run_predicts_restored_version_count_without_restor
     assert client.get(
         "/api/notebooks/import_dry_run_versions.ipynb/versions"
     ).status_code == 404
+
+
+class _NotebookUrlHandler(http.server.BaseHTTPRequestHandler):
+    """A minimal HTTP server standing in for wherever a notebook actually
+    lives (a GitHub raw URL, an S3 object URL, ...) for POST
+    /api/notebooks/import-url's own tests below -- serves fixed bytes at
+    a fixed path, and (only when `redirect_to` is set) a redirect at
+    "/redirect" instead, for the tests exercising import-url's own
+    redirect handling.
+    """
+
+    content = b""
+    redirect_to = None
+
+    def do_GET(self):
+
+        if self.path == "/redirect" and type(self).redirect_to:
+            self.send_response(302)
+            self.send_header("Location", type(self).redirect_to)
+            self.end_headers()
+            return
+
+        payload = type(self).content
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ipynb+json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def notebook_url_server():
+    _NotebookUrlHandler.content = b""
+    _NotebookUrlHandler.redirect_to = None
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _NotebookUrlHandler)
+    port = server.server_address[1]
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    try:
+        yield f"http://127.0.0.1:{port}", _NotebookUrlHandler
+    finally:
+        server.shutdown()
+        server_thread.join(timeout=5)
+
+
+@pytest.fixture
+def _bypass_import_url_ssrf_guard(monkeypatch):
+    """POST /api/notebooks/import-url's own real _reject_unsafe_import_url_host
+    correctly refuses every loopback address -- including notebook_url_server's
+    own 127.0.0.1 -- so every test below that needs an actual successful fetch
+    against that local server has to bypass it deliberately. The guard's own
+    rejection behavior is tested directly, against the real function, in
+    test_import_url_rejects_a_private_address/test_import_url_rejects_a_non_http_scheme
+    below instead.
+    """
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(
+        upload_module, "_reject_unsafe_import_url_host", lambda url: None
+    )
+
+
+def test_import_url_fetches_and_saves_a_notebook(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    resp = client.post(
+        "/api/notebooks/import-url",
+        json={"url": f"{base_url}/nb.ipynb"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["filename"] == "nb.ipynb"
+    assert body["overwritten"] is False
+    assert body["dry_run"] is False
+    assert body["source_url"] == f"{base_url}/nb.ipynb"
+    assert body["sha256"] == hashlib.sha256(handler.content).hexdigest()
+
+    assert (Path(UPLOAD_DIR) / "nb.ipynb").read_bytes() == handler.content
+
+
+def test_import_url_explicit_filename_overrides_the_derived_one(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    resp = client.post(
+        "/api/notebooks/import-url",
+        json={"url": f"{base_url}/nb.ipynb", "filename": "custom.ipynb"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["filename"] == "custom.ipynb"
+    assert (Path(UPLOAD_DIR) / "custom.ipynb").exists()
+    assert not (Path(UPLOAD_DIR) / "nb.ipynb").exists()
+
+
+def test_import_url_rejects_a_non_ipynb_filename(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    resp = client.post(
+        "/api/notebooks/import-url",
+        json={"url": f"{base_url}/notes.txt"},
+    )
+
+    assert resp.status_code == 400
+    assert "filename" in resp.json()["detail"]
+
+
+def test_import_url_requires_a_url_field():
+
+    resp = client.post("/api/notebooks/import-url", json={})
+
+    assert resp.status_code == 400
+    assert "url" in resp.json()["detail"]
+
+
+def test_import_url_rejects_a_non_http_scheme():
+
+    resp = client.post(
+        "/api/notebooks/import-url",
+        json={"url": "ftp://example.com/nb.ipynb"},
+    )
+
+    assert resp.status_code == 400
+    assert "scheme" in resp.json()["detail"]
+    assert not (Path(UPLOAD_DIR) / "nb.ipynb").exists()
+
+
+def test_import_url_rejects_a_private_address():
+    """Run against the real _reject_unsafe_import_url_host (no bypass
+    fixture) -- 127.0.0.1 is a numeric literal, so this resolves with no
+    real DNS lookup and is exactly the kind of address (loopback) POST
+    /api/notebooks/import-url must never let a caller reach through this
+    server.
+    """
+
+    resp = client.post(
+        "/api/notebooks/import-url",
+        json={"url": "http://127.0.0.1:1/nb.ipynb"},
+    )
+
+    assert resp.status_code == 400
+    assert "non-public" in resp.json()["detail"]
+
+
+def test_import_url_rechecks_the_ssrf_guard_on_every_redirect_hop(
+    notebook_url_server, monkeypatch
+):
+    """A URL that itself resolves safely can still redirect to one that
+    doesn't -- _reject_unsafe_import_url_host must be re-run against the
+    redirect's own target, not only the original URL, or a public-looking
+    URL could be used to reach an address only this server's own network
+    can.
+
+    Swaps in a fake guard (rather than the real one) so this test can
+    assert re-invocation happened for *both* hops without depending on
+    the real function's own private-address classification, which is
+    already covered directly by test_import_url_rejects_a_private_address
+    above.
+    """
+    from backend.routes import upload as upload_module
+
+    base_url, handler = notebook_url_server
+    handler.redirect_to = "http://127.0.0.1:1/evil.ipynb"
+
+    checked_urls = []
+
+    def fake_guard(url):
+        checked_urls.append(url)
+        if "evil" in url:
+            raise HTTPException(status_code=400, detail="blocked by test guard")
+
+    monkeypatch.setattr(upload_module, "_reject_unsafe_import_url_host", fake_guard)
+
+    resp = client.post(
+        "/api/notebooks/import-url",
+        json={"url": f"{base_url}/redirect", "filename": "nb.ipynb"},
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "blocked by test guard"
+    assert checked_urls == [f"{base_url}/redirect", "http://127.0.0.1:1/evil.ipynb"]
+    assert not (Path(UPLOAD_DIR) / "evil.ipynb").exists()
+
+
+def test_import_url_rejects_content_over_the_configured_max_size(
+    notebook_url_server, _bypass_import_url_ssrf_guard, monkeypatch
+):
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_UPLOAD_BYTES", 10)
+
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+    assert len(handler.content) > 10
+
+    resp = client.post(
+        "/api/notebooks/import-url",
+        json={"url": f"{base_url}/nb.ipynb"},
+    )
+
+    assert resp.status_code == 413
+    assert not (Path(UPLOAD_DIR) / "nb.ipynb").exists()
+
+
+def test_import_url_rejects_a_sha256_mismatch(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    resp = client.post(
+        "/api/notebooks/import-url",
+        json={
+            "url": f"{base_url}/nb.ipynb",
+            "expected_sha256": "0" * 64,
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "expected_sha256" in resp.json()["detail"]
+    assert not (Path(UPLOAD_DIR) / "nb.ipynb").exists()
+
+
+def test_import_url_dry_run_does_not_write_anything(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    resp = client.post(
+        "/api/notebooks/import-url",
+        json={"url": f"{base_url}/nb.ipynb", "dry_run": True},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert not (Path(UPLOAD_DIR) / "nb.ipynb").exists()
+
+
+def test_import_url_applies_tags_and_description_on_success(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    resp = client.post(
+        "/api/notebooks/import-url",
+        json={
+            "url": f"{base_url}/tagged.ipynb",
+            "tags": "a,b",
+            "description": "fetched from a url",
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+
+    info = client.get("/api/notebooks/tagged.ipynb/info").json()
+    assert sorted(info["tags"]) == ["a", "b"]
+    assert info["description"] == "fetched from a url"
+
+
+def test_import_url_does_not_apply_tags_under_dry_run(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    resp = client.post(
+        "/api/notebooks/import-url",
+        json={
+            "url": f"{base_url}/dry_tagged.ipynb",
+            "tags": "a,b",
+            "dry_run": True,
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert not (Path(UPLOAD_DIR) / "dry_tagged.ipynb").exists()
+
+
+def test_import_url_requires_overwrite_to_replace_an_existing_notebook(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("collide.ipynb", io.BytesIO(handler.content), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/notebooks/import-url",
+        json={"url": f"{base_url}/collide.ipynb"},
+    )
+
+    assert resp.status_code == 409
+
+    resp = client.post(
+        "/api/notebooks/import-url",
+        json={"url": f"{base_url}/collide.ipynb", "overwrite": True},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["overwritten"] is True
 
 
 def test_upload_lock_for_returns_the_same_lock_for_the_same_filename():

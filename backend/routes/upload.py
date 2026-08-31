@@ -3,19 +3,24 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import List
+from urllib.parse import urljoin, urlsplit
 import asyncio
 import csv
 import hashlib
 import io
+import ipaddress
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
 import uuid
 import zipfile
+
+import httpx
 
 # ValidationError is the exception nbformat raises for a syntactically
 # valid JSON file that is nonetheless missing required notebook keys
@@ -198,6 +203,22 @@ MAX_UPLOAD_BYTES = int(
     os.getenv("NOTEBOOK_API_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))
 )
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+# Same NOTEBOOK_API_* convention as DEPLOY_SUBPROCESS_TIMEOUT_SECONDS
+# below. POST /api/notebooks/import-url's own outbound fetch (see
+# _download_url_for_import below) has nothing else bounding how long a
+# slow or deliberately stalled remote server can hold this request open.
+URL_IMPORT_TIMEOUT_SECONDS = float(
+    os.getenv("NOTEBOOK_API_URL_IMPORT_TIMEOUT_SECONDS", "30")
+)
+
+# How many redirect hops POST /api/notebooks/import-url will follow
+# before giving up -- not independently configurable via its own
+# NOTEBOOK_API_* env var (unlike the limits above): this bounds a fixed
+# implementation detail (avoiding an unbounded/looping redirect chain),
+# not a real per-deployment tradeoff an operator would ever need to
+# tune.
+_URL_IMPORT_MAX_REDIRECTS = 5
 
 # Same NOTEBOOK_API_* convention as MAX_UPLOAD_BYTES above. Without this,
 # POST /api/upload/batch (see upload_notebooks_batch below) accepted a
@@ -1549,6 +1570,346 @@ async def import_notebooks(
         "succeeded_count": succeeded_count,
         "failed_count": failed_count,
     }
+
+
+def _reject_unsafe_import_url_host(url):
+    """Raise HTTPException(400) unless `url` is http(s) and its hostname
+    resolves to a publicly-routable address.
+
+    POST /api/notebooks/import-url below fetches a caller-supplied URL
+    from this server itself -- without this check, a caller could point
+    it at http://169.254.169.254/ (a cloud metadata endpoint),
+    http://localhost:<internal-port>/, or any other address only this
+    server's own network can reach, turning it into an open proxy into
+    infrastructure the caller would otherwise have no access to at all.
+    Every non-http(s) scheme is rejected outright too ("file://",
+    "gopher://", ...), the same class of request-forgery surface a raw
+    caller-supplied URL always carries.
+
+    Called for the original URL and, by _download_url_for_import below,
+    again for every redirect hop it follows: a URL whose own host
+    resolves safely can still 3xx a response to an unsafe one, and only
+    re-checking every hop -- not just the first -- catches that.
+    """
+    parsed = urlsplit(url)
+
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported URL scheme '{parsed.scheme or url}': only "
+                "http/https URLs may be imported."
+            )
+        )
+
+    hostname = parsed.hostname
+
+    if not hostname:
+        raise HTTPException(
+            status_code=400,
+            detail="url must include a hostname"
+        )
+
+    try:
+        addr_infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not resolve host '{hostname}': {e}"
+        )
+
+    for _, _, _, _, sockaddr in addr_infos:
+
+        ip = ipaddress.ip_address(sockaddr[0])
+
+        if (
+            ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"URL host '{hostname}' resolves to a non-public "
+                    f"address ({ip}); only publicly-routable URLs may be "
+                    "imported."
+                )
+            )
+
+
+async def _download_url_for_import(url):
+    """Fetch `url`'s full response body into memory for POST
+    /api/notebooks/import-url below, capped at MAX_UPLOAD_BYTES -- the
+    same limit POST /api/upload's own streamed write already enforces,
+    checked here as each chunk arrives (not only against a possibly-
+    absent or dishonest Content-Length header) so a remote server can't
+    exhaust this process's memory by simply streaming more than that.
+
+    Returns (final_url, content_bytes) -- final_url is `url` itself, or
+    wherever a redirect chain (see below) actually landed; it's what
+    _derive_import_url_filename falls back to for deriving a filename
+    when the caller doesn't supply one explicitly, and what the response
+    reports back as "source_url" so a caller can tell whether a redirect
+    happened at all.
+
+    follow_redirects is deliberately left at httpx's own default (False)
+    and redirects are instead followed by hand, up to
+    _URL_IMPORT_MAX_REDIRECTS hops: _reject_unsafe_import_url_host is
+    re-run against every hop's own target before it's ever fetched, which
+    httpx's own automatic redirect-following has no hook to do -- a
+    public URL that 3xx's to an internal address must be caught exactly
+    as if that internal address had been the original URL itself.
+    """
+    current_url = url
+
+    try:
+
+        async with httpx.AsyncClient(
+            follow_redirects=False, timeout=URL_IMPORT_TIMEOUT_SECONDS
+        ) as client:
+
+            for _ in range(_URL_IMPORT_MAX_REDIRECTS + 1):
+
+                _reject_unsafe_import_url_host(current_url)
+
+                async with client.stream("GET", current_url) as response:
+
+                    if response.status_code in (301, 302, 303, 307, 308):
+
+                        location = response.headers.get("location")
+
+                        if not location:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=(
+                                    f"Redirect from '{current_url}' had no "
+                                    "Location header"
+                                )
+                            )
+
+                        current_url = urljoin(current_url, location)
+                        continue
+
+                    if response.status_code != 200:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                f"Fetching '{current_url}' failed with "
+                                f"status {response.status_code}"
+                            )
+                        )
+
+                    content_length = response.headers.get("content-length")
+
+                    if content_length is not None:
+
+                        try:
+                            declared_too_large = int(content_length) > MAX_UPLOAD_BYTES
+                        except ValueError:
+                            declared_too_large = False
+
+                        if declared_too_large:
+                            raise HTTPException(
+                                status_code=413,
+                                detail=(
+                                    "URL content-length exceeds the "
+                                    f"maximum upload size of "
+                                    f"{MAX_UPLOAD_BYTES} bytes"
+                                )
+                            )
+
+                    buffer = bytearray()
+
+                    async for chunk in response.aiter_bytes(_UPLOAD_CHUNK_BYTES):
+
+                        buffer.extend(chunk)
+
+                        if len(buffer) > MAX_UPLOAD_BYTES:
+                            raise HTTPException(
+                                status_code=413,
+                                detail=(
+                                    "Fetched content exceeds the maximum "
+                                    f"upload size of {MAX_UPLOAD_BYTES} "
+                                    "bytes"
+                                )
+                            )
+
+                    return current_url, bytes(buffer)
+
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not fetch '{current_url}': {e}"
+        )
+
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Too many redirects (> {_URL_IMPORT_MAX_REDIRECTS}) fetching "
+            f"'{url}'"
+        )
+    )
+
+
+def _derive_import_url_filename(url, explicit_filename):
+    """The filename POST /api/notebooks/import-url below saves a fetched
+    notebook under -- `explicit_filename` if given, otherwise the last
+    path segment of `url` itself (mirroring how a browser's own "Save
+    As" dialog names a downloaded file), so a caller pulling a notebook
+    from e.g. a GitHub raw URL or an S3 object URL doesn't have to name
+    it a second time when the URL's own path already does.
+    """
+    if explicit_filename is not None:
+        return explicit_filename
+
+    candidate = urlsplit(url).path.rsplit("/", 1)[-1]
+
+    if not candidate:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Could not derive a filename from url's own path; pass "
+                '"filename" explicitly.'
+            )
+        )
+
+    return candidate
+
+
+@router.post("/notebooks/import-url")
+async def import_notebook_from_url(data: dict):
+    """Upload a notebook fetched from a URL this server itself downloads
+    -- the counterpart to POST /api/upload for a notebook that already
+    lives somewhere reachable over http(s) (a GitHub raw URL, an S3/GCS
+    object URL, an internal artifact server, ...) rather than a file a
+    caller already has locally to hand over as a multipart upload.
+
+    Before this, seeding a dashboard from such a URL was always a two-step,
+    client-side round trip: download the file yourself, then POST it to
+    /api/upload -- extra work for a script doing nothing with the
+    downloaded bytes in between besides re-uploading them right back out,
+    and outright impractical for a URL only the dashboard's own server
+    (not wherever a caller happens to be running) can actually reach.
+
+    Reuses _save_uploaded_notebook -- the exact same size cap, notebook-
+    validity check, atomic write, and pre-overwrite versioning POST
+    /api/upload itself goes through -- by handing it a real UploadFile
+    wrapping the downloaded bytes in memory, the identical
+    "UploadFile(file=io.BytesIO(...), filename=...)" adapter POST
+    /api/notebooks/import already uses to reuse the same function for a
+    .zip archive entry's own bytes instead of a genuine multipart part.
+
+    "url" (required) is fetched via _download_url_for_import, which
+    rejects a non-http(s) scheme or a hostname resolving to a private/
+    loopback/internal address outright (see
+    _reject_unsafe_import_url_host) -- without that, this endpoint would
+    let any caller use this server as a proxy to probe or fetch from
+    networks only the server itself has access to.
+
+    "filename" (optional) names the notebook to save the fetched content
+    as; omitted, it's derived from `url`'s own last path segment (see
+    _derive_import_url_filename) -- either way it must end in ".ipynb",
+    the same requirement _save_uploaded_notebook already enforces for
+    POST /api/upload's own "file.filename".
+
+    "overwrite"/"tags"/"description"/"expected_sha256" are the identical
+    optional fields POST /api/upload already accepts, applied the same
+    way: "overwrite" (default false) permits replacing an already-
+    existing notebook of the same name (snapshotting its previous
+    content first, exactly like every other overwrite in this file);
+    "tags"/"description" are applied once the fetched content is
+    actually saved, never on a failed or dry-run fetch; "expected_sha256"
+    rejects the fetched content with 400 if its own hash doesn't match.
+
+    "dry_run" (optional, default false) still fetches the URL and runs
+    every validity/collision check above, without ever writing anything
+    to UPLOAD_DIR or applying "tags"/"description" -- the same "report
+    what a real call would do without doing it" preview POST
+    /api/notebooks/import's own "dry_run" already provides for a .zip
+    archive's own entries. The response's own "dry_run" field echoes
+    back whether this call actually saved anything, the same convention
+    every other "dry_run"-accepting endpoint in this file already
+    follows.
+
+    The response's own "source_url" is the URL actually fetched -- `url`
+    itself, or wherever a redirect chain landed, so a caller can tell a
+    redirect happened at all.
+    """
+
+    data = data or {}
+
+    url = data.get("url")
+
+    if not isinstance(url, str) or not url:
+        raise HTTPException(
+            status_code=400,
+            detail="url is required and must be a non-empty string"
+        )
+
+    explicit_filename = data.get("filename")
+
+    if explicit_filename is not None and not isinstance(explicit_filename, str):
+        raise HTTPException(
+            status_code=400,
+            detail="filename must be a string"
+        )
+
+    overwrite = bool(data.get("overwrite", False))
+    dry_run = bool(data.get("dry_run", False))
+
+    expected_sha256 = data.get("expected_sha256")
+
+    if expected_sha256 is not None and not isinstance(expected_sha256, str):
+        raise HTTPException(
+            status_code=400,
+            detail="expected_sha256 must be a string"
+        )
+
+    tags = data.get("tags")
+
+    if tags is not None and not isinstance(tags, str):
+        raise HTTPException(
+            status_code=400,
+            detail="tags must be a string"
+        )
+
+    normalized_tags = _parse_and_validate_tags_query_param(tags)
+
+    description = data.get("description")
+
+    normalized_description = (
+        _validate_and_normalize_description(description)
+        if description is not None else None
+    )
+
+    filename = _derive_import_url_filename(url, explicit_filename)
+
+    if not filename.endswith(".ipynb"):
+        raise HTTPException(
+            status_code=400,
+            detail="filename must end with .ipynb"
+        )
+
+    final_url, content_bytes = await _download_url_for_import(url)
+
+    upload_file = UploadFile(
+        file=io.BytesIO(content_bytes), filename=filename
+    )
+
+    result = await _save_uploaded_notebook(
+        upload_file, overwrite, dry_run=dry_run,
+        expected_sha256=expected_sha256,
+    )
+
+    result["dry_run"] = dry_run
+    result["source_url"] = final_url
+
+    if normalized_tags is not None and not dry_run:
+        _write_notebook_tags(result["filename"], normalized_tags)
+
+    if normalized_description is not None and not dry_run:
+        _write_notebook_description(result["filename"], normalized_description)
+
+    return result
 
 
 def _currently_compiled_notebook_metadata():

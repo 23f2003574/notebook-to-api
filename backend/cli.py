@@ -339,7 +339,7 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 # commands through _dispatch_core_command's shared error handling.
 _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
-    "export-curl", "serve", "watch", "deploy", "diff", "upload", "import-notebooks",
+    "export-curl", "serve", "watch", "deploy", "diff", "upload", "import-notebooks", "import-url",
     "list", "info", "info-batch",
     "search-functions", "search-content", "find-duplicates", "resolve-duplicates", "storage",
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy",
@@ -1441,6 +1441,56 @@ def _dispatch_core_command(args):
 
         if data.get("failed_count", 0) > 0:
             sys.exit(1)
+    elif args.command == "import-url":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        body = {"url": args.url, "overwrite": args.overwrite}
+
+        if args.filename:
+            body["filename"] = args.filename
+        if args.tags:
+            body["tags"] = args.tags
+        if args.description is not None:
+            body["description"] = args.description
+        if args.expected_sha256:
+            body["expected_sha256"] = args.expected_sha256
+        if args.dry_run:
+            body["dry_run"] = True
+
+        try:
+            response = httpx.post(
+                f"{dashboard_url}/api/notebooks/import-url",
+                json=body,
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the import ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            verb = "Would import" if data.get("dry_run") else "Imported"
+
+            print(
+                f"{verb} '{data.get('filename')}' from {data.get('source_url')}"
+            )
+            print(f"  path: {data.get('path')}")
+            print(f"  overwritten: {data.get('overwritten')}")
+            print(f"  sha256: {data.get('sha256')}")
     elif args.command == "list":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -5474,6 +5524,96 @@ def main():
             "\"results\": [{\"filename\", \"status\", ...}, ...], "
             "\"succeeded_count\", \"failed_count\"}) instead of a "
             "human-readable summary, for scripting/automation."
+        )
+    )
+
+    # import-url command (upload a notebook a running dashboard fetches
+    # itself from a URL, via POST /api/notebooks/import-url -- distinct
+    # from `upload`, which always sends a local file's own bytes)
+    import_url_parser = subparsers.add_parser(
+        "import-url",
+        help=(
+            "Upload a notebook fetched from a URL a running dashboard "
+            "instance downloads itself, via POST "
+            "/api/notebooks/import-url."
+        )
+    )
+    import_url_parser.add_argument(
+        "url",
+        help=(
+            "http(s) URL of the notebook to fetch and upload -- the "
+            "dashboard itself performs this fetch, not this CLI, so the "
+            "URL only needs to be reachable from wherever the dashboard "
+            "is running."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(import_url_parser)
+    import_url_parser.add_argument(
+        "--filename",
+        default=None,
+        help=(
+            "Name to save the fetched notebook as, via POST "
+            "/api/notebooks/import-url's own \"filename\" body field -- "
+            "omitted, it's derived from the URL's own last path segment."
+        )
+    )
+    import_url_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Replace an existing notebook of the same name on the "
+            "dashboard, mirroring POST /api/notebooks/import-url's own "
+            "\"overwrite\": true -- without this, an existing filename "
+            "collision is rejected with a 409, exactly as it already is "
+            "for `upload`."
+        )
+    )
+    import_url_parser.add_argument(
+        "--tags",
+        help=(
+            "Comma-separated tags to set on the imported notebook, via "
+            "POST /api/notebooks/import-url's own \"tags\" body field."
+        )
+    )
+    import_url_parser.add_argument(
+        "--description",
+        default=None,
+        help=(
+            "Description to set on the imported notebook, via POST "
+            "/api/notebooks/import-url's own \"description\" body field."
+        )
+    )
+    import_url_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "Reject the import with an error unless the fetched "
+            "content's own hash matches this value, via POST "
+            "/api/notebooks/import-url's own \"expected_sha256\" body "
+            "field."
+        )
+    )
+    import_url_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Fetch the URL and report what would happen -- without "
+            "saving anything -- via POST /api/notebooks/import-url's own "
+            "\"dry_run\" body field."
+        )
+    )
+    import_url_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"filename\", \"path\", \"overwritten\", \"sha256\", "
+            "\"dry_run\", \"source_url\"}) instead of a human-readable "
+            "summary, for scripting/automation."
         )
     )
 

@@ -2515,6 +2515,166 @@ def test_upload_command_with_multiple_notebooks_reports_a_clean_error_for_a_miss
     _assert_clean_cli_error(proc, "No such file or directory")
 
 
+def test_import_url_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "import-url" in proc.stdout
+
+
+def test_import_url_command_reports_success(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "path": "/srv/uploads/nb.ipynb",
+            "overwritten": False,
+            "sha256": "a" * 64,
+            "dry_run": False,
+            "source_url": "https://example.com/nb.ipynb",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "import-url", "https://example.com/nb.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Imported 'nb.ipynb' from https://example.com/nb.ipynb" in proc.stdout
+    assert "overwritten: False" in proc.stdout
+    assert handler.requests == ["/api/notebooks/import-url"]
+
+    body = json.loads(handler.bodies[0])
+    assert body == {"url": "https://example.com/nb.ipynb", "overwrite": False}
+
+
+def test_import_url_command_passes_optional_fields_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "custom.ipynb",
+            "path": "/srv/uploads/custom.ipynb",
+            "overwritten": True,
+            "sha256": "b" * 64,
+            "dry_run": True,
+            "source_url": "https://example.com/nb.ipynb",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "import-url", "https://example.com/nb.ipynb",
+            "--dashboard-url", dashboard_url,
+            "--filename", "custom.ipynb",
+            "--overwrite",
+            "--tags", "a,b",
+            "--description", "fetched notebook",
+            "--expected-sha256", "c" * 64,
+            "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would import 'custom.ipynb'" in proc.stdout
+
+    body = json.loads(handler.bodies[0])
+    assert body == {
+        "url": "https://example.com/nb.ipynb",
+        "overwrite": True,
+        "filename": "custom.ipynb",
+        "tags": "a,b",
+        "description": "fetched notebook",
+        "expected_sha256": "c" * 64,
+        "dry_run": True,
+    }
+
+
+def test_import_url_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "filename": "nb.ipynb",
+        "path": "/srv/uploads/nb.ipynb",
+        "overwritten": False,
+        "sha256": "a" * 64,
+        "dry_run": False,
+        "source_url": "https://example.com/nb.ipynb",
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "import-url", "https://example.com/nb.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_import_url_command_reports_a_dashboard_error(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(400, {"detail": "url is required and must be a non-empty string"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "import-url", "https://example.com/nb.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "url is required and must be a non-empty string")
+
+
+def test_import_url_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "import-url", "https://example.com/nb.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def _write_zip(path, entries):
     """Write a local .zip archive at `path` from {entry_name: content_bytes}."""
 
