@@ -1005,7 +1005,20 @@ def compile_notebook_to_api(
         # has one reserved-name collision left its runtime module rewritten
         # to the broken notebook's code while app.py and
         # .compile_metadata.json still described the last working one).
-        api_code = generate_fastapi_code(functions, package_name)
+        # Baked into the generated app itself as SOURCE_NOTEBOOK_SHA256,
+        # returned by its own GET /info -- see generate_fastapi_code's own
+        # docstring for why. Hashed from notebook_path (the exact content
+        # actually being compiled here -- a version snapshot's own path
+        # when this compile is pinned to one, not necessarily the
+        # notebook's current content) so a running deployed container can
+        # always be traced back to precisely what produced it, the same
+        # content identity every other sha256 already tracked in this
+        # project (deploy/compile history, GET /api/notebooks?sha256=,
+        # GET /api/notebooks/duplicates) already uses.
+        api_code = generate_fastapi_code(
+            functions, package_name,
+            source_notebook_sha256=hash_notebook_file(notebook_path),
+        )
 
         # generate_fastapi_code succeeding means this compile is now
         # guaranteed to go through -- from here on the only failures left

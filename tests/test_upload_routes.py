@@ -14418,6 +14418,37 @@ def test_app_preview_matches_what_an_actual_compile_writes():
     assert preview_body["app_code"] == actual_app_code
 
 
+def test_app_preview_bakes_in_the_notebooks_own_sha256():
+
+    import hashlib
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "app_preview_sha256.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/app-preview",
+        json={"notebook_path": "app_preview_sha256.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    expected_sha256 = hashlib.sha256(content).hexdigest()
+    assert (
+        f"SOURCE_NOTEBOOK_SHA256 = '{expected_sha256}'" in resp.json()["app_code"]
+    )
+
+
 def test_app_preview_respects_only_and_exclude():
 
     content = _notebook_bytes(

@@ -574,6 +574,62 @@ def test_compiler_pipeline_generates_a_docker_compose_file(tmp_path):
     assert "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE=${NOTEBOOK_API_RATE_LIMIT_PER_MINUTE:-0}" in compose
 
 
+def test_compiler_pipeline_bakes_source_notebook_sha256_into_info_endpoint(tmp_path):
+    """A running deployed container had no way to self-report which exact
+    notebook content actually produced it, short of cross-referencing
+    this dashboard's own deploy/compile history externally -- GET /info
+    now reports it directly, baked in at compile time.
+    """
+    import hashlib
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    expected_sha256 = hashlib.sha256(notebook_path.read_bytes()).hexdigest()
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+info = client.get("/info").json()
+assert info["source_notebook_sha256"] == {expected_sha256!r}, info
+
+print("SOURCE_NOTEBOOK_SHA256_INFO_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SOURCE_NOTEBOOK_SHA256_INFO_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_dockerignore_excludes_a_real_exported_openapi_and_sdk(
     tmp_path,
 ):

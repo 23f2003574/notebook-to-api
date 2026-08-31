@@ -36,6 +36,26 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
         assert entry["description"]
 
 
+def test_generate_fastapi_code_bakes_in_the_given_source_notebook_sha256():
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+    sha = "a" * 64
+
+    code = generate_fastapi_code(functions, source_notebook_sha256=sha)
+
+    assert f"SOURCE_NOTEBOOK_SHA256 = '{sha}'" in code
+    assert '"source_notebook_sha256": SOURCE_NOTEBOOK_SHA256' in code
+
+
+def test_generate_fastapi_code_defaults_source_notebook_sha256_to_none():
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "SOURCE_NOTEBOOK_SHA256 = None" in code
+
+
 def _register_fake_notebook_module(monkeypatch, package_name="generated"):
     """Generated code always contains a real
     `import <package_name>.runtime.notebook_module as notebook_module`

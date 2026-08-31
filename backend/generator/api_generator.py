@@ -253,7 +253,7 @@ def _resolve_annotation_source(type_str):
 
 
 # Template for generating the FastAPI application source code
-def generate_fastapi_code(functions, package_name="generated"):
+def generate_fastapi_code(functions, package_name="generated", source_notebook_sha256=None):
     """Generate FastAPI app code for the given functions.
 
     Each function is examined; if its name contains any of the
@@ -265,6 +265,17 @@ def generate_fastapi_code(functions, package_name="generated"):
     runtime module from (`<package_name>.runtime.notebook_module`). It
     must match the basename of wherever this generated code actually gets
     written -- see compiler.package_name_for_output_dir.
+
+    source_notebook_sha256 (optional) is baked into the generated app
+    itself as a fixed constant, returned by its own GET /info -- see that
+    endpoint's own "source_notebook_sha256" field below for why this
+    exists: a running deployed container had no way to self-report which
+    exact notebook content actually produced it, short of cross-
+    referencing this dashboard's own deploy/compile history externally
+    (assuming that history is even still available, and the caller
+    already knows which dashboard/tag to look under). None (the default,
+    used by any caller not passing it) means "unknown" -- GET /info
+    reports it as null, exactly as if this parameter didn't exist.
     """
     colliding_names = sorted(
         {func["name"] for func in functions} & RESERVED_INFRASTRUCTURE_NAMES
@@ -584,6 +595,9 @@ def generate_fastapi_code(functions, package_name="generated"):
     lines.append(
         "PYTHON_VERSION = sys.version.split()[0]"
     )
+    lines.append(
+        f"SOURCE_NOTEBOOK_SHA256 = {source_notebook_sha256!r}"
+    )
     lines.append("")
     protected_endpoint_count = len(functions)
     endpoint_list = [
@@ -745,6 +759,7 @@ def generate_fastapi_code(functions, package_name="generated"):
     lines.append(f'        "endpoints": {repr(endpoint_list)},')
     lines.append(f'        "endpoint_count": {len(endpoint_list)},')
     lines.append(f'        "background_endpoint_count": {background_endpoint_count},')
+    lines.append('        "source_notebook_sha256": SOURCE_NOTEBOOK_SHA256,')
     lines.append('        "authentication": {')
     lines.append('            "enabled": True,')
     lines.append('            "type": "api_key"')
