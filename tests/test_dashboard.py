@@ -3,13 +3,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.dashboard import (
     app,
     dashboard_host,
+    dashboard_log_level,
     dashboard_port,
+    dashboard_reload,
+    dashboard_ssl_config,
     FRONTEND_DIST_DIR,
     mount_frontend_static_files,
 )
@@ -156,6 +160,182 @@ print("DASHBOARD_MAIN_DEFAULT_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "DASHBOARD_MAIN_DEFAULT_OK" in proc.stdout
+
+
+def test_dashboard_reload_defaults_to_true(monkeypatch):
+
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_RELOAD", raising=False)
+
+    assert dashboard_reload() is True
+
+
+def test_dashboard_reload_env_var_disables_it(monkeypatch):
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_RELOAD", "false")
+
+    assert dashboard_reload() is False
+
+
+def test_dashboard_reload_env_var_is_case_and_value_insensitive(monkeypatch):
+
+    for falsy in ("False", "FALSE", "0", "no", "off"):
+        monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_RELOAD", falsy)
+        assert dashboard_reload() is False, falsy
+
+    for truthy in ("true", "True", "yes", "1"):
+        monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_RELOAD", truthy)
+        assert dashboard_reload() is True, truthy
+
+
+def test_dashboard_ssl_config_defaults_to_none_none(monkeypatch):
+
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_SSL_KEYFILE", raising=False)
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_SSL_CERTFILE", raising=False)
+
+    assert dashboard_ssl_config() == (None, None)
+
+
+def test_dashboard_ssl_config_returns_both_when_both_are_set(monkeypatch):
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_SSL_KEYFILE", "/certs/key.pem")
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_SSL_CERTFILE", "/certs/cert.pem")
+
+    assert dashboard_ssl_config() == ("/certs/key.pem", "/certs/cert.pem")
+
+
+def test_dashboard_ssl_config_rejects_a_keyfile_with_no_certfile(monkeypatch):
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_SSL_KEYFILE", "/certs/key.pem")
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_SSL_CERTFILE", raising=False)
+
+    with pytest.raises(ValueError, match="SSL_CERTFILE is not"):
+        dashboard_ssl_config()
+
+
+def test_dashboard_ssl_config_rejects_a_certfile_with_no_keyfile(monkeypatch):
+
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_SSL_KEYFILE", raising=False)
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_SSL_CERTFILE", "/certs/cert.pem")
+
+    with pytest.raises(ValueError, match="SSL_KEYFILE is not"):
+        dashboard_ssl_config()
+
+
+def test_dashboard_log_level_defaults_to_none(monkeypatch):
+
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_LOG_LEVEL", raising=False)
+
+    assert dashboard_log_level() is None
+
+
+def test_dashboard_log_level_env_var_overrides_the_default(monkeypatch):
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_LOG_LEVEL", "warning")
+
+    assert dashboard_log_level() == "warning"
+
+
+def test_dashboard_module_run_directly_passes_reload_ssl_and_log_level_to_uvicorn():
+    """Mirrors test_dashboard_module_run_directly_passes_configured_host_and_port_to_uvicorn
+    above for the new reload/ssl/log_level knobs -- run in a subprocess
+    for the identical reason: they must be re-read from the environment
+    at process start, not from whatever's already been imported in this
+    test process.
+    """
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+
+import uvicorn
+
+captured = {{}}
+
+def fake_run(app_path, **kwargs):
+    captured["app_path"] = app_path
+    captured.update(kwargs)
+
+uvicorn.run = fake_run
+
+import runpy
+runpy.run_module("backend.dashboard", run_name="__main__")
+
+assert captured["reload"] is False, captured
+assert captured["ssl_keyfile"] == "/certs/key.pem", captured
+assert captured["ssl_certfile"] == "/certs/cert.pem", captured
+assert captured["log_level"] == "warning", captured
+
+print("DASHBOARD_MAIN_STARTUP_CONFIG_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={
+            **os.environ,
+            "NOTEBOOK_API_DASHBOARD_RELOAD": "false",
+            "NOTEBOOK_API_DASHBOARD_SSL_KEYFILE": "/certs/key.pem",
+            "NOTEBOOK_API_DASHBOARD_SSL_CERTFILE": "/certs/cert.pem",
+            "NOTEBOOK_API_DASHBOARD_LOG_LEVEL": "warning",
+        },
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "DASHBOARD_MAIN_STARTUP_CONFIG_OK" in proc.stdout
+
+
+def test_dashboard_module_run_directly_fails_fast_on_a_lopsided_ssl_config():
+    """A keyfile with no matching certfile must abort *before*
+    uvicorn.run is ever reached -- reused as the signal here (fake_run
+    would set "called": True) that this failed the way it should: at
+    dashboard_ssl_config() itself, not somewhere inside uvicorn.
+    """
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+
+import uvicorn
+
+captured = {{"called": False}}
+
+def fake_run(app_path, **kwargs):
+    captured["called"] = True
+
+uvicorn.run = fake_run
+
+import runpy
+
+try:
+    runpy.run_module("backend.dashboard", run_name="__main__")
+except ValueError as e:
+    assert "SSL_CERTFILE is not" in str(e), str(e)
+    assert captured["called"] is False, captured
+    print("DASHBOARD_MAIN_SSL_FAIL_FAST_OK")
+else:
+    print("DID_NOT_RAISE")
+"""
+
+    env = {
+        k: v for k, v in os.environ.items()
+        if not k.startswith("NOTEBOOK_API_DASHBOARD_SSL_")
+    }
+    env["NOTEBOOK_API_DASHBOARD_SSL_KEYFILE"] = "/certs/key.pem"
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "DASHBOARD_MAIN_SSL_FAIL_FAST_OK" in proc.stdout
 
 
 def test_frontend_is_not_mounted_in_this_checked_out_repo():

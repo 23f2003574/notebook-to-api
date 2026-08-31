@@ -451,10 +451,111 @@ def dashboard_port():
     return int(os.getenv("NOTEBOOK_API_DASHBOARD_PORT", "8001"))
 
 
+# Values NOTEBOOK_API_DASHBOARD_RELOAD (below) treats as "off" -- matched
+# case-insensitively so "False"/"FALSE"/"0" all behave identically, the
+# same tolerance every other project this convention is modeled on
+# (Django's DEBUG, Flask's FLASK_DEBUG, ...) already extends to a
+# hand-typed env var.
+_DASHBOARD_RELOAD_FALSY_VALUES = frozenset({"false", "0", "no", "off"})
+
+
+def dashboard_reload():
+    """Whether `python -m backend.dashboard` runs uvicorn with hot-reload
+    enabled.
+
+    Matches the app's existing NOTEBOOK_API_DASHBOARD_* env-var
+    convention (see dashboard_host()/dashboard_port() above) rather than
+    the fixed reload=True previously hardcoded directly into the
+    uvicorn.run() call below, with no way to turn it off without editing
+    this file.
+
+    Defaults to True, preserving this project's own existing local-dev
+    workflow exactly as it already is: start-dashboard.sh runs this
+    module directly and relies on hot-reload while iterating on the
+    dashboard itself. But uvicorn's own reload mode spawns a supervising
+    subprocess that restarts the whole server on every filesystem change
+    under this process's own working directory -- real, avoidable
+    overhead (and a startup/shutdown wrinkle: reload mode also silently
+    ignores a real deployment's own `workers=N`, per uvicorn's own
+    precedence between the two) for a production deployment that never
+    edits this file's own source after it's built. Set
+    NOTEBOOK_API_DASHBOARD_RELOAD=false to run this module directly in
+    that kind of deployment without needing an external process
+    manager/reverse proxy just to invoke uvicorn without it.
+    """
+    return os.getenv(
+        "NOTEBOOK_API_DASHBOARD_RELOAD", "true"
+    ).strip().lower() not in _DASHBOARD_RELOAD_FALSY_VALUES
+
+
+def dashboard_ssl_config():
+    """(ssl_keyfile, ssl_certfile) for `python -m backend.dashboard`'s own
+    uvicorn.run() call below, read from
+    NOTEBOOK_API_DASHBOARD_SSL_KEYFILE/NOTEBOOK_API_DASHBOARD_SSL_CERTFILE
+    -- (None, None) if neither is set, the same "unset changes nothing"
+    convention dashboard_host()/dashboard_port() above already follow:
+    plain HTTP, exactly the only thing this module could ever serve
+    before this existed.
+
+    Without this, running this dashboard directly -- rather than behind
+    an external reverse proxy/load balancer already terminating TLS --
+    had no way to serve HTTPS at all: every one of its own endpoints
+    (including POST /api/upload and POST /api/compile) would otherwise
+    have to be reachable in plaintext for any deployment with no such
+    proxy already sitting in front of it.
+
+    Raises ValueError -- at startup, before uvicorn.run is ever called --
+    if only one of the two is set: a keyfile with no matching certfile
+    (or vice versa) isn't a configuration uvicorn could do anything
+    useful with, and failing fast here beats it failing less obviously
+    once uvicorn itself tries to load just the one that was actually
+    given.
+    """
+    ssl_keyfile = os.getenv("NOTEBOOK_API_DASHBOARD_SSL_KEYFILE")
+    ssl_certfile = os.getenv("NOTEBOOK_API_DASHBOARD_SSL_CERTFILE")
+
+    if bool(ssl_keyfile) != bool(ssl_certfile):
+
+        set_name = (
+            "NOTEBOOK_API_DASHBOARD_SSL_KEYFILE" if ssl_keyfile
+            else "NOTEBOOK_API_DASHBOARD_SSL_CERTFILE"
+        )
+        unset_name = (
+            "NOTEBOOK_API_DASHBOARD_SSL_CERTFILE" if ssl_keyfile
+            else "NOTEBOOK_API_DASHBOARD_SSL_KEYFILE"
+        )
+
+        raise ValueError(
+            f"{set_name} is set but {unset_name} is not -- both must be "
+            "set to serve HTTPS, or neither to serve plain HTTP."
+        )
+
+    return ssl_keyfile, ssl_certfile
+
+
+def dashboard_log_level():
+    """uvicorn's own --log-level for `python -m backend.dashboard`, via
+    NOTEBOOK_API_DASHBOARD_LOG_LEVEL -- unset (the default, None) leaves
+    uvicorn's own default ("info") exactly as before, the same "unset
+    changes nothing" convention every other NOTEBOOK_API_DASHBOARD_* knob
+    above already follows. Lets a production deployment quiet (or
+    increase) this dashboard's own log verbosity without editing this
+    file, the same operational knob every other NOTEBOOK_API_* limit in
+    this project (see GET /api/config, routes/upload.py) is already meant
+    to be configurable without.
+    """
+    return os.getenv("NOTEBOOK_API_DASHBOARD_LOG_LEVEL")
+
+
 if __name__ == "__main__":
+    ssl_keyfile, ssl_certfile = dashboard_ssl_config()
+
     uvicorn.run(
         "backend.dashboard:app",
         host=dashboard_host(),
         port=dashboard_port(),
-        reload=True
+        reload=dashboard_reload(),
+        ssl_keyfile=ssl_keyfile,
+        ssl_certfile=ssl_certfile,
+        log_level=dashboard_log_level(),
     )
