@@ -10470,6 +10470,87 @@ def test_copy_notebook_version_does_not_inherit_tags():
     os.remove(Path(UPLOAD_DIR) / "versions_copy_tags_target.ipynb")
 
 
+def test_copy_notebook_version_accepts_explicit_tags_and_description():
+
+    filename = "versions_copy_override_source.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    copy_resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/copy",
+        json={
+            "new_filename": "versions_copy_override_target.ipynb",
+            "tags": ["recovered"],
+            "description": "recovered snapshot",
+        },
+    )
+    assert copy_resp.status_code == 200
+
+    target_info = client.get(
+        "/api/notebooks/versions_copy_override_target.ipynb/info"
+    ).json()
+    assert target_info["tags"] == ["recovered"]
+    assert target_info["description"] == "recovered snapshot"
+
+    os.remove(Path(UPLOAD_DIR) / "versions_copy_override_target.ipynb")
+    _tags_sidecar_path("versions_copy_override_target.ipynb").unlink(missing_ok=True)
+    _description_sidecar_path("versions_copy_override_target.ipynb").unlink(missing_ok=True)
+
+
+def test_copy_notebook_version_rejects_an_invalid_tags_override():
+
+    filename = "versions_copy_bad_tags_source.ipynb"
+    _upload_sample_notebook(filename)
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/copy",
+        json={
+            "new_filename": "versions_copy_bad_tags_target.ipynb",
+            "tags": "not-a-list",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert not (Path(UPLOAD_DIR) / "versions_copy_bad_tags_target.ipynb").exists()
+
+
 def test_copy_notebook_version_does_not_copy_source_version_history():
 
     filename = "versions_copy_history_source.ipynb"
@@ -10804,6 +10885,69 @@ def test_copy_notebook_versions_batch_duplicates_each_version_to_its_own_new_not
     assert client.get("/api/notebooks/versions_copy_batch_b.ipynb").status_code == 200
     # Source's own version history is untouched.
     assert len(client.get(f"/api/notebooks/{filename}/versions").json()["versions"]) == 2
+
+
+def test_copy_notebook_versions_batch_per_entry_tags_and_description():
+
+    filename = "versions_copy_batch_override_source.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/copy-batch",
+        json={
+            "entries": [
+                {
+                    "version_id": version_id,
+                    "new_filename": "versions_copy_batch_override_tagged.ipynb",
+                    "tags": ["recovered"],
+                    "description": "recovered snapshot",
+                },
+                {
+                    "version_id": version_id,
+                    "new_filename": "versions_copy_batch_override_plain.ipynb",
+                },
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["succeeded_count"] == 2
+
+    tagged_info = client.get(
+        "/api/notebooks/versions_copy_batch_override_tagged.ipynb/info"
+    ).json()
+    assert tagged_info["tags"] == ["recovered"]
+    assert tagged_info["description"] == "recovered snapshot"
+
+    plain_info = client.get(
+        "/api/notebooks/versions_copy_batch_override_plain.ipynb/info"
+    ).json()
+    assert plain_info["tags"] == []
+    assert plain_info["description"] == ""
 
 
 def test_copy_notebook_versions_batch_reports_a_bad_entry_without_aborting_the_rest():

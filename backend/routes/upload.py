@@ -7549,11 +7549,17 @@ def copy_notebook_version(filename: str, version_id: str, data: dict):
     match at all -- inheriting either here would misrepresent old content
     as whatever the live notebook happens to be tagged/described as
     today. The new copy starts untagged and undescribed, exactly like any
-    other brand-new upload. If "overwrite": true replaces an existing
-    destination notebook, that destination's own previous tags,
-    description, and version history are discarded along with the rest of
-    the file it belonged to, the same overwrite semantics
-    copy_notebook/rename_notebook already apply.
+    other brand-new upload, unless optional "tags" (a list of strings,
+    validated the same way PUT /api/notebooks/{filename}/tags' own "tags"
+    already is) and/or "description" (validated the same way PUT
+    /api/notebooks/{filename}/description's own already is) are given --
+    e.g. tagging a snapshot recovered while investigating a regression
+    without a separate PUT .../tags round trip immediately after this
+    call succeeds. If "overwrite": true replaces an existing destination
+    notebook, that destination's own previous tags, description, and
+    version history are discarded along with the rest of the file it
+    belonged to, the same overwrite semantics copy_notebook/
+    rename_notebook already apply.
 
     Same new_filename validation (".ipynb" suffix, collision rejected
     with 409 unless "overwrite": true) and _rename_lock_for(dest) usage
@@ -7574,8 +7580,18 @@ def copy_notebook_version(filename: str, version_id: str, data: dict):
 
     overwrite = bool(data.get("overwrite", False))
 
+    tags = data.get("tags")
+    normalized_tags = _validate_and_normalize_tags(tags) if tags is not None else None
+
+    description = data.get("description")
+    normalized_description = (
+        _validate_and_normalize_description(description)
+        if description is not None else None
+    )
+
     new_filename = _copy_notebook_version_to(
-        file_path, versions_dir, version_id, data.get("new_filename"), overwrite
+        file_path, versions_dir, version_id, data.get("new_filename"), overwrite,
+        tags=normalized_tags, description=normalized_description,
     )
 
     return {
@@ -7588,12 +7604,19 @@ def copy_notebook_version(filename: str, version_id: str, data: dict):
 
 def _copy_notebook_version_to(
     file_path: Path, versions_dir: Path, version_id, new_filename, overwrite: bool,
-    dry_run: bool = False,
+    dry_run: bool = False, tags=None, description=None,
 ) -> str:
     """Copy `version_id` (one of `file_path`'s own snapshotted past
     versions, in `versions_dir`) to `new_filename` within UPLOAD_DIR,
     applying the exact same validation and overwrite semantics
     copy_notebook_version's own docstring above documents.
+
+    `tags`/`description` (each optional, already validated/normalized by
+    the caller -- see _validate_and_normalize_tags/
+    _validate_and_normalize_description) set the new copy's own tags/
+    description instead of the previous unconditional "starts untagged
+    and undescribed" default. None (for either, the default, and every
+    caller before this) preserves that previous behavior exactly.
 
     Factored out of copy_notebook_version so POST
     /api/notebooks/{filename}/versions/copy-batch (below) can reuse it
@@ -7684,8 +7707,10 @@ def _copy_notebook_version_to(
         if dest_versions_dir.exists():
             shutil.rmtree(dest_versions_dir)
 
-        _write_notebook_tags(dest_path.name, [])
-        _write_notebook_description(dest_path.name, "")
+        _write_notebook_tags(dest_path.name, tags if tags is not None else [])
+        _write_notebook_description(
+            dest_path.name, description if description is not None else ""
+        )
 
     return new_filename
 
@@ -7709,13 +7734,21 @@ def copy_notebook_versions_batch(filename: str, data: dict):
     several of its past snapshots instead.
 
     Takes "entries", a list of {"version_id", "new_filename"} objects
-    (with an optional per-entry "overwrite", default false) -- the same
-    {"version_id", ...} shape POST
-    /api/notebooks/{filename}/versions/delete-batch already establishes
-    for acting on several of one notebook's own versions at once, plus
-    its own per-entry "new_filename"/"overwrite" since, unlike that
-    endpoint's uniform deletion, each entry here names its own
-    independent destination that may or may not already exist.
+    (with an optional per-entry "overwrite", default false, and optional
+    per-entry "tags"/"description") -- the same {"version_id", ...} shape
+    POST /api/notebooks/{filename}/versions/delete-batch already
+    establishes for acting on several of one notebook's own versions at
+    once, plus its own per-entry "new_filename"/"overwrite"/"tags"/
+    "description" since, unlike that endpoint's uniform deletion, each
+    entry here names its own independent destination that may or may not
+    already exist -- and, per POST .../{version_id}/copy's own docstring
+    above, may want its own distinct tags/description rather than the
+    "untagged and undescribed" default. Each entry's own "tags"/
+    "description" is validated the same way that single-entry endpoint's
+    own identical fields already are, with an invalid one reported as
+    that entry's own "error" result rather than aborting the rest of the
+    batch, the same "one bad entry" contract every other per-entry field
+    here already follows.
 
     Reuses _copy_notebook_version_to (above) -- the exact same
     validation and overwrite semantics the single-entry POST
@@ -7792,9 +7825,22 @@ def copy_notebook_versions_batch(filename: str, data: dict):
 
         try:
 
+            entry_tags = entry.get("tags")
+            normalized_entry_tags = (
+                _validate_and_normalize_tags(entry_tags)
+                if entry_tags is not None else None
+            )
+
+            entry_description = entry.get("description")
+            normalized_entry_description = (
+                _validate_and_normalize_description(entry_description)
+                if entry_description is not None else None
+            )
+
             _copy_notebook_version_to(
                 file_path, versions_dir, version_id, new_filename, overwrite,
                 dry_run=dry_run,
+                tags=normalized_entry_tags, description=normalized_entry_description,
             )
 
             results.append({

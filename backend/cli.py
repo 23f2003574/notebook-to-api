@@ -3922,14 +3922,20 @@ def _dispatch_core_command(args):
 
         elif args.versions_command == "copy":
 
+            versions_copy_body = {
+                "new_filename": args.new_filename,
+                "overwrite": args.overwrite,
+            }
+            if args.tags:
+                versions_copy_body["tags"] = _parse_comma_separated_names(args.tags)
+            if args.description is not None:
+                versions_copy_body["description"] = args.description
+
             try:
                 response = httpx.post(
                     f"{dashboard_url}/api/notebooks/{args.filename}"
                     f"/versions/{args.version_id}/copy",
-                    json={
-                        "new_filename": args.new_filename,
-                        "overwrite": args.overwrite,
-                    },
+                    json=versions_copy_body,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -7909,6 +7915,25 @@ def main():
             "mirroring this endpoint's own \"overwrite\": true -- "
             "without this, copying onto an existing filename is rejected "
             "with a 409."
+        )
+    )
+    versions_copy_parser.add_argument(
+        "--tags",
+        help=(
+            "Comma-separated tags for the new copy, via this endpoint's "
+            "own \"tags\" body field -- without this, the new copy "
+            "starts untagged (it never inherits the source notebook's "
+            "own current tags, since they describe its *current* "
+            "content, not this snapshot)."
+        )
+    )
+    versions_copy_parser.add_argument(
+        "--description",
+        default=None,
+        help=(
+            "Description for the new copy, via this endpoint's own "
+            "\"description\" body field -- without this, the new copy "
+            "starts undescribed, the same reasoning --tags above gives."
         )
     )
     versions_copy_parser.add_argument(

@@ -11056,6 +11056,36 @@ def test_versions_copy_command_passes_overwrite_flag(tmp_path, fake_dashboard):
     }
 
 
+def test_versions_copy_command_passes_tags_and_description_through(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "version_id": "v1.ipynb", "new_filename": "nb-recovered.ipynb",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "copy", "nb.ipynb", "v1.ipynb", "nb-recovered.ipynb",
+            "--dashboard-url", dashboard_url,
+            "--tags", "recovered", "--description", "recovered snapshot",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    body = json.loads(handler.bodies[0])
+    assert body["tags"] == ["recovered"]
+    assert body["description"] == "recovered snapshot"
+
+
 def test_versions_copy_command_json_flag_emits_the_dashboards_own_response(
     tmp_path, fake_dashboard
 ):
