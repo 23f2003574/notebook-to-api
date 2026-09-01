@@ -22,6 +22,7 @@ from backend.inspector import (
     DEFAULT_DEV_API_KEY,
     classify_notebook_diff,
     diff_notebook_functions,
+    diff_notebook_source,
     generate_curl_commands,
     inspect_notebook,
     inspect_notebook_data,
@@ -1242,10 +1243,16 @@ def _dispatch_core_command(args):
     elif args.command == "diff":
         diff = diff_notebook_functions(args.old_notebook, args.new_notebook)
         diff.update(classify_notebook_diff(diff))
+        if args.content:
+            diff["content_diff"] = diff_notebook_source(
+                args.old_notebook, args.new_notebook
+            )
         if args.json_output:
             print(json.dumps(diff, indent=2))
         else:
             print_notebook_diff(diff)
+            if args.content and diff["content_diff"]:
+                print("\n" + "\n".join(diff["content_diff"]))
         if args.fail_on_breaking and not diff["compatible"]:
             sys.exit(1)
     elif args.command == "upload":
@@ -4180,6 +4187,22 @@ def _dispatch_core_command(args):
                 diff = diff_notebook_functions(old_path, new_path)
                 diff.update(classify_notebook_diff(diff))
 
+                if args.content:
+                    # Same old_label/new_label convention GET
+                    # .../versions/{version_id}/diff's own "content"
+                    # already uses server-side (routes/upload.py) --
+                    # old_path/new_path are meaningless local temp files,
+                    # not something a reader of this diff's header would
+                    # recognize.
+                    diff["content_diff"] = diff_notebook_source(
+                        old_path, new_path,
+                        old_label=f"version '{args.version_id}'",
+                        new_label=(
+                            f"version '{args.against}'" if args.against
+                            else f"the current live content of '{args.filename}'"
+                        ),
+                    )
+
             finally:
                 os.remove(old_path)
                 os.remove(new_path)
@@ -4199,6 +4222,9 @@ def _dispatch_core_command(args):
                     f"{dashboard_url}"
                 )
                 print_notebook_diff(diff)
+
+                if args.content and diff["content_diff"]:
+                    print("\n" + "\n".join(diff["content_diff"]))
 
             if args.fail_on_breaking and not diff["compatible"]:
                 sys.exit(1)
@@ -4590,6 +4616,18 @@ def _dispatch_core_command(args):
             diff = diff_notebook_functions(remote_notebook_path, local_notebook_path)
             diff.update(classify_notebook_diff(diff))
 
+            if args.content:
+                # Labeled, not left to diff_notebook_source's own
+                # "default to the path itself" fallback -- unlike `diff`'s
+                # own two caller-given paths, remote_notebook_path is a
+                # meaningless local temp file, not something a reader of
+                # this diff's header would recognize.
+                diff["content_diff"] = diff_notebook_source(
+                    remote_notebook_path, local_notebook_path,
+                    old_label=f"'{args.filename}' on {dashboard_url}",
+                    new_label=local_notebook_path,
+                )
+
         finally:
             os.remove(remote_notebook_path)
 
@@ -4601,6 +4639,8 @@ def _dispatch_core_command(args):
                 f"'{args.filename}' on {dashboard_url}"
             )
             print_notebook_diff(diff)
+            if args.content and diff["content_diff"]:
+                print("\n" + "\n".join(diff["content_diff"]))
         if args.fail_on_breaking and not diff["compatible"]:
             sys.exit(1)
     elif args.command == "diff-notebooks":
@@ -5560,6 +5600,22 @@ def main():
             "parameter, a parameter type change, or a return type change "
             "-- after printing the report. Purely additive changes (a new "
             "endpoint, a new parameter with a default) never trigger this."
+        )
+    )
+    diff_parser.add_argument(
+        "--content",
+        action="store_true",
+        help=(
+            "Also print a line-level unified diff of both notebooks' own "
+            "raw code cell source, via diff_notebook_source (backend/"
+            "inspector.py) -- distinct from the structural added/removed/"
+            "changed-signature report this command already prints, e.g. "
+            "to actually see what changed in a function's own body, not "
+            "just whether its signature did. Computed locally from "
+            "old_notebook/new_notebook directly -- the same report "
+            "`diff-notebooks --content` already offers for two notebooks "
+            "already on a dashboard, just without needing either one "
+            "uploaded first."
         )
     )
 
@@ -8433,6 +8489,19 @@ def main():
         )
     )
     versions_diff_parser.add_argument(
+        "--content",
+        action="store_true",
+        help=(
+            "Also print a line-level unified diff of both sides' own raw "
+            "code cell source, via diff_notebook_source (backend/"
+            "inspector.py) -- distinct from the structural added/removed/"
+            "changed-signature report this command already prints. See "
+            "`diff --content`'s own help for what this shows, and "
+            "`versions compare --content` for the entirely-server-side "
+            "equivalent that needs no local temp files at all."
+        )
+    )
+    versions_diff_parser.add_argument(
         "--fail-on-breaking",
         action="store_true",
         help=(
@@ -8654,6 +8723,17 @@ def main():
             "existing caller of the already-uploaded notebook's compiled "
             "API. See `diff --fail-on-breaking`'s own help for exactly "
             "what counts as breaking."
+        )
+    )
+    remote_diff_parser.add_argument(
+        "--content",
+        action="store_true",
+        help=(
+            "Also print a line-level unified diff of both sides' own raw "
+            "code cell source, via diff_notebook_source (backend/"
+            "inspector.py) -- distinct from the structural added/removed/"
+            "changed-signature report this command already prints. See "
+            "`diff --content`'s own help for what this shows."
         )
     )
 

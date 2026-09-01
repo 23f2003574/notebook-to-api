@@ -1621,6 +1621,80 @@ def test_diff_command_json_flag_emits_machine_readable_output(tmp_path):
     assert data["breaking_changes"] == []
 
 
+def test_diff_command_content_flag_prints_a_line_level_diff(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+
+    # A body-only edit -- the compiled API surface (signature) is
+    # unchanged, so the structural report alone shows nothing, but the
+    # actual code did change.
+    _write_notebook_with_function(
+        old_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    _write_notebook_with_function(
+        new_path, "def add(a: int, b: int) -> int:\n    return a + b + 1\n"
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--content"], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No changes to the compiled API surface." in proc.stdout
+    assert "-    return a + b" in proc.stdout
+    assert "+    return a + b + 1" in proc.stdout
+
+
+def test_diff_command_content_flag_json_output_includes_content_diff(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+
+    _write_notebook_with_function(
+        old_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    _write_notebook_with_function(
+        new_path, "def add(a: int, b: int) -> int:\n    return a + b + 1\n"
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--content", "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert any("return a + b + 1" in line for line in data["content_diff"])
+
+
+def test_diff_command_without_content_flag_omits_content_diff(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+    _write_notebook_with_function(
+        old_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    _write_notebook_with_function(
+        new_path, "def add(a: int, b: int) -> int:\n    return a + b + 1\n"
+    )
+
+    proc = _run_cli(["diff", str(old_path), str(new_path), "--json"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert "content_diff" not in data
+
+
 def test_diff_command_fail_on_breaking_exits_nonzero_for_a_breaking_change(tmp_path):
 
     workdir = tmp_path / "workdir"
@@ -12459,6 +12533,45 @@ def test_versions_diff_command_compares_a_version_against_the_current_notebook(
     ]
 
 
+def test_versions_diff_command_content_flag_prints_a_line_level_diff(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _versions_diff_notebook_bytes(
+                "def add(a: int, b: int) -> int:\n    return a + b\n"
+            ),
+        ),
+        _raw_response(
+            200,
+            _versions_diff_notebook_bytes(
+                "def add(a: int, b: int) -> int:\n    return a + b + 1\n"
+            ),
+        ),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "diff", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url, "--content",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No changes to the compiled API surface." in proc.stdout
+    assert "-    return a + b" in proc.stdout
+    assert "+    return a + b + 1" in proc.stdout
+    assert "version 'v1.ipynb'" in proc.stdout
+    assert "the current live content of 'nb.ipynb'" in proc.stdout
+
+
 def test_versions_diff_command_compares_two_versions_via_against(
     tmp_path, fake_dashboard
 ):
@@ -13187,6 +13300,42 @@ def test_remote_diff_command_reports_added_removed_and_changed_functions(
     assert "Changed 1 endpoint(s):" in proc.stdout
     assert "POST /add" in proc.stdout
     assert handler.requests == ["/api/notebooks/nb.ipynb"]
+
+
+def test_remote_diff_command_content_flag_prints_a_line_level_diff(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    local_path = workdir / "local.ipynb"
+    _write_notebook_with_function(
+        local_path, "def add(a: int, b: int) -> int:\n    return a + b + 1\n"
+    )
+
+    proc = _run_cli(
+        [
+            "remote-diff", "nb.ipynb", str(local_path),
+            "--dashboard-url", dashboard_url, "--content",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No changes to the compiled API surface." in proc.stdout
+    assert "-    return a + b" in proc.stdout
+    assert "+    return a + b + 1" in proc.stdout
+    assert f"'nb.ipynb' on {dashboard_url}" in proc.stdout
 
 
 def test_remote_diff_command_reports_no_changes_for_identical_notebooks(
