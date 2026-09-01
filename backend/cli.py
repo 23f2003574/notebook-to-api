@@ -3773,6 +3773,16 @@ def _dispatch_core_command(args):
                 f"{_extract_dashboard_error_detail(response)}"
             )
 
+        bundle_sha256 = response.headers.get("X-Bundle-SHA256")
+
+        if args.expected_sha256 and args.expected_sha256 != bundle_sha256:
+
+            raise RuntimeError(
+                f"Downloaded bundle's sha256 ({bundle_sha256}) does not "
+                f"match the expected value ({args.expected_sha256}) -- "
+                "nothing was written to disk."
+            )
+
         output_path = args.output or _filename_from_content_disposition(
             response, "generated.zip"
         )
@@ -3797,6 +3807,7 @@ def _dispatch_core_command(args):
                     "path": output_path,
                     "size_bytes": len(response.content),
                     "notebook_changed_since_compile": is_stale,
+                    "bundle_sha256": bundle_sha256,
                 },
                 indent=2,
             ))
@@ -3805,6 +3816,8 @@ def _dispatch_core_command(args):
                 f"Downloaded the compiled app from {dashboard_url} to "
                 f"{output_path} ({len(response.content)} bytes)"
             )
+            if bundle_sha256:
+                print(f"  bundle sha256: {bundle_sha256}")
             if is_stale:
                 print(
                     "  warning: the source notebook has changed since "
@@ -8049,14 +8062,30 @@ def main():
         )
     )
     remote_build_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        help=(
+            "Verify the downloaded zip's own sha256 matches this value "
+            "-- checked against GET /api/download's own \"X-Bundle-"
+            "SHA256\" response header, the same one GET /api/generated"
+            "?checksums=true reports as \"bundle_sha256\" for the exact "
+            "same file set -- before writing it to disk. The same "
+            "content-integrity check `download` and `versions get` "
+            "already perform, applied here to the whole compiled "
+            "bundle instead of a single notebook."
+        )
+    )
+    remote_build_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit a machine-readable JSON result "
             "({\"status\", \"path\", \"size_bytes\", "
-            "\"notebook_changed_since_compile\"}) instead of a "
-            "human-readable summary, for scripting/automation."
+            "\"notebook_changed_since_compile\", \"bundle_sha256\"}) "
+            "instead of a human-readable summary, for scripting/"
+            "automation."
         )
     )
 

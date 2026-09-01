@@ -11240,6 +11240,22 @@ def download_generated_app():
     warns on it) can act on it without a separate, redundant GET
     /api/notebooks call just to read back the currently-compiled entry's
     own "notebook_changed_since_compile" field.
+
+    The "X-Bundle-SHA256" response header is the same _bundle_sha256
+    (below) already summarizes GET /api/generated's own "checksums"
+    listing with, computed here over this exact zip's own file set --
+    so a caller who downloaded this zip (via `remote-build`, or a script
+    driving this endpoint directly) can confirm it byte-for-byte matches
+    what this dashboard currently has compiled in one comparison, the
+    same way GET /api/generated?checksums=true's own "bundle_sha256"
+    already lets a caller verify a bundle assembled from individual GET
+    /api/generated/{filename} calls without re-fetching everything.
+    Unlike that query param, computed unconditionally here rather than
+    behind an opt-in flag: this endpoint already reads every one of
+    these files' full bytes to compress them into the zip, so hashing
+    them too is a comparatively small addition, not the "real work this
+    endpoint's existing listing never needed" GET /api/generated's own
+    checksums=false default exists to avoid.
     """
 
     generated_path = Path(GENERATED_DIR)
@@ -11265,6 +11281,8 @@ def download_generated_app():
 
         buffer = io.BytesIO()
 
+        bundled_file_details = []
+
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
 
             for file_path in sorted(generated_path.rglob("*")):
@@ -11277,10 +11295,16 @@ def download_generated_app():
                     )
                 ):
 
-                    archive.write(
-                        file_path,
-                        file_path.relative_to(generated_path)
-                    )
+                    relative_name = file_path.relative_to(generated_path)
+
+                    archive.write(file_path, relative_name)
+
+                    bundled_file_details.append({
+                        "filename": str(relative_name),
+                        "sha256": hash_notebook_file(str(file_path)),
+                    })
+
+        bundle_sha256 = _bundle_sha256(bundled_file_details)
 
     buffer.seek(0)
 
@@ -11292,6 +11316,7 @@ def download_generated_app():
                 f'attachment; filename="{generated_path.name}.zip"'
             ),
             "X-Notebook-Changed-Since-Compile": "true" if is_stale else "false",
+            "X-Bundle-SHA256": bundle_sha256,
         }
     )
 

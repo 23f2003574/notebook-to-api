@@ -18550,6 +18550,28 @@ def test_download_returns_a_zip_of_the_compiled_app():
     assert "def add(" in app_source
 
 
+def test_download_reports_a_bundle_sha256_matching_generated_checksums():
+    """"X-Bundle-SHA256" summarizes this exact zip's own file set with the
+    same _bundle_sha256 GET /api/generated?checksums=true's own
+    "bundle_sha256" already uses for the identical GENERATED_DIR content
+    -- so a caller who downloaded this zip can confirm it matches what
+    this dashboard currently has compiled without re-fetching or
+    re-hashing anything.
+    """
+
+    filename = "download_bundle_sha256_test.ipynb"
+    _compile_a_notebook(filename)
+
+    download_resp = client.get("/api/download")
+    assert download_resp.status_code == 200
+    bundle_sha256 = download_resp.headers["x-bundle-sha256"]
+    assert bundle_sha256
+
+    generated_resp = client.get("/api/generated", params={"checksums": "true"})
+    assert generated_resp.status_code == 200
+    assert generated_resp.json()["bundle_sha256"] == bundle_sha256
+
+
 def test_download_reports_not_stale_right_after_compile():
 
     filename = "download_not_stale_test.ipynb"

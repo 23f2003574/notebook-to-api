@@ -10742,6 +10742,61 @@ def test_remote_build_command_respects_a_custom_output_path(tmp_path, fake_dashb
     assert not (workdir / "generated.zip").exists()
 
 
+def test_remote_build_command_expected_sha256_succeeds_on_a_match(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x03\x04fake-zip-content"
+    handler.responses = [(200, zip_bytes, "application/zip")]
+    handler.response_headers = [{
+        "Content-Disposition": 'attachment; filename="generated.zip"',
+        "X-Bundle-SHA256": "abc123",
+    }]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-build", "--dashboard-url", dashboard_url,
+            "--expected-sha256", "abc123",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "generated.zip").read_bytes() == zip_bytes
+    assert "bundle sha256: abc123" in proc.stdout
+
+
+def test_remote_build_command_expected_sha256_fails_on_a_mismatch_and_writes_nothing(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x03\x04fake-zip-content"
+    handler.responses = [(200, zip_bytes, "application/zip")]
+    handler.response_headers = [{
+        "Content-Disposition": 'attachment; filename="generated.zip"',
+        "X-Bundle-SHA256": "abc123",
+    }]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-build", "--dashboard-url", dashboard_url,
+            "--expected-sha256", "does-not-match",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "does not match the expected value")
+    assert not (workdir / "generated.zip").exists()
+
+
 def test_remote_build_command_json_flag_emits_a_machine_readable_result(
     tmp_path, fake_dashboard
 ):
