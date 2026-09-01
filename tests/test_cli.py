@@ -5982,6 +5982,34 @@ def test_rename_command_passes_the_overwrite_flag_through(tmp_path, fake_dashboa
     assert json.loads(handler.bodies[0])["overwrite"] is True
 
 
+def test_rename_command_dry_run_sends_dry_run_and_prints_would_rename(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": True, "filename": "nb.ipynb",
+            "new_filename": "renamed.ipynb", "was_currently_compiled": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "rename", "nb.ipynb", "renamed.ipynb",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0])["dry_run"] is True
+    assert "Would rename 'nb.ipynb' to 'renamed.ipynb'" in proc.stdout
+
+
 def test_rename_command_json_flag_emits_the_dashboards_own_response(
     tmp_path, fake_dashboard
 ):
@@ -6315,6 +6343,34 @@ def test_copy_command_passes_the_overwrite_flag_through(tmp_path, fake_dashboard
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads(handler.bodies[0])["overwrite"] is True
+
+
+def test_copy_command_dry_run_sends_dry_run_and_prints_would_copy(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": True, "filename": "nb.ipynb",
+            "new_filename": "nb_copy.ipynb",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "copy", "nb.ipynb", "nb_copy.ipynb",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0])["dry_run"] is True
+    assert "Would copy 'nb.ipynb' to 'nb_copy.ipynb'" in proc.stdout
 
 
 def test_copy_command_passes_tags_and_description_through(tmp_path, fake_dashboard):
@@ -11085,6 +11141,34 @@ def test_versions_copy_command_passes_overwrite_flag(tmp_path, fake_dashboard):
     assert json.loads(handler.bodies[0]) == {
         "new_filename": "nb-old.ipynb", "overwrite": True,
     }
+
+
+def test_versions_copy_command_dry_run_sends_dry_run_and_prints_would_copy(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": True, "filename": "nb.ipynb",
+            "version_id": "v1.ipynb", "new_filename": "nb-old.ipynb",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "copy", "nb.ipynb", "v1.ipynb", "nb-old.ipynb",
+            "--dry-run", "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0])["dry_run"] is True
+    assert "Would copy version 'v1.ipynb' of 'nb.ipynb' to 'nb-old.ipynb'" in proc.stdout
 
 
 def test_versions_copy_command_passes_tags_and_description_through(

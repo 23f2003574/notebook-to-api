@@ -5363,6 +5363,15 @@ def rename_notebook(filename: str, data: dict):
     having been overwritten at all. The same overwrite semantics apply:
     the destination's own previous version history, if any, is discarded
     rather than merged with the just-renamed notebook's.
+
+    "dry_run" (optional, default false) reports the exact same
+    "new_filename"/"was_currently_compiled" a real rename would,
+    including the 409 a same-name collision without "overwrite": true
+    would raise, without moving the file or any sidecar/version-history
+    alongside it -- _rename_notebook_to's own "dry_run" already provides
+    this for POST /api/notebooks/rename-batch's own per-entry preview;
+    this was the one caller of that helper that never actually passed it
+    through.
     """
 
     old_path = resolve_upload_path(filename)
@@ -5375,11 +5384,15 @@ def rename_notebook(filename: str, data: dict):
         )
 
     overwrite = bool(data.get("overwrite", False))
+    dry_run = bool(data.get("dry_run", False))
 
-    result = _rename_notebook_to(old_path, data.get("new_filename"), overwrite)
+    result = _rename_notebook_to(
+        old_path, data.get("new_filename"), overwrite, dry_run=dry_run
+    )
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "filename": filename,
         "new_filename": result["new_filename"],
         "was_currently_compiled": result["was_currently_compiled"],
@@ -5729,9 +5742,18 @@ def copy_notebook(filename: str, data: dict):
     no special-casing needed here -- the same way it already reports
     staleness for a currently-compiled notebook edited via POST
     /api/upload?overwrite=true.
+
+    "dry_run" (optional, default false) reports the exact same
+    "new_filename" a real copy would, including the 409 a same-name
+    collision without "overwrite": true would raise, without copying a
+    single byte -- _copy_notebook_to's own "dry_run" already provides
+    this for POST /api/notebooks/{filename}/copy-batch's own per-
+    destination preview; this was the one caller of that helper that
+    never actually passed it through.
     """
 
     overwrite = bool(data.get("overwrite", False))
+    dry_run = bool(data.get("dry_run", False))
 
     tags = data.get("tags")
     normalized_tags = _validate_and_normalize_tags(tags) if tags is not None else None
@@ -5752,12 +5774,13 @@ def copy_notebook(filename: str, data: dict):
         )
 
     new_filename = _copy_notebook_to(
-        source_path, data.get("new_filename"), overwrite,
+        source_path, data.get("new_filename"), overwrite, dry_run=dry_run,
         tags=normalized_tags, description=normalized_description,
     )
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "filename": filename,
         "new_filename": new_filename,
     }
@@ -7603,6 +7626,14 @@ def copy_notebook_version(filename: str, version_id: str, data: dict):
     with 409 unless "overwrite": true) and _rename_lock_for(dest) usage
     as _copy_notebook_to, applied here to a version snapshot's bytes
     instead of a notebook's current ones.
+
+    "dry_run" (optional, default false) reports the exact same
+    "new_filename" a real copy would, including the 409 a same-name
+    collision without "overwrite": true would raise, without copying a
+    single byte -- _copy_notebook_version_to's own "dry_run" already
+    provides this for POST /api/notebooks/{filename}/versions/copy-batch's
+    own per-entry preview; this was the one caller of that helper that
+    never actually passed it through.
     """
 
     file_path = resolve_upload_path(filename)
@@ -7617,6 +7648,7 @@ def copy_notebook_version(filename: str, version_id: str, data: dict):
     versions_dir = _notebook_versions_dir(file_path.name)
 
     overwrite = bool(data.get("overwrite", False))
+    dry_run = bool(data.get("dry_run", False))
 
     tags = data.get("tags")
     normalized_tags = _validate_and_normalize_tags(tags) if tags is not None else None
@@ -7629,11 +7661,12 @@ def copy_notebook_version(filename: str, version_id: str, data: dict):
 
     new_filename = _copy_notebook_version_to(
         file_path, versions_dir, version_id, data.get("new_filename"), overwrite,
-        tags=normalized_tags, description=normalized_description,
+        dry_run=dry_run, tags=normalized_tags, description=normalized_description,
     )
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "filename": filename,
         "version_id": version_id,
         "new_filename": new_filename,

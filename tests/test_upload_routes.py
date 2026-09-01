@@ -5794,6 +5794,39 @@ def test_rename_notebook_rejects_collision_without_overwrite():
     assert json.loads((Path(UPLOAD_DIR) / "rename_collision_b.ipynb").read_bytes()) == json.loads(content_b)
 
 
+def test_rename_notebook_dry_run_reports_the_new_filename_without_renaming():
+
+    _upload_sample_notebook("rename_dry_run_source.ipynb")
+
+    resp = client.patch(
+        "/api/notebooks/rename_dry_run_source.ipynb",
+        json={"new_filename": "rename_dry_run_target.ipynb", "dry_run": True},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["new_filename"] == "rename_dry_run_target.ipynb"
+
+    # Nothing was actually renamed.
+    assert (Path(UPLOAD_DIR) / "rename_dry_run_source.ipynb").is_file()
+    assert not (Path(UPLOAD_DIR) / "rename_dry_run_target.ipynb").exists()
+
+
+def test_rename_notebook_dry_run_still_reports_a_same_name_collision():
+
+    _upload_sample_notebook("rename_dry_run_collision_source.ipynb")
+    _upload_sample_notebook("rename_dry_run_collision_target.ipynb")
+
+    resp = client.patch(
+        "/api/notebooks/rename_dry_run_collision_source.ipynb",
+        json={"new_filename": "rename_dry_run_collision_target.ipynb", "dry_run": True},
+    )
+
+    assert resp.status_code == 409
+    assert (Path(UPLOAD_DIR) / "rename_dry_run_collision_source.ipynb").is_file()
+
+
 def test_rename_notebook_serializes_two_concurrent_renames_onto_the_same_destination():
     """Before _rename_lock_for existed, two concurrent renames of two
     different existing notebooks onto the same new_filename raced this
@@ -6234,6 +6267,7 @@ def test_copy_notebook_duplicates_the_file_and_keeps_the_source():
     assert copy_resp.status_code == 200
     assert copy_resp.json() == {
         "status": "success",
+        "dry_run": False,
         "filename": "copy_source.ipynb",
         "new_filename": "copy_target.ipynb",
     }
@@ -6446,6 +6480,37 @@ def test_copy_notebook_rejects_an_invalid_tags_override():
 
     assert resp.status_code == 400
     assert not (Path(UPLOAD_DIR) / "copy_bad_tags_target.ipynb").exists()
+
+
+def test_copy_notebook_dry_run_reports_the_new_filename_without_copying():
+
+    _upload_sample_notebook("copy_dry_run_source.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/copy_dry_run_source.ipynb/copy",
+        json={"new_filename": "copy_dry_run_target.ipynb", "dry_run": True},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["new_filename"] == "copy_dry_run_target.ipynb"
+
+    # Nothing was actually copied.
+    assert not (Path(UPLOAD_DIR) / "copy_dry_run_target.ipynb").exists()
+
+
+def test_copy_notebook_dry_run_still_reports_a_same_name_collision():
+
+    _upload_sample_notebook("copy_dry_run_collision_source.ipynb")
+    _upload_sample_notebook("copy_dry_run_collision_target.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/copy_dry_run_collision_source.ipynb/copy",
+        json={"new_filename": "copy_dry_run_collision_target.ipynb", "dry_run": True},
+    )
+
+    assert resp.status_code == 409
 
 
 def test_copy_notebook_does_not_copy_version_history():
@@ -10571,6 +10636,7 @@ def test_copy_notebook_version_duplicates_a_past_version_into_a_new_notebook():
     assert copy_resp.status_code == 200
     assert copy_resp.json() == {
         "status": "success",
+        "dry_run": False,
         "filename": filename,
         "version_id": version_id,
         "new_filename": "versions_copy_target.ipynb",
@@ -10924,6 +10990,49 @@ def test_copy_notebook_version_rejects_collision_without_overwrite():
 
     assert resp.status_code == 409
     os.remove(Path(UPLOAD_DIR) / "versions_copy_collision_target.ipynb")
+
+
+def test_copy_notebook_version_dry_run_reports_the_new_filename_without_copying():
+
+    filename = "versions_copy_dry_run_source.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/copy",
+        json={"new_filename": "versions_copy_dry_run_target.ipynb", "dry_run": True},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["new_filename"] == "versions_copy_dry_run_target.ipynb"
+
+    # Nothing was actually copied.
+    assert not (Path(UPLOAD_DIR) / "versions_copy_dry_run_target.ipynb").exists()
 
 
 def test_copy_notebook_version_overwrite_discards_the_destinations_previous_tags_and_history():

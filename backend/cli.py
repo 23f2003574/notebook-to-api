@@ -2418,10 +2418,14 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        rename_body = {"new_filename": args.new_filename, "overwrite": args.overwrite}
+        if args.dry_run:
+            rename_body["dry_run"] = True
+
         try:
             response = httpx.patch(
                 f"{dashboard_url}/api/notebooks/{args.filename}",
-                json={"new_filename": args.new_filename, "overwrite": args.overwrite},
+                json=rename_body,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -2439,8 +2443,11 @@ def _dispatch_core_command(args):
         if args.json_output:
             print(json.dumps(data, indent=2))
         else:
+
+            verb = "Would rename" if data.get("dry_run") else "Renamed"
+
             print(
-                f"Renamed '{data.get('filename', args.filename)}' to "
+                f"{verb} '{data.get('filename', args.filename)}' to "
                 f"'{data.get('new_filename', args.new_filename)}' on {dashboard_url}"
             )
             if data.get("was_currently_compiled"):
@@ -2512,6 +2519,8 @@ def _dispatch_core_command(args):
             copy_body["tags"] = _parse_comma_separated_names(args.tags)
         if args.description is not None:
             copy_body["description"] = args.description
+        if args.dry_run:
+            copy_body["dry_run"] = True
 
         try:
             response = httpx.post(
@@ -2534,8 +2543,11 @@ def _dispatch_core_command(args):
         if args.json_output:
             print(json.dumps(data, indent=2))
         else:
+
+            verb = "Would copy" if data.get("dry_run") else "Copied"
+
             print(
-                f"Copied '{data.get('filename', args.filename)}' to "
+                f"{verb} '{data.get('filename', args.filename)}' to "
                 f"'{data.get('new_filename', args.new_filename)}' on {dashboard_url}"
             )
     elif args.command == "copy-batch":
@@ -3934,6 +3946,8 @@ def _dispatch_core_command(args):
                 versions_copy_body["tags"] = _parse_comma_separated_names(args.tags)
             if args.description is not None:
                 versions_copy_body["description"] = args.description
+            if args.dry_run:
+                versions_copy_body["dry_run"] = True
 
             try:
                 response = httpx.post(
@@ -3957,8 +3971,11 @@ def _dispatch_core_command(args):
             if args.json_output:
                 print(json.dumps(data, indent=2))
             else:
+
+                verb = "Would copy" if data.get("dry_run") else "Copied"
+
                 print(
-                    f"Copied version '{args.version_id}' of '{args.filename}' "
+                    f"{verb} version '{args.version_id}' of '{args.filename}' "
                     f"to '{data.get('new_filename', args.new_filename)}' "
                     f"on {dashboard_url}"
                 )
@@ -6619,12 +6636,24 @@ def main():
         )
     )
     rename_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report what would be renamed (including the 409 a same-name "
+            "collision without --overwrite would raise), via PATCH "
+            "/api/notebooks/{filename}'s own \"dry_run\" body field, "
+            "without renaming anything -- the same preview `rename-many` "
+            "already offers for renaming several notebooks at once."
+        )
+    )
+    rename_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response "
-            "({\"status\", \"filename\", \"new_filename\", "
+            "({\"status\", \"dry_run\", \"filename\", \"new_filename\", "
             "\"was_currently_compiled\"}) instead of a human-readable "
             "summary, for scripting/automation."
         )
@@ -6729,13 +6758,25 @@ def main():
         )
     )
     copy_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report what would be copied (including the 409 a same-name "
+            "collision without --overwrite would raise), via POST "
+            "/api/notebooks/{filename}/copy's own \"dry_run\" body field, "
+            "without copying anything -- the same preview `copy-batch` "
+            "already offers for copying to several destinations at once."
+        )
+    )
+    copy_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response "
-            "({\"status\", \"filename\", \"new_filename\"}) instead of a "
-            "human-readable summary, for scripting/automation."
+            "({\"status\", \"dry_run\", \"filename\", \"new_filename\"}) "
+            "instead of a human-readable summary, for scripting/automation."
         )
     )
 
@@ -7965,13 +8006,25 @@ def main():
         )
     )
     versions_copy_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report what would be copied (including the 409 a same-name "
+            "collision without --overwrite would raise), via this "
+            "endpoint's own \"dry_run\" body field, without copying "
+            "anything -- the same preview `versions copy-batch` already "
+            "offers for copying several versions at once."
+        )
+    )
+    versions_copy_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
-            "\"filename\", \"version_id\", \"new_filename\"}) instead of "
-            "a human-readable summary, for scripting/automation."
+            "\"dry_run\", \"filename\", \"version_id\", \"new_filename\"}) "
+            "instead of a human-readable summary, for scripting/automation."
         )
     )
 
