@@ -11950,9 +11950,23 @@ def health_check(check_writable: bool = False):
     a plain liveness check (most callers of this endpoint, hit
     frequently by a load balancer or Kubernetes probe) doesn't need; a
     readiness check that specifically wants this can opt in.
+
+    "compiled_version_id" mirrors "compiled_at" -- present (non-null)
+    only when "compiled_app_present" is true, and null for an ordinary
+    compile of the source notebook's own current content rather than one
+    of its previously snapshotted versions (see write_compile_metadata's
+    own docstring, backend/compiler.py, for what a non-null value means).
+    GET /api/notebooks and GET /api/generated already report this same
+    fact for the currently-compiled entry, but this endpoint's own
+    _currently_compiled_notebook_metadata() call already resolves it
+    too -- it was simply discarded here before this, leaving a caller
+    polling only this one liveness/readiness endpoint (a Kubernetes
+    probe, a load balancer, this CLI's own `status`) no way to tell a
+    version-pinned compile apart from an ordinary one without a second,
+    separate GET /api/notebooks or GET /api/generated call.
     """
 
-    _, _, compiled_at, _ = _currently_compiled_notebook_metadata()
+    _, _, compiled_at, compiled_version_id = _currently_compiled_notebook_metadata()
 
     compiled_app_present = (Path(GENERATED_DIR) / "app.py").is_file()
 
@@ -11962,6 +11976,7 @@ def health_check(check_writable: bool = False):
         "version": NOTEBOOK_TO_API_VERSION,
         "compiled_app_present": compiled_app_present,
         "compiled_at": compiled_at if compiled_app_present else None,
+        "compiled_version_id": compiled_version_id if compiled_app_present else None,
     }
 
     if check_writable:

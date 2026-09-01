@@ -19945,6 +19945,7 @@ def test_health_check_reports_no_compiled_app_before_anything_has_been_compiled(
     assert body["status"] == "healthy"
     assert body["compiled_app_present"] is False
     assert body["compiled_at"] is None
+    assert body["compiled_version_id"] is None
 
 
 def test_health_check_reports_a_compiled_app_and_its_compiled_at_timestamp():
@@ -19958,6 +19959,49 @@ def test_health_check_reports_a_compiled_app_and_its_compiled_at_timestamp():
     assert body["status"] == "healthy"
     assert body["compiled_app_present"] is True
     assert body["compiled_at"] is not None
+    assert body["compiled_version_id"] is None
+
+
+def test_health_check_reports_the_compiled_version_id_for_a_version_pinned_compile():
+    """GET /api/notebooks and GET /api/generated already report
+    "compiled_version_id" for the currently-compiled entry -- this
+    endpoint's own _currently_compiled_notebook_metadata() call already
+    resolves the identical value, but discarded it before this, leaving
+    a caller polling only this one liveness/readiness endpoint no way to
+    tell a version-pinned compile apart from an ordinary one.
+    """
+
+    filename = "health_check_version_pinned_test.ipynb"
+    original_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(original_content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": filename, "version_id": version_id}
+    )
+    assert compile_resp.status_code == 200
+
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 200
+    assert resp.json()["compiled_version_id"] == version_id
 
 
 def test_health_check_reports_this_tools_own_version():

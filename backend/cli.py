@@ -5585,7 +5585,14 @@ def _dispatch_core_command(args):
                     )
 
             if health.get("compiled_app_present"):
-                print(f"  compiled app present, last compiled at {health.get('compiled_at')}")
+                version_note = (
+                    f" (version '{health['compiled_version_id']}')"
+                    if health.get("compiled_version_id") else ""
+                )
+                print(
+                    f"  compiled app present, last compiled at "
+                    f"{health.get('compiled_at')}{version_note}"
+                )
             else:
                 print("  no compiled app yet")
 
