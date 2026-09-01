@@ -7452,6 +7452,16 @@ def get_notebook_version(filename: str, version_id: str):
     client input as an uploaded file's own name, just rooted at this one
     notebook's own version directory instead of UPLOAD_DIR or
     GENERATED_DIR directly.
+
+    The "X-Content-SHA256" response header reports the exact bytes' own
+    sha256 -- the same hash GET /api/notebooks/{filename}'s own identical
+    header now reports for a notebook's current content, just applied
+    here to one of its past snapshots instead. A caller downloading a
+    specific historical version (e.g. to archive it, or to verify it
+    before POST .../restore-ing it back over the notebook's current
+    content) had the identical "no way to verify integrity without a
+    second round trip" gap that endpoint's own header already closed for
+    current content -- this closes it for a version-pinned download too.
     """
 
     file_path = resolve_upload_path(filename)
@@ -7480,6 +7490,9 @@ def get_notebook_version(filename: str, version_id: str):
         path=version_path,
         media_type="application/x-ipynb+json",
         filename=version_id,
+        headers={
+            "X-Content-SHA256": hash_notebook_file(version_path),
+        },
     )
 
 

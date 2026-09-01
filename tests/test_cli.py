@@ -11042,6 +11042,94 @@ def test_versions_get_command_downloads_a_version_to_the_default_path(
     assert handler.requests == ["/api/notebooks/nb.ipynb/versions/v1.ipynb"]
 
 
+def test_versions_get_command_prints_and_reports_the_content_sha256_header(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    notebook_bytes = b'{"nbformat": 4, "cells": []}'
+    handler.responses = [_raw_response(200, notebook_bytes)]
+    handler.response_headers = [{"X-Content-SHA256": "abc123"}]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "get", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "sha256: abc123" in proc.stdout
+
+    handler.responses = [_raw_response(200, notebook_bytes)]
+    handler.response_headers = [{"X-Content-SHA256": "abc123"}]
+
+    proc = _run_cli(
+        [
+            "versions", "get", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout)["sha256"] == "abc123"
+
+
+def test_versions_get_command_expected_sha256_succeeds_on_a_match(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    notebook_bytes = b'{"nbformat": 4, "cells": []}'
+    handler.responses = [_raw_response(200, notebook_bytes)]
+    handler.response_headers = [{"X-Content-SHA256": "abc123"}]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "get", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url, "--expected-sha256", "abc123",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "v1.ipynb").read_bytes() == notebook_bytes
+
+
+def test_versions_get_command_expected_sha256_fails_on_a_mismatch_and_writes_nothing(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    notebook_bytes = b'{"nbformat": 4, "cells": []}'
+    handler.responses = [_raw_response(200, notebook_bytes)]
+    handler.response_headers = [{"X-Content-SHA256": "abc123"}]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "get", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url,
+            "--expected-sha256", "does-not-match",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode != 0
+    assert "does not match" in (proc.stdout + proc.stderr)
+    assert not (workdir / "v1.ipynb").exists()
+
+
 def test_versions_get_command_respects_a_custom_output_path(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

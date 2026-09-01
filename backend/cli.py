@@ -3888,6 +3888,16 @@ def _dispatch_core_command(args):
                     f"{_extract_dashboard_error_detail(response)}"
                 )
 
+            sha256 = response.headers.get("x-content-sha256")
+
+            if args.expected_sha256 and args.expected_sha256 != sha256:
+
+                raise RuntimeError(
+                    f"Downloaded content's sha256 ({sha256}) does not "
+                    f"match the expected value ({args.expected_sha256}) "
+                    "-- nothing was written to disk."
+                )
+
             output_path = args.output or args.version_id
 
             with open(output_path, "wb") as f:
@@ -3901,6 +3911,7 @@ def _dispatch_core_command(args):
                         "version_id": args.version_id,
                         "path": output_path,
                         "size_bytes": len(response.content),
+                        "sha256": sha256,
                     },
                     indent=2,
                 ))
@@ -3910,6 +3921,8 @@ def _dispatch_core_command(args):
                     f"'{args.filename}' from {dashboard_url} to "
                     f"{output_path} ({len(response.content)} bytes)"
                 )
+                if sha256:
+                    print(f"  sha256: {sha256}")
 
         elif args.versions_command == "inspect":
 
@@ -8111,14 +8124,29 @@ def main():
         help="Path to save the downloaded version to. Default: the version_id itself, in the current directory."
     )
     versions_get_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "Verify the downloaded content's own hash matches this "
+            "value -- read from the response's own \"X-Content-SHA256\" "
+            "header, the same hash GET /api/notebooks/{filename}/"
+            "versions/{version_id} itself now reports -- before writing "
+            "anything to disk, exiting with an error on a mismatch "
+            "instead. The version-pinned equivalent of `download "
+            "--expected-sha256`."
+        )
+    )
+    versions_get_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit a machine-readable JSON result "
             "({\"status\", \"filename\", \"version_id\", \"path\", "
-            "\"size_bytes\"}) instead of a human-readable summary, for "
-            "scripting/automation."
+            "\"size_bytes\", \"sha256\"}) instead of a human-readable "
+            "summary, for scripting/automation."
         )
     )
 

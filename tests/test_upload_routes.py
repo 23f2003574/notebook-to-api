@@ -10029,6 +10029,80 @@ def test_overwriting_a_notebook_snapshots_the_previous_content():
     assert downloaded.content == original_content
 
 
+def test_get_notebook_version_reports_the_content_sha256_header():
+
+    filename = "versions_get_sha256.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.get(f"/api/notebooks/{filename}/versions/{version_id}")
+
+    assert resp.status_code == 200
+    assert resp.headers["x-content-sha256"] == hashlib.sha256(resp.content).hexdigest()
+
+
+def test_get_notebook_version_content_sha256_header_differs_from_the_current_content():
+
+    filename = "versions_get_sha256_differs.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    version_sha256 = client.get(
+        f"/api/notebooks/{filename}/versions/{version_id}"
+    ).headers["x-content-sha256"]
+    current_sha256 = client.get(
+        f"/api/notebooks/{filename}"
+    ).headers["x-content-sha256"]
+
+    assert version_sha256 != current_sha256
+
+
 def test_uploading_a_brand_new_notebook_does_not_snapshot_anything():
 
     filename = "versions_brand_new.ipynb"
