@@ -155,6 +155,162 @@ def test_compile_command_defaults_output_to_generated(tmp_path):
     assert (workdir / "generated" / "app.py").exists()
 
 
+def test_compile_command_smoke_test_passes_for_a_healthy_app(tmp_path):
+    """`compile --smoke-test` actually imports the just-compiled app in
+    this process and calls its own GET /health -- the same diagnostic
+    POST /api/compile's own "smoke_test" already performs against a
+    notebook compiled on a running dashboard, applied here to a local
+    compile instead of one wherever the CLI happens to be invoked.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "compile", str(notebook_path), "--output", "built",
+            "--smoke-test",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Smoke test: passed (GET /health responded 200)" in proc.stdout
+
+
+def test_compile_command_smoke_test_works_with_a_nested_output_directory(
+    tmp_path
+):
+    """`package_name` (output_dir's own basename) is only importable once
+    output_dir's own *parent* directory is on sys.path -- true by
+    coincidence for the documented default (--output "generated", a
+    direct child of this process's own cwd, already on sys.path when
+    `python -m backend.cli` runs it), but not for a nested --output like
+    this one, whose own parent ("subdir", not the invocation directory
+    itself) was never on sys.path at all before this fix.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "compile", str(notebook_path), "--output",
+            str(Path("subdir") / "built"), "--smoke-test",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Smoke test: passed (GET /health responded 200)" in proc.stdout
+
+
+def test_compile_command_json_flag_includes_smoke_test_field(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "compile", str(notebook_path), "--output", "built",
+            "--smoke-test", "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["smoke_test"] == {
+        "passed": True,
+        "status_code": 200,
+        "detail": None,
+    }
+
+
+def test_compile_command_without_smoke_test_omits_the_field(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built", "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert "smoke_test" not in data
+    assert "Smoke test" not in proc.stdout
+
+
+def test_run_local_compile_smoke_test_fails_cleanly_when_the_compiled_app_cannot_import(
+    tmp_path
+):
+    """A codegen bug that writes a syntactically-broken app.py must be
+    reported back as a failed smoke test, not raise -- the compile itself
+    already succeeded (every file is really on disk), so this is a
+    diagnostic, not a fatal error. The identical case
+    test_compile_smoke_test_fails_cleanly_when_the_compiled_app_cannot_import
+    (tests/test_upload_routes.py) already covers for the dashboard's own
+    _run_compile_smoke_test.
+    """
+    from backend.cli import _run_local_compile_smoke_test
+    from backend.compiler import compile_notebook, package_name_for_output_dir
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    output_dir = workdir / "built"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    app_path = output_dir / "app.py"
+    app_path.write_text(
+        app_path.read_text(encoding="utf-8") + "\nthis is not valid python(((\n",
+        encoding="utf-8",
+    )
+
+    package_name = package_name_for_output_dir(str(output_dir))
+    parent_dir = str(output_dir.resolve().parent)
+
+    assert parent_dir not in sys.path
+
+    try:
+
+        result = _run_local_compile_smoke_test(package_name, str(output_dir))
+
+        assert result["passed"] is False
+        assert result["status_code"] is None
+        assert "failed to import" in result["detail"]
+
+        # The parent directory this needed on sys.path to import the
+        # package is removed again afterward, whether the import
+        # succeeded or not -- a failed smoke test must not leave this
+        # process's own sys.path permanently altered.
+        assert parent_dir not in sys.path
+
+    finally:
+
+        # Called in-process (unlike a real `compile --smoke-test`, whose
+        # own fresh-process-per-invocation guarantee is exactly what
+        # _run_local_compile_smoke_test's own docstring says makes this
+        # unnecessary there) -- this test's own "built" package must not
+        # linger in this pytest process' sys.modules for a later test
+        # that happens to reuse the same --output basename.
+        for name in list(sys.modules):
+            if name == package_name or name.startswith(f"{package_name}."):
+                del sys.modules[name]
+
+
 def _write_add_subtract_notebook(path):
     _write_notebook_with_function(
         path,

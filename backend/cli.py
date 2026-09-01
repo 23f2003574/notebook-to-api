@@ -599,6 +599,92 @@ def _parse_comma_separated_names(value):
     return names or None
 
 
+def _run_local_compile_smoke_test(package_name, output_dir):
+    """`compile --smoke-test`'s own local counterpart to
+    _run_compile_smoke_test (backend/routes/upload.py) -- actually
+    imports the just-compiled "<package_name>.app" and calls its own GET
+    /health in-process, to catch a class of failure nothing else at
+    compile time can: every check `compile`/`inspect`/`validate` already
+    perform (the reserved-name-collision check, inspect_notebook_data's
+    own AST-level parsing) is purely static -- none of them actually
+    execute a single line of the generated Python source. A bug in
+    generate_fastapi_code itself can still write a syntactically-broken
+    app.py that every one of those static checks passes cleanly, only to
+    fail the moment anything -- `deploy`'s own `docker build`, or a real
+    `uvicorn <package>.app:app` -- actually tries to run it. POST
+    /api/compile's own "smoke_test" already closes this same gap for a
+    notebook compiled on a running dashboard; this closes it for a local
+    `compile` too.
+
+    Unlike _run_compile_smoke_test, which can rely on GENERATED_DIR
+    always being a fixed, cwd-relative directory of the one dashboard
+    process it runs in, `compile --output` can point anywhere -- so
+    `package_name` (output_dir's own basename) is only importable once
+    output_dir's own *parent* directory is on sys.path, which this
+    temporarily adds (removed again afterward, whether the import
+    succeeds or not, so a failed smoke test doesn't leave this process's
+    own sys.path permanently altered).
+
+    No module-cache eviction is needed here the way POST /api/compile's
+    own long-lived dashboard process needs it (see
+    _evict_compiled_app_from_module_cache, backend/routes/upload.py):
+    every `compile` invocation is its own fresh Python process with an
+    empty sys.modules, so "<package_name>.app" can never already be
+    imported from a previous, now-stale compile the way a dashboard's
+    own repeated POST /api/compile calls could leave behind.
+
+    Returns {"passed": bool, "status_code": int | None, "detail": str |
+    None} -- never raises. A failed smoke test does not mean the compile
+    itself failed: every file compile_notebook already wrote is still on
+    disk exactly as it was -- this is a diagnostic on top of an
+    already-successful compile, not a retroactive verdict on it.
+    """
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    parent_dir = str(Path(output_dir).resolve().parent)
+    path_already_present = parent_dir in sys.path
+
+    if not path_already_present:
+        sys.path.insert(0, parent_dir)
+
+    try:
+        module = importlib.import_module(f"{package_name}.app")
+        app = module.app
+
+    except Exception as e:
+
+        return {
+            "passed": False,
+            "status_code": None,
+            "detail": f"Compiled app failed to import: {e}",
+        }
+
+    finally:
+
+        if not path_already_present:
+            sys.path.remove(parent_dir)
+
+    try:
+
+        response = TestClient(app).get("/health")
+
+    except Exception as e:
+
+        return {
+            "passed": False,
+            "status_code": None,
+            "detail": f"Compiled app raised handling GET /health: {e}",
+        }
+
+    return {
+        "passed": response.status_code == 200,
+        "status_code": response.status_code,
+        "detail": None if response.status_code == 200 else response.text,
+    }
+
+
 def _parse_notebook_version_pair(value):
     """Parse one `versions restore-batch` positional argument
     ("filename:version_id") into a {"filename", "version_id"} entry
@@ -823,6 +909,8 @@ def _dispatch_core_command(args):
     of needing its own try/except at each of the six call sites.
     """
     if args.command == "compile":
+        from backend.compiler import package_name_for_output_dir
+
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
         only = _parse_comma_separated_names(args.only)
@@ -858,6 +946,15 @@ def _dispatch_core_command(args):
                     endpoint for endpoint in data["endpoints"]
                     if endpoint["path"].lstrip("/") in kept_names
                 ]
+
+            smoke_test = None
+
+            if args.smoke_test:
+                smoke_test = _run_local_compile_smoke_test(
+                    package_name_for_output_dir(str(output_dir)), str(output_dir),
+                )
+                data["smoke_test"] = smoke_test
+
             print(json.dumps(data, indent=2))
         else:
             compile_notebook(
@@ -866,6 +963,22 @@ def _dispatch_core_command(args):
             )
             print("\nCompilation finished. FastAPI app is ready in", output_dir)
             print_compile_summary(args.notebook, output_dir, only=only, exclude=exclude)
+
+            smoke_test = None
+
+            if args.smoke_test:
+
+                smoke_test = _run_local_compile_smoke_test(
+                    package_name_for_output_dir(str(output_dir)), str(output_dir),
+                )
+
+                if smoke_test["passed"]:
+                    print("\nSmoke test: passed (GET /health responded 200)")
+                else:
+                    print(f"\nSmoke test: FAILED -- {smoke_test['detail']}")
+
+        if smoke_test is not None and not smoke_test["passed"]:
+            sys.exit(1)
     elif args.command == "inspect":
         # Deliberately does NOT create output_dir the way "compile" above
         # does -- `inspect` is documented as a read-only "preview what
@@ -5459,7 +5572,25 @@ def main():
             "generated_files, endpoints, skipped_functions) instead of the "
             "human-readable summary, for scripting/automation -- the same "
             "shape `inspect --json` already returns, reflecting the app "
-            "this compile just produced."
+            "this compile just produced. Also includes \"smoke_test\" "
+            "when --smoke-test is given."
+        )
+    )
+    compile_parser.add_argument(
+        "--smoke-test",
+        action="store_true",
+        dest="smoke_test",
+        help=(
+            "After compiling, actually import the compiled app in this "
+            "process and call its own GET /health -- catches a class of "
+            "failure (a codegen bug producing syntactically broken "
+            "Python, say) no purely static check can. The same "
+            "\"smoke_test\" `remote-compile --smoke-test` already "
+            "performs against a notebook compiled on a running "
+            "dashboard, applied here to a local compile instead. This "
+            "command exits 1 if the smoke test fails, even though the "
+            "compile itself still succeeded and every file it wrote is "
+            "still on disk."
         )
     )
     _add_function_selection_arguments(compile_parser)
