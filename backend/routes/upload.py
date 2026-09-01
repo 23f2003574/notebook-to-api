@@ -3063,6 +3063,7 @@ def search_functions(
 
 def _notebook_metadata_entry(
     entry, compiled_path, compiled_sha256, compiled_at, compiled_version_id=None,
+    checksums=False,
 ):
     """Build one notebook's own metadata dict -- the exact shape GET
     /api/notebooks' own "notebooks" list already returns per entry (see
@@ -3076,12 +3077,32 @@ def _notebook_metadata_entry(
     notebook's own current content rather than one of its previously
     snapshotted versions (see write_compile_metadata's own docstring,
     backend/compiler.py, for what a non-null value means).
+
+    "checksums" (optional, default false) adds a "sha256" field -- the
+    same hash_notebook_file (backend/compiler.py) already computes for
+    every other content-identity check in this project (GET
+    /api/notebooks?sha256=, GET /api/generated's own "checksums", GET
+    /api/notebooks/{filename}/versions' own "checksums", ...), just
+    applied here to a notebook's own current content instead. Before
+    this, none of GET /api/notebooks, GET /api/notebooks/{filename}/info,
+    or POST /api/notebooks/info-batch ever reported a notebook's own
+    hash at all -- learning it meant already knowing it (to pass as GET
+    /api/notebooks?sha256=<guess>, which only confirms a match/no-match,
+    never reveals an unknown one) or a completely separate GET
+    /api/notebooks/{filename} download purely to hash the bytes
+    afterward. Reuses the hash notebook_changed_since_compile below
+    already computes for the currently-compiled entry rather than
+    hashing it twice.
     """
 
     entry_stat = entry.stat()
 
     is_currently_compiled = (
         compiled_path is not None and entry.resolve() == compiled_path
+    )
+
+    current_sha256 = (
+        hash_notebook_file(entry) if (checksums or is_currently_compiled) else None
     )
 
     notebook_entry = {
@@ -3098,10 +3119,13 @@ def _notebook_metadata_entry(
     if is_currently_compiled:
         notebook_entry["notebook_changed_since_compile"] = (
             compiled_sha256 is not None
-            and hash_notebook_file(entry) != compiled_sha256
+            and current_sha256 != compiled_sha256
         )
         notebook_entry["compiled_at"] = compiled_at
         notebook_entry["compiled_version_id"] = compiled_version_id
+
+    if checksums:
+        notebook_entry["sha256"] = current_sha256
 
     return notebook_entry
 
@@ -3153,6 +3177,7 @@ def list_notebooks(
     modified_after: str = None,
     modified_before: str = None,
     format: str = "json",
+    checksums: bool = False,
 ):
     """List previously uploaded notebooks.
 
@@ -3342,6 +3367,20 @@ def list_notebooks(
     has the same fixed column count regardless of which notebooks happen
     to be on this page. An unrecognized "format" is rejected with 400
     before a single notebook is even read.
+
+    "checksums" (optional, default false) additionally pairs each
+    "notebooks" entry with its own "sha256" -- see
+    _notebook_metadata_entry's own docstring for exactly what this closes
+    and why. Applied only to the already-filtered, already-sorted,
+    already-paginated page actually being returned, not every matching
+    notebook -- a notebook "limit"/"offset" already excluded from this
+    page is never worth the real work of hashing it just to discard the
+    result unread. Off by default, the same "hashing is real work this
+    endpoint's existing listing never needed" reasoning GET
+    /api/generated's own "checksums" default already follows. CSV export
+    gains a matching "sha256" column only when "checksums" is given, so a
+    plain `format=csv` request's own column set is unchanged from before
+    this existed.
     """
 
     if format not in ("json", "csv"):
@@ -3499,20 +3538,34 @@ def list_notebooks(
 
     notebooks = [entry_tuple[3] for entry_tuple in paginated_entries]
 
+    # Hashed only for the already-paginated page actually being returned,
+    # not every matching notebook -- see this endpoint's own "checksums"
+    # docstring paragraph above for why.
+    if checksums:
+
+        for notebook_entry in notebooks:
+            notebook_entry["sha256"] = hash_notebook_file(
+                upload_root / notebook_entry["filename"]
+            )
+
     if format == "csv":
 
         buffer = io.StringIO()
         writer = csv.writer(buffer)
 
-        writer.writerow([
+        header = [
             "filename", "size_bytes", "modified_at", "currently_compiled",
             "tags", "description", "notebook_changed_since_compile",
             "compiled_at", "compiled_version_id",
-        ])
+        ]
+        if checksums:
+            header.append("sha256")
+
+        writer.writerow(header)
 
         for notebook_entry in notebooks:
 
-            writer.writerow([
+            row = [
                 notebook_entry["filename"],
                 notebook_entry["size_bytes"],
                 notebook_entry["modified_at"],
@@ -3522,7 +3575,11 @@ def list_notebooks(
                 notebook_entry.get("notebook_changed_since_compile", ""),
                 notebook_entry.get("compiled_at", ""),
                 notebook_entry.get("compiled_version_id", ""),
-            ])
+            ]
+            if checksums:
+                row.append(notebook_entry["sha256"])
+
+            writer.writerow(row)
 
         return StreamingResponse(
             iter([buffer.getvalue()]),
@@ -5272,6 +5329,14 @@ def get_notebook_info(filename: str):
     Reuses _notebook_metadata_entry -- the same helper list_notebooks
     itself now calls -- so this can never drift from what the identical
     notebook's own entry in that list already reports.
+
+    Always includes "sha256" -- unlike GET /api/notebooks' own opt-in
+    "checksums" (a bulk listing, where hashing every matching notebook is
+    real work most callers don't need), this endpoint already only ever
+    hashes the one notebook it's already reading, the same "a single-item
+    fetch can afford what a bulk one can't" reasoning GET
+    /api/notebooks/{filename}'s own unconditional "X-Content-SHA256"
+    header already follows.
     """
 
     file_path = resolve_upload_path(filename)
@@ -5290,7 +5355,8 @@ def get_notebook_info(filename: str):
     return {
         "status": "success",
         **_notebook_metadata_entry(
-            file_path, compiled_path, compiled_sha256, compiled_at, compiled_version_id
+            file_path, compiled_path, compiled_sha256, compiled_at, compiled_version_id,
+            checksums=True,
         ),
     }
 
@@ -5331,6 +5397,13 @@ def get_notebooks_info_batch(data: dict):
     request itself was handled, even if every filename in it failed --
     with "succeeded_count"/"failed_count" summarizing "results" the same
     way those two endpoints' own identical fields already do.
+
+    Every successful entry also always includes "sha256", the same way
+    GET /api/notebooks/{filename}/info's own identical field always does
+    now -- see that endpoint's own docstring for why a bounded, explicit
+    fetch like this one (unlike GET /api/notebooks' own opt-in
+    "checksums" for an unbounded catalog scan) can afford to hash
+    unconditionally.
     """
 
     filenames = data.get("filenames")
@@ -5372,7 +5445,7 @@ def get_notebooks_info_batch(data: dict):
                 "status": "success",
                 **_notebook_metadata_entry(
                     file_path, compiled_path, compiled_sha256, compiled_at,
-                    compiled_version_id,
+                    compiled_version_id, checksums=True,
                 ),
             })
             succeeded_count += 1

@@ -3393,6 +3393,60 @@ def test_get_notebook_rejects_a_filename_with_an_embedded_null_byte():
     assert resp.status_code == 400
 
 
+def test_list_notebooks_checksums_flag_adds_a_sha256_field():
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("list_checksums.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get("/api/notebooks", params={"checksums": "true"})
+
+    assert resp.status_code == 200
+    entry = next(
+        nb for nb in resp.json()["notebooks"] if nb["filename"] == "list_checksums.ipynb"
+    )
+    assert entry["sha256"] == hashlib.sha256(content).hexdigest()
+
+
+def test_list_notebooks_without_checksums_omits_sha256():
+
+    _upload_sample_notebook("list_no_checksums.ipynb")
+
+    resp = client.get("/api/notebooks")
+
+    assert resp.status_code == 200
+    entry = next(
+        nb for nb in resp.json()["notebooks"] if nb["filename"] == "list_no_checksums.ipynb"
+    )
+    assert "sha256" not in entry
+
+
+def test_list_notebooks_csv_format_checksums_flag_adds_a_sha256_column():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("list_csv_checksums.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get("/api/notebooks", params={"format": "csv", "checksums": "true"})
+
+    assert resp.status_code == 200
+    rows = resp.text.strip().split("\r\n")
+    assert rows[0] == (
+        "filename,size_bytes,modified_at,currently_compiled,tags,"
+        "description,notebook_changed_since_compile,compiled_at,"
+        "compiled_version_id,sha256"
+    )
+    assert rows[1].endswith(hashlib.sha256(content).hexdigest())
+
+
 def test_get_notebook_info_matches_the_notebooks_own_entry_in_the_list():
 
     content = _notebook_bytes(
@@ -3417,11 +3471,26 @@ def test_get_notebook_info_matches_the_notebooks_own_entry_in_the_list():
     assert "notebook_changed_since_compile" not in info_body
     assert "compiled_at" not in info_body
 
+    # GET /api/notebooks/{filename}/info always includes "sha256" (a
+    # single-notebook fetch can afford to hash unconditionally); GET
+    # /api/notebooks' own bulk listing only does under "checksums=true" --
+    # excluded here from the structural comparison below for that reason,
+    # not because the two entries actually disagree on its value.
     list_entry = next(
         nb for nb in client.get("/api/notebooks").json()["notebooks"]
         if nb["filename"] == "info_test.ipynb"
     )
-    assert {k: v for k, v in info_body.items() if k != "status"} == list_entry
+    assert {
+        k: v for k, v in info_body.items() if k not in ("status", "sha256")
+    } == list_entry
+
+    list_entry_with_checksum = next(
+        nb for nb in client.get(
+            "/api/notebooks", params={"checksums": "true"}
+        ).json()["notebooks"]
+        if nb["filename"] == "info_test.ipynb"
+    )
+    assert info_body["sha256"] == list_entry_with_checksum["sha256"]
 
 
 def test_get_notebook_info_reports_currently_compiled_fields():
@@ -3455,6 +3524,39 @@ def test_get_notebook_info_returns_404_for_missing_file():
     resp = client.get("/api/notebooks/does_not_exist_at_all.ipynb/info")
 
     assert resp.status_code == 404
+
+
+def test_get_notebook_info_always_includes_sha256():
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("info_sha256_test.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get("/api/notebooks/info_sha256_test.ipynb/info")
+
+    assert resp.status_code == 200
+    assert resp.json()["sha256"] == hashlib.sha256(content).hexdigest()
+
+
+def test_get_notebooks_info_batch_always_includes_sha256():
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("info_batch_sha256_test.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/notebooks/info-batch",
+        json={"filenames": ["info_batch_sha256_test.ipynb"]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["results"][0]["sha256"] == hashlib.sha256(content).hexdigest()
 
 
 def test_get_notebook_info_rejects_absolute_filename():

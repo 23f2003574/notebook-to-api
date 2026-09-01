@@ -1685,6 +1685,8 @@ def _dispatch_core_command(args):
             params["limit"] = args.limit
         if args.format == "csv":
             params["format"] = "csv"
+        if args.checksums:
+            params["checksums"] = "true"
 
         try:
             response = httpx.get(
@@ -1734,6 +1736,9 @@ def _dispatch_core_command(args):
 
                     if notebook.get("tags"):
                         markers.append(f"tags: {', '.join(notebook['tags'])}")
+
+                    if args.checksums:
+                        markers.append(f"sha256:{notebook.get('sha256')}")
 
                     suffix = f"  [{'; '.join(markers)}]" if markers else ""
 
@@ -6334,6 +6339,22 @@ def main():
             "Number of matching notebooks to skip before --limit is "
             "applied, mirroring GET /api/notebooks' own ?offset= -- e.g. "
             "for paging through a large list. Default: 0."
+        )
+    )
+    list_parser.add_argument(
+        "--checksums",
+        action="store_true",
+        help=(
+            "Also request each notebook's own sha256, via GET "
+            "/api/notebooks' own \"checksums\" query param -- the same "
+            "per-entry checksum `remote-files list`/`versions list` "
+            "already offer for a compiled bundle's own files/a "
+            "notebook's own snapshotted versions, applied here to the "
+            "notebook catalog itself. Applies to the same already-"
+            "filtered/sorted/paginated page --search/--tag/--sort/"
+            "--order/--limit/--offset already narrow down to; off by "
+            "default, since hashing every matching notebook is real "
+            "work most `list` calls don't need."
         )
     )
     list_parser.add_argument(

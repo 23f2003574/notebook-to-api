@@ -3565,6 +3565,37 @@ def test_list_command_passes_the_sha256_flag_through(fake_dashboard):
     ]
 
 
+def test_list_command_passes_the_checksums_flag_through_and_prints_the_hash(
+    fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebooks": [
+                {
+                    "filename": "nb.ipynb", "size_bytes": 123,
+                    "currently_compiled": False, "tags": [],
+                    "sha256": "abc123",
+                }
+            ],
+            "total_count": 1, "limit": None, "offset": 0,
+        })
+    ]
+
+    proc = _run_cli(
+        ["list", "--dashboard-url", dashboard_url, "--checksums"],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks?sort=name&order=asc&offset=0&checksums=true"
+    ]
+    assert "sha256:abc123" in proc.stdout
+
+
 def test_list_command_passes_modified_after_and_before_through(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
