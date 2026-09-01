@@ -20267,6 +20267,30 @@ def test_get_config_reports_the_configured_limits():
     assert isinstance(body["deploy_subprocess_timeout_seconds"], int)
 
 
+def test_get_config_reports_the_allowed_origins():
+
+    from backend.dashboard import DEFAULT_ALLOWED_ORIGINS
+
+    resp = client.get("/api/config")
+
+    assert resp.status_code == 200
+    assert resp.json()["allowed_origins"] == DEFAULT_ALLOWED_ORIGINS
+
+
+def test_get_config_reflects_a_configured_allowed_origins(monkeypatch):
+
+    monkeypatch.setenv(
+        "NOTEBOOK_API_ALLOWED_ORIGINS", "https://a.example.com,https://b.example.com"
+    )
+
+    resp = client.get("/api/config")
+
+    assert resp.status_code == 200
+    assert resp.json()["allowed_origins"] == [
+        "https://a.example.com", "https://b.example.com",
+    ]
+
+
 def test_get_config_reports_the_compiling_python_version():
 
     resp = client.get("/api/config")

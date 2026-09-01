@@ -5609,6 +5609,7 @@ def _dispatch_core_command(args):
             print(f"  deploy subprocess timeout: {config.get('deploy_subprocess_timeout_seconds')}s")
             print(f"  notebook sort keys: {', '.join(config.get('notebook_sort_keys', []))}")
             print(f"  notebook sort orders: {', '.join(config.get('notebook_sort_orders', []))}")
+            print(f"  allowed origins: {', '.join(config.get('allowed_origins', []))}")
             print(f"\nCompiling Python version: {config.get('compiling_python_version')}")
 
 

@@ -12018,6 +12018,22 @@ def get_config():
     same category of information GET /api/health's own docstring already
     explains has no business leaking out of a dashboard API response.
 
+    "allowed_origins" (added alongside this same docstring's original
+    feature, not a separate change) is allowed_origins()'s (backend/
+    dashboard.py) own resolved list -- already independently configurable
+    via NOTEBOOK_API_ALLOWED_ORIGINS exactly like every other field here,
+    but never itself surfaced through this endpoint: an operator wanting
+    to confirm which origins this dashboard is actually configured to
+    accept credentialed cross-origin requests from -- e.g. before adding
+    a new frontend's own origin, or auditing that an old one was actually
+    removed -- had no way to ask that short of reading the server's own
+    environment directly, the exact access this endpoint's own docstring
+    already says a client shouldn't need. Imported here rather than at
+    module scope: backend.dashboard itself imports this module's own
+    `router` to mount it, so importing back at import time would form a
+    cycle -- safe here since both modules are already fully loaded by
+    the time any request handler actually runs.
+
     "compiling_python_version" (added alongside this same docstring's
     original feature, not a separate change) is compiling_python_version's
     (backend/compiler.py) own "<major>.<minor>" reading of the interpreter
@@ -12040,8 +12056,11 @@ def get_config():
     process actually happens to be running under.
     """
 
+    from backend.dashboard import allowed_origins
+
     return {
         "status": "success",
+        "allowed_origins": allowed_origins(),
         "max_upload_bytes": MAX_UPLOAD_BYTES,
         "max_batch_upload_files": MAX_BATCH_UPLOAD_FILES,
         "max_notebook_versions": MAX_NOTEBOOK_VERSIONS,
