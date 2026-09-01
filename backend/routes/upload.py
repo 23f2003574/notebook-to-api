@@ -1059,6 +1059,7 @@ async def upload_notebook(
     tags: str = None,
     description: str = None,
     expected_sha256: str = None,
+    dry_run: bool = False,
 ):
     """Upload a Jupyter notebook file.
 
@@ -1123,6 +1124,19 @@ async def upload_notebook(
     notebook's own content actually hashes to meant a separate GET
     /api/notebooks?sha256=<guess> round trip (and only if the caller
     already knew the hash to guess).
+
+    "dry_run" (optional, default false) reports the exact same
+    {"filename", "path", "overwritten", "sha256"} a real upload would --
+    including the 409 a same-name collision without "overwrite": true
+    would raise, and the 400 an "expected_sha256" mismatch would raise --
+    without ever actually writing the notebook into UPLOAD_DIR.
+    _save_uploaded_notebook's own "dry_run" already provides exactly this
+    preview, and POST /api/notebooks/import already passes it through --
+    but this endpoint, the one every other one of those ultimately
+    exists to preview an upload *for*, never itself exposed it. Neither
+    "tags" nor "description" are actually written under "dry_run", the
+    same "a preview has no side effects" reasoning already applied to the
+    upload itself.
     """
 
     normalized_tags = _parse_and_validate_tags_query_param(tags)
@@ -1133,14 +1147,16 @@ async def upload_notebook(
     )
 
     result = await _save_uploaded_notebook(
-        file, overwrite, expected_sha256=expected_sha256
+        file, overwrite, dry_run=dry_run, expected_sha256=expected_sha256
     )
 
-    if normalized_tags is not None:
+    if normalized_tags is not None and not dry_run:
         _write_notebook_tags(result["filename"], normalized_tags)
 
-    if normalized_description is not None:
+    if normalized_description is not None and not dry_run:
         _write_notebook_description(result["filename"], normalized_description)
+
+    result["dry_run"] = dry_run
 
     return result
 
@@ -1151,6 +1167,7 @@ async def upload_notebooks_batch(
     overwrite: bool = False,
     tags: str = None,
     description: str = None,
+    dry_run: bool = False,
 ):
     """Upload several Jupyter notebook files in a single request.
 
@@ -1203,6 +1220,18 @@ async def upload_notebooks_batch(
     accepts for one upload, applied to every successfully-uploaded file
     here instead. Also validated once, up front, as a whole-request 400,
     and never applied to a file that itself failed to upload.
+
+    "dry_run" (optional, default false) reports the exact same per-file
+    "results" a real batch upload would -- each file's own "success"
+    (with "overwritten"/"sha256" exactly as a real upload would report)
+    or "error" -- without writing a single one of them into UPLOAD_DIR.
+    _save_uploaded_notebook's own "dry_run" already provides this per-
+    file preview, and POST /api/notebooks/import already passes it
+    through for a zip archive's own entries -- this closes the identical
+    gap for a plain multi-file batch upload. Neither "tags" nor
+    "description" are actually written under "dry_run", the same "a
+    preview has no side effects" reasoning POST /api/upload's own
+    "dry_run" already applies.
     """
 
     if len(files) > MAX_BATCH_UPLOAD_FILES:
@@ -1230,12 +1259,12 @@ async def upload_notebooks_batch(
 
         try:
 
-            result = await _save_uploaded_notebook(file, overwrite)
+            result = await _save_uploaded_notebook(file, overwrite, dry_run=dry_run)
 
-            if normalized_tags is not None:
+            if normalized_tags is not None and not dry_run:
                 _write_notebook_tags(result["filename"], normalized_tags)
 
-            if normalized_description is not None:
+            if normalized_description is not None and not dry_run:
                 _write_notebook_description(result["filename"], normalized_description)
 
             results.append(result)
@@ -1252,6 +1281,7 @@ async def upload_notebooks_batch(
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "results": results,
         "succeeded_count": succeeded_count,
         "failed_count": failed_count,

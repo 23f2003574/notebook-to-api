@@ -1414,6 +1414,8 @@ def _dispatch_core_command(args):
                 params["description"] = args.description
             if args.expected_sha256:
                 params["expected_sha256"] = args.expected_sha256
+            if args.dry_run:
+                params["dry_run"] = True
 
             try:
 
@@ -1446,7 +1448,8 @@ def _dispatch_core_command(args):
             if args.json_output:
                 print(json.dumps(data, indent=2))
             else:
-                print(f"Uploaded '{data.get('filename', notebook_path)}' to {dashboard_url}")
+                verb = "Would upload" if data.get("dry_run") else "Uploaded"
+                print(f"{verb} '{data.get('filename', notebook_path)}' to {dashboard_url}")
                 print(f"  path: {data.get('path')}")
                 print(f"  overwritten: {data.get('overwritten')}")
                 print(f"  sha256: {data.get('sha256')}")
@@ -1479,6 +1482,8 @@ def _dispatch_core_command(args):
                     batch_params["tags"] = args.tags
                 if args.description is not None:
                     batch_params["description"] = args.description
+                if args.dry_run:
+                    batch_params["dry_run"] = True
 
                 try:
                     response = httpx.post(
@@ -1506,11 +1511,13 @@ def _dispatch_core_command(args):
             if args.json_output:
                 print(json.dumps(data, indent=2))
             else:
+                verb = "Would upload" if data.get("dry_run") else "Uploaded"
+
                 for result in data.get("results", []):
 
                     if result.get("status") == "success":
                         print(
-                            f"Uploaded '{result.get('filename')}' "
+                            f"{verb} '{result.get('filename')}' "
                             f"(overwritten: {result.get('overwritten')})"
                         )
                     else:
@@ -6038,15 +6045,29 @@ def main():
         )
     )
     upload_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report what the upload(s) would do -- including a same-name "
+            "collision without --overwrite, or an --expected-sha256 "
+            "mismatch -- via POST /api/upload's or POST /api/upload/"
+            "batch's own \"dry_run\" query param, without writing "
+            "anything to UPLOAD_DIR. Neither --tags nor --description "
+            "are applied under --dry-run either."
+        )
+    )
+    upload_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response -- "
             "{\"status\", \"filename\", \"path\", \"overwritten\", "
-            "\"sha256\"} for a single file, or {\"status\", \"results\", "
-            "\"succeeded_count\", \"failed_count\"} for multiple -- "
-            "instead of a human-readable summary, for scripting/automation."
+            "\"sha256\", \"dry_run\"} for a single file, or {\"status\", "
+            "\"dry_run\", \"results\", \"succeeded_count\", "
+            "\"failed_count\"} for multiple -- instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 

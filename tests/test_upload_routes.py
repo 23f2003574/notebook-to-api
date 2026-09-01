@@ -542,6 +542,113 @@ def test_upload_reports_the_sha256_of_the_uploaded_content():
     assert resp.json()["sha256"] == expected
 
 
+def test_upload_dry_run_does_not_write_the_file():
+    """_save_uploaded_notebook's own "dry_run" already provides this
+    preview -- reused by POST /api/notebooks/import -- but POST
+    /api/upload, the endpoint every one of those ultimately exists to
+    preview an upload *for*, never itself exposed it.
+    """
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    resp = client.post(
+        "/api/upload",
+        params={"dry_run": "true"},
+        files={"file": ("upload_dry_run.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["overwritten"] is False
+    assert body["sha256"] == hashlib.sha256(content).hexdigest()
+
+    assert not (Path(UPLOAD_DIR) / "upload_dry_run.ipynb").exists()
+
+
+def test_upload_dry_run_reports_a_collision_without_writing_anything():
+
+    original_content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("upload_dry_run_collide.ipynb", io.BytesIO(original_content), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/upload",
+        params={"dry_run": "true"},
+        files={
+            "file": (
+                "upload_dry_run_collide.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+
+    assert resp.status_code == 409
+    assert (Path(UPLOAD_DIR) / "upload_dry_run_collide.ipynb").read_bytes() == original_content
+
+
+def test_upload_dry_run_does_not_apply_tags_or_description():
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    resp = client.post(
+        "/api/upload",
+        params={"dry_run": "true", "tags": "prod", "description": "hello"},
+        files={"file": ("upload_dry_run_tags.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["dry_run"] is True
+    assert not (Path(UPLOAD_DIR) / "upload_dry_run_tags.ipynb").exists()
+
+
+def test_upload_batch_dry_run_does_not_write_any_file():
+
+    content_a = _notebook_bytes("def f() -> int:\n    return 1\n")
+    content_b = _notebook_bytes("def g() -> int:\n    return 2\n")
+
+    resp = client.post(
+        "/api/upload/batch",
+        params={"dry_run": "true"},
+        files=[
+            ("files", ("batch_dry_run_a.ipynb", io.BytesIO(content_a), "application/json")),
+            ("files", ("batch_dry_run_b.ipynb", io.BytesIO(content_b), "application/json")),
+        ],
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["succeeded_count"] == 2
+    assert all(r["status"] == "success" for r in body["results"])
+
+    assert not (Path(UPLOAD_DIR) / "batch_dry_run_a.ipynb").exists()
+    assert not (Path(UPLOAD_DIR) / "batch_dry_run_b.ipynb").exists()
+
+
+def test_upload_batch_dry_run_does_not_apply_tags_or_description():
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    resp = client.post(
+        "/api/upload/batch",
+        params={"dry_run": "true", "tags": "prod", "description": "hello"},
+        files=[
+            ("files", ("batch_dry_run_tags.ipynb", io.BytesIO(content), "application/json")),
+        ],
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["dry_run"] is True
+    assert not (Path(UPLOAD_DIR) / "batch_dry_run_tags.ipynb").exists()
+
+
 def test_upload_expected_sha256_matching_succeeds():
 
     import hashlib

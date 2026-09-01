@@ -2306,6 +2306,72 @@ def test_upload_command_passes_the_overwrite_flag_through(tmp_path, fake_dashboa
     assert handler.requests == ["/api/upload?overwrite=true"]
 
 
+def test_upload_command_dry_run_passes_the_flag_through_and_prints_would_upload(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "path": "/srv/uploads/nb.ipynb", "overwritten": False,
+            "sha256": "abc123", "dry_run": True,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["upload", str(notebook_path), "--dashboard-url", dashboard_url, "--dry-run"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/upload?overwrite=false&dry_run=true"]
+    assert "Would upload 'nb.ipynb'" in proc.stdout
+
+
+def test_upload_command_with_multiple_notebooks_dry_run_passes_the_flag_through(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": True,
+            "results": [
+                {"filename": "a.ipynb", "status": "success", "overwritten": False},
+                {"filename": "b.ipynb", "status": "success", "overwritten": False},
+            ],
+            "succeeded_count": 2, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_a = workdir / "a.ipynb"
+    notebook_b = workdir / "b.ipynb"
+    _write_notebook(notebook_a)
+    _write_notebook(notebook_b)
+
+    proc = _run_cli(
+        [
+            "upload", str(notebook_a), str(notebook_b),
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/upload/batch?overwrite=false&dry_run=true"]
+    assert "Would upload 'a.ipynb'" in proc.stdout
+    assert "Would upload 'b.ipynb'" in proc.stdout
+
+
 def test_upload_command_reports_the_sha256(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
