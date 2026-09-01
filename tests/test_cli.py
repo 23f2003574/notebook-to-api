@@ -16455,6 +16455,42 @@ def test_status_command_prints_health_and_config(tmp_path, fake_dashboard):
     assert handler.requests == ["/api/health", "/api/config"]
 
 
+def test_status_command_prints_url_import_timeout(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "healthy", "service": "notebook-to-api",
+            "compiled_app_present": False,
+        }),
+        _json_response(200, {
+            "status": "success",
+            "max_upload_bytes": 10485760,
+            "max_batch_upload_files": 50,
+            "max_notebook_versions": 20,
+            "max_tag_length": 40,
+            "max_tags_per_notebook": 20,
+            "max_description_length": 500,
+            "max_deploy_history_entries": 50,
+            "max_compile_history_entries": 50,
+            "deploy_subprocess_timeout_seconds": 600,
+            "url_import_timeout_seconds": 30,
+            "notebook_sort_keys": ["name", "size", "uploaded_at"],
+            "notebook_sort_orders": ["asc", "desc"],
+            "allowed_origins": [],
+            "compiling_python_version": "3.12",
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["status", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "URL import timeout: 30s" in proc.stdout
+
+
 def test_status_command_prints_allowed_origins(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

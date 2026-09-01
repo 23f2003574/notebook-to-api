@@ -12013,6 +12013,18 @@ def get_config():
     exact access this endpoint's own docstring already says a client
     shouldn't need.
 
+    "url_import_timeout_seconds" (added alongside this same docstring's
+    original feature, not a separate change) closes the identical gap
+    for POST /api/notebooks/import-url's own outbound fetch:
+    independently configurable via NOTEBOOK_API_URL_IMPORT_TIMEOUT_SECONDS
+    since that endpoint itself was added (see URL_IMPORT_TIMEOUT_SECONDS'
+    own comment above), but never picked up here either -- a caller
+    about to hand that endpoint a URL, and deciding how long to wait on
+    its own side for the response, had no way to know how long this
+    dashboard itself is willing to wait on the remote server before
+    giving up, short of the same direct environment access this
+    endpoint exists to avoid.
+
     Deliberately omits UPLOAD_DIR and GENERATED_DIR: those are absolute
     (or process-relative) filesystem paths on the compiling server, the
     same category of information GET /api/health's own docstring already
@@ -12070,6 +12082,7 @@ def get_config():
         "max_deploy_history_entries": MAX_DEPLOY_HISTORY_ENTRIES,
         "max_compile_history_entries": MAX_COMPILE_HISTORY_ENTRIES,
         "deploy_subprocess_timeout_seconds": DEPLOY_SUBPROCESS_TIMEOUT_SECONDS,
+        "url_import_timeout_seconds": URL_IMPORT_TIMEOUT_SECONDS,
         "notebook_sort_keys": sorted(_NOTEBOOK_SORT_KEYS),
         "notebook_sort_orders": sorted(_NOTEBOOK_SORT_ORDERS),
         "compiling_python_version": compiling_python_version(),

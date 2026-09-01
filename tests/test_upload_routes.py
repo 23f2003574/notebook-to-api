@@ -20334,6 +20334,27 @@ def test_get_config_reflects_a_configured_max_deploy_history_entries(monkeypatch
     assert resp.json()["max_deploy_history_entries"] == 9
 
 
+def test_get_config_reports_the_url_import_timeout():
+
+    from backend.routes.upload import URL_IMPORT_TIMEOUT_SECONDS
+
+    resp = client.get("/api/config")
+
+    assert resp.status_code == 200
+    assert resp.json()["url_import_timeout_seconds"] == URL_IMPORT_TIMEOUT_SECONDS
+
+
+def test_get_config_reflects_a_configured_url_import_timeout(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "URL_IMPORT_TIMEOUT_SECONDS", 12.5)
+
+    resp = client.get("/api/config")
+
+    assert resp.json()["url_import_timeout_seconds"] == 12.5
+
+
 def test_get_config_reflects_a_configured_max_compile_history_entries(monkeypatch):
 
     from backend.routes import upload as upload_module
