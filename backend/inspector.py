@@ -1,6 +1,7 @@
 import difflib
 import json
 import os
+from collections import Counter
 from pathlib import Path
 
 from backend.compiler import (
@@ -220,6 +221,33 @@ def _reserved_name_conflicts(functions):
     )
 
 
+def _duplicate_function_names(functions):
+    """Names `functions` (the raw, pre-deduplicate_functions_by_name list
+    extracted straight from every code cell) defines more than once.
+
+    Notebooks are edited iteratively -- a cell defining `def add(...)` is
+    commonly re-run later with a fixed/changed body under the same name
+    -- and deduplicate_functions_by_name (backend/parser/ast_parser.py)
+    already handles that correctly by keeping only the last definition,
+    matching what running the whole notebook top to bottom in a single
+    kernel would actually do. But that resolution happened silently: a
+    notebook author who *didn't* intend a redefinition (a copy-pasted
+    cell, a typo'd name reused by accident) got no signal at all that one
+    of their functions had simply vanished, silently replaced by an
+    unrelated later definition sharing its name -- inspect_notebook_data's
+    "functions" (and "endpoints") already only ever reflected the
+    winning definition, with nothing anywhere naming what got shadowed.
+
+    Computed from `functions` *before* deduplication -- a name appearing
+    exactly once is never "duplicate" regardless of how many other names
+    exist alongside it, and a name appearing three or more times is still
+    reported once, not once per extra repetition.
+    """
+    counts = Counter(func["name"] for func in functions)
+
+    return sorted(name for name, count in counts.items() if count > 1)
+
+
 def _aggregate_skipped_functions(code_cells, exposed_function_names):
     """Skipped-function reports (see extract_skipped_functions_from_code)
     across every cell in `code_cells`, deduplicated by name and with any
@@ -267,6 +295,8 @@ def inspect_notebook(notebook_path, output_dir="generated"):
         all_functions.extend(funcs)
         all_imports.update(imports)
 
+    duplicate_function_names = _duplicate_function_names(all_functions)
+
     all_functions = deduplicate_functions_by_name(all_functions)
 
     # Same "# notebook-to-api: private" directive compile_notebook_to_api
@@ -304,6 +334,12 @@ def inspect_notebook(notebook_path, output_dir="generated"):
         print("\n⚠ Reserved Name Conflicts (compilation will fail):")
         print("-" * 20)
         for name in reserved_name_conflicts:
+            print(f"- {name}")
+
+    if duplicate_function_names:
+        print("\n⚠ Duplicate Functions (redefined; only the last definition is compiled):")
+        print("-" * 20)
+        for name in duplicate_function_names:
             print(f"- {name}")
 
     if private_function_names:
@@ -421,6 +457,8 @@ def inspect_notebook_data(
         all_functions.extend(funcs)
         all_imports.update(imports)
 
+    duplicate_function_names = _duplicate_function_names(all_functions)
+
     all_functions = deduplicate_functions_by_name(all_functions)
 
     # See the identical comment in inspect_notebook above -- keeps
@@ -465,6 +503,15 @@ def inspect_notebook_data(
         # above, with "dependencies" giving no way to tell "never
         # imported" apart from "imported, but deliberately excluded".
         "excluded_imports": sorted(excluded_imports),
+        # Names defined more than once in the notebook's own raw
+        # extraction (before deduplicate_functions_by_name, backend/
+        # parser/ast_parser.py, silently collapses each down to its last
+        # definition) -- see _duplicate_function_names' own docstring for
+        # exactly what this catches that "functions"/"endpoints" alone
+        # can't: an accidental redefinition that shadowed an earlier
+        # function of the same name with no signal anywhere that it
+        # happened.
+        "duplicate_functions": duplicate_function_names,
     }
 
 
@@ -531,6 +578,14 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
             "(opted out of requirements.txt):"
         )
         for name in data["excluded_imports"]:
+            print(f"  {name}")
+
+    if data["duplicate_functions"]:
+        print(
+            f"\n⚠ {len(data['duplicate_functions'])} duplicate function(s) "
+            "(redefined; only the last definition is compiled):"
+        )
+        for name in data["duplicate_functions"]:
             print(f"  {name}")
 
 

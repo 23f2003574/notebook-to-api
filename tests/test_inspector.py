@@ -12,6 +12,7 @@ from backend.inspector import (
     print_compile_summary,
     print_notebook_diff,
     _aggregate_skipped_functions,
+    _duplicate_function_names,
     _list_generated_files,
     _reserved_name_conflicts,
 )
@@ -552,6 +553,119 @@ def test_inspect_notebook_report_lists_an_excluded_import_section(tmp_path, caps
         "Excluded Imports (opted out of requirements.txt):"
     )[1].split("Dependencies:")[0]
     assert "- pandas" in excluded_section
+
+
+def test_duplicate_function_names_finds_a_name_defined_more_than_once():
+
+    functions = [
+        {"name": "add"}, {"name": "subtract"}, {"name": "add"}, {"name": "add"},
+    ]
+
+    assert _duplicate_function_names(functions) == ["add"]
+
+
+def test_duplicate_function_names_is_empty_when_every_name_is_unique():
+
+    functions = [{"name": "add"}, {"name": "subtract"}]
+
+    assert _duplicate_function_names(functions) == []
+
+
+def test_inspect_notebook_data_reports_a_redefined_function_as_duplicate(tmp_path):
+    """A notebook re-running an edited cell under the same function name
+    is deduplicate_functions_by_name's (backend/parser/ast_parser.py) own
+    documented common case -- it silently keeps only the last definition,
+    matching what running the whole notebook top to bottom in a single
+    kernel would do. But before this, nothing reported *that* a
+    redefinition happened at all: an accidental one (a copy-pasted cell,
+    a typo'd name reused by mistake) silently lost a function with no
+    signal anywhere.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def add(a: int, b: int) -> int:\n    return a * b\n",
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    assert data["duplicate_functions"] == ["add"]
+    # Only the last definition survives -- the same "last one wins"
+    # behavior deduplicate_functions_by_name already documents.
+    assert len(data["functions"]) == 1
+    assert data["functions"][0]["name"] == "add"
+
+
+def test_inspect_notebook_data_duplicate_functions_is_empty_for_a_clean_notebook(
+    tmp_path,
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    assert data["duplicate_functions"] == []
+
+
+def test_inspect_notebook_report_lists_a_duplicate_function_section(tmp_path, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def add(a: int, b: int) -> int:\n    return a * b\n",
+    )
+
+    inspect_notebook(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert (
+        "Duplicate Functions (redefined; only the last definition is compiled):"
+        in output
+    )
+    duplicate_section = output.split(
+        "Duplicate Functions (redefined; only the last definition is compiled):"
+    )[1].split("Functions Found:")[0]
+    assert "- add" in duplicate_section
+
+
+def test_print_compile_summary_lists_a_duplicate_function(tmp_path, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def add(a: int, b: int) -> int:\n    return a * b\n",
+    )
+
+    print_compile_summary(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert (
+        "duplicate function(s) (redefined; only the last definition is compiled):"
+        in output
+    )
+    assert "  add" in output
+
+
+def test_print_compile_summary_omits_duplicate_functions_line_when_there_are_none(
+    tmp_path, capsys
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    print_compile_summary(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "duplicate function" not in output
 
 
 def test_inspect_notebook_data_omits_a_private_directive_marked_function(tmp_path):

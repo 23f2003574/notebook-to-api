@@ -1022,6 +1022,7 @@ def _dispatch_core_command(args):
 
         reserved_name_conflicts = data["reserved_name_conflicts"]
         skipped_functions = data["skipped_functions"]
+        duplicate_functions = data["duplicate_functions"]
 
         # Narrows "reserved_name_conflicts" to just the names --only/
         # --exclude would still actually let through to compile, the
@@ -1050,9 +1051,11 @@ def _dispatch_core_command(args):
             ]
 
         has_blocking_issues = bool(reserved_name_conflicts) or (
-            args.strict and bool(skipped_functions)
+            args.strict and (bool(skipped_functions) or bool(duplicate_functions))
         )
-        has_warnings = bool(skipped_functions) and not has_blocking_issues
+        has_warnings = (
+            bool(skipped_functions) or bool(duplicate_functions)
+        ) and not has_blocking_issues
 
         if has_blocking_issues:
             status = "fail"
@@ -1068,6 +1071,7 @@ def _dispatch_core_command(args):
                     "notebook": args.notebook,
                     "reserved_name_conflicts": reserved_name_conflicts,
                     "skipped_functions": skipped_functions,
+                    "duplicate_functions": duplicate_functions,
                 },
                 indent=2,
             ))
@@ -1077,6 +1081,12 @@ def _dispatch_core_command(args):
             if reserved_name_conflicts:
                 print("\n✗ Reserved name conflicts (compilation will fail):")
                 for name in reserved_name_conflicts:
+                    print(f"  - {name}")
+
+            if duplicate_functions:
+                marker = "✗" if args.strict else "⚠"
+                print(f"\n{marker} Duplicate functions (redefined; only the last definition is compiled):")
+                for name in duplicate_functions:
                     print(f"  - {name}")
 
             if skipped_functions:
@@ -3432,6 +3442,13 @@ def _dispatch_core_command(args):
                 for name in reserved_name_conflicts:
                     print(f"  - {name}")
 
+            duplicate_functions = data.get("duplicate_functions", [])
+
+            if duplicate_functions:
+                print("\n⚠ Duplicate functions (redefined; only the last definition is compiled):")
+                for name in duplicate_functions:
+                    print(f"  - {name}")
+
             private_functions = data.get("private_functions", [])
 
             if private_functions:
@@ -3508,6 +3525,7 @@ def _dispatch_core_command(args):
         status = data.get("status")
         reserved_name_conflicts = data.get("reserved_name_conflicts", [])
         skipped_functions = data.get("skipped_functions", [])
+        duplicate_functions = data.get("duplicate_functions", [])
 
         if args.json_output:
             print(json.dumps(data, indent=2))
@@ -3521,6 +3539,12 @@ def _dispatch_core_command(args):
             if reserved_name_conflicts:
                 print("\n✗ Reserved name conflicts (compilation will fail):")
                 for name in reserved_name_conflicts:
+                    print(f"  - {name}")
+
+            if duplicate_functions:
+                marker = "✗" if args.strict else "⚠"
+                print(f"\n{marker} Duplicate functions (redefined; only the last definition is compiled):")
+                for name in duplicate_functions:
                     print(f"  - {name}")
 
             if skipped_functions:
@@ -3601,6 +3625,9 @@ def _dispatch_core_command(args):
 
                     for name in result.get("reserved_name_conflicts", []):
                         print(f"    reserved name conflict: {name}")
+
+                    for name in result.get("duplicate_functions", []):
+                        print(f"    duplicate function: {name}")
 
                     for skipped in result.get("skipped_functions", []):
                         print(f"    skipped: {skipped['name']}: {skipped['reason']}")
@@ -5639,11 +5666,12 @@ def main():
         action="store_true",
         help=(
             "Also fail (exit 2) when the notebook has skipped functions "
-            "(no endpoint will be generated for them). By default these "
-            "are reported as a non-fatal warning (exit 1): compiling "
-            "still succeeds for every other function, unlike a reserved "
-            "name conflict, which always fails compilation outright and "
-            "always exits 2."
+            "(no endpoint will be generated for them) or duplicate "
+            "functions (a name defined more than once -- only the last "
+            "definition is compiled). By default these are reported as "
+            "a non-fatal warning (exit 1): compiling still succeeds for "
+            "every other function, unlike a reserved name conflict, "
+            "which always fails compilation outright and always exits 2."
         )
     )
     _add_function_selection_arguments(validate_parser)
@@ -5654,8 +5682,8 @@ def main():
         help=(
             "Emit machine-readable JSON ({\"status\": \"pass\"|\"warn\"|"
             "\"fail\", \"notebook\", \"reserved_name_conflicts\", "
-            "\"skipped_functions\"}) instead of the human-readable "
-            "report, for scripting/automation."
+            "\"skipped_functions\", \"duplicate_functions\"}) instead of "
+            "the human-readable report, for scripting/automation."
         )
     )
 
@@ -7874,8 +7902,8 @@ def main():
             "\"functions\", \"dependencies\", \"generated_files\", "
             "\"reserved_name_conflicts\", \"endpoints\", "
             "\"skipped_functions\", \"private_functions\", "
-            "\"excluded_imports\"}) instead of the human-readable "
-            "report, for scripting/automation."
+            "\"excluded_imports\", \"duplicate_functions\"}) instead of "
+            "the human-readable report, for scripting/automation."
         )
     )
 
@@ -7900,7 +7928,8 @@ def main():
         action="store_true",
         help=(
             "Also fail (exit 2) when the notebook has skipped functions "
-            "(no endpoint will be generated for them) -- the same "
+            "(no endpoint will be generated for them) or duplicate "
+            "functions (a name defined more than once) -- the same "
             "--strict `validate` itself already accepts. By default "
             "these are reported as a non-fatal warning (exit 1)."
         )
@@ -7913,8 +7942,9 @@ def main():
         help=(
             "Emit the dashboard's own JSON response ({\"status\": "
             "\"pass\"|\"warn\"|\"fail\", \"notebook\", \"version_id\", "
-            "\"reserved_name_conflicts\", \"skipped_functions\"}) instead "
-            "of the human-readable report, for scripting/automation."
+            "\"reserved_name_conflicts\", \"skipped_functions\", "
+            "\"duplicate_functions\"}) instead of the human-readable "
+            "report, for scripting/automation."
         )
     )
 

@@ -8627,6 +8627,17 @@ def validate_notebook_endpoint(
     otherwise-identical "skipped_functions" field, since a skipped
     function was never a candidate to become an endpoint in the first
     place, whether or not only/exclude names it.
+
+    "duplicate_functions" (see inspect_notebook_data's own field of the
+    same name, backend/inspector.py) also contributes to "status" the
+    same way "skipped_functions" does: "warn" without "strict", "fail"
+    with it. A notebook defining the same function name more than once
+    still compiles cleanly (deduplicate_functions_by_name silently keeps
+    only the last definition), but that's exactly the kind of accidental
+    footgun -- a copy-pasted cell, a typo'd name reused by mistake -- a
+    CI validation gate exists to catch before it ships, not silently wave
+    through as "pass" alongside a real compile-time failure like a
+    reserved-name conflict.
     """
 
     notebook_path = data.get(
@@ -8690,6 +8701,7 @@ def validate_notebook_endpoint(
 
     reserved_name_conflicts = inspection["reserved_name_conflicts"]
     skipped_functions = inspection["skipped_functions"]
+    duplicate_functions = inspection["duplicate_functions"]
 
     if only or exclude:
 
@@ -8712,9 +8724,11 @@ def validate_notebook_endpoint(
         ]
 
     has_blocking_issues = bool(reserved_name_conflicts) or (
-        strict and bool(skipped_functions)
+        strict and (bool(skipped_functions) or bool(duplicate_functions))
     )
-    has_warnings = bool(skipped_functions) and not has_blocking_issues
+    has_warnings = (
+        bool(skipped_functions) or bool(duplicate_functions)
+    ) and not has_blocking_issues
 
     if has_blocking_issues:
         status = "fail"
@@ -8729,6 +8743,7 @@ def validate_notebook_endpoint(
         "version_id": version_id,
         "reserved_name_conflicts": reserved_name_conflicts,
         "skipped_functions": skipped_functions,
+        "duplicate_functions": duplicate_functions,
     }
 
 
@@ -8796,15 +8811,15 @@ def validate_all_notebooks(
     already-paginated "results" the "json" response would return, so
     "strict"/"tag"/"limit"/"offset" compose with "format" identically.
     Column order is "filename,status,reserved_name_conflicts,
-    skipped_functions,detail" -- one row per notebook (not one per
-    conflict/skipped function): "reserved_name_conflicts" is every
-    conflicting name joined with "; ", and "skipped_functions" is every
-    "<name>: <reason>" joined the same way, so a notebook with several of
-    either still fits in a single row instead of the "duplicates"/
-    "functions" CSVs' own one-row-per-leaf-entry convention, which would
-    otherwise repeat "filename"/"status" across rows for no benefit here.
-    An unrecognized "format" is rejected with 400 before a single
-    notebook is even read.
+    skipped_functions,duplicate_functions,detail" -- one row per notebook
+    (not one per conflict/skipped/duplicate function): each of
+    "reserved_name_conflicts"/"duplicate_functions" is every name joined
+    with "; ", and "skipped_functions" is every "<name>: <reason>" joined
+    the same way, so a notebook with several of any of them still fits in
+    a single row instead of the "duplicates"/"functions" CSVs' own
+    one-row-per-leaf-entry convention, which would otherwise repeat
+    "filename"/"status" across rows for no benefit here. An unrecognized
+    "format" is rejected with 400 before a single notebook is even read.
     """
 
     if format not in ("json", "csv"):
@@ -8854,6 +8869,7 @@ def validate_all_notebooks(
                 "status": "fail",
                 "reserved_name_conflicts": [],
                 "skipped_functions": [],
+                "duplicate_functions": [],
                 "detail": f"Uploaded file is not a valid Jupyter notebook: {e}",
             })
             fail_count += 1
@@ -8873,11 +8889,14 @@ def validate_all_notebooks(
 
         reserved_name_conflicts = inspection["reserved_name_conflicts"]
         skipped_functions = inspection["skipped_functions"]
+        duplicate_functions = inspection["duplicate_functions"]
 
         has_blocking_issues = bool(reserved_name_conflicts) or (
-            strict and bool(skipped_functions)
+            strict and (bool(skipped_functions) or bool(duplicate_functions))
         )
-        has_warnings = bool(skipped_functions) and not has_blocking_issues
+        has_warnings = (
+            bool(skipped_functions) or bool(duplicate_functions)
+        ) and not has_blocking_issues
 
         if has_blocking_issues:
             status = "fail"
@@ -8894,6 +8913,7 @@ def validate_all_notebooks(
             "status": status,
             "reserved_name_conflicts": reserved_name_conflicts,
             "skipped_functions": skipped_functions,
+            "duplicate_functions": duplicate_functions,
             "detail": None,
         })
 
@@ -8910,7 +8930,7 @@ def validate_all_notebooks(
 
         writer.writerow([
             "filename", "status", "reserved_name_conflicts",
-            "skipped_functions", "detail",
+            "skipped_functions", "duplicate_functions", "detail",
         ])
 
         for entry in paginated_results:
@@ -8923,6 +8943,7 @@ def validate_all_notebooks(
                     f"{skipped['name']}: {skipped['reason']}"
                     for skipped in entry["skipped_functions"]
                 ),
+                "; ".join(entry["duplicate_functions"]),
                 entry["detail"] or "",
             ])
 

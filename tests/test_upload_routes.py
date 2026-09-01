@@ -14442,6 +14442,41 @@ def test_inspect_reports_an_exclude_directive_marked_import_separately():
     assert "requests" in body["dependencies"]
 
 
+def test_inspect_reports_a_redefined_function_as_duplicate():
+    """A function name defined more than once in a notebook is silently
+    collapsed to its last definition by deduplicate_functions_by_name
+    (backend/parser/ast_parser.py) -- but before this, nothing reported
+    that a redefinition even happened, indistinguishable from a notebook
+    that only ever defined that name once.
+    """
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def add(a: int, b: int) -> int:\n    return a * b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "inspect_duplicate_function_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/inspect", json={"notebook_path": "inspect_duplicate_function_test.ipynb"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["duplicate_functions"] == ["add"]
+    assert len(body["functions"]) == 1
+
+
 def test_inspect_reports_reserved_name_conflicts_for_a_colliding_function():
     """/api/inspect is the tool's own "preview what compiling this
     notebook will do" step, but had no idea a function named
@@ -14528,6 +14563,7 @@ def test_validate_reports_pass_for_a_clean_notebook():
         "version_id": None,
         "reserved_name_conflicts": [],
         "skipped_functions": [],
+        "duplicate_functions": [],
     }
 
 
@@ -14580,6 +14616,63 @@ def test_validate_reports_fail_for_skipped_functions_with_strict():
     resp = client.post(
         "/api/validate",
         json={"notebook_path": "validate_strict_fail.ipynb", "strict": True},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "fail"
+
+
+def test_validate_reports_warn_for_duplicate_functions_without_strict():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def add(a: int, b: int) -> int:\n    return a * b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "validate_duplicate_warn.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post(
+        "/api/validate", json={"notebook_path": "validate_duplicate_warn.ipynb"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "warn"
+    assert body["duplicate_functions"] == ["add"]
+
+
+def test_validate_reports_fail_for_duplicate_functions_with_strict():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def add(a: int, b: int) -> int:\n    return a * b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "validate_duplicate_strict_fail.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post(
+        "/api/validate",
+        json={"notebook_path": "validate_duplicate_strict_fail.ipynb", "strict": True},
     )
 
     assert resp.status_code == 200
@@ -14926,13 +15019,16 @@ def test_validate_all_csv_format_returns_a_csv_response():
     assert 'attachment; filename="validate_all.csv"' in resp.headers["content-disposition"]
 
     rows = resp.text.strip().split("\r\n")
-    assert rows[0] == "filename,status,reserved_name_conflicts,skipped_functions,detail"
+    assert rows[0] == (
+        "filename,status,reserved_name_conflicts,skipped_functions,"
+        "duplicate_functions,detail"
+    )
 
     by_filename = {row.split(",", 1)[0]: row for row in rows[1:]}
 
-    assert by_filename["validate_all_csv_pass.ipynb"] == "validate_all_csv_pass.ipynb,pass,,,"
+    assert by_filename["validate_all_csv_pass.ipynb"] == "validate_all_csv_pass.ipynb,pass,,,,"
     assert by_filename["validate_all_csv_fail.ipynb"] == (
-        "validate_all_csv_fail.ipynb,fail,health_check,,"
+        "validate_all_csv_fail.ipynb,fail,health_check,,,"
     )
     assert "unsupported: " in by_filename["validate_all_csv_warn.ipynb"]
     assert by_filename["validate_all_csv_warn.ipynb"].startswith(
@@ -15055,6 +15151,42 @@ def test_validate_all_strict_turns_skipped_functions_into_a_failure():
     assert body["fail_count"] == 1
     assert body["warn_count"] == 0
     assert body["results"][0]["status"] == "fail"
+
+
+def test_validate_all_strict_turns_duplicate_functions_into_a_failure():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    duplicate_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def add(a: int, b: int) -> int:\n    return a * b\n"
+    )
+
+    resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "validate_all_duplicate_strict.ipynb",
+                io.BytesIO(duplicate_content),
+                "application/json",
+            )
+        },
+    )
+    assert resp.status_code == 200
+
+    resp = client.get(
+        "/api/validate-all",
+        params={"strict": "true"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    result = next(
+        r for r in body["results"]
+        if r["filename"] == "validate_all_duplicate_strict.ipynb"
+    )
+    assert result["status"] == "fail"
+    assert result["duplicate_functions"] == ["add"]
 
 
 def test_validate_all_reports_a_malformed_notebook_as_fail_instead_of_skipping_it():
