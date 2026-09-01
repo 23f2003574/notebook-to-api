@@ -14846,6 +14846,54 @@ def test_requirements_preview_includes_an_explicit_requirement_directive():
     assert "definitely-not-a-real-pkg==1.2.3" in resp.json()["requirements"]
 
 
+def test_requirements_preview_explicit_requirements_field_lists_only_directive_lines():
+
+    content = _notebook_bytes(
+        "# notebook-to-api: requires definitely-not-a-real-pkg==1.2.3\n"
+        "import json\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "requirements_preview_explicit_field.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post(
+        "/api/requirements-preview",
+        json={"notebook_path": "requirements_preview_explicit_field.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["explicit_requirements"] == ["definitely-not-a-real-pkg==1.2.3"]
+    # Every explicit entry is also present in the merged "requirements" list.
+    assert set(body["explicit_requirements"]) <= set(body["requirements"])
+    # Auto-detected core dependencies are NOT reported as explicit.
+    assert "fastapi" not in body["explicit_requirements"]
+
+
+def test_requirements_preview_explicit_requirements_field_is_empty_without_a_directive():
+
+    _upload_sample_notebook("requirements_preview_no_directive.ipynb")
+
+    resp = client.post(
+        "/api/requirements-preview",
+        json={"notebook_path": "requirements_preview_no_directive.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["explicit_requirements"] == []
+
+
 def test_requirements_preview_omits_an_excluded_import():
 
     content = _notebook_bytes(

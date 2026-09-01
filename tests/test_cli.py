@@ -9641,6 +9641,35 @@ def test_requirements_preview_command_prints_the_requirements(tmp_path, fake_das
     assert json.loads(handler.bodies[0]) == {"notebook_path": "nb.ipynb"}
 
 
+def test_requirements_preview_command_marks_explicit_requirements(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebook": "nb.ipynb",
+            "requirements": ["fastapi==0.100.0", "a-private-pkg==1.0.0"],
+            "explicit_requirements": ["a-private-pkg==1.0.0"],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["requirements-preview", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    lines = {line.strip() for line in proc.stdout.splitlines()}
+    assert "a-private-pkg==1.0.0  (explicit)" in lines
+    assert "fastapi==0.100.0" in lines
+
+
 def test_requirements_preview_command_passes_the_version_id_flag_through(
     tmp_path, fake_dashboard
 ):

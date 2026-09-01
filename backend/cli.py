@@ -3449,6 +3449,7 @@ def _dispatch_core_command(args):
         else:
 
             requirements = data.get("requirements", [])
+            explicit_requirements = set(data.get("explicit_requirements", []))
 
             target = (
                 f"'{args.filename}' version '{args.version_id}'" if args.version_id
@@ -3457,7 +3458,8 @@ def _dispatch_core_command(args):
             print(f"requirements.txt preview for {target} on {dashboard_url}:\n")
 
             for dep in requirements:
-                print(f"  {dep}")
+                suffix = "  (explicit)" if dep in explicit_requirements else ""
+                print(f"  {dep}{suffix}")
     elif args.command == "app-preview":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -7629,8 +7631,9 @@ def main():
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
-            "\"notebook\", \"version_id\", \"requirements\"}) instead of "
-            "a human-readable listing, for scripting/automation."
+            "\"notebook\", \"version_id\", \"requirements\", "
+            "\"explicit_requirements\"}) instead of a human-readable "
+            "listing, for scripting/automation."
         )
     )
 

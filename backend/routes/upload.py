@@ -8870,6 +8870,27 @@ def requirements_preview_endpoint(data: dict):
     whether an old version would still need a dependency that's since
     been removed, before restoring it back over the notebook's current
     content.
+
+    "explicit_requirements" is the subset of "requirements" that came
+    from a "# notebook-to-api: requires <spec>" directive in the
+    notebook itself (see _extract_explicit_requirements, backend/
+    compiler.py) rather than being auto-detected from an `import`
+    statement and pinned via _pinned_requirement -- resolve_requirements
+    already computes and merges both into the single "requirements" list
+    this endpoint has always returned, but which of those lines came
+    from which source was discarded the moment they were merged, with no
+    way to tell them apart afterward. Before this, a notebook mixing
+    ordinary imports with an explicit directive (e.g. for a private
+    package, an extras spec, or a pin this tool's own auto-resolution
+    can't express) left a caller staring at one flat, alphabetically-
+    sorted list with no way to audit which lines it actually wrote
+    itself versus which the tool inferred -- useful before trusting an
+    auto-resolved pin, or double-checking a hand-written directive for a
+    typo, since _extract_explicit_requirements' own docstring notes
+    those are copied through verbatim, unvalidated. Every entry here is
+    also present in "requirements" -- this narrows that list, it never
+    adds anything "requirements" wouldn't already have. Empty for a
+    notebook with no such directive at all.
     """
 
     notebook_path = data.get("notebook_path")
@@ -8901,9 +8922,11 @@ def requirements_preview_endpoint(data: dict):
         if is_parseable_python(cell)
     ]
 
+    explicit_requirements = _extract_explicit_requirements(code_cells)
+
     requirements = resolve_requirements(
         extract_third_party_imports(code_cells),
-        explicit_requirements=_extract_explicit_requirements(code_cells),
+        explicit_requirements=explicit_requirements,
     )
 
     return {
@@ -8911,6 +8934,7 @@ def requirements_preview_endpoint(data: dict):
         "notebook": notebook_path,
         "version_id": version_id,
         "requirements": requirements,
+        "explicit_requirements": explicit_requirements,
     }
 
 
