@@ -5431,6 +5431,55 @@ def test_export_notebooks_command_passes_filenames_through_and_saves_the_zip(
     assert handler.requests == ["/api/notebooks/export?filenames=a.ipynb%2Cb.ipynb"]
 
 
+def test_export_notebooks_command_expected_sha256_succeeds_on_a_match(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+    handler.response_headers = [{"X-Bundle-SHA256": "abc123"}]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "export-notebooks", "a.ipynb", "--dashboard-url", dashboard_url,
+            "--expected-sha256", "abc123",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "notebooks_export.zip").read_bytes() == zip_bytes
+    assert "bundle sha256: abc123" in proc.stdout
+
+
+def test_export_notebooks_command_expected_sha256_fails_on_a_mismatch_and_writes_nothing(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+    handler.response_headers = [{"X-Bundle-SHA256": "abc123"}]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "export-notebooks", "a.ipynb", "--dashboard-url", dashboard_url,
+            "--expected-sha256", "does-not-match",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "does not match the expected value")
+    assert not (workdir / "notebooks_export.zip").exists()
+
+
 def test_export_notebooks_command_with_no_filenames_omits_the_query_param(
     tmp_path, fake_dashboard
 ):
@@ -5565,6 +5614,7 @@ def test_export_notebooks_command_json_flag_emits_a_machine_readable_result(
         "status": "success",
         "path": "notebooks_export.zip",
         "size_bytes": len(zip_bytes),
+        "bundle_sha256": None,
     }
 
 
@@ -11848,6 +11898,55 @@ def test_versions_export_command_saves_the_zip_to_the_default_path(
     assert f"({len(zip_bytes)} bytes)" in proc.stdout
     assert (workdir / "nb.ipynb.versions.zip").read_bytes() == zip_bytes
     assert handler.requests == ["/api/notebooks/nb.ipynb/versions/export"]
+
+
+def test_versions_export_command_expected_sha256_succeeds_on_a_match(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+    handler.response_headers = [{"X-Bundle-SHA256": "abc123"}]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "export", "nb.ipynb", "--dashboard-url", dashboard_url,
+            "--expected-sha256", "abc123",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "nb.ipynb.versions.zip").read_bytes() == zip_bytes
+    assert "bundle sha256: abc123" in proc.stdout
+
+
+def test_versions_export_command_expected_sha256_fails_on_a_mismatch_and_writes_nothing(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+    handler.response_headers = [{"X-Bundle-SHA256": "abc123"}]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "export", "nb.ipynb", "--dashboard-url", dashboard_url,
+            "--expected-sha256", "does-not-match",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "does not match the expected value")
+    assert not (workdir / "nb.ipynb.versions.zip").exists()
 
 
 def test_versions_export_command_version_id_sends_a_comma_separated_query_param(

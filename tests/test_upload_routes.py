@@ -29,6 +29,7 @@ from backend.routes.upload import (
     GENERATED_DIR,
     MAX_NOTEBOOK_VERSIONS,
     UPLOAD_DIR,
+    _bundle_sha256,
     _description_sidecar_path,
     _notebook_versions_dir,
     _tags_sidecar_path,
@@ -3687,6 +3688,42 @@ def test_export_notebooks_zips_the_named_filenames():
         assert sorted(archive.namelist()) == ["export_a.ipynb", "export_b.ipynb"]
         assert json.loads(archive.read("export_a.ipynb")) == json.loads(content_a)
         assert json.loads(archive.read("export_b.ipynb")) == json.loads(content_b)
+
+
+def test_export_notebooks_reports_a_bundle_sha256_over_the_exported_notebooks():
+    """"X-Bundle-SHA256" summarizes just the exported notebooks' own
+    content -- not the "tags/"/"description/" sidecar entries also
+    bundled in alongside them -- the same _bundle_sha256 GET
+    /api/download's own identical header already uses for a compiled
+    bundle's own file set.
+    """
+
+    content_a = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+    content_b = _notebook_bytes("def sub(a: int, b: int) -> int:\n    return a - b\n")
+
+    for filename, content in (
+        ("bundle_sha_a.ipynb", content_a),
+        ("bundle_sha_b.ipynb", content_b),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    export_resp = client.get(
+        "/api/notebooks/export",
+        params={"filenames": "bundle_sha_a.ipynb,bundle_sha_b.ipynb"},
+    )
+
+    assert export_resp.status_code == 200
+    bundle_sha256 = export_resp.headers["x-bundle-sha256"]
+    assert bundle_sha256
+
+    expected = _bundle_sha256([
+        {"filename": "bundle_sha_a.ipynb", "sha256": hashlib.sha256(content_a).hexdigest()},
+        {"filename": "bundle_sha_b.ipynb", "sha256": hashlib.sha256(content_b).hexdigest()},
+    ])
+    assert bundle_sha256 == expected
 
 
 def test_export_notebooks_without_filenames_exports_every_uploaded_notebook():
@@ -10501,6 +10538,40 @@ def test_export_notebook_versions_bundles_current_content_and_every_version():
 
         version_contents = {archive.read(f"versions/{vid}") for vid in version_ids}
         assert version_contents == {original_content, middle_content}
+
+
+def test_export_notebook_versions_reports_a_bundle_sha256():
+
+    filename = "versions_export_bundle_sha.ipynb"
+    original_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    current_content = _notebook_bytes("def h() -> int:\n    return 3\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(original_content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(current_content), "application/json")},
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    export_resp = client.get(f"/api/notebooks/{filename}/versions/export")
+
+    assert export_resp.status_code == 200
+    bundle_sha256 = export_resp.headers["x-bundle-sha256"]
+
+    expected = _bundle_sha256([
+        {"filename": filename, "sha256": hashlib.sha256(current_content).hexdigest()},
+        {
+            "filename": f"versions/{version_id}",
+            "sha256": hashlib.sha256(original_content).hexdigest(),
+        },
+    ])
+    assert bundle_sha256 == expected
 
 
 def test_export_notebook_versions_succeeds_with_no_version_history():

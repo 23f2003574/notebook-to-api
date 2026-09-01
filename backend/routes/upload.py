@@ -3685,6 +3685,20 @@ def export_notebooks(
     contributes no entry for either, the same "empty/absent is a valid
     state, not an error" reasoning "versions/<filename>/" above already
     follows.
+
+    The "X-Bundle-SHA256" response header is the same _bundle_sha256 GET
+    /api/download's own identical header already summarizes a compiled
+    bundle's own file set with (see that endpoint's own docstring),
+    computed here over just the exported notebooks' own {"filename",
+    "sha256"} pairs -- not the "tags/"/"description/"/"versions/"
+    sidecar entries also bundled in alongside them, since those describe
+    the notebooks rather than being one -- so a caller who downloaded
+    this archive (via `export-notebooks`, or a script driving this
+    endpoint directly) can confirm the exported notebooks' own content
+    matches what this dashboard's catalog currently holds in one
+    comparison. Computed unconditionally, the same "already reading
+    every byte to zip it, hashing it too is comparatively small"
+    reasoning GET /api/download's own identical header already applies.
     """
 
     if filenames and tag:
@@ -3752,11 +3766,18 @@ def export_notebooks(
 
     buffer = io.BytesIO()
 
+    exported_file_details = []
+
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
 
         for name, file_path in notebooks_to_export:
 
             archive.write(file_path, name)
+
+            exported_file_details.append({
+                "filename": name,
+                "sha256": hash_notebook_file(file_path),
+            })
 
             _write_notebook_metadata_to_archive(
                 archive, file_path.name,
@@ -3785,6 +3806,7 @@ def export_notebooks(
         media_type="application/zip",
         headers={
             "Content-Disposition": 'attachment; filename="notebooks_export.zip"',
+            "X-Bundle-SHA256": _bundle_sha256(exported_file_details),
         },
     )
 
@@ -7078,6 +7100,15 @@ def export_notebook_versions(filename: str, version_ids: str = None):
     the same way it never had anything to say about the current content
     even before this. Omitted (the default), every version is bundled,
     exactly as before this.
+
+    The "X-Bundle-SHA256" response header is the same _bundle_sha256 GET
+    /api/download's own identical header already summarizes a compiled
+    bundle's own file set with, computed here over the archive's own
+    top-level content entry plus every bundled "versions/<version_id>"
+    entry (not the "tags.json"/"description.txt" sidecars) -- so a
+    caller who downloaded this backup can confirm it matches this
+    notebook's own current content and version history in one
+    comparison, without re-fetching or re-hashing anything.
     """
 
     file_path = resolve_upload_path(filename)
@@ -7132,12 +7163,22 @@ def export_notebook_versions(filename: str, version_ids: str = None):
 
     buffer = io.BytesIO()
 
+    bundled_file_details = [
+        {"filename": filename, "sha256": hash_notebook_file(file_path)}
+    ]
+
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
 
         archive.write(file_path, filename)
 
         for version_path in version_paths:
+
             archive.write(version_path, f"versions/{version_path.name}")
+
+            bundled_file_details.append({
+                "filename": f"versions/{version_path.name}",
+                "sha256": hash_notebook_file(version_path),
+            })
 
         _write_notebook_metadata_to_archive(
             archive, file_path.name, *_notebook_metadata_archive_entry_names()
@@ -7152,6 +7193,7 @@ def export_notebook_versions(filename: str, version_ids: str = None):
             "Content-Disposition": (
                 f'attachment; filename="{filename}.versions.zip"'
             ),
+            "X-Bundle-SHA256": _bundle_sha256(bundled_file_details),
         },
     )
 

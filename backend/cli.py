@@ -2291,6 +2291,16 @@ def _dispatch_core_command(args):
                 f"{_extract_dashboard_error_detail(response)}"
             )
 
+        bundle_sha256 = response.headers.get("X-Bundle-SHA256")
+
+        if args.expected_sha256 and args.expected_sha256 != bundle_sha256:
+
+            raise RuntimeError(
+                f"Exported bundle's sha256 ({bundle_sha256}) does not "
+                f"match the expected value ({args.expected_sha256}) -- "
+                "nothing was written to disk."
+            )
+
         output_path = args.output or _filename_from_content_disposition(
             response, "notebooks_export.zip"
         )
@@ -2304,6 +2314,7 @@ def _dispatch_core_command(args):
                     "status": "success",
                     "path": output_path,
                     "size_bytes": len(response.content),
+                    "bundle_sha256": bundle_sha256,
                 },
                 indent=2,
             ))
@@ -2312,6 +2323,8 @@ def _dispatch_core_command(args):
                 f"Exported notebooks from {dashboard_url} to "
                 f"{output_path} ({len(response.content)} bytes)"
             )
+            if bundle_sha256:
+                print(f"  bundle sha256: {bundle_sha256}")
     elif args.command == "delete":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -4189,6 +4202,16 @@ def _dispatch_core_command(args):
                     f"{_extract_dashboard_error_detail(response)}"
                 )
 
+            bundle_sha256 = response.headers.get("X-Bundle-SHA256")
+
+            if args.expected_sha256 and args.expected_sha256 != bundle_sha256:
+
+                raise RuntimeError(
+                    f"Exported bundle's sha256 ({bundle_sha256}) does not "
+                    f"match the expected value ({args.expected_sha256}) -- "
+                    "nothing was written to disk."
+                )
+
             output_path = args.output or _filename_from_content_disposition(
                 response, f"{args.filename}.versions.zip"
             )
@@ -4203,6 +4226,7 @@ def _dispatch_core_command(args):
                         "filename": args.filename,
                         "path": output_path,
                         "size_bytes": len(response.content),
+                        "bundle_sha256": bundle_sha256,
                     },
                     indent=2,
                 ))
@@ -4212,6 +4236,8 @@ def _dispatch_core_command(args):
                     f"from {dashboard_url} to {output_path} "
                     f"({len(response.content)} bytes)"
                 )
+                if bundle_sha256:
+                    print(f"  bundle sha256: {bundle_sha256}")
 
         elif args.versions_command == "import":
 
@@ -6913,13 +6939,27 @@ def main():
         help="Path to save the downloaded zip to. Default: notebooks_export.zip."
     )
     export_notebooks_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        help=(
+            "Verify the exported bundle's own sha256 matches this value "
+            "-- checked against GET /api/notebooks/export's own "
+            "\"X-Bundle-SHA256\" response header -- before writing it to "
+            "disk. The same content-integrity check `remote-build` "
+            "already performs for a compiled bundle, applied here to a "
+            "notebook export instead."
+        )
+    )
+    export_notebooks_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit a machine-readable JSON result "
-            "({\"status\", \"path\", \"size_bytes\"}) instead of a "
-            "human-readable summary, for scripting/automation."
+            "({\"status\", \"path\", \"size_bytes\", \"bundle_sha256\"}) "
+            "instead of a human-readable summary, for scripting/"
+            "automation."
         )
     )
 
@@ -8529,13 +8569,25 @@ def main():
         help="Path to save the downloaded zip to. Default: the server's own suggested filename."
     )
     versions_export_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        help=(
+            "Verify the exported bundle's own sha256 matches this value "
+            "-- checked against GET /api/notebooks/{filename}/versions/"
+            "export's own \"X-Bundle-SHA256\" response header -- before "
+            "writing it to disk."
+        )
+    )
+    versions_export_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit a machine-readable JSON result ({\"status\", "
-            "\"filename\", \"path\", \"size_bytes\"}) instead of a "
-            "human-readable summary, for scripting/automation."
+            "\"filename\", \"path\", \"size_bytes\", \"bundle_sha256\"}) "
+            "instead of a human-readable summary, for scripting/"
+            "automation."
         )
     )
 
