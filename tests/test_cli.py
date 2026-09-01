@@ -9163,6 +9163,150 @@ def test_remote_compile_command_reports_a_clean_error_when_the_dashboard_is_unre
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_remote_inspect_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "remote-inspect" in proc.stdout
+
+
+def test_remote_inspect_command_prints_the_full_report(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "functions": [{"name": "add"}, {"name": "multiply"}],
+            "dependencies": ["numpy", "pandas"],
+            "generated_files": ["app.py", "requirements.txt"],
+            "reserved_name_conflicts": [],
+            "endpoints": [
+                {"path": "/add", "method": "POST", "is_async": False},
+                {"path": "/multiply", "method": "POST", "is_async": True},
+            ],
+            "skipped_functions": [],
+            "private_functions": [],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-inspect", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Inspecting 'nb.ipynb'" in proc.stdout
+    assert "2 endpoint(s):" in proc.stdout
+    assert "POST /add" in proc.stdout
+    assert "POST /multiply  [background]" in proc.stdout
+    assert "Dependencies: numpy, pandas" in proc.stdout
+    assert "Generated files: app.py, requirements.txt" in proc.stdout
+    assert handler.requests == ["/api/inspect"]
+    assert json.loads(handler.bodies[0]) == {"notebook_path": "nb.ipynb"}
+
+
+def test_remote_inspect_command_reports_reserved_name_conflicts_skipped_and_private_functions(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "functions": [],
+            "dependencies": [],
+            "generated_files": [],
+            "reserved_name_conflicts": ["health_check"],
+            "endpoints": [],
+            "skipped_functions": [{"name": "load_data", "reason": "no return type"}],
+            "private_functions": ["_helper"],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-inspect", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Reserved name conflicts (compilation will fail):" in proc.stdout
+    assert "- health_check" in proc.stdout
+    assert "Private functions (never exposed as an endpoint):" in proc.stdout
+    assert "- _helper" in proc.stdout
+    assert "Skipped functions (no endpoint will be generated):" in proc.stdout
+    assert "- load_data: no return type" in proc.stdout
+
+
+def test_remote_inspect_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "functions": [], "dependencies": [], "generated_files": [],
+        "reserved_name_conflicts": [], "endpoints": [],
+        "skipped_functions": [], "private_functions": [],
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-inspect", "nb.ipynb", "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_remote_inspect_command_reports_a_clean_error_for_a_missing_notebook(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook file not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-inspect", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook file not found")
+
+
+def test_remote_inspect_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-inspect", "nb.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_remote_validate_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

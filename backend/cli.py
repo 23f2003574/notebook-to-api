@@ -346,7 +346,7 @@ _CORE_COMMANDS = frozenset({
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy",
     "copy-batch", "copy-many", "rename-many", "tags", "prune-versions", "description", "deploy-history",
     "clear-deploy-history", "compile-history", "clear-compile-history",
-    "remote-compile", "remote-build",
+    "remote-compile", "remote-inspect", "remote-build",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
     "status", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
     "remote-curl", "app-preview", "dockerfile-preview", "docker-compose-preview", "env-vars-preview",
@@ -3265,6 +3265,74 @@ def _dispatch_core_command(args):
 
         if data.get("smoke_test") is not None and not data["smoke_test"]["passed"]:
             sys.exit(1)
+    elif args.command == "remote-inspect":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.post(
+                f"{dashboard_url}/api/inspect",
+                json={"notebook_path": args.filename},
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"Inspecting '{args.filename}' on {dashboard_url}")
+
+            reserved_name_conflicts = data.get("reserved_name_conflicts", [])
+
+            if reserved_name_conflicts:
+                print("\n✗ Reserved name conflicts (compilation will fail):")
+                for name in reserved_name_conflicts:
+                    print(f"  - {name}")
+
+            private_functions = data.get("private_functions", [])
+
+            if private_functions:
+                print("\nPrivate functions (never exposed as an endpoint):")
+                for name in private_functions:
+                    print(f"  - {name}")
+
+            skipped_functions = data.get("skipped_functions", [])
+
+            if skipped_functions:
+                print("\n⚠ Skipped functions (no endpoint will be generated):")
+                for skipped in skipped_functions:
+                    print(f"  - {skipped['name']}: {skipped['reason']}")
+
+            endpoints = data.get("endpoints", [])
+
+            if endpoints:
+                print(f"\n{len(endpoints)} endpoint(s):")
+                for endpoint in endpoints:
+                    marker = "  [background]" if endpoint.get("is_async") else ""
+                    print(f"  {endpoint['method']} {endpoint['path']}{marker}")
+
+            dependencies = data.get("dependencies", [])
+
+            if dependencies:
+                print(f"\nDependencies: {', '.join(dependencies)}")
+
+            generated_files = data.get("generated_files", [])
+
+            if generated_files:
+                print(f"\nGenerated files: {', '.join(sorted(generated_files))}")
     elif args.command == "remote-validate":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -7525,6 +7593,37 @@ def main():
             "\"generated_files\"}, plus \"smoke_test\" when --smoke-test "
             "is given) instead of a human-readable summary, for "
             "scripting/automation."
+        )
+    )
+
+    # remote-inspect command (the full inspection report -- functions,
+    # dependencies, would-be endpoints, reserved-name conflicts, skipped/
+    # private functions, and already-generated files -- for a notebook
+    # already uploaded to a running dashboard, via its own POST
+    # /api/inspect -- not this CLI's own local `inspect`, which only ever
+    # reads a notebook on disk, and unlike `remote-compile` -- whose own
+    # response happens to carry nearly this same shape -- never performs
+    # a real compile or touches GENERATED_DIR/the currently-compiled app
+    # just to get it)
+    remote_inspect_parser = subparsers.add_parser(
+        "remote-inspect",
+        help="Inspect a notebook already uploaded to a running dashboard instance and display its analysis report, via its POST /api/inspect."
+    )
+    remote_inspect_parser.add_argument(
+        "filename",
+        help="Filename of the notebook already uploaded to the dashboard, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(remote_inspect_parser)
+    remote_inspect_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"functions\", \"dependencies\", \"generated_files\", "
+            "\"reserved_name_conflicts\", \"endpoints\", "
+            "\"skipped_functions\", \"private_functions\"}) instead of "
+            "the human-readable report, for scripting/automation."
         )
     )
 
