@@ -10866,6 +10866,44 @@ def test_versions_list_command_prints_the_notebooks_versions(tmp_path, fake_dash
     assert handler.requests == ["/api/notebooks/nb.ipynb/versions?offset=0"]
 
 
+def test_versions_list_command_checksums_flag_sends_the_query_param_and_prints_sha256(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "versions": [
+                {
+                    "version_id": "20260101T000000Z-abcdef.ipynb",
+                    "size_bytes": 512,
+                    "saved_at": "2026-01-01T00:00:00+00:00",
+                    "sha256": "abc123",
+                },
+            ],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "list", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--checksums",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "sha256:abc123" in proc.stdout
+    assert handler.requests == [
+        "/api/notebooks/nb.ipynb/versions?offset=0&checksums=true"
+    ]
+
+
 def test_versions_list_command_reports_no_saved_versions(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

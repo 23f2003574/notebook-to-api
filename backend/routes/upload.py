@@ -6699,7 +6699,7 @@ def set_notebook_description_batch(data: dict):
 @router.get("/notebooks/{filename}/versions")
 def list_notebook_versions(
     filename: str, limit: int = None, offset: int = 0, format: str = "json",
-    saved_after: str = None, saved_before: str = None,
+    saved_after: str = None, saved_before: str = None, checksums: bool = False,
 ):
     """List a previously uploaded notebook's snapshotted previous
     versions, newest first.
@@ -6753,6 +6753,25 @@ def list_notebook_versions(
     "saved_after" later than "saved_before" is rejected with 400, the
     same way GET /api/notebooks already rejects that combination for
     "modified_after"/"modified_before".
+
+    "checksums" (optional, default false) additionally pairs each
+    "versions" entry with its own "sha256" -- the same hash_notebook_file
+    (backend/compiler.py) GET /api/generated's own "checksums" already
+    computes for a compiled output file, just applied here to one of a
+    notebook's past snapshots instead. Before this, telling two version
+    snapshots apart by content (e.g. spotting a redundant overwrite that
+    produced byte-identical content, or verifying a specific historical
+    version against a known-good hash before POST .../restore-ing it)
+    meant downloading each snapshot individually and hashing it locally
+    -- N+1 requests for what this field now answers in the one already-
+    paginated `versions list` call. Applies to the exact same paginated
+    "versions" every other field here already reflects, so it composes
+    with "limit"/"offset"/"saved_after"/"saved_before" identically; CSV
+    export gains a matching "sha256" column only when "checksums" is
+    given, so a plain `format=csv` request's own column set is unchanged
+    from before this existed. Off by default -- hashing every snapshot is
+    real work this endpoint's existing listing never needed, most callers
+    don't need either.
     """
 
     if format not in ("json", "csv"):
@@ -6832,18 +6851,35 @@ def list_notebook_versions(
         versions[offset:offset + limit] if limit is not None else versions[offset:]
     )
 
+    # Hashed only for the already-paginated subset actually being
+    # returned, not every version in "versions" -- a snapshot "saved_after"/
+    # "saved_before"/"limit"/"offset" already filtered out is never worth
+    # the real work of hashing it just to discard the result unread.
+    if checksums:
+
+        for entry in paginated_versions:
+            entry["sha256"] = hash_notebook_file(
+                str(versions_dir / entry["version_id"])
+            )
+
     if format == "csv":
 
         buffer = io.StringIO()
         writer = csv.writer(buffer)
 
-        writer.writerow(["version_id", "size_bytes", "saved_at"])
+        header = ["version_id", "size_bytes", "saved_at"]
+        if checksums:
+            header.append("sha256")
+
+        writer.writerow(header)
 
         for entry in paginated_versions:
 
-            writer.writerow([
-                entry["version_id"], entry["size_bytes"], entry["saved_at"],
-            ])
+            row = [entry["version_id"], entry["size_bytes"], entry["saved_at"]]
+            if checksums:
+                row.append(entry["sha256"])
+
+            writer.writerow(row)
 
         return StreamingResponse(
             iter([buffer.getvalue()]),

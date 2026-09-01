@@ -3825,6 +3825,8 @@ def _dispatch_core_command(args):
                 params["saved_after"] = args.saved_after
             if args.saved_before:
                 params["saved_before"] = args.saved_before
+            if args.checksums:
+                params["checksums"] = "true"
 
             try:
                 response = httpx.get(
@@ -3861,10 +3863,13 @@ def _dispatch_core_command(args):
                     print(f"No saved versions for '{args.filename}'.")
                 else:
                     for version in versions:
+                        checksum_note = (
+                            f"  sha256:{version['sha256']}" if args.checksums else ""
+                        )
                         print(
                             f"{version['version_id']}  "
                             f"({version['size_bytes']} bytes, "
-                            f"saved {version['saved_at']})"
+                            f"saved {version['saved_at']}){checksum_note}"
                         )
 
                     total_count = data.get("total_count")
@@ -8092,6 +8097,22 @@ def main():
             "Only show versions saved on or before this ISO 8601 "
             "datetime, via GET /api/notebooks/{filename}/versions's own "
             "?saved_before= query param."
+        )
+    )
+    versions_list_parser.add_argument(
+        "--checksums",
+        action="store_true",
+        help=(
+            "Also request each version's own sha256, via GET "
+            "/api/notebooks/{filename}/versions's own \"checksums\" "
+            "query param -- the same per-entry sha256 `remote-files "
+            "list --checksums` already offers for a compiled bundle's "
+            "own files, e.g. to spot a redundant overwrite that produced "
+            "byte-identical content, or to verify a specific historical "
+            "version against a known-good hash before `versions "
+            "restore`. Adds a matching \"sha256\" column under --format "
+            "csv; a plain `versions list` (without --checksums) keeps "
+            "its previous column set unchanged."
         )
     )
     versions_list_parser.add_argument(

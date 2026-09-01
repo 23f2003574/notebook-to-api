@@ -9832,6 +9832,119 @@ def test_list_notebook_versions_rejects_an_unknown_format():
     assert "format" in resp.json()["detail"]
 
 
+def test_list_notebook_versions_checksums_reports_each_versions_own_sha256():
+
+    filename = "versions_checksums.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions", params={"checksums": "true"}
+    )
+
+    assert resp.status_code == 200
+    version = resp.json()["versions"][0]
+
+    downloaded = client.get(
+        f"/api/notebooks/{filename}/versions/{version['version_id']}"
+    )
+    assert version["sha256"] == hashlib.sha256(downloaded.content).hexdigest()
+
+
+def test_list_notebook_versions_omits_sha256_by_default():
+
+    filename = "versions_no_checksums.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.get(f"/api/notebooks/{filename}/versions")
+
+    assert "sha256" not in resp.json()["versions"][0]
+
+
+def test_list_notebook_versions_checksums_csv_format_adds_a_sha256_column():
+
+    filename = "versions_checksums_csv.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    json_versions = client.get(
+        f"/api/notebooks/{filename}/versions", params={"checksums": "true"}
+    ).json()["versions"]
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"checksums": "true", "format": "csv"},
+    )
+
+    assert resp.status_code == 200
+    rows = resp.text.strip().split("\r\n")
+    assert rows[0] == "version_id,size_bytes,saved_at,sha256"
+
+    version = json_versions[0]
+    assert rows[1] == (
+        f"{version['version_id']},{version['size_bytes']},"
+        f"{version['saved_at']},{version['sha256']}"
+    )
+
+
 def _age_notebook_version(filename, version_id, seconds_ago):
     version_path = _notebook_versions_dir(filename) / version_id
     version_stat = version_path.stat()
