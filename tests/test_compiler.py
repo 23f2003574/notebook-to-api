@@ -27,6 +27,7 @@ from backend.compiler import (
     compiling_python_version,
     extract_third_party_imports,
     package_name_for_output_dir,
+    resolve_requirements,
     STANDARD_LIBS,
     THIS_TOOLS_OWN_PACKAGE_NAME,
 )
@@ -3028,6 +3029,90 @@ def test_requirements_strips_a_local_version_segment_from_a_pinned_dependency(
     assert "local_version_dependency_test==0.1.0" in lines
     assert "local_version_dependency_test==0.1.0+dirty" not in lines
     assert not any("+dirty" in line for line in lines)
+
+
+def test_resolve_requirements_drops_the_auto_detected_line_that_conflicts_with_an_explicit_one():
+    """A notebook importing a package directly while also declaring
+    "# notebook-to-api: requires <same-package>==<version>" (to pin a
+    specific version this tool's own auto-resolution wouldn't otherwise
+    choose) previously got *both* lines written to requirements.txt --
+    confirmed exploitable: two version-pinned lines for the same
+    distribution is a requirement pip refuses outright ("Double
+    requirement given"), breaking `deploy`'s own Docker build over
+    exactly the kind of explicit override this directive exists to let a
+    notebook author make. The explicit line must win.
+    """
+
+    requirements = resolve_requirements(
+        ["numpy"], explicit_requirements=["numpy==1.24.0"]
+    )
+
+    numpy_lines = [line for line in requirements if line.split("==")[0] == "numpy"]
+    assert numpy_lines == ["numpy==1.24.0"]
+
+
+def test_resolve_requirements_conflict_detection_is_case_insensitive():
+    """PyPI distribution names are themselves case-insensitive -- pip
+    normalizes "NumPy"/"numpy"/"nUmPy" to the identical project -- so a
+    directive spelled differently than distribution_name_for_import's
+    own resolved name must still be recognized as the same package.
+    """
+
+    requirements = resolve_requirements(
+        ["numpy"], explicit_requirements=["NumPy==1.24.0"]
+    )
+
+    numpy_lines = [
+        line for line in requirements if line.lower().split("==")[0] == "numpy"
+    ]
+    assert numpy_lines == ["NumPy==1.24.0"]
+
+
+def test_resolve_requirements_keeps_auto_detected_lines_with_no_explicit_conflict():
+
+    requirements = resolve_requirements(
+        ["requests"], explicit_requirements=["a-private-pkg==1.0.0"]
+    )
+
+    assert any(line.startswith("requests") for line in requirements)
+    assert "a-private-pkg==1.0.0" in requirements
+
+
+def test_compile_drops_the_auto_detected_dependency_that_conflicts_with_an_explicit_pin(
+    tmp_path
+):
+    """Uses python-multipart the same way
+    test_requirements_resolves_an_import_name_to_its_actual_distribution_name
+    (below) does: its import name ("multipart") differs from its
+    distribution name ("python-multipart") -- so the explicit directive
+    here, naming the *distribution*, must still suppress the
+    auto-detected import's own resolved "python-multipart==<installed>"
+    line, not just an exact-text match against the raw import name.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "# notebook-to-api: requires python-multipart==999.0.0\n"
+            "import multipart\n\n"
+            "def noop() -> int:\n    return 1\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    requirements = (output_dir / "requirements.txt").read_text(encoding="utf-8")
+    lines = requirements.split()
+
+    multipart_lines = [
+        line for line in lines if line.split("==")[0] == "python-multipart"
+    ]
+    assert multipart_lines == ["python-multipart==999.0.0"]
 
 
 def test_requirements_resolves_an_import_name_to_its_actual_distribution_name(

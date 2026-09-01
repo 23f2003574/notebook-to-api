@@ -607,6 +607,32 @@ def extract_third_party_imports(code_cells):
     ]
 
 
+# Matches the leading package-name token of a requirement spec (PEP 508
+# distribution name rules: letters/digits/"."/"_"/"-"), stopping at the
+# first character that can only belong to a version specifier, extras
+# bracket, or "@ <url>" direct-reference suffix -- see
+# _explicit_requirement_package_name below for what this is for.
+_REQUIREMENT_SPEC_NAME_PATTERN = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+
+
+def _explicit_requirement_package_name(spec):
+    """The package name `spec` (one "# notebook-to-api: requires <spec>"
+    line, or an auto-pinned "name==version" one) declares, or None if
+    `spec` doesn't start with one at all (e.g. a bare VCS URL with no
+    "#egg=name" or "name @ " prefix, which this tool has no reliable way
+    to name).
+
+    Used by resolve_requirements below to tell whether an explicit
+    directive and an auto-detected import are naming the *same* package,
+    even though their own spec strings never match exactly (a pin can
+    carry a version/extras/URL an auto-detected "name==version" line
+    never would).
+    """
+    match = _REQUIREMENT_SPEC_NAME_PATTERN.match(spec)
+
+    return match.group(1) if match else None
+
+
 def resolve_requirements(imports, explicit_requirements=None):
     """The exact, sorted requirements.txt lines write_requirements (below)
     would write for `imports` (a notebook's own third-party imports, e.g.
@@ -619,6 +645,25 @@ def resolve_requirements(imports, explicit_requirements=None):
     value immediately before writing it out; write_requirements below now
     just calls this and writes the result, so a preview built from this
     function can never drift from what an actual compile would produce.
+
+    An auto-detected import whose own resolved distribution name matches
+    an explicit requirement's own package name (see
+    _explicit_requirement_package_name above) is dropped from the
+    auto-pinned set entirely -- confirmed exploitable before this: a
+    notebook importing a package directly (e.g. `import numpy`) while
+    also declaring "# notebook-to-api: requires numpy==1.24.0" (to pin a
+    specific version this tool's own auto-resolution wouldn't have
+    chosen) got *both* lines written to requirements.txt side by side --
+    the auto-detected "numpy==<installed-version>" and the explicit
+    "numpy==1.24.0" -- two version-pinned lines for the same distribution,
+    which pip treats as an unsatisfiable requirement and refuses outright
+    (`pip install -r requirements.txt` failing with "Double requirement
+    given"), breaking `deploy`'s own Docker build over exactly the kind
+    of explicit override this directive exists to let a notebook author
+    make. The explicit line always wins; nothing here validates that its
+    own version/extras are otherwise sensible, the same "copied through
+    verbatim, unvalidated" contract _extract_explicit_requirements'
+    own docstring already establishes for it.
     """
 
     # watchdog is a dependency of this tool's own `serve` command (it
@@ -648,18 +693,38 @@ def resolve_requirements(imports, explicit_requirements=None):
         distribution_name_for_import(dep) for dep in final_deps
     })
 
-    pinned_deps = [_pinned_requirement(dep) for dep in distribution_names]
+    explicit_requirements = explicit_requirements or []
 
-    # Merged in alongside the auto-detected, pinned dependencies above --
-    # see _extract_explicit_requirements' own docstring for what these
-    # are and why a notebook author would need them. Deduplicated only by
-    # exact matching text, not by which PyPI distribution a line actually
-    # refers to: this can't tell that "opencv-python==4.9.0.80" and
-    # "opencv-python-headless==4.9.0.80" ultimately provide the same
-    # `cv2` import, so declaring one doesn't suppress the other if the
-    # notebook also imports it directly -- only an exact duplicate is
-    # removed.
-    return sorted(set(pinned_deps) | set(explicit_requirements or []))
+    # Case-insensitive: PyPI distribution names are themselves
+    # case-insensitive (pip normalizes "NumPy"/"numpy"/"nUmPy" to the
+    # identical project), so a directive spelled differently than this
+    # tool's own auto-resolved distribution_name_for_import result must
+    # still be recognized as naming the same package.
+    explicit_package_names = {
+        name.lower()
+        for name in (
+            _explicit_requirement_package_name(spec)
+            for spec in explicit_requirements
+        )
+        if name is not None
+    }
+
+    # Drops any auto-detected distribution an explicit directive already
+    # names -- see this function's own docstring above for the conflicting-
+    # pin this closes. Still deduplicated only by exact matching text
+    # against *other* explicit requirements below, not by which PyPI
+    # distribution a line actually refers to: this can't tell that
+    # "opencv-python==4.9.0.80" and "opencv-python-headless==4.9.0.80"
+    # ultimately provide the same `cv2` import, so declaring one doesn't
+    # suppress the other if the notebook also imports it directly -- only
+    # an auto-detected import colliding with an *explicit* requirement is
+    # resolved in the explicit one's favor.
+    pinned_deps = [
+        _pinned_requirement(dep) for dep in distribution_names
+        if dep.lower() not in explicit_package_names
+    ]
+
+    return sorted(set(pinned_deps) | set(explicit_requirements))
 
 
 def write_requirements(imports, output_dir, explicit_requirements=None):

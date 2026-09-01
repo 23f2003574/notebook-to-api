@@ -15619,6 +15619,44 @@ def test_requirements_preview_matches_what_an_actual_compile_writes():
     assert any(dep.startswith("pandas") for dep in preview_body["requirements"])
 
 
+def test_requirements_preview_explicit_directive_overrides_a_conflicting_auto_detected_import():
+    """A notebook importing a package directly while also declaring a
+    "# notebook-to-api: requires <same-package>==<version>" directive for
+    it must never preview *both* a version-pinned auto-detected line and
+    the explicit one -- two pins for the same distribution is a
+    requirement pip refuses outright.
+    """
+
+    content = _notebook_bytes(
+        "# notebook-to-api: requires python-multipart==999.0.0\n"
+        "import multipart\n\n"
+        "def noop() -> int:\n    return 1\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "requirements_preview_conflict.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/requirements-preview",
+        json={"notebook_path": "requirements_preview_conflict.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    requirements = resp.json()["requirements"]
+    multipart_lines = [
+        line for line in requirements if line.split("==")[0] == "python-multipart"
+    ]
+    assert multipart_lines == ["python-multipart==999.0.0"]
+
+
 def test_requirements_preview_includes_an_explicit_requirement_directive():
 
     content = _notebook_bytes(
