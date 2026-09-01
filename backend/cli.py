@@ -1532,6 +1532,8 @@ def _dispatch_core_command(args):
             params["tag"] = args.tag
         if args.description_search:
             params["description_search"] = args.description_search
+        if args.regex:
+            params["regex"] = "true"
         if args.sha256:
             params["sha256"] = args.sha256
         if args.modified_after:
@@ -5819,6 +5821,18 @@ def main():
         help=(
             "Case-insensitive description substring filter, mirroring "
             "GET /api/notebooks' own ?description_search=."
+        )
+    )
+    list_parser.add_argument(
+        "--regex",
+        action="store_true",
+        help=(
+            "Treat --search and --description-search as case-insensitive "
+            "Python regular expressions instead of plain substrings, via "
+            "GET /api/notebooks' own ?regex=true -- the same \"regex\" "
+            "`search-functions`/`search-content` already offer for their "
+            "own single search field, applied here to whichever of "
+            "--search/--description-search is actually given."
         )
     )
     list_parser.add_argument(

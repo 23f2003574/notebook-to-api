@@ -3116,6 +3116,7 @@ def list_notebooks(
     offset: int = 0,
     tag: str = None,
     description_search: str = None,
+    regex: bool = False,
     sha256: str = None,
     modified_after: str = None,
     modified_before: str = None,
@@ -3227,6 +3228,27 @@ def list_notebooks(
     "description_search", the same way an untagged notebook already never
     matches "tag".
 
+    "regex" (optional, default false) treats both "search" and
+    "description_search" as case-insensitive Python regular expressions
+    instead of plain substrings -- the identical "regex" GET
+    /api/functions' own "search" (a function name) and GET
+    /api/notebooks/search-content's own "search" (a code cell's raw
+    source) already support, just applied here to a filename and a
+    description at once, since this endpoint has two independent text
+    filters where those each have only one. Useful for the same kind of
+    pattern a plain substring can't express (e.g. every filename matching
+    "^report_2024" to find a specific quarter's uploads, or every
+    description matching "v[0-9]+" to find ones that mention a version
+    number) rather than one specific, already-known substring. Applies
+    uniformly to whichever of "search"/"description_search" is actually
+    given -- there's no way to make one a regex and the other a plain
+    substring in the same call. A "search" or "description_search" that
+    isn't a valid pattern under "regex" is rejected with 400, naming the
+    underlying re.error and which of the two fields it came from, before
+    a single notebook is even read. Leaving "regex" false (the default)
+    behaves exactly as before this -- a plain substring match for either
+    field, byte for byte identical to the previous implementation.
+
     "sha256" filters to the notebook(s) whose exact content currently
     hashes to this value -- the same digest GET /api/notebooks/duplicates
     already groups uploads by, and that GET /api/deploy/history's and GET
@@ -3325,6 +3347,33 @@ def list_notebooks(
             detail="limit must be a positive integer"
         )
 
+    search_pattern = None
+    description_search_pattern = None
+
+    if regex:
+
+        for field_name, field_value in (
+            ("search", search), ("description_search", description_search),
+        ):
+
+            if not field_value:
+                continue
+
+            try:
+                pattern = re.compile(field_value, re.IGNORECASE)
+
+            except re.error as e:
+
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{field_name} is not a valid regular expression: {e}"
+                )
+
+            if field_name == "search":
+                search_pattern = pattern
+            else:
+                description_search_pattern = pattern
+
     modified_after_dt = _parse_iso_datetime_query_param(modified_after, "modified_after")
     modified_before_dt = _parse_iso_datetime_query_param(modified_before, "modified_before")
 
@@ -3358,7 +3407,10 @@ def list_notebooks(
         if not (entry.is_file() and entry.suffix == ".ipynb"):
             continue
 
-        if search and search.lower() not in entry.name.lower():
+        if search_pattern is not None:
+            if not search_pattern.search(entry.name):
+                continue
+        elif search and search.lower() not in entry.name.lower():
             continue
 
         notebook_tags = _read_notebook_tags(entry.name)
@@ -3366,7 +3418,12 @@ def list_notebooks(
         if tag and tag not in notebook_tags:
             continue
 
-        if description_search and (
+        if description_search_pattern is not None:
+            if not description_search_pattern.search(
+                _read_notebook_description(entry.name)
+            ):
+                continue
+        elif description_search and (
             description_search.lower()
             not in _read_notebook_description(entry.name).lower()
         ):

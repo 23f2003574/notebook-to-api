@@ -9347,6 +9347,100 @@ def test_list_notebooks_description_search_excludes_notebooks_without_a_descript
     assert notebooks == []
 
 
+def test_list_notebooks_regex_matches_a_pattern_not_a_literal_substring():
+
+    _upload_sample_notebook("list_regex_report_2024.ipynb")
+    _upload_sample_notebook("list_regex_report_2025.ipynb")
+
+    # A plain substring for "list_regex_report_" alone matches both
+    # notebooks; the pattern below only matches the one ending in
+    # "2024.ipynb".
+    notebooks = client.get(
+        "/api/notebooks",
+        params={"search": r"2024\.ipynb$", "regex": "true"},
+    ).json()["notebooks"]
+
+    assert [nb["filename"] for nb in notebooks] == ["list_regex_report_2024.ipynb"]
+
+
+def test_list_notebooks_regex_is_case_insensitive():
+
+    _upload_sample_notebook("list_regex_CaseTest.ipynb")
+
+    notebooks = client.get(
+        "/api/notebooks",
+        params={"search": "^list_regex_casetest", "regex": "true"},
+    ).json()["notebooks"]
+
+    assert [nb["filename"] for nb in notebooks] == ["list_regex_CaseTest.ipynb"]
+
+
+def test_list_notebooks_regex_false_treats_search_as_a_plain_substring():
+
+    _upload_sample_notebook("list_regex_abc.ipynb")
+
+    # "a.c" would match "abc" as a *regex* (any-character "."), but not
+    # as a literal substring the filename doesn't actually contain.
+    notebooks = client.get(
+        "/api/notebooks",
+        params={"search": "regex_a.c", "regex": "false"},
+    ).json()["notebooks"]
+
+    assert notebooks == []
+
+
+def test_list_notebooks_regex_applies_to_description_search_too():
+
+    _upload_sample_notebook("list_regex_desc.ipynb")
+    client.put(
+        "/api/notebooks/list_regex_desc.ipynb/description",
+        json={"description": "quarterly churn model v2"},
+    )
+
+    notebooks = client.get(
+        "/api/notebooks",
+        params={
+            "search": "list_regex_desc",
+            "description_search": r"v\d+",
+            "regex": "true",
+        },
+    ).json()["notebooks"]
+
+    assert [nb["filename"] for nb in notebooks] == ["list_regex_desc.ipynb"]
+
+    no_match = client.get(
+        "/api/notebooks",
+        params={
+            "search": "list_regex_desc",
+            "description_search": r"v\d{3,}",
+            "regex": "true",
+        },
+    ).json()["notebooks"]
+
+    assert no_match == []
+
+
+def test_list_notebooks_regex_rejects_an_invalid_search_pattern():
+
+    resp = client.get(
+        "/api/notebooks", params={"search": "(unclosed", "regex": "true"}
+    )
+
+    assert resp.status_code == 400
+    assert "search is not a valid regular expression" in resp.json()["detail"]
+
+
+def test_list_notebooks_regex_rejects_an_invalid_description_search_pattern():
+
+    resp = client.get(
+        "/api/notebooks",
+        params={"description_search": "(unclosed", "regex": "true"},
+    )
+
+    assert resp.status_code == 400
+    assert "description_search is not a valid regular expression" in resp.json()["detail"]
+
+
 def test_delete_notebook_removes_its_tags_sidecar_file():
 
     _upload_sample_notebook("tags_delete_single.ipynb")
