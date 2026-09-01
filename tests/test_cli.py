@@ -15477,6 +15477,41 @@ def test_status_command_prints_health_and_config(tmp_path, fake_dashboard):
     assert handler.requests == ["/api/health", "/api/config"]
 
 
+def test_status_command_check_writable_flag_passes_the_query_param_and_prints_results(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "healthy", "service": "notebook-to-api",
+            "compiled_app_present": False, "compiled_at": None,
+            "upload_dir_writable": True, "generated_dir_writable": False,
+        }),
+        _json_response(200, {
+            "status": "success", "max_upload_bytes": 1, "max_batch_upload_files": 1,
+            "max_notebook_versions": 1, "max_tag_length": 1, "max_tags_per_notebook": 1,
+            "deploy_subprocess_timeout_seconds": 1,
+            "notebook_sort_keys": [], "notebook_sort_orders": [],
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["status", "--dashboard-url", dashboard_url, "--check-writable"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "upload directory writable: yes" in proc.stdout
+    assert "generated directory writable: NO" in proc.stdout
+    assert handler.requests == [
+        "/api/health?check_writable=true", "/api/config",
+    ]
+
+
 def test_status_command_reports_no_compiled_app(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

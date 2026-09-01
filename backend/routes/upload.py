@@ -11553,8 +11553,48 @@ def get_generated_file(filename: str):
     }
 
 
+def _directory_is_writable(path: str) -> bool:
+    """Whether `path` -- or, if it doesn't exist yet, its nearest
+    existing ancestor -- actually accepts a write right now, for
+    health_check's own "upload_dir_writable"/"generated_dir_writable"
+    below.
+
+    Checked by actually creating and immediately removing a small,
+    uniquely-named probe file, not by inspecting permission bits (e.g.
+    os.access): those can claim a directory is writable while a
+    read-only bind mount, a full disk, or a filesystem quota still
+    rejects every real write to it -- exactly the failure modes this
+    exists to catch before they surface as a raw, unhelpful 500 from
+    POST /api/upload or POST /api/compile instead.
+
+    GENERATED_DIR (unlike UPLOAD_DIR, always created eagerly at import
+    time above) doesn't exist at all until the first successful compile
+    -- probing its nearest existing ancestor instead answers the
+    question a health check actually cares about here ("would creating
+    it right now succeed") rather than failing the probe outright just
+    because nothing has been compiled yet.
+    """
+
+    directory = Path(path)
+
+    while not directory.is_dir():
+        directory = directory.parent
+
+    probe_path = directory / f".health_write_probe_{uuid.uuid4().hex[:8]}"
+
+    try:
+
+        probe_path.write_bytes(b"")
+        probe_path.unlink()
+
+    except OSError:
+        return False
+
+    return True
+
+
 @router.get("/health")
-def health_check():
+def health_check(check_writable: bool = False):
     """Liveness/readiness probe for the dashboard API.
 
     Before this, GET /api/health returned the exact same static
@@ -11574,18 +11614,40 @@ def health_check():
     /api/download, GET /api/generated/{filename}, and the generated
     Docker image, for the same reason: a health probe has no business
     leaking server-side filesystem layout to whatever's polling it.
+
+    "check_writable" (optional, default false) additionally probes
+    UPLOAD_DIR/GENERATED_DIR (see _directory_is_writable above) and
+    reports the result as "upload_dir_writable"/"generated_dir_writable".
+    Neither "compiled_app_present" nor a plain "the process is up"
+    liveness check catches a data volume that's gone read-only, hit a
+    disk quota, or had its permissions changed out from under this
+    process after startup -- a dashboard in that state keeps reporting
+    "healthy" here right up until the first real POST /api/upload or
+    POST /api/compile fails with a raw, unhelpful 500, with nothing
+    beforehand to warn a caller anything was wrong. Off by default --
+    creating and removing a real probe file on every call is real work
+    a plain liveness check (most callers of this endpoint, hit
+    frequently by a load balancer or Kubernetes probe) doesn't need; a
+    readiness check that specifically wants this can opt in.
     """
 
     _, _, compiled_at, _ = _currently_compiled_notebook_metadata()
 
     compiled_app_present = (Path(GENERATED_DIR) / "app.py").is_file()
 
-    return {
+    response = {
         "status": "healthy",
         "service": "notebook-to-api",
         "compiled_app_present": compiled_app_present,
         "compiled_at": compiled_at if compiled_app_present else None,
     }
+
+    if check_writable:
+
+        response["upload_dir_writable"] = _directory_is_writable(UPLOAD_DIR)
+        response["generated_dir_writable"] = _directory_is_writable(GENERATED_DIR)
+
+    return response
 
 
 @router.get("/config")

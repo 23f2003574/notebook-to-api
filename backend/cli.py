@@ -5209,9 +5209,11 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        health_params = {"check_writable": "true"} if args.check_writable else {}
+
         try:
             health_response = httpx.get(
-                f"{dashboard_url}/api/health", timeout=args.timeout,
+                f"{dashboard_url}/api/health", params=health_params, timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
             raise _dashboard_connection_error(exc, dashboard_url)
@@ -5250,6 +5252,14 @@ def _dispatch_core_command(args):
                 print(f"  compiled app present, last compiled at {health.get('compiled_at')}")
             else:
                 print("  no compiled app yet")
+
+            if "upload_dir_writable" in health:
+                writable = "yes" if health["upload_dir_writable"] else "NO"
+                print(f"  upload directory writable: {writable}")
+
+            if "generated_dir_writable" in health:
+                writable = "yes" if health["generated_dir_writable"] else "NO"
+                print(f"  generated directory writable: {writable}")
 
             print("\nConfigured limits:")
             print(f"  max upload size: {config.get('max_upload_bytes')} bytes")
@@ -9458,6 +9468,20 @@ def main():
         help="Show a running dashboard instance's health and configured limits, via its GET /api/health and GET /api/config."
     )
     _add_dashboard_url_and_timeout_arguments(status_parser)
+    status_parser.add_argument(
+        "--check-writable",
+        action="store_true",
+        dest="check_writable",
+        help=(
+            "Also probe UPLOAD_DIR/GENERATED_DIR for an actual write, "
+            "via GET /api/health's own ?check_writable=true query param "
+            "-- catches a data volume that's gone read-only, hit a disk "
+            "quota, or had its permissions changed since the dashboard "
+            "started, none of which a plain \"is the process up\" health "
+            "check notices on its own. Off by default, since it's real "
+            "extra work most callers of this command don't need."
+        )
+    )
     status_parser.add_argument(
         "--json",
         action="store_true",

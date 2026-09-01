@@ -19119,6 +19119,82 @@ def test_health_check_reports_a_compiled_app_and_its_compiled_at_timestamp():
     assert body["compiled_at"] is not None
 
 
+def test_health_check_omits_writable_fields_by_default():
+
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "upload_dir_writable" not in body
+    assert "generated_dir_writable" not in body
+
+
+def test_health_check_with_check_writable_reports_both_directories_writable():
+
+    resp = client.get("/api/health", params={"check_writable": "true"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["upload_dir_writable"] is True
+    assert body["generated_dir_writable"] is True
+
+
+def test_health_check_check_writable_does_not_leave_a_probe_file_behind():
+
+    resp = client.get("/api/health", params={"check_writable": "true"})
+
+    assert resp.status_code == 200
+
+    assert not any(
+        entry.name.startswith(".health_write_probe_")
+        for entry in Path(UPLOAD_DIR).iterdir()
+    )
+
+
+def test_health_check_check_writable_reports_true_for_a_generated_dir_that_does_not_exist_yet(
+    monkeypatch, tmp_path
+):
+    """GENERATED_DIR (unlike UPLOAD_DIR) isn't created until the first
+    successful compile -- the probe should fall back to the nearest
+    existing ancestor rather than failing outright just because nothing
+    has been compiled yet.
+    """
+
+    from backend.routes import upload as upload_module
+
+    not_yet_created = tmp_path / "generated_health_writable_missing_test"
+    monkeypatch.setattr(upload_module, "GENERATED_DIR", str(not_yet_created))
+
+    resp = client.get("/api/health", params={"check_writable": "true"})
+
+    assert resp.status_code == 200
+    assert resp.json()["generated_dir_writable"] is True
+    assert not not_yet_created.exists()
+
+
+def test_health_check_check_writable_reports_false_for_an_unwritable_directory(
+    monkeypatch, tmp_path
+):
+
+    from backend.routes import upload as upload_module
+
+    readonly_dir = tmp_path / "generated_health_readonly_test"
+    readonly_dir.mkdir()
+    readonly_dir.chmod(0o500)
+
+    monkeypatch.setattr(upload_module, "GENERATED_DIR", str(readonly_dir))
+
+    try:
+
+        resp = client.get("/api/health", params={"check_writable": "true"})
+
+        assert resp.status_code == 200
+        assert resp.json()["generated_dir_writable"] is False
+
+    finally:
+        readonly_dir.chmod(0o700)
+
+
 def test_health_check_never_leaks_the_source_notebooks_server_side_filesystem_path():
     """.compile_metadata.json's "source_notebook" field is the source
     notebook's absolute filesystem path on the compiling server -- the
