@@ -12169,6 +12169,36 @@ def test_versions_restore_command_reports_success(tmp_path, fake_dashboard):
     assert handler.requests == ["/api/notebooks/nb.ipynb/versions/v1.ipynb/restore"]
 
 
+def test_versions_restore_command_dry_run_reports_would_restore_and_sends_dry_run_param(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "restored_version_id": "v1.ipynb", "dry_run": True,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "restore", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would restore 'nb.ipynb' to version 'v1.ipynb'" in proc.stdout
+    assert handler.requests == [
+        "/api/notebooks/nb.ipynb/versions/v1.ipynb/restore?dry_run=true"
+    ]
+
+
 def test_versions_restore_command_json_flag_emits_the_dashboards_own_response(
     tmp_path, fake_dashboard
 ):

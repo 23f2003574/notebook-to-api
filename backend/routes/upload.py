@@ -8120,7 +8120,7 @@ def copy_notebook_versions_batch(filename: str, data: dict):
 
 
 @router.post("/notebooks/{filename}/versions/{version_id}/restore")
-def restore_notebook_version(filename: str, version_id: str):
+def restore_notebook_version(filename: str, version_id: str, dry_run: bool = False):
     """Make a previously snapshotted version `filename`'s current content
     again, undoing one or more overwrites (POST
     /api/upload?overwrite=true).
@@ -8136,6 +8136,21 @@ def restore_notebook_version(filename: str, version_id: str):
     rename_notebook's own check-then-write sequence is held under
     _rename_lock_for: without it, two concurrent restores of the same
     notebook could interleave their own snapshot-then-copy steps.
+
+    "dry_run" (optional, default false) confirms `filename` and
+    `version_id` both exist -- the exact same 404s a real restore would
+    raise -- without actually snapshotting the current content or
+    copying the version over it. POST /api/notebooks/versions/restore-
+    batch's own "dry_run" already provides this same preview for
+    restoring several different notebooks at once, but this single-
+    notebook counterpart (the one every restore-batch entry itself
+    ultimately reduces to) never picked it up -- a caller wanting to
+    confirm a specific restore is even possible (e.g. `version_id` was
+    typed correctly) before actually overwriting a notebook's current
+    content had no way to check that short of doing the restore for
+    real. The response's own "dry_run" field echoes back whether this
+    call actually restored anything, the same convention every other
+    "dry_run" response in this file already follows.
     """
 
     file_path = resolve_upload_path(filename)
@@ -8160,16 +8175,19 @@ def restore_notebook_version(filename: str, version_id: str):
             detail="Notebook version not found"
         )
 
-    with _version_lock_for(file_path.name):
+    if not dry_run:
 
-        _snapshot_current_notebook_version(file_path)
+        with _version_lock_for(file_path.name):
 
-        shutil.copy2(version_path, file_path)
+            _snapshot_current_notebook_version(file_path)
+
+            shutil.copy2(version_path, file_path)
 
     return {
         "status": "success",
         "filename": filename,
         "restored_version_id": version_id,
+        "dry_run": dry_run,
     }
 
 

@@ -4187,9 +4187,12 @@ def _dispatch_core_command(args):
 
         elif args.versions_command == "restore":
 
+            params = {"dry_run": "true"} if args.dry_run else {}
+
             try:
                 response = httpx.post(
                     f"{dashboard_url}/api/notebooks/{args.filename}/versions/{args.version_id}/restore",
+                    params=params,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -4207,8 +4210,11 @@ def _dispatch_core_command(args):
             if args.json_output:
                 print(json.dumps(data, indent=2))
             else:
+
+                verb = "Would restore" if data.get("dry_run") else "Restored"
+
                 print(
-                    f"Restored '{data.get('filename', args.filename)}' to "
+                    f"{verb} '{data.get('filename', args.filename)}' to "
                     f"version '{data.get('restored_version_id', args.version_id)}' "
                     f"on {dashboard_url}"
                 )
@@ -8505,6 +8511,19 @@ def main():
         "version_id",
         help="Version id to restore, as reported by `versions list`."
     )
+    versions_restore_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Confirm the version can be restored -- filename and "
+            "version_id both exist -- via POST "
+            "/api/notebooks/{filename}/versions/{version_id}/restore's "
+            "own \"dry_run\" query param, without actually restoring "
+            "anything. The same preview `restore-batch` already offers "
+            "for restoring several different notebooks at once."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(versions_restore_parser)
     versions_restore_parser.add_argument(
         "--json",
@@ -8512,8 +8531,9 @@ def main():
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response "
-            "({\"status\", \"filename\", \"restored_version_id\"}) "
-            "instead of a human-readable summary, for scripting/automation."
+            "({\"status\", \"filename\", \"restored_version_id\", "
+            "\"dry_run\"}) instead of a human-readable summary, for "
+            "scripting/automation."
         )
     )
 

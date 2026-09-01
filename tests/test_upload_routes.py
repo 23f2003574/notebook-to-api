@@ -11893,9 +11893,55 @@ def test_restore_notebook_version_makes_it_the_current_content_again():
         "status": "success",
         "filename": filename,
         "restored_version_id": version_id,
+        "dry_run": False,
     }
 
     assert (Path(UPLOAD_DIR) / filename).read_bytes() == original_content
+
+
+def test_restore_notebook_version_dry_run_reports_the_plan_without_restoring():
+    """"dry_run" confirms the version exists without actually snapshotting
+    the current content or copying the version over it -- the identical
+    preview POST /api/notebooks/versions/restore-batch's own "dry_run"
+    already provides for restoring several different notebooks at once.
+    """
+
+    filename = "versions_restore_dry_run.ipynb"
+    original_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    current_content = _notebook_bytes("def g() -> int:\n    return 2\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(original_content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(current_content), "application/json")},
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    version_id = versions[0]["version_id"]
+
+    restore_resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/restore",
+        params={"dry_run": "true"},
+    )
+
+    assert restore_resp.status_code == 200
+    assert restore_resp.json() == {
+        "status": "success",
+        "filename": filename,
+        "restored_version_id": version_id,
+        "dry_run": True,
+    }
+
+    # Nothing was actually restored: the current content is unchanged,
+    # and no new snapshot was taken of it.
+    assert (Path(UPLOAD_DIR) / filename).read_bytes() == current_content
+    assert client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"] == versions
 
 
 def test_restore_notebook_version_itself_snapshots_the_content_it_replaces():
