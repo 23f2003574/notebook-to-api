@@ -16,7 +16,11 @@ from pathlib import Path
 from nbformat import ValidationError as NotebookValidationError
 
 # Import the compiler function
-from backend.compiler import compile_notebook, _filter_functions_by_name
+from backend.compiler import (
+    NOTEBOOK_TO_API_VERSION,
+    compile_notebook,
+    _filter_functions_by_name,
+)
 # Import inspector for analysis
 from backend.inspector import (
     DEFAULT_DEV_API_KEY,
@@ -5347,6 +5351,18 @@ def _dispatch_core_command(args):
 
             print(f"Dashboard at {dashboard_url}: {health.get('status')}")
 
+            dashboard_version = health.get("version")
+
+            if dashboard_version is not None:
+
+                if dashboard_version == NOTEBOOK_TO_API_VERSION:
+                    print(f"  version: {dashboard_version} (matches this CLI)")
+                else:
+                    print(
+                        f"  version: {dashboard_version} "
+                        f"(this CLI is {NOTEBOOK_TO_API_VERSION} -- mismatched)"
+                    )
+
             if health.get("compiled_app_present"):
                 print(f"  compiled app present, last compiled at {health.get('compiled_at')}")
             else:
@@ -5379,6 +5395,20 @@ def main():
     parser = argparse.ArgumentParser(
         prog="notebook-to-api",
         description="Compile Jupyter notebooks into FastAPI services and optionally build Docker images."
+    )
+    # NOTEBOOK_TO_API_VERSION (backend/compiler.py) is also what
+    # dashboard.py's own FastAPI(version=...) and GET / already report --
+    # before this, there was no way to ask the CLI itself which version
+    # it was, short of reading its own source, the single most standard
+    # expectation any well-behaved CLI tool already meets. action="version"
+    # prints and exits immediately when given, before subparsers' own
+    # required=True below is ever enforced -- `notebook-to-api --version`
+    # works with no subcommand, exactly like `notebook-to-api --help`
+    # already does.
+    parser.add_argument(
+        "--version", "-V",
+        action="version",
+        version=f"notebook-to-api {NOTEBOOK_TO_API_VERSION}",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 

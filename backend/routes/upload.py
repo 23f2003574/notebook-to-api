@@ -36,6 +36,7 @@ from nbformat import ValidationError as NotebookValidationError
 from backend.compiler import (
     COMPILE_LOCK,
     COMPILE_METADATA_FILENAME,
+    NOTEBOOK_TO_API_VERSION,
     _drop_private_functions,
     _extract_explicit_requirements,
     _filter_functions_by_name,
@@ -11680,6 +11681,19 @@ def health_check(check_writable: bool = False):
     Docker image, for the same reason: a health probe has no business
     leaking server-side filesystem layout to whatever's polling it.
 
+    "version" is this tool's own NOTEBOOK_TO_API_VERSION (backend/
+    compiler.py) -- the identical value GET / (the FastAPI app's own
+    root endpoint, outside the /api/* prefix this dashboard's actual
+    client traffic uses) already reports, just reachable from the one
+    endpoint a caller checking on a dashboard's state -- the CLI's own
+    `status`, chief among them -- already calls. Before this, telling
+    which dashboard version a CLI (or any other client) was actually
+    talking to meant a separate, undocumented GET / call outside this
+    API's own surface, or reading the server's source directly -- the
+    single most common "is my tooling out of sync with what's actually
+    running" question this project's own CLI had no way to answer for
+    itself.
+
     "check_writable" (optional, default false) additionally probes
     UPLOAD_DIR/GENERATED_DIR (see _directory_is_writable above) and
     reports the result as "upload_dir_writable"/"generated_dir_writable".
@@ -11703,6 +11717,7 @@ def health_check(check_writable: bool = False):
     response = {
         "status": "healthy",
         "service": "notebook-to-api",
+        "version": NOTEBOOK_TO_API_VERSION,
         "compiled_app_present": compiled_app_present,
         "compiled_at": compiled_at if compiled_app_present else None,
     }

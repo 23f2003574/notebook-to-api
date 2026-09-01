@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from backend.compiler import (
     COMPILE_LOCK,
     COMPILE_METADATA_FILENAME,
+    NOTEBOOK_TO_API_VERSION,
     compiling_python_version,
     package_name_for_output_dir,
 )
@@ -19368,6 +19369,14 @@ def test_health_check_reports_a_compiled_app_and_its_compiled_at_timestamp():
     assert body["status"] == "healthy"
     assert body["compiled_app_present"] is True
     assert body["compiled_at"] is not None
+
+
+def test_health_check_reports_this_tools_own_version():
+
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 200
+    assert resp.json()["version"] == NOTEBOOK_TO_API_VERSION
 
 
 def test_health_check_omits_writable_fields_by_default():

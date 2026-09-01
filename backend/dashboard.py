@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
+from backend.compiler import NOTEBOOK_TO_API_VERSION
 from backend.routes.upload import router as upload_router
 from backend.observability.deployment_governance_api import (
     register_governance_metrics_middleware,
@@ -106,7 +107,7 @@ from backend.cluster.bootstrap import bootstrap_cluster_subsystem
 app = FastAPI(
     title="notebook-to-api Dashboard",
     description="Transform Jupyter notebooks into production APIs",
-    version="0.1.0"
+    version=NOTEBOOK_TO_API_VERSION
 )
 
 DEFAULT_ALLOWED_ORIGINS = [
@@ -361,7 +362,7 @@ async def root():
     return {
         "status": "running",
         "service": "notebook-to-api Dashboard API",
-        "version": "0.1.0",
+        "version": NOTEBOOK_TO_API_VERSION,
         "docs": "/docs"
     }
 

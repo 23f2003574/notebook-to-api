@@ -7,6 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.compiler import NOTEBOOK_TO_API_VERSION
 from backend.dashboard import (
     app,
     dashboard_host,
@@ -67,7 +68,18 @@ def test_root_endpoint_reports_service_metadata():
     body = resp.json()
     assert body["status"] == "running"
     assert body["service"] == "notebook-to-api Dashboard API"
+    assert body["version"] == NOTEBOOK_TO_API_VERSION
     assert body["docs"] == "/docs"
+
+
+def test_app_own_openapi_version_matches_notebook_to_api_version():
+    """FastAPI(version=...) -- surfaced in the app's own OpenAPI schema
+    and /docs -- must report the identical NOTEBOOK_TO_API_VERSION GET /
+    and GET /api/health already do, not a second, independently-drifting
+    literal.
+    """
+
+    assert app.version == NOTEBOOK_TO_API_VERSION
 
 
 def test_dashboard_module_run_directly_passes_configured_host_and_port_to_uvicorn():

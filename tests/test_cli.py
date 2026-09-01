@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from backend.compiler import NOTEBOOK_TO_API_VERSION
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -71,6 +73,45 @@ def _run_cli(args, cwd):
         text=True,
         timeout=60,
     )
+
+
+def test_version_flag_prints_the_tools_own_version_and_exits_zero(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["--version"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.strip() == f"notebook-to-api {NOTEBOOK_TO_API_VERSION}"
+
+
+def test_version_short_flag_prints_the_same_thing_as_the_long_flag(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    long_proc = _run_cli(["--version"], cwd=workdir)
+    short_proc = _run_cli(["-V"], cwd=workdir)
+
+    assert short_proc.returncode == 0, short_proc.stdout + short_proc.stderr
+    assert short_proc.stdout == long_proc.stdout
+
+
+def test_version_flag_works_with_no_subcommand_given(tmp_path):
+    """Unlike every other flag, --version must not trip the top-level
+    parser's own required=True subparsers -- confirmed this doesn't
+    regress into the same "required: command" argparse error a bare
+    `notebook-to-api` (no args at all) already gets.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["--version"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "required" not in proc.stderr.lower()
 
 
 def test_compile_command_writes_the_generated_app(tmp_path):
@@ -15824,6 +15865,88 @@ def test_status_command_prints_health_and_config(tmp_path, fake_dashboard):
     assert "notebook sort keys: name, size, uploaded_at" in proc.stdout
     assert "Compiling Python version: 3.12" in proc.stdout
     assert handler.requests == ["/api/health", "/api/config"]
+
+
+def test_status_command_reports_a_matching_dashboard_version(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "healthy", "service": "notebook-to-api",
+            "version": NOTEBOOK_TO_API_VERSION,
+            "compiled_app_present": False, "compiled_at": None,
+        }),
+        _json_response(200, {
+            "status": "success", "max_upload_bytes": 1, "max_batch_upload_files": 1,
+            "max_notebook_versions": 1, "max_tag_length": 1, "max_tags_per_notebook": 1,
+            "deploy_subprocess_timeout_seconds": 1,
+            "notebook_sort_keys": [], "notebook_sort_orders": [],
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["status", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"version: {NOTEBOOK_TO_API_VERSION} (matches this CLI)" in proc.stdout
+
+
+def test_status_command_flags_a_mismatched_dashboard_version(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "healthy", "service": "notebook-to-api",
+            "version": "9.9.9",
+            "compiled_app_present": False, "compiled_at": None,
+        }),
+        _json_response(200, {
+            "status": "success", "max_upload_bytes": 1, "max_batch_upload_files": 1,
+            "max_notebook_versions": 1, "max_tag_length": 1, "max_tags_per_notebook": 1,
+            "deploy_subprocess_timeout_seconds": 1,
+            "notebook_sort_keys": [], "notebook_sort_orders": [],
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["status", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (
+        f"version: 9.9.9 (this CLI is {NOTEBOOK_TO_API_VERSION} -- mismatched)"
+        in proc.stdout
+    )
+
+
+def test_status_command_omits_version_line_when_the_dashboard_does_not_report_one(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "healthy", "service": "notebook-to-api",
+            "compiled_app_present": False, "compiled_at": None,
+        }),
+        _json_response(200, {
+            "status": "success", "max_upload_bytes": 1, "max_batch_upload_files": 1,
+            "max_notebook_versions": 1, "max_tag_length": 1, "max_tags_per_notebook": 1,
+            "deploy_subprocess_timeout_seconds": 1,
+            "notebook_sort_keys": [], "notebook_sort_orders": [],
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["status", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "\n  version:" not in proc.stdout
 
 
 def test_status_command_check_writable_flag_passes_the_query_param_and_prints_results(

@@ -31,6 +31,21 @@ STANDARD_LIBS = set(sys.stdlib_module_names)
 # package_name_for_output_dir's own-package collision check below.
 THIS_TOOLS_OWN_PACKAGE_NAME = __name__.partition(".")[0]
 
+# This tool's own version -- previously duplicated as two independent
+# "0.1.0" string literals (backend/dashboard.py's own FastAPI(version=...)
+# and its GET / root endpoint's own "version" field), with nothing
+# enforcing they'd ever be bumped together, and no way for the CLI to
+# report its own version at all (no --version flag existed, and
+# backend/cli.py deliberately never imports from backend.dashboard --
+# doing so would drag in that module's own FastAPI app and every
+# unrelated subsystem router it mounts, just for a version string).
+# backend/compiler.py is the one lightweight module both already import
+# from at module level, so this is the one place a caller on either side
+# reads it from -- bump this single constant and both dashboard.py's
+# responses and the CLI's own --version follow automatically, with no way
+# for them to drift out of sync with each other again.
+NOTEBOOK_TO_API_VERSION = "0.1.0"
+
 # Ensure project root is in sys.path for proper imports
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
