@@ -5182,6 +5182,19 @@ def get_notebook(filename: str):
     actual content again through the API -- a dashboard frontend could
     show a list of uploaded notebooks but never let a user view or
     re-download one, only re-upload a fresh copy from scratch.
+
+    The "X-Content-SHA256" response header reports the exact bytes'
+    own sha256 -- the same hash_notebook_file (backend/compiler.py)
+    POST /api/upload's own response, GET /api/notebooks?sha256=, and GET
+    /api/notebooks/duplicates already compute for identical content --
+    so a caller downloading a notebook to verify its integrity (a CI
+    pipeline, a backup script, or a plain `download`-then-verify
+    workflow) can confirm it in this one request instead of a second,
+    redundant GET /api/notebooks/{filename}/info call just to read a
+    hash this endpoint already has the bytes in hand to compute anyway.
+    The identical "avoid a second round trip for a fact already
+    computed while serving the file" reasoning GET /api/download's own
+    "X-Notebook-Changed-Since-Compile" header already established.
     """
 
     file_path = resolve_upload_path(filename)
@@ -5197,6 +5210,9 @@ def get_notebook(filename: str):
         path=file_path,
         media_type="application/x-ipynb+json",
         filename=filename,
+        headers={
+            "X-Content-SHA256": hash_notebook_file(file_path),
+        },
     )
 
 

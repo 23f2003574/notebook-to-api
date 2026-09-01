@@ -4983,7 +4983,86 @@ def test_download_command_json_flag_emits_a_machine_readable_result(
         "filename": "nb.ipynb",
         "path": "nb.ipynb",
         "size_bytes": len(notebook_bytes),
+        "sha256": None,
     }
+
+
+def test_download_command_prints_and_reports_the_content_sha256_header(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    notebook_bytes = b'{"cells": [], "nbformat": 4, "nbformat_minor": 5, "metadata": {}}'
+    handler.responses = [_raw_response(200, notebook_bytes)]
+    handler.response_headers = [{"X-Content-SHA256": "abc123"}]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["download", "nb.ipynb", "--dashboard-url", dashboard_url], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "sha256: abc123" in proc.stdout
+
+    handler.responses = [_raw_response(200, notebook_bytes)]
+    handler.response_headers = [{"X-Content-SHA256": "abc123"}]
+
+    proc = _run_cli(
+        ["download", "nb.ipynb", "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout)["sha256"] == "abc123"
+
+
+def test_download_command_expected_sha256_succeeds_on_a_match(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    notebook_bytes = b'{"cells": [], "nbformat": 4, "nbformat_minor": 5, "metadata": {}}'
+    handler.responses = [_raw_response(200, notebook_bytes)]
+    handler.response_headers = [{"X-Content-SHA256": "abc123"}]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "download", "nb.ipynb", "--dashboard-url", dashboard_url,
+            "--expected-sha256", "abc123",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "nb.ipynb").read_bytes() == notebook_bytes
+
+
+def test_download_command_expected_sha256_fails_on_a_mismatch_and_writes_nothing(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    notebook_bytes = b'{"cells": [], "nbformat": 4, "nbformat_minor": 5, "metadata": {}}'
+    handler.responses = [_raw_response(200, notebook_bytes)]
+    handler.response_headers = [{"X-Content-SHA256": "abc123"}]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "download", "nb.ipynb", "--dashboard-url", dashboard_url,
+            "--expected-sha256", "does-not-match",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode != 0
+    assert "does not match" in (proc.stdout + proc.stderr)
+    assert not (workdir / "nb.ipynb").exists()
 
 
 def test_download_command_reports_a_clean_error_for_a_missing_notebook(

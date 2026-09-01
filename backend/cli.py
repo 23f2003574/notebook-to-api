@@ -2085,6 +2085,16 @@ def _dispatch_core_command(args):
                 f"{_extract_dashboard_error_detail(response)}"
             )
 
+        sha256 = response.headers.get("x-content-sha256")
+
+        if args.expected_sha256 and args.expected_sha256 != sha256:
+
+            raise RuntimeError(
+                f"Downloaded content's sha256 ({sha256}) does not match "
+                f"the expected value ({args.expected_sha256}) -- nothing "
+                "was written to disk."
+            )
+
         output_path = args.output or args.filename
 
         with open(output_path, "wb") as f:
@@ -2097,6 +2107,7 @@ def _dispatch_core_command(args):
                     "filename": args.filename,
                     "path": output_path,
                     "size_bytes": len(response.content),
+                    "sha256": sha256,
                 },
                 indent=2,
             ))
@@ -2105,6 +2116,8 @@ def _dispatch_core_command(args):
                 f"Downloaded '{args.filename}' from {dashboard_url} to "
                 f"{output_path} ({len(response.content)} bytes)"
             )
+            if sha256:
+                print(f"  sha256: {sha256}")
     elif args.command == "export-notebooks":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -6534,13 +6547,29 @@ def main():
         help="Path to save the downloaded notebook to. Default: the notebook's own filename, in the current directory."
     )
     download_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "Verify the downloaded content's own hash matches this "
+            "value -- read from the response's own \"X-Content-SHA256\" "
+            "header, the same hash GET /api/notebooks/{filename} itself "
+            "now reports -- before writing anything to disk, exiting "
+            "with an error on a mismatch instead. The download-side "
+            "complement to `upload --expected-sha256`, which verifies "
+            "integrity on the way in instead of the way back out."
+        )
+    )
+    download_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit a machine-readable JSON result "
-            "({\"status\", \"filename\", \"path\", \"size_bytes\"}) "
-            "instead of a human-readable summary, for scripting/automation."
+            "({\"status\", \"filename\", \"path\", \"size_bytes\", "
+            "\"sha256\"}) instead of a human-readable summary, for "
+            "scripting/automation."
         )
     )
 

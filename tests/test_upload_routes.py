@@ -3192,6 +3192,70 @@ def test_get_notebook_returns_the_uploaded_content():
     assert json.loads(get_resp.content) == json.loads(content)
 
 
+def test_get_notebook_reports_the_content_sha256_header():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={"file": ("get_sha256.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get("/api/notebooks/get_sha256.ipynb")
+
+    assert resp.status_code == 200
+    assert resp.headers["x-content-sha256"] == hashlib.sha256(resp.content).hexdigest()
+
+
+def test_get_notebook_content_sha256_header_matches_the_upload_responses_own_sha256():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={"file": ("get_sha256_matches_upload.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    get_resp = client.get("/api/notebooks/get_sha256_matches_upload.ipynb")
+
+    assert get_resp.headers["x-content-sha256"] == upload_resp.json()["sha256"]
+
+
+def test_get_notebook_content_sha256_header_changes_after_overwrite():
+
+    filename = "get_sha256_overwrite.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    first_sha256 = client.get(f"/api/notebooks/{filename}").headers["x-content-sha256"]
+
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    second_sha256 = client.get(f"/api/notebooks/{filename}").headers["x-content-sha256"]
+
+    assert first_sha256 != second_sha256
+
+
 def test_get_notebook_returns_404_for_missing_file():
 
     resp = client.get("/api/notebooks/does_not_exist_at_all.ipynb")
