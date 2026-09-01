@@ -4654,7 +4654,7 @@ def notebook_storage_usage(
 
 
 @router.delete("/notebooks")
-def delete_all_notebooks(confirm: bool = False, tag: str = None):
+def delete_all_notebooks(confirm: bool = False, tag: str = None, dry_run: bool = False):
     """Remove every uploaded notebook in UPLOAD_DIR at once.
 
     GET /api/notebooks and DELETE /api/generated already form a
@@ -4719,15 +4719,28 @@ def delete_all_notebooks(confirm: bool = False, tag: str = None):
     "never touched at all" guarantee GET /api/notebooks?tag= already
     gives an out-of-tag entry in its own response. Omitted, every
     notebook is deleted exactly as before "tag" existed.
+
+    "dry_run" (optional, default false) reports the exact same
+    "deleted_filenames"/"currently_compiled_notebook_deleted" a real call
+    would, without removing a single file -- the identical preview POST
+    /api/notebooks/delete-batch's own "dry_run" already provides for a
+    caller-chosen list of notebooks, applied here to this endpoint's own
+    catalog-wide (optionally "tag"-scoped) sweep instead. Bypasses the
+    "?confirm=true" requirement above entirely: that opt-in exists to
+    gate an actual, irreversible deletion, and a dry run never deletes
+    anything -- requiring it too would just be friction against the one
+    thing "dry_run" exists for, previewing what a real call (with
+    "confirm=true") would do before deciding whether to send it at all.
     """
 
-    if not confirm:
+    if not confirm and not dry_run:
 
         raise HTTPException(
             status_code=400,
             detail=(
                 "This deletes every uploaded notebook. Pass "
-                '"?confirm=true" to proceed.'
+                '"?confirm=true" to proceed, or "?dry_run=true" to preview '
+                "what would be deleted without deleting anything."
             )
         )
 
@@ -4749,14 +4762,18 @@ def delete_all_notebooks(confirm: bool = False, tag: str = None):
         if compiled_path is not None and entry.resolve() == compiled_path:
             currently_compiled_notebook_deleted = True
 
-        os.remove(entry)
-        _tags_sidecar_path(entry.name).unlink(missing_ok=True)
-        _description_sidecar_path(entry.name).unlink(missing_ok=True)
-        shutil.rmtree(_notebook_versions_dir(entry.name), ignore_errors=True)
+        if not dry_run:
+
+            os.remove(entry)
+            _tags_sidecar_path(entry.name).unlink(missing_ok=True)
+            _description_sidecar_path(entry.name).unlink(missing_ok=True)
+            shutil.rmtree(_notebook_versions_dir(entry.name), ignore_errors=True)
+
         deleted_filenames.append(entry.name)
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "deleted_count": len(deleted_filenames),
         "deleted_filenames": deleted_filenames,
         "currently_compiled_notebook_deleted": currently_compiled_notebook_deleted,
@@ -4899,7 +4916,7 @@ def prune_all_notebook_versions(
 
 
 @router.delete("/notebooks/{filename}")
-def delete_notebook(filename: str):
+def delete_notebook(filename: str, dry_run: bool = False):
     """Delete a previously uploaded notebook.
 
     Reuses resolve_upload_path for the same traversal protection already
@@ -4923,6 +4940,13 @@ def delete_notebook(filename: str):
     delete_all_notebooks' own identical cleanup above for why any one
     left behind must not silently carry over to a future notebook
     re-uploaded under the same filename.
+
+    "dry_run" (optional, default false) reports the exact same
+    "was_currently_compiled" a real delete would, without removing the
+    file or any sidecar/version-history alongside it -- the identical
+    preview POST /api/notebooks/delete-batch's own "dry_run" already
+    provides for deleting several notebooks at once, applied here to
+    this endpoint's own single notebook instead.
     """
 
     file_path = resolve_upload_path(filename)
@@ -4940,22 +4964,25 @@ def delete_notebook(filename: str):
         compiled_path is not None and file_path.resolve() == compiled_path
     )
 
-    try:
+    if not dry_run:
 
-        os.remove(file_path)
-        _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
-        _description_sidecar_path(file_path.name).unlink(missing_ok=True)
-        shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
+        try:
 
-    except Exception as e:
+            os.remove(file_path)
+            _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
+            _description_sidecar_path(file_path.name).unlink(missing_ok=True)
+            shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
 
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+        except Exception as e:
+
+            raise HTTPException(
+                status_code=500,
+                detail=str(e)
+            )
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "filename": filename,
         "was_currently_compiled": was_currently_compiled,
     }
@@ -8141,7 +8168,7 @@ def restore_notebook_versions_batch(data: dict):
 
 
 @router.delete("/notebooks/{filename}/versions/{version_id}")
-def delete_notebook_version(filename: str, version_id: str):
+def delete_notebook_version(filename: str, version_id: str, dry_run: bool = False):
     """Permanently discard one of a notebook's snapshotted previous
     versions, by the "version_id" GET
     /api/notebooks/{filename}/versions already lists.
@@ -8169,6 +8196,13 @@ def delete_notebook_version(filename: str, version_id: str):
     notebook it belongs to, and has no bulk/"delete every version"
     equivalent -- an operator wanting that already has it, via `versions
     list` piped into one call per version_id.
+
+    "dry_run" (optional, default false) confirms `version_id` exists and
+    reports the exact same "deleted_version_id" a real call would,
+    without discarding it -- the identical preview POST
+    /api/notebooks/{filename}/versions/delete-batch's own "dry_run"
+    already provides for discarding several versions at once, applied
+    here to this endpoint's own single version instead.
     """
 
     file_path = resolve_upload_path(filename)
@@ -8193,12 +8227,15 @@ def delete_notebook_version(filename: str, version_id: str):
             detail="Notebook version not found"
         )
 
-    with _version_lock_for(file_path.name):
+    if not dry_run:
 
-        version_path.unlink()
+        with _version_lock_for(file_path.name):
+
+            version_path.unlink()
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "filename": filename,
         "deleted_version_id": version_id,
     }

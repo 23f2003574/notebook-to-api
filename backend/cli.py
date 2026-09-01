@@ -2175,8 +2175,11 @@ def _dispatch_core_command(args):
             # it does anything (routes/upload.py) -- always passed here
             # once this prompt (or --yes) has already confirmed the same
             # thing on this side, so the two confirmation steps never
-            # double-prompt a caller who already said yes once.
-            if not args.yes:
+            # double-prompt a caller who already said yes once. Neither
+            # the prompt nor "confirm" is sent at all under --dry-run,
+            # which never deletes anything -- the endpoint's own "dry_run"
+            # bypasses its "confirm" requirement for the identical reason.
+            if not args.dry_run and not args.yes:
                 target = (
                     f"every notebook tagged '{args.tag}'" if args.tag
                     else "ALL uploaded notebooks"
@@ -2186,7 +2189,11 @@ def _dispatch_core_command(args):
                     print("Aborted.")
                     return
 
-            params = {"confirm": "true"}
+            params = {}
+            if args.dry_run:
+                params["dry_run"] = "true"
+            else:
+                params["confirm"] = "true"
             if args.tag:
                 params["tag"] = args.tag
 
@@ -2212,6 +2219,7 @@ def _dispatch_core_command(args):
                 print(json.dumps(data, indent=2))
             else:
 
+                verb = "Would delete" if data.get("dry_run") else "Deleted"
                 deleted_filenames = data.get("deleted_filenames", [])
 
                 if not deleted_filenames:
@@ -2219,11 +2227,12 @@ def _dispatch_core_command(args):
                 else:
 
                     for filename in deleted_filenames:
-                        print(f"Deleted '{filename}'")
+                        print(f"{verb} '{filename}'")
 
                     print(
                         f"\n{data.get('deleted_count', len(deleted_filenames))} "
-                        f"notebook(s) deleted from {dashboard_url}"
+                        f"notebook(s) {'would be ' if data.get('dry_run') else ''}"
+                        f"deleted from {dashboard_url}"
                     )
 
                 if data.get("currently_compiled_notebook_deleted"):
@@ -2236,21 +2245,25 @@ def _dispatch_core_command(args):
             # /api/notebooks, so a script relying on this command's
             # original single-file output/exit-code shape keeps working
             # exactly as it did.
-            if not args.yes:
+            if not args.dry_run and not args.yes:
                 # DELETE /api/notebooks/{filename} (routes/upload.py) has
                 # no confirmation step of its own and is irreversible --
                 # unlike `upload --overwrite`/`rename --overwrite`,
                 # there's no non-destructive default to fall back to
                 # here, so this asks on the terminal instead. --yes skips
-                # the prompt for scripting/automation.
+                # the prompt for scripting/automation; --dry-run skips it
+                # too, since nothing irreversible happens under it.
                 answer = input(f"Delete '{args.filename}' from {dashboard_url}? [y/N] ")
                 if answer.strip().lower() not in ("y", "yes"):
                     print("Aborted.")
                     return
 
+            params = {"dry_run": "true"} if args.dry_run else {}
+
             try:
                 response = httpx.delete(
                     f"{dashboard_url}/api/notebooks/{args.filename}",
+                    params=params,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -2268,7 +2281,10 @@ def _dispatch_core_command(args):
             if args.json_output:
                 print(json.dumps(data, indent=2))
             else:
-                print(f"Deleted '{data.get('filename', args.filename)}' from {dashboard_url}")
+
+                verb = "Would delete" if data.get("dry_run") else "Deleted"
+
+                print(f"{verb} '{data.get('filename', args.filename)}' from {dashboard_url}")
                 if data.get("was_currently_compiled"):
                     print("  note: this was the notebook backing the currently compiled app.")
     elif args.command == "delete-batch":
@@ -4236,11 +4252,12 @@ def _dispatch_core_command(args):
 
         elif args.versions_command == "delete":
 
-            if not args.yes:
+            if not args.dry_run and not args.yes:
                 # DELETE /api/notebooks/{filename}/versions/{version_id}
                 # (routes/upload.py) has no confirmation step of its own
                 # and is irreversible -- the same reasoning `delete`'s own
-                # single-filename path above already applies.
+                # single-filename path above already applies. Not asked
+                # at all under --dry-run, which never discards anything.
                 answer = input(
                     f"Permanently delete version '{args.version_id}' of "
                     f"'{args.filename}' from {dashboard_url}? [y/N] "
@@ -4249,9 +4266,12 @@ def _dispatch_core_command(args):
                     print("Aborted.")
                     return
 
+            params = {"dry_run": "true"} if args.dry_run else {}
+
             try:
                 response = httpx.delete(
                     f"{dashboard_url}/api/notebooks/{args.filename}/versions/{args.version_id}",
+                    params=params,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -4269,8 +4289,11 @@ def _dispatch_core_command(args):
             if args.json_output:
                 print(json.dumps(data, indent=2))
             else:
+
+                verb = "Would delete" if data.get("dry_run") else "Deleted"
+
                 print(
-                    f"Deleted version "
+                    f"{verb} version "
                     f"'{data.get('deleted_version_id', args.version_id)}' of "
                     f"'{data.get('filename', args.filename)}' on {dashboard_url}"
                 )
@@ -6474,13 +6497,29 @@ def main():
         )
     )
     delete_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report what would be deleted (one filename, or, with --all, "
+            "every matching one), via DELETE /api/notebooks/{filename} or "
+            "DELETE /api/notebooks's own \"dry_run\" query param, without "
+            "deleting anything -- the same preview `delete-batch` already "
+            "offers for deleting several named notebooks at once. Skips "
+            "the confirmation prompt --yes would otherwise require (and, "
+            "with --all, the endpoint's own \"?confirm=true\" requirement "
+            "too), since nothing irreversible happens."
+        )
+    )
+    delete_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response -- "
-            "{\"status\", \"filename\", \"was_currently_compiled\"} for a "
-            "single filename, or {\"status\", \"deleted_count\", "
+            "{\"status\", \"dry_run\", \"filename\", "
+            "\"was_currently_compiled\"} for a single filename, or "
+            "{\"status\", \"dry_run\", \"deleted_count\", "
             "\"deleted_filenames\", \"currently_compiled_notebook_deleted\"} "
             "for --all -- instead of a human-readable summary, for "
             "scripting/automation."
@@ -8180,13 +8219,29 @@ def main():
         )
     )
     versions_delete_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Confirm the version exists and report what would be "
+            "discarded, via DELETE "
+            "/api/notebooks/{filename}/versions/{version_id}'s own "
+            "\"dry_run\" query param, without discarding it -- the same "
+            "preview `versions delete-batch` already offers for "
+            "discarding several versions at once. Skips the confirmation "
+            "prompt --yes would otherwise require, since nothing "
+            "irreversible happens."
+        )
+    )
+    versions_delete_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response "
-            "({\"status\", \"filename\", \"deleted_version_id\"}) instead "
-            "of a human-readable summary, for scripting/automation."
+            "({\"status\", \"dry_run\", \"filename\", "
+            "\"deleted_version_id\"}) instead of a human-readable "
+            "summary, for scripting/automation."
         )
     )
 

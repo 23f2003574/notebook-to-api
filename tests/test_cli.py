@@ -5168,6 +5168,31 @@ def test_delete_command_reports_success_with_yes_flag(tmp_path, fake_dashboard):
     assert handler.requests == ["/api/notebooks/nb.ipynb"]
 
 
+def test_delete_command_dry_run_skips_the_prompt_and_prints_would_delete(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": True,
+            "filename": "nb.ipynb", "was_currently_compiled": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["delete", "nb.ipynb", "--dashboard-url", dashboard_url, "--dry-run"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would delete 'nb.ipynb'" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb?dry_run=true"]
+
+
 def test_delete_command_flags_when_the_currently_compiled_notebook_was_deleted(
     tmp_path, fake_dashboard
 ):
@@ -5308,6 +5333,35 @@ def test_delete_command_all_flag_reports_success_with_yes_flag(tmp_path, fake_da
     assert "Deleted 'b.ipynb'" in proc.stdout
     assert "2 notebook(s) deleted" in proc.stdout
     assert handler.requests == ["/api/notebooks?confirm=true"]
+
+
+def test_delete_command_all_flag_dry_run_skips_the_prompt_and_prints_would_delete(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": True,
+            "deleted_count": 2,
+            "deleted_filenames": ["a.ipynb", "b.ipynb"],
+            "currently_compiled_notebook_deleted": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["delete", "--all", "--dashboard-url", dashboard_url, "--dry-run"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would delete 'a.ipynb'" in proc.stdout
+    assert "Would delete 'b.ipynb'" in proc.stdout
+    assert "2 notebook(s) would be deleted" in proc.stdout
+    assert handler.requests == ["/api/notebooks?dry_run=true"]
 
 
 def test_delete_command_all_flag_reports_nothing_to_delete(tmp_path, fake_dashboard):
@@ -11580,6 +11634,34 @@ def test_versions_delete_command_reports_success_with_yes_flag(
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "Deleted version 'v1.ipynb' of 'nb.ipynb'" in proc.stdout
     assert handler.requests == ["/api/notebooks/nb.ipynb/versions/v1.ipynb"]
+
+
+def test_versions_delete_command_dry_run_skips_the_prompt_and_prints_would_delete(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": True, "filename": "nb.ipynb",
+            "deleted_version_id": "v1.ipynb",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "delete", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would delete version 'v1.ipynb' of 'nb.ipynb'" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions/v1.ipynb?dry_run=true"]
 
 
 def test_versions_delete_command_json_flag_emits_the_dashboards_own_response(
