@@ -2955,10 +2955,14 @@ def _dispatch_core_command(args):
 
         elif args.tags_command == "set":
 
+            set_tags_body = {"tags": args.tag}
+            if args.dry_run:
+                set_tags_body["dry_run"] = True
+
             try:
                 response = httpx.put(
                     f"{dashboard_url}/api/notebooks/{args.filename}/tags",
-                    json={"tags": args.tag},
+                    json=set_tags_body,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -2977,7 +2981,8 @@ def _dispatch_core_command(args):
                 print(json.dumps(data, indent=2))
             else:
                 tags = data.get("tags", [])
-                print(f"{args.filename} tags set to: {', '.join(tags) if tags else '(none)'}")
+                verb = "would be set to" if data.get("dry_run") else "set to"
+                print(f"{args.filename} tags {verb}: {', '.join(tags) if tags else '(none)'}")
 
         else:  # args.tags_command == "set-batch"
 
@@ -3077,10 +3082,14 @@ def _dispatch_core_command(args):
 
         elif args.description_command == "set":
 
+            set_description_body = {"description": args.description}
+            if args.dry_run:
+                set_description_body["dry_run"] = True
+
             try:
                 response = httpx.put(
                     f"{dashboard_url}/api/notebooks/{args.filename}/description",
-                    json={"description": args.description},
+                    json=set_description_body,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -3099,8 +3108,9 @@ def _dispatch_core_command(args):
                 print(json.dumps(data, indent=2))
             else:
                 description = data.get("description", "")
+                verb = "would be set to" if data.get("dry_run") else "set to"
                 print(
-                    f"{args.filename} description set to: "
+                    f"{args.filename} description {verb}: "
                     f"{description if description else '(cleared)'}"
                 )
 
@@ -7272,13 +7282,26 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(tags_set_parser)
     tags_set_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report the validated, normalized tag set a real call would "
+            "record, via PUT /api/notebooks/{filename}/tags's own "
+            "\"dry_run\" body field, without replacing the notebook's "
+            "own existing tags -- the same preview `tags set-batch` "
+            "already offers for replacing several notebooks' tags at "
+            "once."
+        )
+    )
+    tags_set_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response "
-            "({\"status\", \"filename\", \"tags\"}) instead of a "
-            "human-readable summary, for scripting/automation."
+            "({\"status\", \"dry_run\", \"filename\", \"tags\"}) instead "
+            "of a human-readable summary, for scripting/automation."
         )
     )
 
@@ -7380,13 +7403,26 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(description_set_parser)
     description_set_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report the validated, normalized description a real call "
+            "would record, via PUT /api/notebooks/{filename}"
+            "/description's own \"dry_run\" body field, without "
+            "replacing the notebook's own existing description -- the "
+            "same preview `description set-batch` already offers for "
+            "replacing several notebooks' descriptions at once."
+        )
+    )
+    description_set_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response "
-            "({\"status\", \"filename\", \"description\"}) instead of a "
-            "human-readable summary, for scripting/automation."
+            "({\"status\", \"dry_run\", \"filename\", \"description\"}) "
+            "instead of a human-readable summary, for scripting/automation."
         )
     )
 

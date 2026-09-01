@@ -7293,6 +7293,7 @@ def test_set_notebook_tags_persists_and_is_readable_back():
     assert set_resp.status_code == 200
     assert set_resp.json() == {
         "status": "success",
+        "dry_run": False,
         "filename": "tags_persist.ipynb",
         "tags": ["bug", "production"],
     }
@@ -7300,6 +7301,30 @@ def test_set_notebook_tags_persists_and_is_readable_back():
     get_resp = client.get("/api/notebooks/tags_persist.ipynb/tags")
 
     assert get_resp.json()["tags"] == ["bug", "production"]
+
+
+def test_set_notebook_tags_dry_run_reports_the_normalized_tags_without_writing():
+
+    _upload_sample_notebook("tags_dry_run.ipynb")
+    client.put("/api/notebooks/tags_dry_run.ipynb/tags", json={"tags": ["stale"]})
+
+    resp = client.put(
+        "/api/notebooks/tags_dry_run.ipynb/tags",
+        json={"tags": [" Production ", "Production"], "dry_run": True},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "success",
+        "dry_run": True,
+        "filename": "tags_dry_run.ipynb",
+        "tags": ["Production"],
+    }
+
+    # Nothing was actually written.
+    assert client.get(
+        "/api/notebooks/tags_dry_run.ipynb/tags"
+    ).json()["tags"] == ["stale"]
 
 
 def test_set_notebook_tags_strips_whitespace_and_deduplicates():
@@ -7618,12 +7643,40 @@ def test_set_notebook_description_persists_and_is_readable_back():
     assert set_resp.status_code == 200
     assert set_resp.json() == {
         "status": "success",
+        "dry_run": False,
         "filename": "description_persist.ipynb",
         "description": "The quarterly churn model, retrained monthly.",
     }
 
     get_resp = client.get("/api/notebooks/description_persist.ipynb/description")
     assert get_resp.json()["description"] == "The quarterly churn model, retrained monthly."
+
+
+def test_set_notebook_description_dry_run_reports_the_normalized_value_without_writing():
+
+    _upload_sample_notebook("description_dry_run.ipynb")
+    client.put(
+        "/api/notebooks/description_dry_run.ipynb/description",
+        json={"description": "stale"},
+    )
+
+    resp = client.put(
+        "/api/notebooks/description_dry_run.ipynb/description",
+        json={"description": "  a new description  ", "dry_run": True},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "success",
+        "dry_run": True,
+        "filename": "description_dry_run.ipynb",
+        "description": "a new description",
+    }
+
+    # Nothing was actually written.
+    assert client.get(
+        "/api/notebooks/description_dry_run.ipynb/description"
+    ).json()["description"] == "stale"
 
 
 def test_set_notebook_description_strips_surrounding_whitespace():

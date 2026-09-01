@@ -6319,6 +6319,17 @@ def set_notebook_tags(filename: str, data: dict):
     /api/deploy's own "tag" (a Docker image tag, an unrelated concept)
     and "platform" fields already are elsewhere in this file for a
     non-string value.
+
+    "dry_run" (optional, default false) reports the exact same
+    validated, normalized "tags" a real call would, without replacing
+    the notebook's own recorded tags -- the identical preview POST
+    /api/notebooks/tags-batch's own "dry_run" already provides for
+    replacing several notebooks' tags at once, applied here to this
+    endpoint's own single notebook instead. Useful for the same reason
+    it's useful there: this is a full replace that silently discards
+    whatever tags the notebook already had, and there was previously no
+    way to check what a call would validate/normalize "tags" down to
+    without actually overwriting the notebook's existing set first.
     """
 
     file_path = resolve_upload_path(filename)
@@ -6332,10 +6343,14 @@ def set_notebook_tags(filename: str, data: dict):
 
     tags = _validate_and_normalize_tags(data.get("tags", []))
 
-    _write_notebook_tags(file_path.name, tags)
+    dry_run = bool(data.get("dry_run", False))
+
+    if not dry_run:
+        _write_notebook_tags(file_path.name, tags)
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "filename": filename,
         "tags": tags,
     }
@@ -6512,6 +6527,15 @@ def set_notebook_description(filename: str, data: dict):
     characters after stripping leading/trailing whitespace -- an invalid
     value is rejected with 400, the same way PUT .../tags' own "tags"
     field already is for a non-list value.
+
+    "dry_run" (optional, default false) reports the exact same
+    validated, normalized "description" a real call would, without
+    replacing the notebook's own recorded description -- the identical
+    preview POST /api/notebooks/description-batch's own "dry_run"
+    already provides for replacing several notebooks' descriptions at
+    once, applied here to this endpoint's own single notebook instead,
+    the same reasoning PUT .../tags' own "dry_run" now provides there
+    too.
     """
 
     file_path = resolve_upload_path(filename)
@@ -6525,10 +6549,14 @@ def set_notebook_description(filename: str, data: dict):
 
     description = _validate_and_normalize_description(data.get("description", ""))
 
-    _write_notebook_description(file_path.name, description)
+    dry_run = bool(data.get("dry_run", False))
+
+    if not dry_run:
+        _write_notebook_description(file_path.name, description)
 
     return {
         "status": "success",
+        "dry_run": dry_run,
         "filename": filename,
         "description": description,
     }

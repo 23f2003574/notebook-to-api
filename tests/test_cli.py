@@ -7932,6 +7932,34 @@ def test_tags_set_command_replaces_the_notebooks_tags(tmp_path, fake_dashboard):
     assert json.loads(handler.bodies[0]) == {"tags": ["prod", "v2"]}
 
 
+def test_tags_set_command_dry_run_sends_dry_run_and_prints_would_be_set_to(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": True,
+            "filename": "nb.ipynb", "tags": ["prod", "v2"],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "tags", "set", "nb.ipynb", "prod", "v2",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nb.ipynb tags would be set to: prod, v2" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {"tags": ["prod", "v2"], "dry_run": True}
+
+
 def test_tags_set_command_with_no_tags_clears_them(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
@@ -8287,6 +8315,36 @@ def test_description_set_command_replaces_the_notebooks_description(tmp_path, fa
     assert "nb.ipynb description set to: new description" in proc.stdout
     assert handler.requests == ["/api/notebooks/nb.ipynb/description"]
     assert json.loads(handler.bodies[0]) == {"description": "new description"}
+
+
+def test_description_set_command_dry_run_sends_dry_run_and_prints_would_be_set_to(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": True,
+            "filename": "nb.ipynb", "description": "new description",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "description", "set", "nb.ipynb", "new description",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nb.ipynb description would be set to: new description" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "description": "new description", "dry_run": True,
+    }
 
 
 def test_description_set_command_with_empty_string_clears_it(tmp_path, fake_dashboard):
