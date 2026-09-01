@@ -495,6 +495,65 @@ def test_inspect_notebook_report_omits_an_excluded_import(tmp_path, capsys):
     assert "- nbformat" in dependencies_section
 
 
+def test_inspect_notebook_data_reports_an_excluded_import_separately(tmp_path):
+    """A "# notebook-to-api: exclude <import-name>" directive silently
+    drops the named import from "dependencies" -- but before this,
+    nothing reported *which* import(s) were dropped, indistinguishable
+    from one simply never imported at all. The identical "silently
+    dropped, but surfaced separately" precedent "private_functions"
+    already sets for "# notebook-to-api: private".
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: exclude pandas\n"
+        "import pandas as pd\n"
+        "import nbformat\n\n"
+        "def summarize(count: int) -> int:\n    return count * 2\n",
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    assert data["excluded_imports"] == ["pandas"]
+    assert "pandas" not in data["dependencies"]
+    assert "nbformat" in data["dependencies"]
+
+
+def test_inspect_notebook_data_excluded_imports_is_empty_for_a_clean_notebook(
+    tmp_path,
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    assert data["excluded_imports"] == []
+
+
+def test_inspect_notebook_report_lists_an_excluded_import_section(tmp_path, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: exclude pandas\n"
+        "import pandas as pd\n\n"
+        "def summarize(count: int) -> int:\n    return count\n",
+    )
+
+    inspect_notebook(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "Excluded Imports (opted out of requirements.txt):" in output
+    excluded_section = output.split(
+        "Excluded Imports (opted out of requirements.txt):"
+    )[1].split("Dependencies:")[0]
+    assert "- pandas" in excluded_section
+
+
 def test_inspect_notebook_data_omits_a_private_directive_marked_function(tmp_path):
 
     notebook_path = tmp_path / "nb.ipynb"
@@ -582,6 +641,43 @@ def test_print_compile_summary_omits_a_private_directive_marked_function(
     assert "POST /helper" not in output
     assert "Private 1 function(s) (never exposed as an endpoint):" in output
     assert "  helper" in output
+
+
+def test_print_compile_summary_lists_an_excluded_import(tmp_path, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: exclude pandas\n"
+        "import pandas as pd\n"
+        "import nbformat\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    print_compile_summary(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    dependencies_line = next(
+        line for line in output.splitlines() if line.startswith("Dependencies:")
+    )
+    assert "pandas" not in dependencies_line
+    assert "Excluded 1 import(s) (opted out of requirements.txt):" in output
+    assert "  pandas" in output
+
+
+def test_print_compile_summary_omits_excluded_imports_line_when_there_are_none(
+    tmp_path, capsys
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    print_compile_summary(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "Excluded" not in output
 
 
 def test_inspect_notebook_data_dependencies_resolves_the_actual_distribution_name(

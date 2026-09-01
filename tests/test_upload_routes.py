@@ -14404,6 +14404,44 @@ def test_inspect_reports_a_private_directive_marked_function_separately():
     assert [e["path"] for e in body["endpoints"]] == ["/add"]
 
 
+def test_inspect_reports_an_exclude_directive_marked_import_separately():
+    """An import a notebook itself opts out of requirements.txt via
+    "# notebook-to-api: exclude <import-name>" must be reported in its own
+    "excluded_imports" field, and must never show up in "dependencies" --
+    the same "silently dropped, but surfaced separately" precedent
+    "private_functions" already sets for "# notebook-to-api: private".
+    """
+
+    content = _notebook_bytes(
+        "# notebook-to-api: exclude pytest\n"
+        "import pytest\n"
+        "import requests\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "inspect_excluded_import_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/inspect", json={"notebook_path": "inspect_excluded_import_test.ipynb"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["excluded_imports"] == ["pytest"]
+    assert "pytest" not in body["dependencies"]
+    assert "requests" in body["dependencies"]
+
+
 def test_inspect_reports_reserved_name_conflicts_for_a_colliding_function():
     """/api/inspect is the tool's own "preview what compiling this
     notebook will do" step, but had no idea a function named
@@ -15270,9 +15308,24 @@ def test_requirements_preview_omits_an_excluded_import():
     )
 
     assert resp.status_code == 200
+    body = resp.json()
     assert not any(
-        dep.startswith("nbformat") for dep in resp.json()["requirements"]
+        dep.startswith("nbformat") for dep in body["requirements"]
     )
+    assert body["excluded_imports"] == ["nbformat"]
+
+
+def test_requirements_preview_excluded_imports_field_is_empty_without_a_directive():
+
+    _upload_sample_notebook("requirements_preview_no_exclude_directive.ipynb")
+
+    resp = client.post(
+        "/api/requirements-preview",
+        json={"notebook_path": "requirements_preview_no_exclude_directive.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["excluded_imports"] == []
 
 
 def test_requirements_preview_falls_back_to_a_bare_name_for_an_uninstalled_dependency():

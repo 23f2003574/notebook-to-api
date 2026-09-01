@@ -38,6 +38,7 @@ from backend.compiler import (
     COMPILE_METADATA_FILENAME,
     NOTEBOOK_TO_API_VERSION,
     _drop_private_functions,
+    _extract_excluded_imports,
     _extract_explicit_requirements,
     _filter_functions_by_name,
     compile_notebook,
@@ -9003,6 +9004,23 @@ def requirements_preview_endpoint(data: dict):
     also present in "requirements" -- this narrows that list, it never
     adds anything "requirements" wouldn't already have. Empty for a
     notebook with no such directive at all.
+
+    "excluded_imports" is the complementary directive:
+    extract_third_party_imports (backend/compiler.py) silently drops any
+    import a "# notebook-to-api: exclude <import-name>" directive names
+    (see _extract_excluded_imports) before "requirements" is ever
+    resolved from what's left -- so an import a notebook author
+    explicitly opted out of requirements.txt was previously invisible
+    here, indistinguishable from one that was simply never imported at
+    all. inspect_notebook_data's own "private_functions" field already
+    surfaces the identical "# notebook-to-api: private" directive's
+    effect the same way (a function silently dropped before "functions"
+    is computed, only visible again via a field naming what was
+    removed) -- this closes the same gap for the "exclude" directive,
+    which "dependencies"/"requirements" never had until now. Unlike
+    "explicit_requirements", never a subset of "requirements": these are
+    import names deliberately kept *out* of it. Empty for a notebook with
+    no such directive at all.
     """
 
     notebook_path = data.get("notebook_path")
@@ -9035,6 +9053,7 @@ def requirements_preview_endpoint(data: dict):
     ]
 
     explicit_requirements = _extract_explicit_requirements(code_cells)
+    excluded_imports = sorted(_extract_excluded_imports(code_cells))
 
     requirements = resolve_requirements(
         extract_third_party_imports(code_cells),
@@ -9047,6 +9066,7 @@ def requirements_preview_endpoint(data: dict):
         "version_id": version_id,
         "requirements": requirements,
         "explicit_requirements": explicit_requirements,
+        "excluded_imports": excluded_imports,
     }
 
 

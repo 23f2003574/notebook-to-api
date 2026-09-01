@@ -3439,6 +3439,13 @@ def _dispatch_core_command(args):
                 for name in private_functions:
                     print(f"  - {name}")
 
+            excluded_imports = data.get("excluded_imports", [])
+
+            if excluded_imports:
+                print("\nExcluded imports (opted out of requirements.txt):")
+                for name in excluded_imports:
+                    print(f"  - {name}")
+
             skipped_functions = data.get("skipped_functions", [])
 
             if skipped_functions:
@@ -3658,6 +3665,7 @@ def _dispatch_core_command(args):
 
             requirements = data.get("requirements", [])
             explicit_requirements = set(data.get("explicit_requirements", []))
+            excluded_imports = data.get("excluded_imports", [])
 
             target = (
                 f"'{args.filename}' version '{args.version_id}'" if args.version_id
@@ -3668,6 +3676,11 @@ def _dispatch_core_command(args):
             for dep in requirements:
                 suffix = "  (explicit)" if dep in explicit_requirements else ""
                 print(f"  {dep}{suffix}")
+
+            if excluded_imports:
+                print("\nExcluded imports (opted out of requirements.txt):")
+                for name in excluded_imports:
+                    print(f"  {name}")
     elif args.command == "app-preview":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -7860,8 +7873,9 @@ def main():
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"functions\", \"dependencies\", \"generated_files\", "
             "\"reserved_name_conflicts\", \"endpoints\", "
-            "\"skipped_functions\", \"private_functions\"}) instead of "
-            "the human-readable report, for scripting/automation."
+            "\"skipped_functions\", \"private_functions\", "
+            "\"excluded_imports\"}) instead of the human-readable "
+            "report, for scripting/automation."
         )
     )
 
@@ -8015,8 +8029,8 @@ def main():
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"notebook\", \"version_id\", \"requirements\", "
-            "\"explicit_requirements\"}) instead of a human-readable "
-            "listing, for scripting/automation."
+            "\"explicit_requirements\", \"excluded_imports\"}) instead "
+            "of a human-readable listing, for scripting/automation."
         )
     )
 

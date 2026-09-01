@@ -9500,6 +9500,7 @@ def test_remote_inspect_command_reports_reserved_name_conflicts_skipped_and_priv
             "endpoints": [],
             "skipped_functions": [{"name": "load_data", "reason": "no return type"}],
             "private_functions": ["_helper"],
+            "excluded_imports": ["pandas"],
         })
     ]
 
@@ -9516,6 +9517,8 @@ def test_remote_inspect_command_reports_reserved_name_conflicts_skipped_and_priv
     assert "- health_check" in proc.stdout
     assert "Private functions (never exposed as an endpoint):" in proc.stdout
     assert "- _helper" in proc.stdout
+    assert "Excluded imports (opted out of requirements.txt):" in proc.stdout
+    assert "- pandas" in proc.stdout
     assert "Skipped functions (no endpoint will be generated):" in proc.stdout
     assert "- load_data: no return type" in proc.stdout
 
@@ -10146,6 +10149,34 @@ def test_requirements_preview_command_marks_explicit_requirements(
     lines = {line.strip() for line in proc.stdout.splitlines()}
     assert "a-private-pkg==1.0.0  (explicit)" in lines
     assert "fastapi==0.100.0" in lines
+
+
+def test_requirements_preview_command_lists_excluded_imports(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebook": "nb.ipynb",
+            "requirements": ["fastapi==0.100.0"],
+            "explicit_requirements": [],
+            "excluded_imports": ["pandas"],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["requirements-preview", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Excluded imports (opted out of requirements.txt):" in proc.stdout
+    assert "pandas" in proc.stdout
 
 
 def test_requirements_preview_command_passes_the_version_id_flag_through(

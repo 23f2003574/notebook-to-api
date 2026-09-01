@@ -288,7 +288,8 @@ def inspect_notebook(notebook_path, output_dir="generated"):
     # a notebook author explicitly opted out of requirements.txt would
     # still show up here as a "dependency", even though it's never
     # actually pinned by an ensuing compile.
-    all_imports -= _extract_excluded_imports(code_cells)
+    excluded_imports = _extract_excluded_imports(code_cells)
+    all_imports -= excluded_imports
 
     reserved_name_conflicts = _reserved_name_conflicts(all_functions)
 
@@ -375,6 +376,12 @@ def inspect_notebook(notebook_path, output_dir="generated"):
             f"   Example Response: {func.get('example_response', {})}"
         )
 
+    if excluded_imports:
+        print("\nExcluded Imports (opted out of requirements.txt):")
+        print("-" * 20)
+        for name in sorted(excluded_imports):
+            print(f"- {name}")
+
     print("\nDependencies:")
     print("-" * 20)
 
@@ -437,7 +444,8 @@ def inspect_notebook_data(
     # all read it through this one function) from drifting out of sync
     # with what write_requirements/extract_third_party_imports
     # (backend/compiler.py) actually excludes.
-    all_imports -= _extract_excluded_imports(code_cells)
+    excluded_imports = _extract_excluded_imports(code_cells)
+    all_imports -= excluded_imports
 
     return {
         "functions": all_functions,
@@ -449,6 +457,14 @@ def inspect_notebook_data(
             code_cells, {func["name"] for func in all_functions}
         ),
         "private_functions": sorted(private_function_names),
+        # The complementary "# notebook-to-api: exclude <import-name>"
+        # directive's own effect, surfaced the same way "private_functions"
+        # already surfaces "# notebook-to-api: private"'s -- before this,
+        # an import a notebook author explicitly opted out of
+        # requirements.txt was silently absorbed into the subtraction
+        # above, with "dependencies" giving no way to tell "never
+        # imported" apart from "imported, but deliberately excluded".
+        "excluded_imports": sorted(excluded_imports),
     }
 
 
@@ -507,6 +523,14 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
             "(never exposed as an endpoint):"
         )
         for name in data["private_functions"]:
+            print(f"  {name}")
+
+    if data["excluded_imports"]:
+        print(
+            f"\nExcluded {len(data['excluded_imports'])} import(s) "
+            "(opted out of requirements.txt):"
+        )
+        for name in data["excluded_imports"]:
             print(f"  {name}")
 
 
