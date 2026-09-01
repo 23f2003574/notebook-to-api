@@ -11560,6 +11560,16 @@ def get_generated_file(filename: str):
     `{filename}` GET /api/notebooks/{filename} uses) so a nested path like
     "runtime/notebook_module.py" is accepted as a single path parameter
     instead of only ever matching a single path segment.
+
+    The "sha256" response field is the same hash_notebook_file
+    (backend/compiler.py) already computes for an uploaded notebook's own
+    content (GET /api/notebooks/{filename}'s "X-Content-SHA256" header,
+    GET /api/generated's own per-entry "checksums") -- applied here to
+    this one compiled file's content. Before this, verifying a single
+    file previewed through this endpoint meant a separate GET
+    /api/generated?checksums=true call just to look up its entry, even
+    though this endpoint already reads the exact same bytes to answer the
+    request in the first place.
     """
 
     file_path = resolve_generated_path(filename)
@@ -11612,10 +11622,13 @@ def get_generated_file(filename: str):
                 detail=f"'{filename}' is not a text file"
             )
 
+        sha256 = hash_notebook_file(str(file_path))
+
     return {
         "status": "success",
         "filename": filename,
         "content": content,
+        "sha256": sha256,
     }
 
 

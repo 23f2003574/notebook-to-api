@@ -19128,6 +19128,24 @@ def test_get_generated_file_returns_app_py_content():
     assert "def add(" in body["content"]
 
 
+def test_get_generated_file_reports_content_sha256():
+    """The "sha256" response field lets a caller verify the file it just
+    fetched, the same content-integrity check GET /api/notebooks/{filename}
+    (via its "X-Content-SHA256" header) and GET /api/generated's own
+    "checksums" query param already provide, applied here to a single
+    compiled file preview.
+    """
+
+    _compile_a_notebook("get_file_sha256_test.ipynb")
+
+    resp = client.get("/api/generated/app.py")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    expected_sha256 = hashlib.sha256(body["content"].encode("utf-8")).hexdigest()
+    assert body["sha256"] == expected_sha256
+
+
 def test_get_generated_file_returns_requirements_txt_content():
 
     _compile_a_notebook("get_file_requirements_test.ipynb")

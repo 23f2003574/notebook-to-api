@@ -13543,6 +13543,61 @@ def test_remote_files_get_command_saves_to_output_when_given(tmp_path, fake_dash
     assert "Saved 'requirements.txt'" in proc.stdout
 
 
+def test_remote_files_get_command_expected_sha256_succeeds_on_a_match(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "app.py",
+            "content": "x = 1\n", "sha256": "abc123",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-files", "get", "app.py", "--dashboard-url", dashboard_url,
+            "--output", "app.py", "--expected-sha256", "abc123",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (workdir / "app.py").read_text() == "x = 1\n"
+    assert "sha256: abc123" in proc.stdout
+
+
+def test_remote_files_get_command_expected_sha256_fails_on_a_mismatch_and_writes_nothing(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "app.py",
+            "content": "x = 1\n", "sha256": "abc123",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-files", "get", "app.py", "--dashboard-url", dashboard_url,
+            "--output", "app.py", "--expected-sha256", "does-not-match",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "does not match the expected value")
+    assert not (workdir / "app.py").exists()
+
+
 def test_remote_files_get_command_json_flag_emits_the_dashboards_own_response(
     tmp_path, fake_dashboard
 ):

@@ -4639,6 +4639,15 @@ def _dispatch_core_command(args):
 
             data = response.json()
             content = data.get("content", "")
+            sha256 = data.get("sha256")
+
+            if args.expected_sha256 and args.expected_sha256 != sha256:
+
+                raise RuntimeError(
+                    f"Fetched content's sha256 ({sha256}) does not match "
+                    f"the expected value ({args.expected_sha256}) -- "
+                    "nothing was written to disk."
+                )
 
             if args.output:
 
@@ -4649,6 +4658,8 @@ def _dispatch_core_command(args):
                 print(json.dumps(data, indent=2))
             elif args.output:
                 print(f"Saved '{args.filename}' from {dashboard_url} to {args.output}")
+                if sha256:
+                    print(f"  sha256: {sha256}")
             else:
                 print(content, end="" if content.endswith("\n") else "\n")
 
@@ -8898,13 +8909,27 @@ def main():
         help="Path to save the file's content to. Default: print it to stdout instead of writing a file."
     )
     remote_files_get_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        help=(
+            "Verify the fetched content's sha256 matches this value "
+            "before printing it or writing --output -- checked against "
+            "GET /api/generated/{filename}'s own \"sha256\" response "
+            "field. The same content-integrity check `download` and "
+            "`versions get` already perform before writing anything to "
+            "disk, applied here to a compiled output file instead of a "
+            "notebook."
+        )
+    )
+    remote_files_get_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response "
-            "({\"status\", \"filename\", \"content\"}) instead of just "
-            "the raw content, for scripting/automation."
+            "({\"status\", \"filename\", \"content\", \"sha256\"}) "
+            "instead of just the raw content, for scripting/automation."
         )
     )
 
