@@ -10448,6 +10448,37 @@ def test_versions_list_command_passes_limit_and_offset_through(tmp_path, fake_da
     assert handler.requests == ["/api/notebooks/nb.ipynb/versions?offset=1&limit=1"]
 
 
+def test_versions_list_command_sends_saved_after_and_before_query_params(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "filename": "nb.ipynb", "versions": []})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "list", "nb.ipynb",
+            "--saved-after", "2026-01-01T00:00:00+00:00",
+            "--saved-before", "2026-06-01T00:00:00+00:00",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query == {
+        "offset": ["0"],
+        "saved_after": ["2026-01-01T00:00:00+00:00"],
+        "saved_before": ["2026-06-01T00:00:00+00:00"],
+    }
+
+
 def test_versions_list_command_reports_a_clean_error_for_a_missing_notebook(
     tmp_path, fake_dashboard
 ):

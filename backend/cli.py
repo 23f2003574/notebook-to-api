@@ -3691,6 +3691,10 @@ def _dispatch_core_command(args):
                 params["limit"] = args.limit
             if args.format == "csv":
                 params["format"] = "csv"
+            if args.saved_after:
+                params["saved_after"] = args.saved_after
+            if args.saved_before:
+                params["saved_before"] = args.saved_before
 
             try:
                 response = httpx.get(
@@ -7724,6 +7728,30 @@ def main():
             "saved_at\" CSV response straight to stdout (redirect it to a "
             "file); --json is ignored under --format csv, since the "
             "response isn't JSON at all."
+        )
+    )
+    versions_list_parser.add_argument(
+        "--saved-after",
+        default=None,
+        dest="saved_after",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only show versions saved on or after this ISO 8601 datetime, "
+            "via GET /api/notebooks/{filename}/versions's own "
+            "?saved_after= query param -- a value with no UTC offset is "
+            "assumed to already be UTC. Composes with --saved-before to "
+            "bound a window."
+        )
+    )
+    versions_list_parser.add_argument(
+        "--saved-before",
+        default=None,
+        dest="saved_before",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only show versions saved on or before this ISO 8601 "
+            "datetime, via GET /api/notebooks/{filename}/versions's own "
+            "?saved_before= query param."
         )
     )
     versions_list_parser.add_argument(

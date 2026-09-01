@@ -6548,6 +6548,7 @@ def set_notebook_description_batch(data: dict):
 @router.get("/notebooks/{filename}/versions")
 def list_notebook_versions(
     filename: str, limit: int = None, offset: int = 0, format: str = "json",
+    saved_after: str = None, saved_before: str = None,
 ):
     """List a previously uploaded notebook's snapshotted previous
     versions, newest first.
@@ -6584,6 +6585,23 @@ def list_notebook_versions(
     identically. Column order is "version_id,size_bytes,saved_at", every
     field each "versions" entry already carries. An unrecognized "format"
     is rejected with 400 before "filename" is even resolved.
+
+    "saved_after"/"saved_before" (each an optional ISO 8601 datetime,
+    parsed/validated by _parse_iso_datetime_query_param exactly like GET
+    /api/notebooks' own "modified_after"/"modified_before") narrow
+    "versions" to snapshots whose own "saved_at" falls on or after/before
+    the given bound -- inclusive on both ends, the identical semantics
+    those query params already give the notebook catalog. Before this, a
+    caller wanting only the versions saved within some window (e.g.
+    "everything captured during last night's bad deploy, to restore or
+    export just those") had to fetch every snapshot and filter
+    client-side. Both compose with "limit"/"offset"/"format": "total_count"
+    reports how many versions match "saved_after"/"saved_before" before
+    "limit"/"offset" are applied, and CSV export reflects the same
+    filtered, paginated set the JSON response would return. A
+    "saved_after" later than "saved_before" is rejected with 400, the
+    same way GET /api/notebooks already rejects that combination for
+    "modified_after"/"modified_before".
     """
 
     if format not in ("json", "csv"):
@@ -6616,6 +6634,18 @@ def list_notebook_versions(
             detail="limit must be a positive integer"
         )
 
+    saved_after_dt = _parse_iso_datetime_query_param(saved_after, "saved_after")
+    saved_before_dt = _parse_iso_datetime_query_param(saved_before, "saved_before")
+
+    if (
+        saved_after_dt is not None and saved_before_dt is not None
+        and saved_after_dt > saved_before_dt
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="saved_after must not be later than saved_before"
+        )
+
     versions_dir = _notebook_versions_dir(file_path.name)
 
     versions = []
@@ -6629,12 +6659,20 @@ def list_notebook_versions(
 
             entry_stat = entry.stat()
 
+            entry_saved_at = datetime.fromtimestamp(
+                entry_stat.st_mtime, tz=timezone.utc
+            )
+
+            if saved_after_dt is not None and entry_saved_at < saved_after_dt:
+                continue
+
+            if saved_before_dt is not None and entry_saved_at > saved_before_dt:
+                continue
+
             versions.append({
                 "version_id": entry.name,
                 "size_bytes": entry_stat.st_size,
-                "saved_at": datetime.fromtimestamp(
-                    entry_stat.st_mtime, tz=timezone.utc
-                ).isoformat(),
+                "saved_at": entry_saved_at.isoformat(),
             })
 
     total_count = len(versions)

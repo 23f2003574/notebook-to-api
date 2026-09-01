@@ -9480,6 +9480,166 @@ def test_list_notebook_versions_rejects_an_unknown_format():
     assert "format" in resp.json()["detail"]
 
 
+def _age_notebook_version(filename, version_id, seconds_ago):
+    version_path = _notebook_versions_dir(filename) / version_id
+    version_stat = version_path.stat()
+    os.utime(
+        version_path, (version_stat.st_atime, version_stat.st_mtime - seconds_ago)
+    )
+
+
+def test_list_notebook_versions_filters_by_saved_after_and_before():
+
+    filename = "versions_saved_filter.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+
+    all_versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(all_versions) == 2
+
+    older_version, newer_version = all_versions[1], all_versions[0]
+    _age_notebook_version(filename, older_version["version_id"], 7200)
+
+    older_saved_at = client.get(f"/api/notebooks/{filename}/versions").json()[
+        "versions"
+    ][1]["saved_at"]
+    newer_saved_at = newer_version["saved_at"]
+
+    # saved_after excludes the older entry, keeps the newer one.
+    versions = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"saved_after": newer_saved_at},
+    ).json()["versions"]
+    assert [v["version_id"] for v in versions] == [newer_version["version_id"]]
+
+    # saved_before excludes the newer entry, keeps the older one.
+    versions = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"saved_before": older_saved_at},
+    ).json()["versions"]
+    assert [v["version_id"] for v in versions] == [older_version["version_id"]]
+
+    # Both bounds together, wide enough to include both.
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"saved_after": older_saved_at, "saved_before": newer_saved_at},
+    )
+    body = resp.json()
+    assert sorted(v["version_id"] for v in body["versions"]) == sorted(
+        [older_version["version_id"], newer_version["version_id"]]
+    )
+    assert body["total_count"] == 2
+
+
+def test_list_notebook_versions_saved_after_is_inclusive():
+
+    filename = "versions_saved_inclusive.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    saved_at = client.get(f"/api/notebooks/{filename}/versions").json()["versions"][0][
+        "saved_at"
+    ]
+
+    versions = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"saved_after": saved_at, "saved_before": saved_at},
+    ).json()["versions"]
+
+    assert len(versions) == 1
+    assert versions[0]["saved_at"] == saved_at
+
+
+def test_list_notebook_versions_rejects_saved_after_later_than_saved_before():
+
+    _upload_sample_notebook("versions_saved_bad_range.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/versions_saved_bad_range.ipynb/versions",
+        params={
+            "saved_after": "2026-06-01T00:00:00+00:00",
+            "saved_before": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "saved_after" in resp.json()["detail"]
+
+
+def test_list_notebook_versions_rejects_a_malformed_saved_after():
+
+    _upload_sample_notebook("versions_saved_bad_after.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/versions_saved_bad_after.ipynb/versions",
+        params={"saved_after": "not-a-date"},
+    )
+
+    assert resp.status_code == 400
+    assert "saved_after" in resp.json()["detail"]
+
+
+def test_list_notebook_versions_rejects_a_malformed_saved_before():
+
+    _upload_sample_notebook("versions_saved_bad_before.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/versions_saved_bad_before.ipynb/versions",
+        params={"saved_before": "not-a-date"},
+    )
+
+    assert resp.status_code == 400
+    assert "saved_before" in resp.json()["detail"]
+
+
 def test_overwriting_a_notebook_snapshots_the_previous_content():
 
     filename = "versions_overwrite_snapshots.ipynb"
