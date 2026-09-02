@@ -500,6 +500,19 @@ def test_docker_compose_content_uses_the_given_package_name_as_the_service_name(
     assert "    build: ." in content
 
 
+def test_docker_compose_content_sets_an_unless_stopped_restart_policy():
+    """Compose's own default restart policy is "no" -- without this, a
+    container that crashed or was OOM-killed just stayed down until an
+    operator noticed and re-ran `docker compose up` by hand, defeating
+    the whole point of a `docker compose up -d`-style unattended
+    deployment.
+    """
+
+    content = docker_compose_content("generated", [])
+
+    assert "    restart: unless-stopped\n" in content
+
+
 def test_docker_compose_content_maps_port_on_both_sides_via_the_port_env_var():
     """The Dockerfile's own CMD/HEALTHCHECK bind/probe whatever $PORT is
     set to at container start (see dockerfile_content above) -- the
@@ -571,6 +584,7 @@ def test_compiler_pipeline_generates_a_docker_compose_file(tmp_path):
 
     compose = compose_path.read_text(encoding="utf-8")
     assert "services:\n  generated:\n    build: .\n" in compose
+    assert "    restart: unless-stopped\n" in compose
     assert "NOTEBOOK_API_KEY=${NOTEBOOK_API_KEY:-notebook-to-api-dev-key}" in compose
     assert "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE=${NOTEBOOK_API_RATE_LIMIT_PER_MINUTE:-0}" in compose
 

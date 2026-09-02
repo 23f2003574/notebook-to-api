@@ -156,6 +156,22 @@ def docker_compose_content(package_name="generated", env_vars=None):
     treatment here, driving both sides of the host:container port
     mapping so the exposed port always matches whatever the container
     itself actually bound to.
+
+    "restart: unless-stopped" was previously absent entirely -- Compose's
+    own default restart policy is "no" (never restart), so a container
+    that crashed or was OOM-killed (a real possibility: the compiled
+    app's own NOTEBOOK_API_MAX_TASKS/NOTEBOOK_API_MAX_REQUEST_BYTES limit
+    a single process' load, but nothing stops the host itself from
+    running low on memory) just stayed down until an operator noticed
+    and re-ran `docker compose up` by hand -- for a `docker compose up
+    -d`-style deployment meant to keep running unattended (this file's
+    own reason to exist, per this docstring's opening paragraph), that's
+    a silent outage with no self-healing at all. "unless-stopped" (rather
+    than the more aggressive "always") still respects an operator's own
+    explicit `docker compose stop`: it restarts after a crash or a host
+    reboot, but not after a deliberate stop, the same distinction Docker
+    Swarm/Kubernetes' own default restart policies already draw between
+    an unexpected exit and an intentional one.
     """
 
     env_vars = env_vars or []
@@ -169,6 +185,7 @@ def docker_compose_content(package_name="generated", env_vars=None):
         "services:\n"
         f"  {package_name}:\n"
         "    build: .\n"
+        "    restart: unless-stopped\n"
         "    ports:\n"
         '      - "${PORT:-8000}:${PORT:-8000}"\n'
         "    environment:\n"
