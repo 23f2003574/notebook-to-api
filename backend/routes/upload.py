@@ -5056,6 +5056,27 @@ def notebook_storage_usage(
     exported "total_bytes" column itself, or just fetch "format": "json"
     for those five numbers directly. An unrecognized "format" is
     rejected with 400 before a single notebook is even read.
+
+    "max_notebooks" and "notebooks_remaining" (JSON only, the same
+    "catalog-wide singleton figure, not a per-notebook CSV column"
+    reasoning "total_notebook_bytes" and friends already follow above)
+    are MAX_NOTEBOOKS (see its own comment above) and how many more
+    notebooks the catalog can accept before that cap rejects a new one --
+    already independently readable via GET /api/config's own
+    "max_notebooks" field, but pairing it with actual current usage
+    previously meant a second, separate call just to compute
+    "notebook_count / max_notebooks" by hand. Deliberately computed from
+    _current_notebook_count() -- the exact same catalog-wide (never
+    "tag"-scoped) count POST /api/upload's own MAX_NOTEBOOKS check
+    already enforces against -- not from this endpoint's own
+    "notebook_count" above, which narrows to "tag" when given: comparing
+    a tag-scoped count against a catalog-wide cap would silently
+    understate how close the *whole* catalog actually is to it. "null"
+    when MAX_NOTEBOOKS is 0 (the cap disabled) -- there's no meaningful
+    "remaining" figure against a limit that doesn't exist -- and can go
+    negative if the cap was lowered after the catalog already exceeded
+    it, an honest signal of that state rather than a misleadingly
+    clamped 0.
     """
 
     if format not in ("json", "csv"):
@@ -5154,6 +5175,10 @@ def notebook_storage_usage(
             },
         )
 
+    notebooks_remaining = (
+        MAX_NOTEBOOKS - _current_notebook_count() if MAX_NOTEBOOKS else None
+    )
+
     return {
         "status": "success",
         "notebooks": paginated_notebooks,
@@ -5164,6 +5189,8 @@ def notebook_storage_usage(
         "total_version_bytes": total_version_bytes,
         "total_version_count": total_version_count,
         "total_bytes": total_notebook_bytes + total_version_bytes,
+        "max_notebooks": MAX_NOTEBOOKS,
+        "notebooks_remaining": notebooks_remaining,
     }
 
 

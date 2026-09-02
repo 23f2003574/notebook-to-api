@@ -5505,6 +5505,124 @@ def test_notebook_storage_reports_per_notebook_and_total_bytes():
     assert entries_by_filename["storage_b.ipynb"]["notebook_bytes"] == len(content_b)
 
 
+def test_notebook_storage_reports_max_notebooks_disabled_by_default():
+
+    resp = client.get("/api/notebooks/storage")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["max_notebooks"] == 0
+    assert body["notebooks_remaining"] is None
+
+
+def test_notebook_storage_reports_notebooks_remaining_with_a_configured_cap(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    client.delete("/api/notebooks?confirm=true")
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "storage_cap_a.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+
+    current_count = upload_module._current_notebook_count()
+    monkeypatch.setattr(upload_module, "MAX_NOTEBOOKS", current_count + 5)
+
+    resp = client.get("/api/notebooks/storage")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["max_notebooks"] == current_count + 5
+    assert body["notebooks_remaining"] == 5
+
+
+def test_notebook_storage_notebooks_remaining_can_go_negative(monkeypatch):
+    """Honest, not clamped to 0 -- a cap lowered after the catalog already
+    exceeded it must still report the true (negative) remaining figure.
+    """
+
+    from backend.routes import upload as upload_module
+
+    client.delete("/api/notebooks?confirm=true")
+
+    for filename in ("storage_over_cap_a.ipynb", "storage_over_cap_b.ipynb"):
+        client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                    "application/json",
+                )
+            },
+        )
+
+    current_count = upload_module._current_notebook_count()
+    assert current_count >= 2
+    monkeypatch.setattr(upload_module, "MAX_NOTEBOOKS", current_count - 1)
+
+    resp = client.get("/api/notebooks/storage")
+
+    body = resp.json()
+    assert body["notebooks_remaining"] == -1
+
+
+def test_notebook_storage_notebooks_remaining_ignores_the_tag_filter(monkeypatch):
+    """"notebooks_remaining" must reflect the *whole* catalog against
+    MAX_NOTEBOOKS, never just the "tag"-scoped subset this endpoint's own
+    "notebook_count" narrows to when "tag" is given -- comparing a
+    tag-scoped count against a catalog-wide cap would silently understate
+    how close the whole catalog actually is to it.
+    """
+
+    from backend.routes import upload as upload_module
+
+    client.delete("/api/notebooks?confirm=true")
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "storage_tag_scope_tagged.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.put(
+        "/api/notebooks/storage_tag_scope_tagged.ipynb/tags",
+        json={"tags": ["prod"]},
+    )
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "storage_tag_scope_untagged.ipynb",
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    current_count = upload_module._current_notebook_count()
+    assert current_count >= 2
+    monkeypatch.setattr(upload_module, "MAX_NOTEBOOKS", current_count + 3)
+
+    resp = client.get("/api/notebooks/storage", params={"tag": "prod"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["notebook_count"] == 1  # tag-scoped, unaffected by this feature
+    assert body["notebooks_remaining"] == 3  # catalog-wide, not tag-scoped
+
+
 def test_notebook_storage_csv_format_returns_a_csv_response():
 
     client.delete("/api/notebooks?confirm=true")
@@ -5786,6 +5904,8 @@ def test_notebook_storage_reports_zeros_for_an_empty_catalog():
         "total_version_bytes": 0,
         "total_version_count": 0,
         "total_bytes": 0,
+        "max_notebooks": 0,
+        "notebooks_remaining": None,
     }
 
 

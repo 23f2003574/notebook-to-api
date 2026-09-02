@@ -5054,6 +5054,54 @@ def test_storage_command_prints_per_notebook_and_total_usage(fake_dashboard):
     assert handler.requests == ["/api/notebooks/storage?offset=0"]
 
 
+def test_storage_command_prints_the_catalog_cap_when_configured(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "notebooks": [],
+        "notebook_count": 0,
+        "total_notebook_bytes": 0,
+        "total_version_bytes": 0,
+        "total_version_count": 0,
+        "total_bytes": 0,
+        "max_notebooks": 500,
+        "notebooks_remaining": 497,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["storage", "--dashboard-url", dashboard_url], cwd=Path.cwd()
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Catalog cap: 500 notebook(s), 497 remaining" in proc.stdout
+
+
+def test_storage_command_omits_the_catalog_cap_line_when_disabled(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "notebooks": [],
+        "notebook_count": 0,
+        "total_notebook_bytes": 0,
+        "total_version_bytes": 0,
+        "total_version_count": 0,
+        "total_bytes": 0,
+        "max_notebooks": 0,
+        "notebooks_remaining": None,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["storage", "--dashboard-url", dashboard_url], cwd=Path.cwd()
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Catalog cap" not in proc.stdout
+
+
 def test_storage_command_sends_tag_query_param(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

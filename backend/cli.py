@@ -2212,6 +2212,17 @@ def _dispatch_core_command(args):
                     f"on {dashboard_url}"
                 )
 
+            # Printed regardless of whether "notebooks" is empty -- the
+            # catalog-wide cap (and how close it is) is just as relevant
+            # to an operator looking at an empty catalog as a full one.
+            max_notebooks = data.get("max_notebooks")
+
+            if max_notebooks:
+                print(
+                    f"Catalog cap: {max_notebooks} notebook(s), "
+                    f"{data.get('notebooks_remaining')} remaining"
+                )
+
     elif args.command == "download":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -6952,8 +6963,9 @@ def main():
             "\"version_bytes\", \"version_count\", \"total_bytes\"}, ...], "
             "\"notebook_count\", \"limit\", \"offset\", "
             "\"total_notebook_bytes\", \"total_version_bytes\", "
-            "\"total_version_count\", \"total_bytes\"}) instead of a "
-            "human-readable summary, for scripting/automation."
+            "\"total_version_count\", \"total_bytes\", \"max_notebooks\", "
+            "\"notebooks_remaining\"}) instead of a human-readable "
+            "summary, for scripting/automation."
         )
     )
 
