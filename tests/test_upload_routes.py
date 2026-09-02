@@ -16176,6 +16176,37 @@ def test_requirements_preview_returns_400_for_a_malformed_notebook_file():
     assert resp.status_code == 400
 
 
+def test_requirements_preview_returns_400_for_conflicting_explicit_requirement_directives():
+    """_extract_explicit_requirements (backend/compiler.py) raises a
+    ValueError for two "# notebook-to-api: requires" directives naming
+    the same package with different specs -- this is the notebook's own
+    problem, not this server's, so it must surface as a 400 the caller
+    can act on, not an unhandled 500.
+    """
+
+    filename = "requirements_preview_conflicting_directives.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "# notebook-to-api: requires numpy==1.24.0\n"
+                    "# notebook-to-api: requires numpy==1.26.0\n"
+                    "def noop() -> int:\n    return 1\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post("/api/requirements-preview", json={"notebook_path": filename})
+
+    assert resp.status_code == 400
+    assert "numpy" in resp.json()["detail"]
+
+
 def test_requirements_preview_requires_a_notebook_path():
 
     resp = client.post("/api/requirements-preview", json={})

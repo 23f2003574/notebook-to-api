@@ -9409,7 +9409,25 @@ def requirements_preview_endpoint(data: dict):
         if is_parseable_python(cell)
     ]
 
-    explicit_requirements = _extract_explicit_requirements(code_cells)
+    try:
+
+        explicit_requirements = _extract_explicit_requirements(code_cells)
+
+    except ValueError as e:
+
+        # _extract_explicit_requirements (backend/compiler.py) raises this
+        # for two conflicting "# notebook-to-api: requires" directives
+        # naming the same package -- the notebook itself is the problem,
+        # not this server, so this is a 400 the caller can act on (fix
+        # the conflicting directive and retry), not an unhandled 500 --
+        # the same distinction POST /api/compile's own ReservedFunctionNameError/
+        # ValueError handling already draws for a different kind of
+        # notebook-content problem.
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+
     excluded_imports = sorted(_extract_excluded_imports(code_cells))
 
     requirements = resolve_requirements(

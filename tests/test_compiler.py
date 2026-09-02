@@ -16,6 +16,7 @@ import pytest
 
 from backend.compiler import (
     _drop_private_functions,
+    _explicit_requirement_package_name,
     _extract_excluded_imports,
     _extract_explicit_requirements,
     _extract_private_function_names,
@@ -3129,6 +3130,76 @@ def test_compile_drops_the_auto_detected_dependency_that_conflicts_with_an_expli
     assert multipart_lines == ["python-multipart==999.0.0"]
 
 
+def test_compile_raises_for_conflicting_explicit_requirement_directives(tmp_path):
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "# notebook-to-api: requires numpy==1.24.0\n"
+            "# notebook-to-api: requires numpy==1.26.0\n"
+            "def noop() -> int:\n    return 1\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    with pytest.raises(ValueError, match="numpy"):
+        compile_notebook(str(notebook_path), str(output_dir))
+
+
+def test_compile_with_conflicting_requirements_does_not_corrupt_a_previous_good_compile(
+    tmp_path
+):
+    """Mirrors the identical "output_dir left in an inconsistent state"
+    regression compile_notebook_to_api's own comment above (right before
+    generate_fastapi_code is called) already documents fixing for a
+    ReservedFunctionNameError -- this closes the same class of bug for a
+    conflicting-requirements notebook: recompiling a working app with one
+    must leave every file from the last working compile completely
+    untouched, not a torn mix of the old app.py/Dockerfile alongside a
+    requirements.txt already rewritten from the failing notebook.
+    """
+
+    good_notebook = nbformat.v4.new_notebook()
+    good_notebook.cells.append(
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    )
+    good_notebook_path = tmp_path / "good.ipynb"
+    with open(good_notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(good_notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(good_notebook_path), str(output_dir))
+
+    app_py_before = (output_dir / "app.py").read_text(encoding="utf-8")
+    requirements_before = (output_dir / "requirements.txt").read_text(encoding="utf-8")
+
+    bad_notebook = nbformat.v4.new_notebook()
+    bad_notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "# notebook-to-api: requires numpy==1.24.0\n"
+            "# notebook-to-api: requires numpy==1.26.0\n"
+            "def multiply(a: int, b: int) -> int:\n    return a * b\n"
+        )
+    )
+    bad_notebook_path = tmp_path / "bad.ipynb"
+    with open(bad_notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(bad_notebook, f)
+
+    with pytest.raises(ValueError, match="numpy"):
+        compile_notebook(str(bad_notebook_path), str(output_dir))
+
+    assert (output_dir / "app.py").read_text(encoding="utf-8") == app_py_before
+    assert (
+        (output_dir / "requirements.txt").read_text(encoding="utf-8")
+        == requirements_before
+    )
+
+
 def test_requirements_resolves_an_import_name_to_its_actual_distribution_name(
     tmp_path
 ):
@@ -5197,6 +5268,144 @@ def test_extract_explicit_requirements_returns_an_empty_list_with_no_directives(
     code_cells = ["import pandas\n\ndef f() -> int:\n    return 1\n"]
 
     assert _extract_explicit_requirements(code_cells) == []
+
+
+def test_extract_explicit_requirements_raises_for_conflicting_specs_in_the_same_cell():
+    """Two different specs for the same package both surviving into
+    requirements.txt is the identical "Double requirement given" pip
+    failure resolve_requirements' own docstring already describes fixing
+    for the auto-detected-vs-explicit case (see
+    test_resolve_requirements_drops_the_auto_detected_line_that_conflicts_with_an_explicit_one
+    below) -- just for two explicit directives naming the same package
+    instead, e.g. left behind after pinning a different version while
+    iterating on a notebook.
+    """
+
+    code_cells = [
+        "# notebook-to-api: requires numpy==1.24.0\n"
+        "# notebook-to-api: requires numpy==1.26.0\n"
+    ]
+
+    with pytest.raises(ValueError, match="numpy"):
+        _extract_explicit_requirements(code_cells)
+
+
+def test_extract_explicit_requirements_raises_for_conflicting_specs_across_cells():
+
+    code_cells = [
+        "# notebook-to-api: requires numpy==1.24.0\nimport pandas\n",
+        "def f() -> int:\n    return 1\n",
+        "# notebook-to-api: requires numpy==1.26.0\n",
+    ]
+
+    with pytest.raises(ValueError, match="numpy"):
+        _extract_explicit_requirements(code_cells)
+
+
+def test_extract_explicit_requirements_conflict_detection_is_case_insensitive():
+    """PyPI distribution names are themselves case-insensitive -- pip
+    normalizes "NumPy"/"numpy"/"nUmPy" to the identical project -- so a
+    directive spelled differently than another must still be recognized
+    as naming the same package.
+    """
+
+    code_cells = [
+        "# notebook-to-api: requires NumPy==1.24.0\n"
+        "# notebook-to-api: requires numpy==1.26.0\n"
+    ]
+
+    with pytest.raises(ValueError, match="(?i)numpy"):
+        _extract_explicit_requirements(code_cells)
+
+
+def test_extract_explicit_requirements_error_names_both_conflicting_specs():
+
+    code_cells = [
+        "# notebook-to-api: requires numpy==1.24.0\n"
+        "# notebook-to-api: requires numpy==1.26.0\n"
+    ]
+
+    with pytest.raises(ValueError) as exc_info:
+        _extract_explicit_requirements(code_cells)
+
+    message = str(exc_info.value)
+    assert "numpy==1.24.0" in message
+    assert "numpy==1.26.0" in message
+
+
+def test_extract_explicit_requirements_allows_identical_specs_repeated():
+    """An exact-duplicate line is not a conflict -- exact-duplicate
+    removal (test_extract_explicit_requirements_deduplicates_exact_matches_across_cells
+    above) already handles this case cleanly, and must keep doing so
+    with conflict detection layered on top of it.
+    """
+
+    code_cells = [
+        "# notebook-to-api: requires somepkg==1.0\n",
+        "# notebook-to-api: requires somepkg==1.0\n",
+    ]
+
+    assert _extract_explicit_requirements(code_cells) == ["somepkg==1.0"]
+
+
+def test_extract_explicit_requirements_allows_unrelated_packages():
+
+    code_cells = [
+        "# notebook-to-api: requires numpy==1.24.0\n"
+        "# notebook-to-api: requires pandas==2.0.0\n"
+    ]
+
+    assert _extract_explicit_requirements(code_cells) == [
+        "numpy==1.24.0", "pandas==2.0.0",
+    ]
+
+
+def test_extract_explicit_requirements_does_not_false_flag_two_unrelated_vcs_specs():
+    """_explicit_requirement_package_name has no reliable way to name a
+    bare VCS/URL spec with no "name @ " prefix (see its own docstring) --
+    two such specs must never be treated as conflicting just because
+    neither can be named, the same "no reliable name, so no comparison"
+    reasoning that function's own None return already establishes for
+    resolve_requirements' identical auto-detected-conflict check.
+    """
+
+    code_cells = [
+        "# notebook-to-api: requires git+https://example.com/one.git\n"
+        "# notebook-to-api: requires git+https://example.com/two.git\n"
+    ]
+
+    assert _extract_explicit_requirements(code_cells) == [
+        "git+https://example.com/one.git",
+        "git+https://example.com/two.git",
+    ]
+
+
+def test_explicit_requirement_package_name_returns_none_for_a_bare_vcs_url():
+    """Confirmed exploitable before this: "[A-Za-z0-9._-]*" alone had no
+    reason to stop before "git+https://...write.git"'s own "+", so it
+    silently captured "git" as though that were the actual package name
+    -- indistinguishable from a real, unrelated package literally named
+    "git".
+    """
+
+    assert _explicit_requirement_package_name(
+        "git+https://example.com/pkg.git"
+    ) is None
+
+
+def test_explicit_requirement_package_name_handles_every_pep_508_continuation():
+
+    assert _explicit_requirement_package_name("requests") == "requests"
+    assert _explicit_requirement_package_name("somepkg[extra]==1.2.3") == "somepkg"
+    assert _explicit_requirement_package_name("somepkg>=1.0") == "somepkg"
+    assert _explicit_requirement_package_name("somepkg~=1.0") == "somepkg"
+    assert _explicit_requirement_package_name("somepkg!=1.0") == "somepkg"
+    assert _explicit_requirement_package_name(
+        'somepkg;python_version<"3.11"'
+    ) == "somepkg"
+    assert _explicit_requirement_package_name(
+        "my-private-pkg @ git+https://example.com/pkg.git"
+    ) == "my-private-pkg"
 
 
 def test_extract_excluded_imports_finds_a_directive_in_a_cell():

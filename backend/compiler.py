@@ -401,9 +401,37 @@ def _extract_explicit_requirements(code_cells):
     _pinned_requirement, since a caller writing this directive is already
     stating precisely what belongs there, the same as a hand-written
     requirements.txt line would.
+
+    Raises ValueError if two *different* specs name the same package (via
+    _explicit_requirement_package_name below, case-insensitively -- PyPI
+    distribution names are themselves case-insensitive) -- e.g. one cell
+    declaring "# notebook-to-api: requires numpy==1.24.0" and another
+    "# notebook-to-api: requires numpy==1.26.0", commonly left behind
+    after pinning a different version while iterating on a notebook.
+    "seen"/exact-duplicate removal just above only catches the identical-
+    line case; two distinct specs for the same package both survived it
+    (and this function's own returned list) before this check existed,
+    both then surviving resolve_requirements' own explicit-vs-auto-
+    detected conflict resolution too (its own docstring explains that
+    one) -- since resolve_requirements only ever drops an *auto-detected*
+    import an explicit directive already names, it never had a reason to
+    also dedupe explicit requirements against each other, that being this
+    function's own job. Both lines landing side by side in
+    requirements.txt is the identical "Double requirement given" pip
+    failure resolve_requirements' own docstring already describes fixing
+    for the auto-detected-vs-explicit case, just for two explicit
+    directives instead -- confirmed exploitable before this check
+    existed. Raised here (not in resolve_requirements, which has no way
+    to tell an explicit spec's own conflicting sibling apart from an
+    ordinary auto-detected/explicit collision it's already supposed to
+    resolve) so the conflicting notebook fails this specific, actionable
+    check -- rather than a raw pip error surfacing only much later, at
+    `docker build` time, deep inside POST /api/deploy or the CLI's own
+    `deploy`.
     """
     specs = []
     seen = set()
+    spec_by_package_name = {}
 
     for cell in code_cells:
 
@@ -411,9 +439,30 @@ def _extract_explicit_requirements(code_cells):
 
             spec = match.group("spec").strip()
 
-            if spec and spec not in seen:
-                seen.add(spec)
-                specs.append(spec)
+            if not spec or spec in seen:
+                continue
+
+            package_name = _explicit_requirement_package_name(spec)
+
+            if package_name is not None:
+
+                normalized_name = package_name.lower()
+                conflicting_spec = spec_by_package_name.get(normalized_name)
+
+                if conflicting_spec is not None:
+                    raise ValueError(
+                        "Conflicting '# notebook-to-api: requires' "
+                        f"directives for '{package_name}': "
+                        f"'{conflicting_spec}' and '{spec}' -- pip refuses "
+                        "two requirements for the same package "
+                        "('Double requirement given'). Remove or reconcile "
+                        "one of them."
+                    )
+
+                spec_by_package_name[normalized_name] = spec
+
+            seen.add(spec)
+            specs.append(spec)
 
     return specs
 
@@ -612,7 +661,25 @@ def extract_third_party_imports(code_cells):
 # first character that can only belong to a version specifier, extras
 # bracket, or "@ <url>" direct-reference suffix -- see
 # _explicit_requirement_package_name below for what this is for.
-_REQUIREMENT_SPEC_NAME_PATTERN = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+#
+# The trailing lookahead is load-bearing, not cosmetic: without it, a bare
+# VCS/URL spec with no "name @ " prefix at all (e.g.
+# "git+https://example.com/pkg.git", one of the exact "no reliable way to
+# name" examples this pattern's own docstring below already calls out)
+# still matched -- "[A-Za-z0-9._-]*" has no reason to stop before the "+"
+# any earlier than it does, so it happily captured "git" as though that
+# were the actual package name. Confirmed: this pattern alone (with no
+# lookahead) returned "git" for that exact input, silently
+# mis-identifying an arbitrary, unrelated VCS spec as declaring a package
+# literally named "git" -- the false "same package" match
+# _explicit_requirement_package_name below exists to avoid, not manufacture.
+# Anchoring the match to end only where PEP 508 actually allows a name to
+# end (whitespace, "[", a version comparator, ";", "@", or end of string)
+# makes this return None for that case instead, matching what the
+# docstring already claims.
+_REQUIREMENT_SPEC_NAME_PATTERN = re.compile(
+    r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)(?=\s|\[|==|!=|<=|>=|~=|===|<|>|=|;|@|$)"
+)
 
 
 def _explicit_requirement_package_name(spec):
@@ -1042,6 +1109,21 @@ def compile_notebook_to_api(
             if is_parseable_python(cell)
         ]
 
+        # Computed here -- and let it raise (a ValueError, for two
+        # conflicting "# notebook-to-api: requires" directives naming the
+        # same package -- see its own docstring) -- before writing
+        # anything to output_dir at all, the same "validate the notebook's
+        # own content before any write" reasoning generate_fastapi_code's
+        # own ReservedFunctionNameError check below already established.
+        # Reused at the write_requirements call further down instead of
+        # calling this a second time there, so a conflict is caught this
+        # early rather than only surfacing after write_runtime_module has
+        # already overwritten a previous successful compile's own runtime
+        # module with this failing notebook's code -- the identical
+        # inconsistent-output_dir failure mode that comment already
+        # documents fixing for generate_fastapi_code's own checks.
+        explicit_requirements = _extract_explicit_requirements(code_cells)
+
         functions = []
 
         for cell in code_cells:
@@ -1113,7 +1195,7 @@ def compile_notebook_to_api(
         write_requirements(
             extract_third_party_imports(code_cells),
             output_dir,
-            explicit_requirements=_extract_explicit_requirements(code_cells)
+            explicit_requirements=explicit_requirements
         )
 
         write_generated_api(
