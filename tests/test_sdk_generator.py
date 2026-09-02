@@ -282,8 +282,14 @@ def test_generate_python_sdk_constructor_accepts_a_configurable_timeout(tmp_path
 
     assert "timeout: float = 30.0" in source
     assert "self.timeout = timeout" in source
-    # Every requests.* call this client makes must actually use it.
-    assert source.count("timeout=self.timeout") == 6
+    # Every requests.* call this client makes must actually use it: the 6
+    # hardcoded task methods (get_task, list_tasks, delete_task,
+    # delete_completed_tasks, delete_failed_tasks, plus the single
+    # "/train_model" path this test's own schema declares -- wait_for_task
+    # makes no request of its own, it only calls self.get_task), plus the
+    # 8 hardcoded health/ready/info/metrics/uptime/auth_status/auth_info/
+    # auth_validate methods.
+    assert source.count("timeout=self.timeout") == 14
 
 
 def test_generate_python_sdk_uses_the_configured_timeout_for_a_request(
@@ -346,8 +352,14 @@ def test_generate_typescript_sdk_constructor_accepts_a_configurable_timeout(
 
     assert "timeoutMs?: number;" in source
     assert "this.timeoutMs = options.timeoutMs ?? 30000;" in source
-    # Every fetch() call this client makes must actually use it.
-    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 6
+    # Every fetch() call this client makes must actually use it: the 6
+    # hardcoded task methods (getTask, listTasks, deleteTask,
+    # deleteCompletedTasks, deleteFailedTasks, plus the single shared
+    # private `request()` helper every POST-path method -- "/train_model"
+    # in this test's own schema -- funnels through, regardless of how many
+    # such paths exist), plus the 8 hardcoded health/ready/info/metrics/
+    # uptime/authStatus/authInfo/authValidate methods.
+    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 14
 
 
 def test_generate_python_sdk_method_name_handles_multi_segment_paths(tmp_path):
@@ -1115,6 +1127,121 @@ def test_generate_python_sdk_delete_completed_and_failed_tasks_send_correct_requ
     ]
 
 
+def test_generate_python_sdk_includes_infrastructure_helpers(tmp_path):
+    """Every compiled app guarantees GET /health, /ready, /info, /metrics,
+    /uptime, /auth/status, /auth/info, and /auth/validate (see
+    RESERVED_INFRASTRUCTURE_NAMES in api_generator.py), but the per-path
+    loop only emits a method for POST paths -- before this, a caller
+    wanting a liveness/readiness probe, service info, request metrics, or
+    auth configuration through the generated client had no way to do it
+    short of hand-writing the exact same requests.get call get_task
+    already demonstrates this client knows how to make.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    ast.parse(source)
+    assert "def health(self) -> dict:" in source
+    assert "def ready(self) -> dict:" in source
+    assert "def info(self) -> dict:" in source
+    assert "def metrics(self) -> dict:" in source
+    assert "def uptime(self) -> dict:" in source
+    assert "def auth_status(self) -> dict:" in source
+    assert "def auth_info(self) -> dict:" in source
+    assert "def auth_validate(self) -> dict:" in source
+
+
+def test_generate_python_sdk_infrastructure_helpers_send_correct_requests(
+    tmp_path, monkeypatch
+):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"status": "ok"}
+
+    def fake_get(url, headers=None, timeout=None):
+        calls.append({"url": url, "headers": headers})
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000", api_key="secret-key")
+
+    assert client.health() == {"status": "ok"}
+    assert client.ready() == {"status": "ok"}
+    assert client.info() == {"status": "ok"}
+    assert client.metrics() == {"status": "ok"}
+    assert client.uptime() == {"status": "ok"}
+    assert client.auth_status() == {"status": "ok"}
+    assert client.auth_info() == {"status": "ok"}
+    assert client.auth_validate() == {"status": "ok"}
+
+    assert calls == [
+        {"url": "http://localhost:8000/health", "headers": {"X-API-Key": "secret-key"}},
+        {"url": "http://localhost:8000/ready", "headers": {"X-API-Key": "secret-key"}},
+        {"url": "http://localhost:8000/info", "headers": {"X-API-Key": "secret-key"}},
+        {"url": "http://localhost:8000/metrics", "headers": {"X-API-Key": "secret-key"}},
+        {"url": "http://localhost:8000/uptime", "headers": {"X-API-Key": "secret-key"}},
+        {"url": "http://localhost:8000/auth/status", "headers": {"X-API-Key": "secret-key"}},
+        {"url": "http://localhost:8000/auth/info", "headers": {"X-API-Key": "secret-key"}},
+        {"url": "http://localhost:8000/auth/validate", "headers": {"X-API-Key": "secret-key"}},
+    ]
+
+
+def test_generate_python_sdk_infrastructure_helper_names_take_priority_over_a_colliding_path(
+    tmp_path,
+):
+    """Same collision hazard PYTHON_RESERVED_CLIENT_METHOD_NAMES' own
+    docstring already documents for get_task/wait_for_task/etc. -- a
+    notebook path sanitizing to "health" (e.g. "/health") would otherwise
+    silently redefine (Python) the real infrastructure method. This can't
+    actually happen server-side (RESERVED_INFRASTRUCTURE_NAMES already
+    blocks a notebook function literally named "health_check" et al. from
+    compiling at all), but "health" itself is not in that server-side
+    set, so nothing before this stopped it at the SDK-generation layer.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/health": {"post": {"operationId": "health"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    ast.parse(source)
+    assert "def health(self) -> dict:" in source
+    assert "def health_2(self, payload: dict):" in source
+
+
 def test_generate_typescript_sdk_produces_expected_structure(tmp_path):
 
     schema_path = _write_schema(
@@ -1715,6 +1842,91 @@ def test_generate_typescript_sdk_task_management_methods_send_correct_requests(t
         {"url": "http://localhost:8000/tasks/completed", "method": "DELETE"},
         {"url": "http://localhost:8000/tasks/failed", "method": "DELETE"},
     ]
+
+
+def test_generate_typescript_sdk_includes_infrastructure_helpers(tmp_path):
+    """Mirrors test_generate_python_sdk_includes_infrastructure_helpers for
+    the TypeScript client.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert "async health(): Promise<any> {" in source
+    assert "async ready(): Promise<any> {" in source
+    assert "async info(): Promise<any> {" in source
+    assert "async metrics(): Promise<any> {" in source
+    assert "async uptime(): Promise<any> {" in source
+    assert "async authStatus(): Promise<any> {" in source
+    assert "async authInfo(): Promise<any> {" in source
+    assert "async authValidate(): Promise<any> {" in source
+
+
+def test_generate_typescript_sdk_infrastructure_helpers_send_correct_requests(tmp_path):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const calls = [];
+        globalThis.fetch = async (url, opts) => {{
+          calls.push({{ url, method: (opts && opts.method) || "GET" }});
+          return {{ ok: true, json: async () => ({{ status: "ok" }}) }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        const results = [];
+        results.push(await client.health());
+        results.push(await client.ready());
+        results.push(await client.info());
+        results.push(await client.metrics());
+        results.push(await client.uptime());
+        results.push(await client.authStatus());
+        results.push(await client.authInfo());
+        results.push(await client.authValidate());
+
+        console.log(JSON.stringify({{ calls, results }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["calls"] == [
+        {"url": "http://localhost:8000/health", "method": "GET"},
+        {"url": "http://localhost:8000/ready", "method": "GET"},
+        {"url": "http://localhost:8000/info", "method": "GET"},
+        {"url": "http://localhost:8000/metrics", "method": "GET"},
+        {"url": "http://localhost:8000/uptime", "method": "GET"},
+        {"url": "http://localhost:8000/auth/status", "method": "GET"},
+        {"url": "http://localhost:8000/auth/info", "method": "GET"},
+        {"url": "http://localhost:8000/auth/validate", "method": "GET"},
+    ]
+    assert output["results"] == [{"status": "ok"}] * 8
 
 
 def test_sdk_pipeline_end_to_end_against_real_compiled_app(tmp_path):

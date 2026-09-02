@@ -21,6 +21,8 @@ from pathlib import Path
 PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "get_task", "wait_for_task", "list_tasks", "delete_task",
     "delete_completed_tasks", "delete_failed_tasks",
+    "health", "ready", "info", "metrics", "uptime",
+    "auth_status", "auth_info", "auth_validate",
     # Confirmed exploitable: base_url/api_key/timeout are the client's
     # own __init__-set *instance attributes* (self.base_url, self.api_key,
     # self.timeout -- every other method here reads them for exactly
@@ -44,6 +46,8 @@ PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
 TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "getTask", "waitForTask", "listTasks", "deleteTask",
     "deleteCompletedTasks", "deleteFailedTasks",
+    "health", "ready", "info", "metrics", "uptime",
+    "authStatus", "authInfo", "authValidate",
     # Same hazard as PYTHON_RESERVED_CLIENT_METHOD_NAMES's base_url/
     # api_key/timeout above: baseUrl/apiKey/timeoutMs are this client's
     # own private instance fields (this.baseUrl, this.apiKey,
@@ -300,6 +304,15 @@ def generate_python_sdk(
     actually retrieve that result short of hand-writing their own polling
     loop against GET /tasks/{task_id}, even though the client already
     knows the base_url and api_key needed to do it.
+
+    Also always includes health/ready/info/metrics/uptime/auth_status/
+    auth_info/auth_validate -- every compiled app's own built-in GET
+    routes for liveness/readiness, service metadata, request metrics, and
+    auth configuration (see RESERVED_INFRASTRUCTURE_NAMES in
+    api_generator.py, which guarantees they exist and can never be
+    shadowed by a notebook function). Like get_task/list_tasks above,
+    these are hardcoded rather than derived from the OpenAPI paths loop
+    below, which only ever emits a method for a POST path.
     """
     # Load OpenAPI schema
     schema = _load_openapi_schema(openapi_path)
@@ -421,6 +434,39 @@ def generate_python_sdk(
     lines.append("        response.raise_for_status()")
     lines.append("        return response.json()")
     lines.append("")
+    # health/ready/info/metrics/uptime/auth_status/auth_info/auth_validate
+    # are, like get_task/list_tasks/... above, hardcoded rather than
+    # derived from the per-path loop below: every compiled app guarantees
+    # these exact GET routes too (see RESERVED_INFRASTRUCTURE_NAMES in
+    # api_generator.py, which blocks a notebook function from ever
+    # redefining any of them), but that loop only ever emits a method for
+    # POST paths. A caller wanting a liveness/readiness probe, service
+    # info, request metrics, or auth configuration through the generated
+    # client itself -- e.g. to back a monitoring dashboard, or confirm the
+    # client's own api_key will actually be accepted before calling a real
+    # notebook endpoint with it -- previously had no way to do that short
+    # of hand-writing the exact same requests.get call get_task already
+    # demonstrates this client knows how to make.
+    for infra_method_name, infra_path in (
+        ("health", "/health"),
+        ("ready", "/ready"),
+        ("info", "/info"),
+        ("metrics", "/metrics"),
+        ("uptime", "/uptime"),
+        ("auth_status", "/auth/status"),
+        ("auth_info", "/auth/info"),
+        ("auth_validate", "/auth/validate"),
+    ):
+        lines.append(f"    def {infra_method_name}(self) -> dict:")
+        lines.append(f'        """GET {infra_path}."""')
+        lines.append("        response = requests.get(")
+        lines.append(f'            f"{{self.base_url}}{infra_path}",')
+        lines.append('            headers={"X-API-Key": self.api_key},')
+        lines.append("            timeout=self.timeout,")
+        lines.append("        )")
+        lines.append("        response.raise_for_status()")
+        lines.append("        return response.json()")
+        lines.append("")
     for path, method_name in method_names.items():
         is_background = _is_background_path(paths[path])
         description = _operation_description(paths[path])
@@ -672,6 +718,39 @@ def generate_typescript_sdk(
     lines.append("    }")
     lines.append("    return response.json();")
     lines.append("  }")
+    # Mirrors generate_python_sdk's health/ready/info/metrics/uptime/
+    # auth_status/auth_info/auth_validate above: hardcoded rather than
+    # derived from the per-path loop below (which only emits a method for
+    # POST paths), since every compiled app guarantees these exact GET
+    # routes (see RESERVED_INFRASTRUCTURE_NAMES in api_generator.py).
+    for infra_method_name, infra_path in (
+        ("health", "/health"),
+        ("ready", "/ready"),
+        ("info", "/info"),
+        ("metrics", "/metrics"),
+        ("uptime", "/uptime"),
+        ("authStatus", "/auth/status"),
+        ("authInfo", "/auth/info"),
+        ("authValidate", "/auth/validate"),
+    ):
+        lines.append("")
+        lines.append(f"  async {infra_method_name}(): Promise<any> {{")
+        lines.append(
+            f"    const response = await fetch(`${{this.baseUrl}}{infra_path}`, {{"
+        )
+        lines.append("      headers: {")
+        lines.append('        "X-API-Key": this.apiKey,')
+        lines.append("      },")
+        lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+        lines.append("    });")
+        lines.append("    if (!response.ok) {")
+        lines.append(
+            f"      throw new Error(`Request to {infra_path} failed with "
+            "status ${response.status}`);"
+        )
+        lines.append("    }")
+        lines.append("    return response.json();")
+        lines.append("  }")
     for path, method_name in method_names.items():
         is_background = _is_background_path(paths[path])
         description = _operation_description(paths[path])
