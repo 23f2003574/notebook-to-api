@@ -2061,6 +2061,23 @@ async def import_notebook_from_url(data: dict):
     The response's own "source_url" is the URL actually fetched -- `url`
     itself, or wherever a redirect chain landed, so a caller can tell a
     redirect happened at all.
+
+    Also persisted (non-dry-run only) via _write_notebook_source_url, the
+    same hidden-sidecar convention tags/description already use -- before
+    this, "source_url" was only ever visible in that one request's own
+    response, gone the moment it scrolled off a terminal or wasn't
+    otherwise recorded by the caller. An operator later auditing "which
+    notebooks came from a URL, and from where" (e.g. before a security
+    review, or reconciling which notebooks are meant to stay in sync with
+    an external source) had nothing on this dashboard itself to answer
+    that -- reused here from GET /api/notebooks, GET
+    /api/notebooks/{filename}/info, and POST /api/notebooks/info-batch's
+    own shared _notebook_metadata_entry, so it can never drift from what
+    this endpoint itself actually recorded. Overwritten (not merged) on a
+    later `?overwrite=true` re-import of the same filename from a
+    *different* URL -- the notebook's own current content only ever came
+    from the most recent import, so recording anything else would be
+    misleading.
     """
 
     data = data or {}
@@ -2130,6 +2147,9 @@ async def import_notebook_from_url(data: dict):
 
     result["dry_run"] = dry_run
     result["source_url"] = final_url
+
+    if not dry_run:
+        _write_notebook_source_url(result["filename"], final_url)
 
     if normalized_tags is not None and not dry_run:
         _write_notebook_tags(result["filename"], normalized_tags)
@@ -2582,6 +2602,84 @@ def _validate_and_normalize_description(description) -> str:
         )
 
     return description
+
+
+def _source_url_sidecar_path(notebook_filename: str) -> Path:
+    """Path to the hidden JSON sidecar file that stores the URL a
+    notebook was originally imported from via POST
+    /api/notebooks/import-url -- the same ".<filename>.<thing>.json"
+    hidden-sidecar convention _tags_sidecar_path/_description_sidecar_path
+    already establish, its own separate file for the identical
+    "overwriting one never silently discards the other" reason
+    _description_sidecar_path's own docstring already gives.
+
+    `notebook_filename` is always a notebook's own already-validated
+    Path.name, never raw, unresolved client input directly -- same
+    precondition _tags_sidecar_path already documents for the identical
+    reason.
+    """
+    return Path(UPLOAD_DIR) / f".{notebook_filename}.source_url.json"
+
+
+def _read_notebook_source_url(notebook_filename: str):
+    """The URL the notebook named `notebook_filename` was originally
+    imported from via POST /api/notebooks/import-url, or None if it
+    wasn't -- either uploaded directly (POST /api/upload, /api/upload/batch,
+    or /api/notebooks/import), or imported before this field existed at
+    all. Unlike tags/description (freeform metadata that legitimately
+    defaults to "empty"), a URL is either known or it isn't, so this
+    returns None rather than "" for "no sidecar file yet" -- best-effort
+    the same way tags/description already are: a missing/unreadable/
+    corrupt sidecar file is treated identically to "never imported from a
+    URL", never a reason to fail the read.
+    """
+    sidecar_path = _source_url_sidecar_path(notebook_filename)
+
+    if not sidecar_path.is_file():
+        return None
+
+    try:
+
+        with open(sidecar_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+    except (OSError, ValueError):
+        return None
+
+    source_url = data.get("source_url")
+
+    if not isinstance(source_url, str) or not source_url:
+        return None
+
+    return source_url
+
+
+def _write_notebook_source_url(notebook_filename: str, source_url: str) -> None:
+    """Persist `source_url` as the URL notebook_filename was imported
+    from -- called unconditionally (never optional the way tags/
+    description are at upload time) by POST /api/notebooks/import-url's
+    own success path below, since a real, non-dry-run call to that
+    endpoint always has one.
+
+    Writes via a temp-file-then-os.replace swap in the same directory --
+    the identical atomic-write pattern _write_notebook_tags/
+    _write_notebook_description already use -- so a concurrent reader
+    (GET /api/notebooks, .../info) never observes a partially-written
+    sidecar file.
+    """
+    sidecar_path = _source_url_sidecar_path(notebook_filename)
+
+    if not source_url:
+        sidecar_path.unlink(missing_ok=True)
+        return
+
+    upload_root = Path(UPLOAD_DIR).resolve()
+    temp_path = upload_root / f".{notebook_filename}.source_url.{uuid.uuid4().hex}.part"
+
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump({"source_url": source_url}, f)
+
+    os.replace(temp_path, sidecar_path)
 
 
 @router.get("/tags")
@@ -3491,6 +3589,15 @@ def _notebook_metadata_entry(
     snapshotted versions (see write_compile_metadata's own docstring,
     backend/compiler.py, for what a non-null value means).
 
+    "source_url" (added alongside POST /api/notebooks/import-url's own
+    persisted sidecar, not a separate change) is
+    _read_notebook_source_url(entry.name) -- the URL this notebook was
+    originally imported from, or null for one uploaded directly (POST
+    /api/upload, /api/upload/batch, /api/notebooks/import) or imported
+    before this field existed. The identical "unconditional, best-effort
+    metadata" treatment "tags"/"description" already get, not gated
+    behind "checksums" or any other opt-in flag.
+
     "checksums" (optional, default false) adds a "sha256" field -- the
     same hash_notebook_file (backend/compiler.py) already computes for
     every other content-identity check in this project (GET
@@ -3527,6 +3634,7 @@ def _notebook_metadata_entry(
         "currently_compiled": is_currently_compiled,
         "tags": _read_notebook_tags(entry.name),
         "description": _read_notebook_description(entry.name),
+        "source_url": _read_notebook_source_url(entry.name),
     }
 
     if is_currently_compiled:
@@ -4597,6 +4705,7 @@ def resolve_duplicate_notebooks(data: dict = None):
                 os.remove(file_path)
                 _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
                 _description_sidecar_path(file_path.name).unlink(missing_ok=True)
+                _source_url_sidecar_path(file_path.name).unlink(missing_ok=True)
                 shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
 
             deleted_filenames.append({
@@ -5359,6 +5468,7 @@ def delete_all_notebooks(confirm: bool = False, tag: str = None, dry_run: bool =
             os.remove(entry)
             _tags_sidecar_path(entry.name).unlink(missing_ok=True)
             _description_sidecar_path(entry.name).unlink(missing_ok=True)
+            _source_url_sidecar_path(entry.name).unlink(missing_ok=True)
             shutil.rmtree(_notebook_versions_dir(entry.name), ignore_errors=True)
 
         deleted_filenames.append(entry.name)
@@ -5563,6 +5673,7 @@ def delete_notebook(filename: str, dry_run: bool = False):
             os.remove(file_path)
             _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
             _description_sidecar_path(file_path.name).unlink(missing_ok=True)
+            _source_url_sidecar_path(file_path.name).unlink(missing_ok=True)
             shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
 
         except Exception as e:
@@ -5681,6 +5792,7 @@ def delete_notebooks_batch(data: dict):
                 os.remove(file_path)
                 _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
                 _description_sidecar_path(file_path.name).unlink(missing_ok=True)
+                _source_url_sidecar_path(file_path.name).unlink(missing_ok=True)
                 shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
 
             results.append({
@@ -6167,6 +6279,14 @@ def _rename_notebook_to(old_path: Path, new_filename, overwrite: bool, dry_run: 
         else:
             new_description_path.unlink(missing_ok=True)
 
+        old_source_url_path = _source_url_sidecar_path(old_path.name)
+        new_source_url_path = _source_url_sidecar_path(new_path.name)
+
+        if old_source_url_path.is_file():
+            os.replace(old_source_url_path, new_source_url_path)
+        else:
+            new_source_url_path.unlink(missing_ok=True)
+
         old_versions_dir = _notebook_versions_dir(old_path.name)
         new_versions_dir = _notebook_versions_dir(new_path.name)
 
@@ -6382,6 +6502,13 @@ def copy_notebook(filename: str, data: dict):
     discarded along with the rest of the file it belonged to, the same
     overwrite semantics rename_notebook already applies.
 
+    "source_url" (the URL a notebook was originally imported from, if
+    any -- see POST /api/notebooks/import-url) is always inherited too,
+    unconditionally: unlike tags/description, there's no "override"
+    concept for it here, since a copy's own bytes are byte-identical to
+    the source's, so wherever those bytes originally came from is
+    exactly as true of the copy.
+
     Never touches .compile_metadata.json: the source notebook's own
     identity (and whatever it currently backs in GENERATED_DIR, if
     anything) doesn't change at all just because a copy of it now exists
@@ -6542,6 +6669,14 @@ def _copy_notebook_to(
             dest_path.name,
             description if description is not None
             else _read_notebook_description(source_path.name),
+        )
+        # Unlike tags/description above, there's no "override" concept
+        # for source_url in a copy request -- a copy's own bytes are
+        # byte-identical to its source's (shutil.copy2 just above), so
+        # wherever the source's own content originally came from is
+        # exactly as true of the copy, unconditionally inherited.
+        _write_notebook_source_url(
+            dest_path.name, _read_notebook_source_url(source_path.name)
         )
 
     return new_filename

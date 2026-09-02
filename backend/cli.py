@@ -1802,6 +1802,10 @@ def _dispatch_core_command(args):
             print(f"{data['filename']}  ({data['size_bytes']} bytes)")
             print(f"  modified: {data['modified_at']}")
             print(f"  tags: {', '.join(data['tags']) if data['tags'] else '(none)'}")
+
+            if data.get("source_url"):
+                print(f"  source url: {data['source_url']}")
+
             print(f"  currently compiled: {data['currently_compiled']}")
 
             if data['currently_compiled']:

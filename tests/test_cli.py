@@ -3815,6 +3815,50 @@ def test_info_command_prints_a_notebooks_metadata(fake_dashboard):
     assert handler.requests == ["/api/notebooks/add.ipynb/info"]
 
 
+def test_info_command_prints_source_url_when_present(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "filename": "add.ipynb",
+        "size_bytes": 123,
+        "modified_at": "2026-01-01T00:00:00+00:00",
+        "currently_compiled": False,
+        "tags": [],
+        "source_url": "https://example.com/notebooks/add.ipynb",
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["info", "add.ipynb", "--dashboard-url", dashboard_url], cwd=Path.cwd()
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "source url: https://example.com/notebooks/add.ipynb" in proc.stdout
+
+
+def test_info_command_omits_source_url_line_when_absent(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "filename": "add.ipynb",
+        "size_bytes": 123,
+        "modified_at": "2026-01-01T00:00:00+00:00",
+        "currently_compiled": False,
+        "tags": [],
+        "source_url": None,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["info", "add.ipynb", "--dashboard-url", dashboard_url], cwd=Path.cwd()
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "source url" not in proc.stdout
+
+
 def test_info_command_reports_no_tags(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

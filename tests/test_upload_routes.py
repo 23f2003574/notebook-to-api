@@ -35,6 +35,7 @@ from backend.routes.upload import (
     _description_sidecar_path,
     _notebook_versions_dir,
     _regex_has_nested_unbounded_repetition,
+    _source_url_sidecar_path,
     _tags_sidecar_path,
     resolve_generated_path,
     resolve_upload_path,
@@ -2338,6 +2339,140 @@ def test_import_url_fetches_and_saves_a_notebook(
     assert body["sha256"] == hashlib.sha256(handler.content).hexdigest()
 
     assert (Path(UPLOAD_DIR) / "nb.ipynb").read_bytes() == handler.content
+
+
+def test_import_url_persists_source_url_to_notebook_info(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+    """Before this, "source_url" was only ever visible in that one
+    request's own response -- gone the moment it scrolled off a
+    terminal, with no way to later ask "which notebooks came from a URL,
+    and from where".
+    """
+
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    resp = client.post(
+        "/api/notebooks/import-url",
+        json={"url": f"{base_url}/source_url_test.ipynb"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    info = client.get("/api/notebooks/source_url_test.ipynb/info").json()
+    assert info["source_url"] == f"{base_url}/source_url_test.ipynb"
+
+
+def test_source_url_is_null_for_a_directly_uploaded_notebook():
+
+    _upload_sample_notebook("source_url_direct_upload_test.ipynb")
+
+    info = client.get("/api/notebooks/source_url_direct_upload_test.ipynb/info").json()
+    assert info["source_url"] is None
+
+
+def test_import_url_does_not_persist_source_url_under_dry_run(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    resp = client.post(
+        "/api/notebooks/import-url",
+        json={"url": f"{base_url}/source_url_dry_run.ipynb", "dry_run": True},
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert not _source_url_sidecar_path("source_url_dry_run.ipynb").exists()
+
+
+def test_import_url_overwrite_updates_source_url_to_the_new_url(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+    """The notebook's own current content only ever came from the most
+    recent import -- recording anything else about "source_url" would be
+    misleading.
+    """
+
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    client.post(
+        "/api/notebooks/import-url",
+        json={"url": f"{base_url}/source_url_overwrite_a.ipynb", "filename": "source_url_overwrite.ipynb"},
+    )
+
+    resp = client.post(
+        "/api/notebooks/import-url",
+        json={
+            "url": f"{base_url}/source_url_overwrite_b.ipynb",
+            "filename": "source_url_overwrite.ipynb",
+            "overwrite": True,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+    info = client.get("/api/notebooks/source_url_overwrite.ipynb/info").json()
+    assert info["source_url"] == f"{base_url}/source_url_overwrite_b.ipynb"
+
+
+def test_delete_notebook_removes_its_source_url_sidecar_file(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    client.post(
+        "/api/notebooks/import-url",
+        json={"url": f"{base_url}/source_url_delete_test.ipynb"},
+    )
+    assert _source_url_sidecar_path("source_url_delete_test.ipynb").is_file()
+
+    resp = client.delete("/api/notebooks/source_url_delete_test.ipynb")
+    assert resp.status_code == 200
+
+    assert not _source_url_sidecar_path("source_url_delete_test.ipynb").exists()
+
+
+def test_notebooks_info_batch_reports_source_url(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    client.post(
+        "/api/notebooks/import-url",
+        json={"url": f"{base_url}/source_url_info_batch.ipynb"},
+    )
+
+    resp = client.post(
+        "/api/notebooks/info-batch",
+        json={"filenames": ["source_url_info_batch.ipynb"]},
+    )
+
+    assert resp.status_code == 200
+    result = resp.json()["results"][0]
+    assert result["source_url"] == f"{base_url}/source_url_info_batch.ipynb"
+
+
+def test_list_notebooks_reports_source_url_for_an_imported_notebook(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    client.post(
+        "/api/notebooks/import-url",
+        json={"url": f"{base_url}/source_url_list_test.ipynb"},
+    )
+
+    notebooks = client.get("/api/notebooks").json()["notebooks"]
+    entry = next(n for n in notebooks if n["filename"] == "source_url_list_test.ipynb")
+    assert entry["source_url"] == f"{base_url}/source_url_list_test.ipynb"
 
 
 def test_import_url_explicit_filename_overrides_the_derived_one(
@@ -10311,6 +10446,76 @@ def test_rename_notebook_moves_its_tags_to_the_new_name():
 
     os.remove(Path(UPLOAD_DIR) / "tags_rename_target.ipynb")
     _tags_sidecar_path("tags_rename_target.ipynb").unlink(missing_ok=True)
+
+
+def test_rename_notebook_moves_its_source_url_to_the_new_name(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    client.post(
+        "/api/notebooks/import-url",
+        json={"url": f"{base_url}/source_url_rename_source.ipynb", "filename": "source_url_rename_source.ipynb"},
+    )
+
+    rename_resp = client.patch(
+        "/api/notebooks/source_url_rename_source.ipynb",
+        json={"new_filename": "source_url_rename_target.ipynb"},
+    )
+    assert rename_resp.status_code == 200
+
+    assert not _source_url_sidecar_path("source_url_rename_source.ipynb").is_file()
+    assert client.get(
+        "/api/notebooks/source_url_rename_target.ipynb/info"
+    ).json()["source_url"] == f"{base_url}/source_url_rename_source.ipynb"
+
+    os.remove(Path(UPLOAD_DIR) / "source_url_rename_target.ipynb")
+    _source_url_sidecar_path("source_url_rename_target.ipynb").unlink(missing_ok=True)
+
+
+def test_copy_notebook_inherits_source_url_from_the_source(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    client.post(
+        "/api/notebooks/import-url",
+        json={"url": f"{base_url}/copy_source_url_source.ipynb", "filename": "copy_source_url_source.ipynb"},
+    )
+
+    copy_resp = client.post(
+        "/api/notebooks/copy_source_url_source.ipynb/copy",
+        json={"new_filename": "copy_source_url_target.ipynb"},
+    )
+    assert copy_resp.status_code == 200
+
+    assert client.get(
+        "/api/notebooks/copy_source_url_target.ipynb/info"
+    ).json()["source_url"] == f"{base_url}/copy_source_url_source.ipynb"
+
+    os.remove(Path(UPLOAD_DIR) / "copy_source_url_target.ipynb")
+    _source_url_sidecar_path("copy_source_url_target.ipynb").unlink(missing_ok=True)
+
+
+def test_copy_notebook_source_url_is_null_when_the_source_has_none():
+
+    _upload_sample_notebook("copy_source_url_none_source.ipynb")
+
+    copy_resp = client.post(
+        "/api/notebooks/copy_source_url_none_source.ipynb/copy",
+        json={"new_filename": "copy_source_url_none_target.ipynb"},
+    )
+    assert copy_resp.status_code == 200
+
+    assert client.get(
+        "/api/notebooks/copy_source_url_none_target.ipynb/info"
+    ).json()["source_url"] is None
+
+    os.remove(Path(UPLOAD_DIR) / "copy_source_url_none_target.ipynb")
 
 
 def test_rename_notebook_overwrite_discards_the_destinations_previous_tags():
