@@ -5676,6 +5676,8 @@ def _dispatch_core_command(args):
             print("\nConfigured limits:")
             print(f"  max upload size: {config.get('max_upload_bytes')} bytes")
             print(f"  max batch upload files: {config.get('max_batch_upload_files')}")
+            max_notebooks = config.get('max_notebooks')
+            print(f"  max notebooks: {max_notebooks if max_notebooks else 'unlimited'}")
             print(f"  max notebook versions kept: {config.get('max_notebook_versions')}")
             print(f"  max tag length: {config.get('max_tag_length')}")
             print(f"  max tags per notebook: {config.get('max_tags_per_notebook')}")

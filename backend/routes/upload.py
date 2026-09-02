@@ -580,6 +580,41 @@ MAX_NOTEBOOK_VERSIONS = int(
     os.getenv("NOTEBOOK_API_MAX_VERSIONS_PER_NOTEBOOK", "20")
 )
 
+# Same NOTEBOOK_API_* env-var convention as MAX_UPLOAD_BYTES/
+# MAX_BATCH_UPLOAD_FILES/MAX_NOTEBOOK_VERSIONS above -- but unlike any of
+# those, which each bound a single upload/batch/notebook's own history,
+# nothing before this ever capped how many *distinct* notebooks UPLOAD_DIR
+# can hold in total: a runaway automated pipeline re-uploading under a
+# fresh filename each run (or simply years of uncurated, never-cleaned-up
+# uploads) could grow the catalog without bound, the exact same
+# unreclaimed-disk-space failure mode MAX_NOTEBOOK_VERSIONS/
+# STALE_UPLOAD_TEMP_FILE_SECONDS already close for a single notebook's own
+# version history and crashed-upload temp files respectively, just at the
+# whole-catalog level instead. 0 (the default) disables the cap entirely,
+# preserving the previous unbounded behavior -- the same "0 means off"
+# convention NOTEBOOK_API_RATE_LIMIT_PER_MINUTE (backend/generator/
+# api_generator.py) already establishes for the generated app's own rate
+# limiter, rather than picking an arbitrary nonzero default that could
+# reject an existing deployment's already-larger catalog the moment this
+# shipped.
+MAX_NOTEBOOKS = int(os.getenv("NOTEBOOK_API_MAX_NOTEBOOKS", "0"))
+
+
+def _current_notebook_count():
+    """How many ".ipynb" files currently sit directly in UPLOAD_DIR --
+    the same catalog GET /api/notebooks lists and MAX_NOTEBOOKS (above)
+    caps the total size of.
+    """
+    upload_root = Path(UPLOAD_DIR)
+
+    if not upload_root.is_dir():
+        return 0
+
+    return sum(
+        1 for entry in upload_root.iterdir()
+        if entry.is_file() and entry.suffix == ".ipynb"
+    )
+
 
 def _notebook_versions_dir(notebook_filename: str) -> Path:
     """Directory holding `notebook_filename`'s previous-version snapshots.
@@ -917,6 +952,23 @@ async def _save_uploaded_notebook(
     real write would do without doing it" preview _copy_notebook_to's own
     `dry_run` already provides one level down from here. The temp file is
     always removed before returning, dry run or not.
+
+    Rejects a brand-new filename with 400 once the catalog already holds
+    MAX_NOTEBOOKS notebooks (0, the default, disables this entirely) --
+    see that constant's own comment above. Never rejects an overwrite of
+    an already-existing filename, regardless of how full the catalog
+    already is, since that never changes how many distinct notebooks
+    UPLOAD_DIR holds. Checked only under _upload_lock_for(file_path.name)
+    -- the same per-*filename* lock every other check in this function
+    already runs under -- so two concurrent uploads of two *different*
+    new filenames can each observe the catalog as just barely under
+    MAX_NOTEBOOKS and both proceed, landing the catalog one or two
+    notebooks over the configured cap. This is the same soft,
+    approximate enforcement _validate_batch_entry_count's own per-batch
+    cap already accepts (nothing in this codebase holds one single global
+    upload lock), acceptable for an administrative capacity limit rather
+    than a hard security boundary -- the *next* new-filename upload after
+    that will still see the catalog at (or over) the cap and be rejected.
     """
 
     if not file.filename.endswith(".ipynb"):
@@ -950,6 +1002,33 @@ async def _save_uploaded_notebook(
                 detail=(
                     f"A notebook named '{file.filename}' already exists. "
                     "Pass ?overwrite=true to replace it."
+                )
+            )
+
+        # Only a brand-new filename actually grows the catalog -- an
+        # overwrite of an already-existing one (handled above/below) never
+        # changes _current_notebook_count() at all, so it's never subject
+        # to this cap regardless of how close to it the catalog already
+        # is. Checked before a single byte of the upload is even streamed
+        # to temp_path below, the same fail-fast-before-doing-any-work
+        # precedent MAX_BATCH_UPLOAD_FILES's own _validate_batch_entry_count
+        # already sets, rather than only discovering the catalog is full
+        # after this request already paid the cost of streaming and
+        # validating the whole file.
+        if (
+            MAX_NOTEBOOKS
+            and not file_path.exists()
+            and _current_notebook_count() >= MAX_NOTEBOOKS
+        ):
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"This dashboard already has the maximum of "
+                    f"{MAX_NOTEBOOKS} notebook(s) allowed "
+                    "(NOTEBOOK_API_MAX_NOTEBOOKS) -- delete an existing "
+                    "one first, or overwrite one instead of adding a new "
+                    "one."
                 )
             )
 
@@ -12208,6 +12287,18 @@ def get_config():
     sweep would have reclaimed it anyway, had no way to ask that short of
     the same direct environment access this endpoint's own docstring
     already says a client shouldn't need.
+
+    "max_notebooks" (added alongside this same docstring's original
+    feature, not a separate change) is MAX_NOTEBOOKS -- already
+    independently configurable via NOTEBOOK_API_MAX_NOTEBOOKS since the
+    catalog-wide cap itself was added to POST /api/upload (and every
+    other notebook-creating endpoint that shares its own
+    _save_uploaded_notebook), but never itself picked up here: 0 means
+    the cap is disabled, the same "0 means off" value
+    "rate_limit_per_minute" (GET /api/env-vars-preview) already uses for
+    the generated app's own rate limiter, so a caller can't tell "no cap
+    configured" apart from "some real, nonzero cap" without reading this
+    field back.
     """
 
     from backend.dashboard import allowed_origins
@@ -12217,6 +12308,7 @@ def get_config():
         "allowed_origins": allowed_origins(),
         "max_upload_bytes": MAX_UPLOAD_BYTES,
         "max_batch_upload_files": MAX_BATCH_UPLOAD_FILES,
+        "max_notebooks": MAX_NOTEBOOKS,
         "max_notebook_versions": MAX_NOTEBOOK_VERSIONS,
         "max_tag_length": _MAX_TAG_LENGTH,
         "max_tags_per_notebook": _MAX_TAGS_PER_NOTEBOOK,

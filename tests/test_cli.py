@@ -16776,6 +16776,82 @@ def test_status_command_prints_stale_upload_temp_file_threshold(tmp_path, fake_d
     assert "stale upload temp file threshold: 3600s" in proc.stdout
 
 
+def test_status_command_prints_a_configured_max_notebooks(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "healthy", "service": "notebook-to-api",
+            "compiled_app_present": False,
+        }),
+        _json_response(200, {
+            "status": "success",
+            "max_upload_bytes": 10485760,
+            "max_batch_upload_files": 50,
+            "max_notebooks": 500,
+            "max_notebook_versions": 20,
+            "max_tag_length": 40,
+            "max_tags_per_notebook": 20,
+            "max_description_length": 500,
+            "max_deploy_history_entries": 50,
+            "max_compile_history_entries": 50,
+            "deploy_subprocess_timeout_seconds": 600,
+            "url_import_timeout_seconds": 30,
+            "stale_upload_temp_file_seconds": 3600,
+            "notebook_sort_keys": ["name", "size", "uploaded_at"],
+            "notebook_sort_orders": ["asc", "desc"],
+            "allowed_origins": [],
+            "compiling_python_version": "3.12",
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["status", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "max notebooks: 500" in proc.stdout
+
+
+def test_status_command_prints_unlimited_for_a_disabled_max_notebooks(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "healthy", "service": "notebook-to-api",
+            "compiled_app_present": False,
+        }),
+        _json_response(200, {
+            "status": "success",
+            "max_upload_bytes": 10485760,
+            "max_batch_upload_files": 50,
+            "max_notebooks": 0,
+            "max_notebook_versions": 20,
+            "max_tag_length": 40,
+            "max_tags_per_notebook": 20,
+            "max_description_length": 500,
+            "max_deploy_history_entries": 50,
+            "max_compile_history_entries": 50,
+            "deploy_subprocess_timeout_seconds": 600,
+            "url_import_timeout_seconds": 30,
+            "stale_upload_temp_file_seconds": 3600,
+            "notebook_sort_keys": ["name", "size", "uploaded_at"],
+            "notebook_sort_orders": ["asc", "desc"],
+            "allowed_origins": [],
+            "compiling_python_version": "3.12",
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["status", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "max notebooks: unlimited" in proc.stdout
+
+
 def test_status_command_prints_allowed_origins(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

@@ -510,6 +510,173 @@ def test_upload_accepts_a_notebook_within_a_raised_size_limit(monkeypatch):
     assert os.path.exists(os.path.join(UPLOAD_DIR, "within_limit.ipynb"))
 
 
+def test_upload_rejects_a_new_notebook_once_max_notebooks_is_reached(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    current_count = upload_module._current_notebook_count()
+    monkeypatch.setattr(upload_module, "MAX_NOTEBOOKS", current_count + 1)
+
+    first_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "max_notebooks_first.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    assert first_resp.status_code == 200
+
+    second_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "max_notebooks_second.ipynb",
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    assert second_resp.status_code == 400
+    assert "maximum" in second_resp.json()["detail"].lower()
+    assert not (Path(UPLOAD_DIR) / "max_notebooks_second.ipynb").exists()
+
+
+def test_upload_overwrite_is_never_blocked_by_max_notebooks(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    filename = "max_notebooks_overwrite_target.ipynb"
+
+    setup_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    assert setup_resp.status_code == 200
+
+    # The catalog is already "full" by this cap's own accounting -- an
+    # overwrite of an already-existing filename must still succeed,
+    # since it never changes how many distinct notebooks UPLOAD_DIR holds.
+    monkeypatch.setattr(
+        upload_module, "MAX_NOTEBOOKS", upload_module._current_notebook_count()
+    )
+
+    overwrite_resp = client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    assert overwrite_resp.status_code == 200
+    assert overwrite_resp.json()["overwritten"] is True
+
+
+def test_upload_dry_run_reports_the_max_notebooks_rejection_without_writing(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(
+        upload_module, "MAX_NOTEBOOKS", upload_module._current_notebook_count()
+    )
+
+    resp = client.post(
+        "/api/upload",
+        params={"dry_run": "true"},
+        files={
+            "file": (
+                "max_notebooks_dry_run.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+
+    assert resp.status_code == 400
+    assert not (Path(UPLOAD_DIR) / "max_notebooks_dry_run.ipynb").exists()
+
+
+def test_upload_batch_reports_errors_for_files_beyond_max_notebooks(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    current_count = upload_module._current_notebook_count()
+    monkeypatch.setattr(upload_module, "MAX_NOTEBOOKS", current_count + 1)
+
+    resp = client.post(
+        "/api/upload/batch",
+        files=[
+            (
+                "files",
+                (
+                    "max_notebooks_batch_a.ipynb",
+                    io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                    "application/json",
+                ),
+            ),
+            (
+                "files",
+                (
+                    "max_notebooks_batch_b.ipynb",
+                    io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                    "application/json",
+                ),
+            ),
+        ],
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    statuses = {r["filename"]: r["status"] for r in body["results"]}
+    assert statuses["max_notebooks_batch_a.ipynb"] == "success"
+    assert statuses["max_notebooks_batch_b.ipynb"] == "error"
+    assert not (Path(UPLOAD_DIR) / "max_notebooks_batch_b.ipynb").exists()
+
+
+def test_upload_max_notebooks_disabled_by_default_allows_unbounded_uploads():
+
+    from backend.routes.upload import MAX_NOTEBOOKS
+
+    assert MAX_NOTEBOOKS == 0
+
+
+def test_get_config_reports_the_max_notebooks_default_of_zero():
+
+    from backend.routes.upload import MAX_NOTEBOOKS
+
+    resp = client.get("/api/config")
+
+    assert resp.status_code == 200
+    assert resp.json()["max_notebooks"] == MAX_NOTEBOOKS
+
+
+def test_get_config_reflects_a_configured_max_notebooks(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_NOTEBOOKS", 5)
+
+    resp = client.get("/api/config")
+
+    assert resp.json()["max_notebooks"] == 5
+
+
 def test_upload_reports_overwritten_false_for_a_brand_new_notebook():
 
     content = _notebook_bytes(
