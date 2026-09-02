@@ -19994,6 +19994,59 @@ def test_list_generated_files_returns_empty_before_any_compile(monkeypatch):
     assert body["compiled_at"] is None
     assert body["source_notebook_filename"] is None
     assert body["source_notebook_exists"] is False
+    assert body["generated_files_modified_since_compile"] is None
+
+
+def test_list_generated_files_reports_false_immediately_after_a_compile():
+
+    _compile_a_notebook("generated_files_modified_false_test.ipynb")
+
+    resp = client.get("/api/generated")
+
+    assert resp.status_code == 200
+    assert resp.json()["generated_files_modified_since_compile"] is False
+
+    os.remove(Path(UPLOAD_DIR) / "generated_files_modified_false_test.ipynb")
+
+
+def test_list_generated_files_reports_true_after_a_generated_file_is_hand_edited():
+    """The output-side mirror of notebook_changed_since_compile: catches
+    the *compiled output itself* (not the source notebook) having been
+    hand-edited on the server since the last compile.
+    """
+
+    _compile_a_notebook("generated_files_modified_true_test.ipynb")
+
+    (Path(GENERATED_DIR) / "requirements.txt").write_text(
+        "fastapi==0.0.0\n", encoding="utf-8"
+    )
+
+    resp = client.get("/api/generated")
+
+    assert resp.status_code == 200
+    assert resp.json()["generated_files_modified_since_compile"] is True
+
+    os.remove(Path(UPLOAD_DIR) / "generated_files_modified_true_test.ipynb")
+
+
+def test_list_generated_files_modified_since_compile_ignores_an_unrelated_export():
+    """A later POST /api/export-openapi/export-sdk writing openapi.json/
+    sdk/ into GENERATED_DIR must never itself be mistaken for the
+    compiled output having been tampered with -- neither is part of what
+    a compile itself actually produces.
+    """
+
+    _compile_a_notebook("generated_files_modified_export_test.ipynb")
+
+    (Path(GENERATED_DIR) / "openapi.json").write_text("{}", encoding="utf-8")
+
+    resp = client.get("/api/generated")
+
+    assert resp.status_code == 200
+    assert resp.json()["generated_files_modified_since_compile"] is False
+
+    os.remove(Path(UPLOAD_DIR) / "generated_files_modified_export_test.ipynb")
+    os.remove(Path(GENERATED_DIR) / "openapi.json")
 
 
 def test_list_generated_files_lists_the_compiled_output():

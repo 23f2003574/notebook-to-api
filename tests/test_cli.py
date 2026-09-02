@@ -14130,6 +14130,66 @@ def test_remote_files_list_command_prints_the_compiled_files(tmp_path, fake_dash
     assert handler.requests == ["/api/generated"]
 
 
+def test_remote_files_list_command_warns_when_generated_files_were_modified_since_compile(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "generated_files": ["app.py", "requirements.txt"],
+            "file_details": [
+                {"filename": "app.py", "size_bytes": 1024, "modified_at": "2026-01-01T00:00:00+00:00"},
+            ],
+            "compiled_at": "2026-01-01T00:00:00+00:00",
+            "source_notebook_filename": "nb.ipynb",
+            "source_notebook_exists": True,
+            "generated_files_modified_since_compile": True,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-files", "list", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "modified since the last compile" in proc.stdout
+
+
+def test_remote_files_list_command_omits_the_warning_when_nothing_was_modified(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "generated_files": ["app.py"],
+            "file_details": [
+                {"filename": "app.py", "size_bytes": 1024, "modified_at": "2026-01-01T00:00:00+00:00"},
+            ],
+            "compiled_at": "2026-01-01T00:00:00+00:00",
+            "source_notebook_filename": "nb.ipynb",
+            "source_notebook_exists": True,
+            "generated_files_modified_since_compile": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-files", "list", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "modified since the last compile" not in proc.stdout
+
+
 def test_remote_files_list_command_shows_the_compiled_version_id_when_present(
     tmp_path, fake_dashboard
 ):

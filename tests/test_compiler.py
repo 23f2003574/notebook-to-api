@@ -3664,6 +3664,124 @@ def test_compile_metadata_records_the_source_notebooks_content_hash(tmp_path):
     assert metadata["source_notebook_sha256"] == hash_notebook_file(notebook_path)
 
 
+def test_compile_metadata_records_generated_files_sha256(tmp_path):
+    """The output-side counterpart to source_notebook_sha256 above: a
+    baseline hash over the compile-produced files themselves (app.py,
+    requirements.txt, Dockerfile, ...), recorded at the very end of a
+    successful compile so a later caller can tell whether the *compiled
+    output* has since been hand-edited on the server, not just whether
+    the source notebook has.
+    """
+
+    import json
+
+    from backend.compiler import COMPILE_METADATA_FILENAME, _generated_files_sha256
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    metadata_path = output_dir / COMPILE_METADATA_FILENAME
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    assert metadata["generated_files_sha256"] == _generated_files_sha256(str(output_dir))
+
+
+def test_generated_files_sha256_changes_when_a_generated_file_is_hand_edited(tmp_path):
+
+    from backend.compiler import _generated_files_sha256
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    baseline = _generated_files_sha256(str(output_dir))
+
+    (output_dir / "requirements.txt").write_text(
+        "fastapi==0.0.0\n", encoding="utf-8"
+    )
+
+    assert _generated_files_sha256(str(output_dir)) != baseline
+
+
+def test_generated_files_sha256_ignores_files_outside_the_known_set(tmp_path):
+    """A generic directory walk would pick up an unrelated file an
+    operator (or a later POST /api/export-openapi/export-sdk) dropped
+    into output_dir -- this hash must only ever reflect the specific
+    files a compile itself actually produces.
+    """
+
+    from backend.compiler import _generated_files_sha256
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    baseline = _generated_files_sha256(str(output_dir))
+
+    (output_dir / "openapi.json").write_text("{}", encoding="utf-8")
+
+    assert _generated_files_sha256(str(output_dir)) == baseline
+
+
+def test_generated_files_sha256_skips_a_missing_file_without_raising(tmp_path):
+
+    from backend.compiler import _generated_files_sha256
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    baseline = _generated_files_sha256(str(output_dir))
+
+    (output_dir / ".dockerignore").unlink()
+
+    changed = _generated_files_sha256(str(output_dir))
+
+    assert changed != baseline  # a missing file still changes the hash
+    # ...but doesn't raise, confirmed simply by reaching this assertion.
+
+
 def test_compiler_pipeline_optional_none_default_param_is_actually_optional(
     tmp_path
 ):

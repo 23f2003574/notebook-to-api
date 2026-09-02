@@ -851,13 +851,104 @@ def hash_notebook_file(notebook_path):
     return hasher.hexdigest()
 
 
+# Every file a real compile actually writes into output_dir, relative to
+# it -- "app.py" itself is appended separately in
+# _generated_files_sha256 below, since its own filename is a caller-
+# supplied output_path, not a fixed literal the way these six are.
+# Deliberately a fixed list, not a generic directory walk: an operator's
+# own unrelated file dropped into output_dir by hand (or a later POST
+# /api/export-openapi/export-sdk's own openapi.json/sdk/, which a
+# compile never produces and clear_stale_export_artifacts already treats
+# as not part of "this compile's own output") must never affect this
+# hash -- only these specific compile-produced artifacts should.
+_GENERATED_OUTPUT_RELATIVE_PATHS = (
+    "requirements.txt",
+    "Dockerfile",
+    ".dockerignore",
+    "docker-compose.yml",
+    os.path.join("runtime", "notebook_module.py"),
+)
+
+
+def _generated_files_sha256(output_dir, app_filename="app.py"):
+    """A single SHA-256 summarizing the exact set of files a real compile
+    writes into `output_dir` -- the same "one filename:sha256 pair per
+    file, sorted, combined into one hash" technique GET /api/download's
+    own "X-Bundle-SHA256" header and GET /api/generated?checksums=true's
+    own "bundle_sha256" (both backend/routes/upload.py) already use for
+    an entire compiled bundle, just applied here to compiler.py's own
+    fixed, known-at-compile-time file set (see
+    _GENERATED_OUTPUT_RELATIVE_PATHS above) instead of a live directory
+    walk -- reused (not duplicated) by write_compile_metadata below to
+    record a baseline at compile time, and by GET /api/generated
+    (routes/upload.py) to recompute the same hash later and compare
+    against it.
+
+    A file this project's own compile pipeline hasn't written yet (or
+    that's since been deleted by hand) is silently skipped rather than
+    raising -- this must never be the reason a real compile fails, since
+    write_compile_metadata's own caller has already committed to
+    treating this compile as successful by the time it calls this (see
+    write_compile_metadata's own docstring for the "no exception past
+    this point" discipline compile_notebook_to_api already follows). A
+    missing file still changes the resulting hash from a compile that
+    did produce it, so a deleted artifact is still detected as a change,
+    just not as a hard failure.
+
+    `app_filename` defaults to "app.py" -- every real caller compiles to
+    "<output_dir>/app.py" (see compile_notebook's own docstring); passed
+    explicitly rather than hardcoded so a caller computing this against
+    an unusual output_path can still get an accurate hash.
+    """
+    hasher = hashlib.sha256()
+
+    relative_paths = sorted(_GENERATED_OUTPUT_RELATIVE_PATHS + (app_filename,))
+
+    for relative_path in relative_paths:
+
+        file_path = Path(output_dir) / relative_path
+
+        if not file_path.is_file():
+            continue
+
+        hasher.update(
+            f"{relative_path}:{hash_notebook_file(str(file_path))}\n".encode("utf-8")
+        )
+
+    return hasher.hexdigest()
+
+
 def write_compile_metadata(
-    notebook_path, output_dir, content_path=None, version_id=None
+    notebook_path, output_dir, content_path=None, version_id=None,
+    app_filename="app.py",
 ):
     """Record which notebook produced the app in `output_dir`, its
     content hash at that moment, when, and -- if this compile came from
     one of that notebook's own previously snapshotted versions rather
     than its current content -- which one.
+
+    "generated_files_sha256" (added alongside this same docstring's
+    original three fields, not a separate change) is
+    _generated_files_sha256(output_dir, app_filename) above -- a
+    baseline hash over the exact compile-produced files themselves
+    (app.py, requirements.txt, Dockerfile, .dockerignore,
+    docker-compose.yml, the runtime module), taken at the very end of a
+    successful compile, once every one of those has actually been
+    written. Every hash/staleness check this dashboard already had
+    compared the *source notebook's* own content against what's
+    currently compiled (see "source_notebook_sha256" below) -- but
+    nothing recorded whether the compiled *output itself* still matches
+    what that compile actually produced. A generated/app.py hand-edited
+    directly on the server after compiling (to patch something in a
+    hurry, say) previously left every metadata-driven consumer -- GET
+    /api/notebooks, GET /api/generated, POST /api/deploy's own staleness
+    check -- confidently reporting the compile as fully up to date with
+    its source notebook, with no way to tell the *served* code had
+    silently diverged from what that notebook actually compiles to.
+    `app_filename` is threaded through from compile_notebook_to_api's
+    own `output_path` (its basename) rather than assumed, so this stays
+    accurate even for a caller compiling to something other than the
+    "<output_dir>/app.py" every documented caller already uses.
 
     "compiled_version_id" (None for an ordinary compile of a notebook's
     own current content, the overwhelmingly common case) is the same
@@ -920,6 +1011,7 @@ def write_compile_metadata(
             datetime.datetime.now(datetime.timezone.utc).isoformat()
         ),
         "compiled_version_id": version_id,
+        "generated_files_sha256": _generated_files_sha256(output_dir, app_filename),
     }
 
     with open(metadata_path, "w", encoding="utf-8") as f:
@@ -1262,6 +1354,7 @@ def compile_notebook_to_api(
                 output_dir,
                 content_path=notebook_path,
                 version_id=version_id,
+                app_filename=os.path.basename(output_path),
             )
 
         except Exception:

@@ -41,6 +41,7 @@ from backend.compiler import (
     _extract_excluded_imports,
     _extract_explicit_requirements,
     _filter_functions_by_name,
+    _generated_files_sha256,
     compile_notebook,
     compiling_python_version,
     extract_third_party_imports,
@@ -2182,6 +2183,56 @@ def _currently_compiled_notebook_metadata():
         metadata.get("compiled_at"),
         metadata.get("compiled_version_id"),
     )
+
+
+def _generated_files_modified_since_compile():
+    """Whether GENERATED_DIR's own compile-produced files (app.py,
+    requirements.txt, Dockerfile, .dockerignore, docker-compose.yml, the
+    runtime module) no longer match the baseline write_compile_metadata
+    recorded for them at compile time (see "generated_files_sha256",
+    backend/compiler.py) -- the output-side mirror of
+    _currently_compiled_notebook_is_stale's own input-side check: that
+    one catches the *source notebook* having changed since the last
+    compile, this one catches the *compiled output itself* having been
+    hand-edited on the server since then (patching generated/app.py
+    directly, say), which nothing before this could detect at all --
+    every metadata-driven consumer (GET /api/notebooks, GET
+    /api/generated, POST /api/deploy's own staleness check) had no way
+    to tell a compile's own recorded output apart from output that had
+    since silently diverged from it.
+
+    Returns None (nothing to compare) if nothing has been compiled yet,
+    the metadata is missing/corrupt, or it predates this field entirely
+    (an existing GENERATED_DIR compiled before this feature existed --
+    "generated_files_sha256" simply isn't there yet) -- the same
+    "informational, best-effort, never a hard failure" degradation
+    _currently_compiled_notebook_metadata's own missing-file handling
+    already follows, distinguished from an actual True/False verdict so
+    a caller can tell "unknown" apart from "confirmed unmodified".
+    Recomputes the current hash via the identical _generated_files_sha256
+    write_compile_metadata itself already used to record the baseline,
+    so this can never drift from what that comparison actually means.
+    """
+
+    metadata_path = Path(GENERATED_DIR) / COMPILE_METADATA_FILENAME
+
+    if not metadata_path.is_file():
+        return None
+
+    try:
+
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+
+    except (OSError, ValueError):
+        return None
+
+    recorded_sha256 = metadata.get("generated_files_sha256")
+
+    if not recorded_sha256:
+        return None
+
+    return _generated_files_sha256(GENERATED_DIR) != recorded_sha256
 
 
 def _currently_compiled_notebook_is_stale():
@@ -12038,6 +12089,22 @@ def list_generated_files_endpoint(checksums: bool = False):
     notebook's own content. Off by default -- hashing every generated
     file is real work this endpoint's existing size/mtime listing never
     needed, most callers of the plain listing don't need either.
+
+    "generated_files_modified_since_compile" (unconditional, unlike
+    "checksums"' own opt-in fields above -- see
+    _generated_files_modified_since_compile's own docstring for why this
+    one is cheap enough to always compute: a fixed handful of known
+    files, not every file "checksums" would hash) is the output-side
+    mirror of "notebook_changed_since_compile" GET /api/notebooks already
+    reports for the currently-compiled entry: that one catches the
+    *source notebook* having changed since the last compile, this one
+    catches the compiled *output itself* -- app.py, requirements.txt,
+    Dockerfile, .dockerignore, docker-compose.yml, the runtime module --
+    having been hand-edited on the server since then, which nothing
+    before this could detect at all. True/False once a compile with this
+    field has actually happened; null if nothing has been compiled yet,
+    or if GENERATED_DIR was produced by a compile that predates this
+    field entirely.
     """
 
     with COMPILE_LOCK:
@@ -12081,6 +12148,10 @@ def list_generated_files_endpoint(checksums: bool = False):
             _currently_compiled_notebook_metadata()
         )
 
+        generated_files_modified_since_compile = (
+            _generated_files_modified_since_compile()
+        )
+
     source_notebook_filename = None
     source_notebook_exists = False
 
@@ -12103,6 +12174,7 @@ def list_generated_files_endpoint(checksums: bool = False):
         "compiled_version_id": compiled_version_id,
         "source_notebook_filename": source_notebook_filename,
         "source_notebook_exists": source_notebook_exists,
+        "generated_files_modified_since_compile": generated_files_modified_since_compile,
     }
 
     if checksums:

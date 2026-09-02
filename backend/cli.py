@@ -4920,6 +4920,14 @@ def _dispatch_core_command(args):
                         )
                         print(f"\nCompiled from: {source}{version_note}{exists_note}")
 
+                    if data.get("generated_files_modified_since_compile"):
+                        print(
+                            "\nwarning: the compiled output itself has been "
+                            "modified since the last compile (app.py, "
+                            "requirements.txt, Dockerfile, ... no longer "
+                            "match what that compile actually produced)."
+                        )
+
         elif args.remote_files_command == "get":
 
             try:
@@ -9383,8 +9391,10 @@ def main():
             "Emit the dashboard's own JSON response ({\"status\", "
             "\"generated_files\", \"file_details\", \"compiled_at\", "
             "\"compiled_version_id\", \"source_notebook_filename\", "
-            "\"source_notebook_exists\"[, \"bundle_sha256\"]}) instead of "
-            "a human-readable listing, for scripting/automation."
+            "\"source_notebook_exists\", "
+            "\"generated_files_modified_since_compile\"[, "
+            "\"bundle_sha256\"]}) instead of a human-readable listing, "
+            "for scripting/automation."
         )
     )
 
