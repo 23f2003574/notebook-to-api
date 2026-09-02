@@ -1290,6 +1290,16 @@ def _dispatch_core_command(args):
         build_args = ["docker", "build", "-t", tag]
         if args.platform:
             build_args += ["--platform", args.platform]
+        # Same reasoning as --platform above: without a way to force
+        # `docker build --no-cache`, an operator debugging a suspected
+        # stale cached layer (requirements.txt changed but a pinned
+        # version's wheel was silently re-published, a floating base
+        # image tag moved without a local re-pull, ...) had no way to
+        # rule it out through this command at all -- only by dropping to
+        # a shell and running `docker build --no-cache` by hand in
+        # --output, bypassing this tool's own compile step.
+        if args.no_cache:
+            build_args.append("--no-cache")
         build_args.append(".")
         if args.json_output:
             # Suppresses every progress print along this path
@@ -5298,6 +5308,9 @@ def _dispatch_core_command(args):
         if args.platform:
             body["platform"] = args.platform
 
+        if args.no_cache:
+            body["no_cache"] = True
+
         if args.dry_run:
             body["dry_run"] = True
 
@@ -6018,6 +6031,19 @@ def main():
             "when building on one architecture (e.g. Apple Silicon) for a "
             "deploy target that runs another, which almost every cloud "
             "PaaS does (linux/amd64)."
+        )
+    )
+    deploy_parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        dest="no_cache",
+        help=(
+            "Pass `docker build --no-cache`, forcing a clean rebuild of "
+            "every layer instead of reusing Docker's own cache -- e.g. "
+            "to rule out a stale cached `pip install` layer after "
+            "requirements.txt changed but a pinned version's wheel was "
+            "silently re-published, or a floating base image tag moved "
+            "without a local re-pull."
         )
     )
     deploy_parser.add_argument(
@@ -9729,6 +9755,17 @@ def main():
             "Target platform to pass to `docker build --platform` on the "
             "dashboard's own host (e.g. linux/amd64, linux/arm64). "
             "Defaults to that host's own Docker daemon default."
+        )
+    )
+    remote_deploy_parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        dest="no_cache",
+        help=(
+            "Pass `docker build --no-cache` on the dashboard's own host, "
+            "via POST /api/deploy's own \"no_cache\" body field -- "
+            "forcing a clean rebuild of every layer instead of reusing "
+            "Docker's own cache there."
         )
     )
     remote_deploy_parser.add_argument(

@@ -10891,6 +10891,16 @@ def deploy_generated_app(data: dict = None):
     "the field always reports what a real run would produce, only
     "dry_run" itself signals nothing actually happened" convention every
     other "dry_run" response in this file already follows.
+
+    "no_cache" (optional, default false) passes `docker build --no-cache`
+    -- forcing a clean rebuild of every layer instead of reusing Docker's
+    own cache, the same escape hatch an operator debugging a suspected
+    stale cached layer (e.g. requirements.txt changed but a pinned
+    version's wheel was silently re-published, or a floating base image
+    tag moved without a local re-pull) would otherwise only have by
+    dropping to a shell on the server and running `docker build
+    --no-cache` directly in GENERATED_DIR, bypassing this dashboard's own
+    deploy history/staleness-check machinery entirely.
     """
 
     generated_path = Path(GENERATED_DIR)
@@ -10930,6 +10940,8 @@ def deploy_generated_app(data: dict = None):
             detail="platform must be a string"
         )
 
+    no_cache = bool(data.get("no_cache", False))
+
     # `docker build`'s own default target platform is whatever the local
     # Docker daemon's host architecture is -- correct for a plain `docker
     # run` on that same machine, but not for the common case of building
@@ -10941,6 +10953,19 @@ def deploy_generated_app(data: dict = None):
     build_args = ["docker", "build", "-t", tag]
     if platform:
         build_args += ["--platform", platform]
+    # Docker's own layer cache can silently reuse a stale `pip install
+    # -r requirements.txt` layer even after requirements.txt changed --
+    # a pinned version's wheel got re-published under the same tag, a
+    # private index changed what it serves for an unpinned/loosely-pinned
+    # spec, or the base image tag this Dockerfile references moved
+    # without Docker ever re-pulling it locally. Before this, an operator
+    # who suspected (or wanted to rule out) a stale cached layer had no
+    # way to force a clean rebuild through this endpoint at all -- the
+    # only escape hatch was dropping to a shell on the server and running
+    # `docker build --no-cache` directly in GENERATED_DIR, bypassing this
+    # dashboard's own deploy history/staleness-check machinery entirely.
+    if no_cache:
+        build_args.append("--no-cache")
     build_args.append(".")
 
     # Held from the staleness check through the build itself (see

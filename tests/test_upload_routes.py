@@ -17964,6 +17964,72 @@ def test_deploy_endpoint_omits_platform_flag_by_default(tmp_path, monkeypatch):
     assert "--platform" not in build_call
 
 
+def test_deploy_endpoint_respects_no_cache(tmp_path, monkeypatch):
+    """Docker's own layer cache can silently reuse a stale `pip install`
+    layer even after requirements.txt changed -- before "no_cache"
+    existed, an operator ruling that out had no way to force a clean
+    rebuild through this endpoint at all.
+    """
+
+    _compile_a_notebook("deploy_no_cache_test.ipynb")
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post("/api/deploy", json={"no_cache": True})
+
+    assert resp.status_code == 200
+
+    calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
+    build_call = calls[0].splitlines()
+    assert build_call[:-1] == [
+        "build", "-t", "generated:latest", "--no-cache", ".",
+    ]
+
+
+def test_deploy_endpoint_omits_no_cache_flag_by_default(tmp_path, monkeypatch):
+
+    _compile_a_notebook("deploy_no_no_cache_test.ipynb")
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post("/api/deploy", json={})
+
+    assert resp.status_code == 200
+
+    calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
+    build_call = calls[0].splitlines()
+    assert "--no-cache" not in build_call
+
+
+def test_deploy_endpoint_combines_no_cache_with_platform(tmp_path, monkeypatch):
+
+    _compile_a_notebook("deploy_no_cache_platform_test.ipynb")
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post(
+        "/api/deploy", json={"no_cache": True, "platform": "linux/amd64"}
+    )
+
+    assert resp.status_code == 200
+
+    calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
+    build_call = calls[0].splitlines()
+    assert build_call[:-1] == [
+        "build", "-t", "generated:latest",
+        "--platform", "linux/amd64", "--no-cache", ".",
+    ]
+
+
 @pytest.mark.parametrize("bad_platform", [123, 1.5, ["linux/amd64"], {"platform": "linux/amd64"}])
 def test_deploy_endpoint_rejects_a_non_string_platform(bad_platform):
     """Mirrors test_deploy_endpoint_rejects_a_non_string_tag: "platform"

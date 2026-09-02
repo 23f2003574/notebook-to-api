@@ -15514,6 +15514,46 @@ def test_remote_deploy_command_passes_tag_push_platform_and_force_through(
     }
 
 
+def test_remote_deploy_command_passes_no_cache_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "tag": "generated:latest", "pushed": False})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-deploy", "--dashboard-url", dashboard_url, "--no-cache"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "push": False, "force": False, "no_cache": True,
+    }
+
+
+def test_remote_deploy_command_omits_no_cache_by_default(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "tag": "generated:latest", "pushed": False})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-deploy", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "no_cache" not in json.loads(handler.bodies[0])
+
+
 def test_remote_deploy_command_dry_run_passes_the_flag_through_and_prints_would_build(
     tmp_path, fake_dashboard
 ):

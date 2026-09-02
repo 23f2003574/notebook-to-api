@@ -385,6 +385,60 @@ def test_deploy_omits_platform_flag_by_default(tmp_path):
     assert "--platform" not in log_lines
 
 
+def test_deploy_respects_no_cache(tmp_path):
+    """Docker's own layer cache can silently reuse a stale `pip install`
+    layer even after requirements.txt changed -- before --no-cache
+    existed, there was no way to force a clean rebuild through this
+    command at all short of running `docker build --no-cache` by hand.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+
+    proc = _run_cli(
+        [
+            "deploy", str(notebook_path), "--output", "generated",
+            "--tag", "myapp:v2", "--no-cache",
+        ],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    log_lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert log_lines[:-1] == [
+        "build", "-t", "myapp:v2", "--no-cache", ".",
+    ]
+
+
+def test_deploy_omits_no_cache_flag_by_default(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+
+    proc = _run_cli(
+        ["deploy", str(notebook_path), "--output", "generated"],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    log_lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert "--no-cache" not in log_lines
+
+
 def test_deploy_reports_a_clear_error_when_docker_is_missing(tmp_path):
 
     workdir = tmp_path / "workdir"
