@@ -324,6 +324,46 @@ STALE_UPLOAD_TEMP_FILE_SECONDS = int(
 )
 
 
+def _stale_upload_temp_file_entries(older_than_seconds):
+    """Yield (path, size_bytes, age_seconds) for every "*.part" temp file
+    directly inside UPLOAD_DIR whose last modification is older than
+    `older_than_seconds`.
+
+    Shared scan logic behind both _cleanup_stale_upload_temp_files below
+    (the opportunistic, silent sweep run at the start of every upload)
+    and DELETE /api/upload/temp-files (an operator-triggered sweep that
+    also reports what it found/removed) -- both need the identical
+    age-gated ".part" scan, just with different thresholds and different
+    things done with the result.
+
+    Best-effort on stat(): a temp file that vanishes between iterdir()
+    listing it and this reading its size/mtime (e.g. its own upload
+    finished and swapped it into place in the meantime) is silently
+    skipped, not an error.
+    """
+    upload_root = Path(UPLOAD_DIR)
+
+    if not upload_root.is_dir():
+        return
+
+    now = datetime.now(timezone.utc).timestamp()
+
+    for entry in sorted(upload_root.iterdir()):
+
+        if not entry.is_file() or not entry.name.endswith(".part"):
+            continue
+
+        try:
+            stat_result = entry.stat()
+        except OSError:
+            continue
+
+        age_seconds = now - stat_result.st_mtime
+
+        if age_seconds > older_than_seconds:
+            yield entry, stat_result.st_size, age_seconds
+
+
 def _cleanup_stale_upload_temp_files():
     """Remove any "*.part" temp file directly inside UPLOAD_DIR whose
     last modification is older than STALE_UPLOAD_TEMP_FILE_SECONDS.
@@ -345,26 +385,15 @@ def _cleanup_stale_upload_temp_files():
     Best-effort: a temp file that's already gone by the time this tries
     to remove it (e.g. its own upload finished and swapped it into place
     in the meantime) is not an error.
+
+    This piggybacked sweep only ever runs as a side effect of a new
+    upload arriving -- see DELETE /api/upload/temp-files below for the
+    gap that leaves open when uploads themselves stop happening.
     """
-    upload_root = Path(UPLOAD_DIR)
-
-    if not upload_root.is_dir():
-        return
-
-    now = datetime.now(timezone.utc).timestamp()
-
-    for entry in upload_root.iterdir():
-
-        if not entry.is_file() or not entry.name.endswith(".part"):
-            continue
-
-        try:
-            age_seconds = now - entry.stat().st_mtime
-        except OSError:
-            continue
-
-        if age_seconds > STALE_UPLOAD_TEMP_FILE_SECONDS:
-            entry.unlink(missing_ok=True)
+    for entry, _size_bytes, _age_seconds in _stale_upload_temp_file_entries(
+        STALE_UPLOAD_TEMP_FILE_SECONDS
+    ):
+        entry.unlink(missing_ok=True)
 
 
 def _resolve_path_within(root_dir: str, name: str, dir_label: str) -> Path:
@@ -1285,6 +1314,89 @@ async def upload_notebooks_batch(
         "results": results,
         "succeeded_count": succeeded_count,
         "failed_count": failed_count,
+    }
+
+
+@router.delete("/upload/temp-files")
+def prune_stale_upload_temp_files(older_than_seconds: int = None, dry_run: bool = False):
+    """Manually sweep UPLOAD_DIR for orphaned ".part" upload temp files
+    and remove whichever ones are old enough, reporting what was found.
+
+    _cleanup_stale_upload_temp_files (above) already reclaims these --
+    but only ever as a side effect of the next POST /api/upload or
+    /api/upload/batch call, since this codebase has no background
+    scheduler of its own to run it any other way (see that function's own
+    docstring). That self-heals a dashboard with steady upload traffic,
+    but leaves a real gap for one without it: a dashboard that's only
+    ever browsed, compiled, or deployed from for a while (no new
+    uploads), or one that has upload traffic entirely disabled behind a
+    read-only proxy, never runs that sweep again -- a `.part` file left
+    behind by one crashed or interrupted upload (a killed container, a
+    client that disconnected mid-stream) just sits in UPLOAD_DIR
+    consuming disk forever, with no way to reclaim it short of an
+    operator finding and deleting a hidden dot-file on the server by
+    hand. Nothing else in this API surfaces these files either: they
+    don't end in ".ipynb", so neither GET /api/notebooks nor GET
+    /api/notebooks/storage (which only ever walks UPLOAD_DIR for ".ipynb"
+    entries and their own ".versions" directories) counts them at all.
+
+    "older_than_seconds" (optional) overrides STALE_UPLOAD_TEMP_FILE_SECONDS
+    (the same age gate the opportunistic sweep uses) for this one call --
+    an operator reclaiming space right now may want a shorter window than
+    the default headroom that gate normally gives an in-flight upload,
+    or a longer one to stay well clear of anything that might still be
+    genuinely streaming. Defaults to STALE_UPLOAD_TEMP_FILE_SECONDS
+    itself, so calling this with no arguments removes exactly what the
+    next upload's own opportunistic sweep would have removed anyway.
+    Must be non-negative; a negative value is rejected with 400 before
+    UPLOAD_DIR is ever scanned.
+
+    "dry_run" (optional, default false) reports the exact same
+    "deleted_files"/"deleted_count"/"reclaimed_bytes" a real sweep would,
+    without removing a single file -- the identical preview DELETE
+    /api/notebooks/versions' own "dry_run" already provides for that
+    endpoint's own irreversible bulk deletion, applied here to this
+    dashboard's own orphaned temp files instead. The top-level response's
+    own "dry_run" field echoes back whether this call actually deleted
+    anything.
+
+    Never touches a ".part" file younger than the threshold -- the same
+    age gate _cleanup_stale_upload_temp_files already enforces, so this
+    can never race a large or merely slow upload that is itself still
+    genuinely streaming into its own temp file.
+    """
+
+    if older_than_seconds is None:
+        older_than_seconds = STALE_UPLOAD_TEMP_FILE_SECONDS
+    elif older_than_seconds < 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="older_than_seconds must be a non-negative integer"
+        )
+
+    deleted_files = []
+    reclaimed_bytes = 0
+
+    for entry, size_bytes, age_seconds in _stale_upload_temp_file_entries(older_than_seconds):
+
+        if not dry_run:
+            entry.unlink(missing_ok=True)
+
+        deleted_files.append({
+            "filename": entry.name,
+            "size_bytes": size_bytes,
+            "age_seconds": int(age_seconds),
+        })
+        reclaimed_bytes += size_bytes
+
+    return {
+        "status": "success",
+        "dry_run": dry_run,
+        "older_than_seconds": older_than_seconds,
+        "deleted_files": deleted_files,
+        "deleted_count": len(deleted_files),
+        "reclaimed_bytes": reclaimed_bytes,
     }
 
 

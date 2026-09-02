@@ -13564,6 +13564,157 @@ def test_prune_all_notebook_versions_requires_a_positive_older_than_days():
     assert resp.status_code == 400
 
 
+def test_prune_temp_files_deletes_only_part_files_older_than_the_default_threshold(
+    monkeypatch,
+):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "STALE_UPLOAD_TEMP_FILE_SECONDS", 3600)
+
+    stale_path = Path(UPLOAD_DIR) / ".prune_temp_stale.ipynb.deadbeef.part"
+    stale_path.write_text("leftover from a crashed upload", encoding="utf-8")
+    stale_size_bytes = stale_path.stat().st_size
+    old_time = datetime.now(timezone.utc).timestamp() - 7200
+    os.utime(stale_path, (old_time, old_time))
+
+    recent_path = Path(UPLOAD_DIR) / ".prune_temp_recent.ipynb.deadbeef.part"
+    recent_path.write_text("still streaming", encoding="utf-8")
+
+    try:
+        resp = client.delete("/api/upload/temp-files")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "success"
+        assert body["dry_run"] is False
+        assert body["older_than_seconds"] == 3600
+        assert body["deleted_count"] == 1
+        assert body["deleted_files"][0]["filename"] == stale_path.name
+        assert body["deleted_files"][0]["size_bytes"] == stale_size_bytes
+        assert body["deleted_files"][0]["age_seconds"] >= 7200
+        assert body["reclaimed_bytes"] == stale_size_bytes
+
+        assert not stale_path.exists()
+        assert recent_path.exists()
+    finally:
+        recent_path.unlink(missing_ok=True)
+        stale_path.unlink(missing_ok=True)
+
+
+def test_prune_temp_files_dry_run_reports_the_plan_without_deleting(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "STALE_UPLOAD_TEMP_FILE_SECONDS", 1)
+
+    stale_path = Path(UPLOAD_DIR) / ".prune_temp_dry_run.ipynb.deadbeef.part"
+    stale_path.write_text("leftover", encoding="utf-8")
+    old_time = datetime.now(timezone.utc).timestamp() - 100
+    os.utime(stale_path, (old_time, old_time))
+
+    try:
+        resp = client.delete("/api/upload/temp-files", params={"dry_run": "true"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["dry_run"] is True
+        assert body["deleted_count"] == 1
+        assert body["deleted_files"][0]["filename"] == stale_path.name
+
+        # Still there -- dry_run must never actually delete anything.
+        assert stale_path.exists()
+    finally:
+        stale_path.unlink(missing_ok=True)
+
+
+def test_prune_temp_files_supports_a_custom_older_than_seconds_override():
+
+    fresh_path = Path(UPLOAD_DIR) / ".prune_temp_override.ipynb.deadbeef.part"
+    fresh_path.write_text("just created", encoding="utf-8")
+    old_time = datetime.now(timezone.utc).timestamp() - 5
+    os.utime(fresh_path, (old_time, old_time))
+
+    try:
+        # Default threshold (a full hour) would never catch a 5-second-old
+        # file -- but an explicit, much shorter override should.
+        resp = client.delete(
+            "/api/upload/temp-files", params={"older_than_seconds": 1}
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["older_than_seconds"] == 1
+        assert body["deleted_count"] == 1
+        assert body["deleted_files"][0]["filename"] == fresh_path.name
+
+        assert not fresh_path.exists()
+    finally:
+        fresh_path.unlink(missing_ok=True)
+
+
+def test_prune_temp_files_rejects_a_negative_older_than_seconds():
+
+    resp = client.delete(
+        "/api/upload/temp-files", params={"older_than_seconds": -1}
+    )
+
+    assert resp.status_code == 400
+
+
+def test_prune_temp_files_is_a_no_op_when_nothing_is_stale():
+
+    resp = client.delete(
+        "/api/upload/temp-files", params={"older_than_seconds": 999999}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["deleted_files"] == []
+    assert body["deleted_count"] == 0
+    assert body["reclaimed_bytes"] == 0
+
+
+def test_prune_temp_files_ignores_notebooks_and_other_non_part_files(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "STALE_UPLOAD_TEMP_FILE_SECONDS", 1)
+
+    unrelated_path = Path(UPLOAD_DIR) / "not_a_temp_file.txt"
+    unrelated_path.write_text("just a stray file", encoding="utf-8")
+    old_time = datetime.now(timezone.utc).timestamp() - 100
+    os.utime(unrelated_path, (old_time, old_time))
+
+    notebook_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "prune_temp_ignores_notebooks.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    assert notebook_resp.status_code == 200
+    notebook_path = Path(UPLOAD_DIR) / "prune_temp_ignores_notebooks.ipynb"
+    old_time = datetime.now(timezone.utc).timestamp() - 100
+    os.utime(notebook_path, (old_time, old_time))
+
+    try:
+        resp = client.delete(
+            "/api/upload/temp-files", params={"older_than_seconds": 1}
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["deleted_files"] == []
+        assert unrelated_path.exists()
+        assert notebook_path.exists()
+    finally:
+        unrelated_path.unlink(missing_ok=True)
+
+
 def test_delete_notebook_removes_its_version_history():
 
     filename = "versions_delete_single.ipynb"

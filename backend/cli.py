@@ -348,7 +348,7 @@ _CORE_COMMANDS = frozenset({
     "list", "info", "info-batch",
     "search-functions", "search-content", "find-duplicates", "resolve-duplicates", "storage",
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy",
-    "copy-batch", "copy-many", "rename-many", "tags", "prune-versions", "description", "deploy-history",
+    "copy-batch", "copy-many", "rename-many", "tags", "prune-versions", "prune-temp-files", "description", "deploy-history",
     "clear-deploy-history", "compile-history", "clear-compile-history",
     "remote-compile", "remote-inspect", "remote-build",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
@@ -2599,6 +2599,75 @@ def _dispatch_core_command(args):
                     f"{verb} across "
                     f"{data.get('notebook_count_affected', len(results))} "
                     f"notebook(s) on {dashboard_url}"
+                )
+
+    elif args.command == "prune-temp-files":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        if not args.dry_run and not args.yes:
+            # DELETE /api/upload/temp-files (routes/upload.py) has no
+            # confirmation step of its own and is irreversible -- the
+            # same reasoning `prune-versions`'s own confirmation already
+            # applies. Not asked at all under --dry-run, which never
+            # deletes anything.
+            answer = input(
+                f"Permanently remove orphaned upload temp files on "
+                f"{dashboard_url}? [y/N] "
+            )
+            if answer.strip().lower() not in ("y", "yes"):
+                print("Aborted.")
+                return
+
+        params = {}
+        if args.older_than_seconds is not None:
+            params["older_than_seconds"] = args.older_than_seconds
+        if args.dry_run:
+            params["dry_run"] = True
+
+        try:
+            response = httpx.delete(
+                f"{dashboard_url}/api/upload/temp-files",
+                params=params,
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            deleted_files = data.get("deleted_files", [])
+            verb = "Would remove" if data.get("dry_run") else "Removed"
+
+            if not deleted_files:
+                print(f"No orphaned upload temp files found on {dashboard_url}.")
+            else:
+
+                for entry in deleted_files:
+                    print(
+                        f"{verb} '{entry['filename']}' "
+                        f"({entry['size_bytes']} bytes, "
+                        f"{entry['age_seconds']}s old)"
+                    )
+
+                print(
+                    f"\n{data.get('deleted_count', 0)} file(s), "
+                    f"{data.get('reclaimed_bytes', 0)} byte(s) "
+                    f"{'would be reclaimed' if data.get('dry_run') else 'reclaimed'}"
                 )
 
     elif args.command == "rename":
@@ -7177,6 +7246,67 @@ def main():
             "\"deleted_version_ids\", \"deleted_count\"}, ...], "
             "\"notebook_count_affected\", \"total_deleted_count\"}) "
             "instead of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    # prune-temp-files command (remove orphaned upload ".part" temp files
+    # left behind by a crashed/interrupted upload, via DELETE
+    # /api/upload/temp-files)
+    prune_temp_files_parser = subparsers.add_parser(
+        "prune-temp-files",
+        help=(
+            "Remove orphaned upload temp files left behind by a crashed "
+            "or interrupted upload on a running dashboard instance, via "
+            "DELETE /api/upload/temp-files."
+        )
+    )
+    prune_temp_files_parser.add_argument(
+        "--older-than-seconds",
+        type=int,
+        dest="older_than_seconds",
+        help=(
+            "Only remove a temp file whose last modification is older "
+            "than this many seconds. Defaults to the dashboard's own "
+            "configured NOTEBOOK_API_STALE_UPLOAD_TEMP_FILE_SECONDS "
+            "(the same threshold its automatic sweep already uses) when "
+            "omitted."
+        )
+    )
+    prune_temp_files_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report which temp files would be removed, via DELETE "
+            "/api/upload/temp-files's own ?dry_run= query param, "
+            "without deleting anything. Skips the confirmation prompt "
+            "--yes would otherwise require, since nothing irreversible "
+            "happens."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(prune_temp_files_parser)
+    prune_temp_files_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Confirm the prune without an interactive prompt. Without "
+            "this, `prune-temp-files` asks for a y/N confirmation on the "
+            "terminal before sending the request -- DELETE "
+            "/api/upload/temp-files itself has no confirmation step of "
+            "its own and is irreversible. Ignored under --dry-run, which "
+            "never prompts."
+        )
+    )
+    prune_temp_files_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"dry_run\", \"older_than_seconds\", \"deleted_files\": "
+            "[{\"filename\", \"size_bytes\", \"age_seconds\"}, ...], "
+            "\"deleted_count\", \"reclaimed_bytes\"}) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 
