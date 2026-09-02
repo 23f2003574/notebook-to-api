@@ -20588,6 +20588,27 @@ def test_get_config_reflects_a_configured_url_import_timeout(monkeypatch):
     assert resp.json()["url_import_timeout_seconds"] == 12.5
 
 
+def test_get_config_reports_the_stale_upload_temp_file_seconds():
+
+    from backend.routes.upload import STALE_UPLOAD_TEMP_FILE_SECONDS
+
+    resp = client.get("/api/config")
+
+    assert resp.status_code == 200
+    assert resp.json()["stale_upload_temp_file_seconds"] == STALE_UPLOAD_TEMP_FILE_SECONDS
+
+
+def test_get_config_reflects_a_configured_stale_upload_temp_file_seconds(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "STALE_UPLOAD_TEMP_FILE_SECONDS", 42)
+
+    resp = client.get("/api/config")
+
+    assert resp.json()["stale_upload_temp_file_seconds"] == 42
+
+
 def test_get_config_reflects_a_configured_max_compile_history_entries(monkeypatch):
 
     from backend.routes import upload as upload_module

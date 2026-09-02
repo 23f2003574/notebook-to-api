@@ -12193,6 +12193,21 @@ def get_config():
     just not independently configurable via its own NOTEBOOK_API_*
     environment variable the way they are: it's whatever interpreter this
     process actually happens to be running under.
+
+    "stale_upload_temp_file_seconds" (added alongside this same
+    docstring's original feature, not a separate change) is
+    STALE_UPLOAD_TEMP_FILE_SECONDS -- already independently configurable
+    via NOTEBOOK_API_STALE_UPLOAD_TEMP_FILE_SECONDS since
+    _cleanup_stale_upload_temp_files' own opportunistic sweep was added,
+    and now also DELETE /api/upload/temp-files' own default
+    "older_than_seconds" threshold -- but never itself picked up here
+    either: an operator deciding whether to pass an explicit
+    ?older_than_seconds= override to that endpoint (rather than relying
+    on its default), or simply wanting to confirm how long a crashed
+    upload's own leftover ".part" file sits before the opportunistic
+    sweep would have reclaimed it anyway, had no way to ask that short of
+    the same direct environment access this endpoint's own docstring
+    already says a client shouldn't need.
     """
 
     from backend.dashboard import allowed_origins
@@ -12210,6 +12225,7 @@ def get_config():
         "max_compile_history_entries": MAX_COMPILE_HISTORY_ENTRIES,
         "deploy_subprocess_timeout_seconds": DEPLOY_SUBPROCESS_TIMEOUT_SECONDS,
         "url_import_timeout_seconds": URL_IMPORT_TIMEOUT_SECONDS,
+        "stale_upload_temp_file_seconds": STALE_UPLOAD_TEMP_FILE_SECONDS,
         "notebook_sort_keys": sorted(_NOTEBOOK_SORT_KEYS),
         "notebook_sort_orders": sorted(_NOTEBOOK_SORT_ORDERS),
         "compiling_python_version": compiling_python_version(),
