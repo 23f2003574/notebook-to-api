@@ -12647,6 +12647,21 @@ def health_check(check_writable: bool = False):
     probe, a load balancer, this CLI's own `status`) no way to tell a
     version-pinned compile apart from an ordinary one without a second,
     separate GET /api/notebooks or GET /api/generated call.
+
+    "generated_files_modified_since_compile" mirrors
+    "compiled_version_id" above -- present (non-null) only when
+    "compiled_app_present" is true, and reused, not recomputed, from
+    _generated_files_modified_since_compile (see its own docstring) --
+    the same output-side integrity check GET /api/generated already
+    exposes, just reachable from this one probe too. A compiled app
+    that's been hand-tampered with directly on the server (app.py
+    patched in a hurry, say) previously kept reporting "healthy" here
+    indefinitely -- "compiled_app_present"/"compiled_at" only ever
+    confirm *a* compile happened at some point, never that what's
+    actually being served still matches it -- with no way for a
+    Kubernetes probe, a load balancer, or this CLI's own `status`
+    polling only this one endpoint to catch that short of a second,
+    separate GET /api/generated call.
     """
 
     _, _, compiled_at, compiled_version_id = _currently_compiled_notebook_metadata()
@@ -12660,6 +12675,9 @@ def health_check(check_writable: bool = False):
         "compiled_app_present": compiled_app_present,
         "compiled_at": compiled_at if compiled_app_present else None,
         "compiled_version_id": compiled_version_id if compiled_app_present else None,
+        "generated_files_modified_since_compile": (
+            _generated_files_modified_since_compile() if compiled_app_present else None
+        ),
     }
 
     if check_writable:

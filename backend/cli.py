@@ -5706,6 +5706,13 @@ def _dispatch_core_command(args):
                     f"  compiled app present, last compiled at "
                     f"{health.get('compiled_at')}{version_note}"
                 )
+                if health.get("generated_files_modified_since_compile"):
+                    print(
+                        "  warning: the compiled output itself has been "
+                        "modified since the last compile (app.py, "
+                        "requirements.txt, Dockerfile, ... no longer "
+                        "match what that compile actually produced)."
+                    )
             else:
                 print("  no compiled app yet")
 

@@ -16950,6 +16950,84 @@ def test_status_command_prints_the_compiled_version_id_when_present(
     ) in proc.stdout
 
 
+def test_status_command_warns_when_generated_files_were_modified_since_compile(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "healthy", "service": "notebook-to-api",
+            "compiled_app_present": True,
+            "compiled_at": "2026-01-01T00:00:00+00:00",
+            "compiled_version_id": None,
+            "generated_files_modified_since_compile": True,
+        }),
+        _json_response(200, {
+            "status": "success",
+            "max_upload_bytes": 10485760,
+            "max_batch_upload_files": 50,
+            "max_notebook_versions": 20,
+            "max_tag_length": 40,
+            "max_tags_per_notebook": 20,
+            "max_description_length": 500,
+            "max_deploy_history_entries": 50,
+            "max_compile_history_entries": 50,
+            "deploy_subprocess_timeout_seconds": 600,
+            "notebook_sort_keys": ["name", "size", "uploaded_at"],
+            "notebook_sort_orders": ["asc", "desc"],
+            "compiling_python_version": "3.12",
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["status", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "modified since the last compile" in proc.stdout
+
+
+def test_status_command_omits_the_warning_when_nothing_was_modified(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "healthy", "service": "notebook-to-api",
+            "compiled_app_present": True,
+            "compiled_at": "2026-01-01T00:00:00+00:00",
+            "compiled_version_id": None,
+            "generated_files_modified_since_compile": False,
+        }),
+        _json_response(200, {
+            "status": "success",
+            "max_upload_bytes": 10485760,
+            "max_batch_upload_files": 50,
+            "max_notebook_versions": 20,
+            "max_tag_length": 40,
+            "max_tags_per_notebook": 20,
+            "max_description_length": 500,
+            "max_deploy_history_entries": 50,
+            "max_compile_history_entries": 50,
+            "deploy_subprocess_timeout_seconds": 600,
+            "notebook_sort_keys": ["name", "size", "uploaded_at"],
+            "notebook_sort_orders": ["asc", "desc"],
+            "compiling_python_version": "3.12",
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["status", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "modified since the last compile" not in proc.stdout
+
+
 def test_status_command_prints_url_import_timeout(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

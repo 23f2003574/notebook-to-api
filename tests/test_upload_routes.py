@@ -21086,6 +21086,7 @@ def test_health_check_reports_no_compiled_app_before_anything_has_been_compiled(
     assert body["compiled_app_present"] is False
     assert body["compiled_at"] is None
     assert body["compiled_version_id"] is None
+    assert body["generated_files_modified_since_compile"] is None
 
 
 def test_health_check_reports_a_compiled_app_and_its_compiled_at_timestamp():
@@ -21100,6 +21101,29 @@ def test_health_check_reports_a_compiled_app_and_its_compiled_at_timestamp():
     assert body["compiled_app_present"] is True
     assert body["compiled_at"] is not None
     assert body["compiled_version_id"] is None
+    assert body["generated_files_modified_since_compile"] is False
+
+
+def test_health_check_reports_generated_files_modified_since_compile_true_after_a_hand_edit():
+    """The output-side integrity check GET /api/generated already
+    exposes (see its own "generated_files_modified_since_compile"), now
+    reachable from this one liveness/readiness probe too -- a compiled
+    app hand-tampered with directly on the server previously kept
+    reporting "healthy" here indefinitely, with no way for a Kubernetes
+    probe or load balancer polling only this one endpoint to catch it
+    short of a second, separate GET /api/generated call.
+    """
+
+    _compile_a_notebook("health_check_tampered_test.ipynb")
+
+    (Path(GENERATED_DIR) / "requirements.txt").write_text(
+        "fastapi==0.0.0\n", encoding="utf-8"
+    )
+
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 200
+    assert resp.json()["generated_files_modified_since_compile"] is True
 
 
 def test_health_check_reports_the_compiled_version_id_for_a_version_pinned_compile():
