@@ -3022,6 +3022,185 @@ def rename_tag(tag: str, data: dict):
     }
 
 
+# Same NOTEBOOK_API_* env-var convention as MAX_UPLOAD_BYTES above.
+# GET /api/functions, GET /api/notebooks (its own "search"/
+# "description_search"), and GET /api/notebooks/search-content all let a
+# caller opt into "regex": true, matching the compiled pattern against
+# every uploaded notebook's own function names, filenames/descriptions,
+# or full code-cell source respectively -- the last of these potentially
+# many megabytes per notebook, across the whole catalog, per request. A
+# short, ordinary-looking pattern is enough to make that catastrophic: no
+# limit here bounds how long a caller-supplied pattern itself can be,
+# unlike every other client-controlled size this project already caps
+# (MAX_TAG_LENGTH, MAX_DESCRIPTION_LENGTH, ...).
+MAX_SEARCH_REGEX_LENGTH = int(
+    os.getenv("NOTEBOOK_API_MAX_SEARCH_REGEX_LENGTH", "200")
+)
+
+# re._parser/re._constants are CPython's own private regex-compiler
+# internals (re._parser was sre_parse before Python 3.11) -- not a
+# documented, version-stability-guaranteed public API, but the only way
+# to inspect a pattern's actual parsed structure (nested groups,
+# repetition counts, alternation branches, ...) rather than re-deriving
+# an approximation of it by hand-scanning the raw pattern *string*, which
+# would itself be trivially foolable by anything requiring real parsing
+# (a quantifier inside a character class, an escaped literal "+", a
+# non-capturing group, ...). Imported defensively: if either module's
+# name or shape ever changes in a future CPython release, every caller
+# below falls back to skipping just this one extra static check (see
+# _regex_has_nested_unbounded_repetition's own docstring) -- re.compile's
+# own existing re.error handling still catches a syntactically invalid
+# pattern either way, so this is strictly additive, never a new way for
+# a request to fail that wasn't already possible before it existed.
+try:
+    import re._parser as _sre_parser
+    import re._constants as _sre_constants
+except ImportError:  # pragma: no cover - defensive only
+
+    _sre_parser = None
+    _sre_constants = None
+
+
+def _regex_has_nested_unbounded_repetition(parsed_pattern, inside_unbounded_repeat=False):
+    """Whether `parsed_pattern` (an re._parser.parse(...) result, or one
+    of its own nested SubPattern/branch lists) contains an unbounded
+    repetition ("+"/"*"/a "{n,}" with no upper bound) directly or
+    indirectly nested inside another one -- the textbook shape behind
+    catastrophic backtracking: "(a+)+", "(a*)*", "(.+)*", and equivalents
+    written with a non-capturing group, a nested "\\d+"/"\\w+", etc. all
+    share this same structure, and CPython's own `re` engine (unlike
+    some other languages' regex engines) has no built-in guard against
+    the exponential-time blowup it causes when matched against a long
+    enough non-matching input.
+
+    Deliberately conservative rather than a precise "can these two
+    repeated sub-patterns actually match overlapping content" analysis
+    (the full version of that problem is the actual hard part of
+    ReDoS detection in general) -- flags *any* nested unbounded
+    repetition, whether or not the inner and outer repeated content
+    could truly overlap. "(a+)+" is flagged (correctly, it's
+    exponential); so is the safe-in-practice but structurally identical
+    "([a-z]+\\d+)+", a false positive this function accepts in exchange
+    for staying simple enough to reason about and test exhaustively.
+    Confirmed empirically to not flag any of this project's own already-
+    existing search patterns in its own test suite (plain literals,
+    "\\w+", alternation, character classes, "{m,n}" bounds, ...).
+
+    Recurses through SUBPATTERN (an explicit "(...)"/"(?:...)" group),
+    BRANCH ("a|b|c" alternation -- checked per-branch, since only one
+    branch is ever actually taken at a time), and ASSERT/ASSERT_NOT (a
+    "(?=...)"/"(?!...)" lookaround) -- every construct re._parser can
+    nest a repetition inside. A bounded repetition ("{2,5}", or a bare
+    literal/no repetition at all) does not itself set
+    "inside_unbounded_repeat", so "(a{2,5})+" is not flagged: the total
+    work it can do is still bounded by the *outer* repetition's own
+    count, not exponential in the input length the way a truly unbounded
+    inner repetition is.
+    """
+    for opcode, argument in parsed_pattern:
+
+        if opcode is _sre_constants.MAX_REPEAT or opcode is _sre_constants.MIN_REPEAT:
+
+            _, max_count, subpattern = argument
+            is_unbounded = max_count is _sre_parser.MAXREPEAT
+
+            if is_unbounded and inside_unbounded_repeat:
+                return True
+
+            if _regex_has_nested_unbounded_repetition(
+                subpattern,
+                inside_unbounded_repeat=inside_unbounded_repeat or is_unbounded,
+            ):
+                return True
+
+        elif opcode is _sre_constants.SUBPATTERN:
+
+            _, _, _, subpattern = argument
+
+            if _regex_has_nested_unbounded_repetition(subpattern, inside_unbounded_repeat):
+                return True
+
+        elif opcode is _sre_constants.BRANCH:
+
+            _, branches = argument
+
+            for branch in branches:
+                if _regex_has_nested_unbounded_repetition(branch, inside_unbounded_repeat):
+                    return True
+
+        elif opcode in (_sre_constants.ASSERT, _sre_constants.ASSERT_NOT):
+
+            _, subpattern = argument
+
+            if _regex_has_nested_unbounded_repetition(subpattern, inside_unbounded_repeat):
+                return True
+
+    return False
+
+
+def _compile_search_regex(pattern_text, field_name="search"):
+    """Compile `pattern_text` (a "regex": true query-param value from
+    search_functions/list_notebooks/search_notebook_content below) into
+    a case-insensitive re.Pattern -- or raise a 400 HTTPException a
+    caller can act on, never a raw re.error (or, previously, no error at
+    all until the match itself hangs the process -- see
+    MAX_SEARCH_REGEX_LENGTH/_regex_has_nested_unbounded_repetition's own
+    comments above for why both checks below exist).
+
+    `field_name` only changes the error message's own wording (e.g.
+    "search"/"description_search", matching whichever query param this
+    pattern actually came from) -- it has no effect on the checks
+    themselves.
+    """
+    if len(pattern_text) > MAX_SEARCH_REGEX_LENGTH:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{field_name} exceeds the maximum regular expression "
+                f"length of {MAX_SEARCH_REGEX_LENGTH} characters"
+            )
+        )
+
+    if _sre_parser is not None:
+
+        try:
+            parsed = _sre_parser.parse(pattern_text)
+
+        except Exception:
+            # Anything from a syntactically invalid pattern (re.compile
+            # below already reports that one, with its own well-formed
+            # re.error message -- no reason to duplicate or preempt it
+            # here with a differently-worded one) to a future CPython
+            # release having changed this private module's own behavior
+            # out from under it -- either way, silently skip just this
+            # one extra check rather than fail the request over it.
+            parsed = None
+
+        if parsed is not None and _regex_has_nested_unbounded_repetition(parsed):
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{field_name} contains a repetition nested inside "
+                    "another repetition with no upper bound (e.g. "
+                    '"(a+)+") -- matching a pattern shaped like this '
+                    "against real content can take catastrophically "
+                    "long. Simplify the pattern."
+                )
+            )
+
+    try:
+        return re.compile(pattern_text, re.IGNORECASE)
+
+    except re.error as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field_name} is not a valid regular expression: {e}"
+        )
+
+
 @router.get("/functions")
 def search_functions(
     search: str = None, tag: str = None, regex: bool = False,
@@ -3148,15 +3327,7 @@ def search_functions(
 
     if regex:
 
-        try:
-            pattern = re.compile(search, re.IGNORECASE)
-
-        except re.error as e:
-
-            raise HTTPException(
-                status_code=400,
-                detail=f"search is not a valid regular expression: {e}"
-            )
+        pattern = _compile_search_regex(search)
 
     else:
 
@@ -3621,15 +3792,7 @@ def list_notebooks(
             if not field_value:
                 continue
 
-            try:
-                pattern = re.compile(field_value, re.IGNORECASE)
-
-            except re.error as e:
-
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"{field_name} is not a valid regular expression: {e}"
-                )
+            pattern = _compile_search_regex(field_value, field_name)
 
             if field_name == "search":
                 search_pattern = pattern
@@ -4526,15 +4689,7 @@ def search_notebook_content(
 
     if regex:
 
-        try:
-            pattern = re.compile(search, re.IGNORECASE)
-
-        except re.error as e:
-
-            raise HTTPException(
-                status_code=400,
-                detail=f"search is not a valid regular expression: {e}"
-            )
+        pattern = _compile_search_regex(search)
 
     else:
 

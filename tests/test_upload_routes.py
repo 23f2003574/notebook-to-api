@@ -28,14 +28,18 @@ from backend.dashboard import app
 from backend.routes.upload import (
     GENERATED_DIR,
     MAX_NOTEBOOK_VERSIONS,
+    MAX_SEARCH_REGEX_LENGTH,
     UPLOAD_DIR,
     _bundle_sha256,
+    _compile_search_regex,
     _description_sidecar_path,
     _notebook_versions_dir,
+    _regex_has_nested_unbounded_repetition,
     _tags_sidecar_path,
     resolve_generated_path,
     resolve_upload_path,
 )
+import re._parser as _sre_parser
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -5137,6 +5141,22 @@ def test_search_notebook_content_regex_rejects_an_invalid_pattern():
     assert "regular expression" in resp.json()["detail"]
 
 
+def test_search_notebook_content_regex_rejects_a_catastrophically_backtracking_pattern():
+    """Matches this endpoint's raw code-cell *source* -- potentially many
+    megabytes per notebook, across the whole catalog -- the highest-value
+    target of the three endpoints sharing _compile_search_regex's own
+    nested-unbounded-repetition check (see its own docstring).
+    """
+
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={"search": "(a+)+", "regex": "true"},
+    )
+
+    assert resp.status_code == 400
+    assert "nested" in resp.json()["detail"].lower()
+
+
 def test_diff_notebooks_reports_added_removed_changed_and_unchanged():
 
     old_content = _notebook_bytes(
@@ -9581,6 +9601,16 @@ def test_search_functions_regex_rejects_an_invalid_pattern():
     assert "regular expression" in resp.json()["detail"]
 
 
+def test_search_functions_regex_rejects_a_catastrophically_backtracking_pattern():
+
+    resp = client.get(
+        "/api/functions", params={"search": "(a+)+", "regex": "true"}
+    )
+
+    assert resp.status_code == 400
+    assert "nested" in resp.json()["detail"].lower()
+
+
 def test_list_notebooks_reports_tags_for_each_entry():
 
     _upload_sample_notebook("tags_in_list.ipynb")
@@ -9970,6 +10000,144 @@ def test_list_notebooks_regex_rejects_an_invalid_description_search_pattern():
 
     assert resp.status_code == 400
     assert "description_search is not a valid regular expression" in resp.json()["detail"]
+
+
+def test_list_notebooks_regex_rejects_a_catastrophically_backtracking_search_pattern():
+    """GET /api/notebooks?search=&regex=true is one of three endpoints
+    sharing _compile_search_regex's own nested-unbounded-repetition
+    check (see its own docstring) -- confirms the wiring actually reaches
+    it, not just _compile_search_regex/_regex_has_nested_unbounded_repetition
+    in isolation (covered directly below).
+    """
+
+    resp = client.get(
+        "/api/notebooks", params={"search": "(a+)+", "regex": "true"}
+    )
+
+    assert resp.status_code == 400
+    assert "search" in resp.json()["detail"]
+    assert "nested" in resp.json()["detail"].lower()
+
+
+def test_list_notebooks_regex_rejects_an_overlong_search_pattern():
+
+    resp = client.get(
+        "/api/notebooks",
+        params={"search": "a" * (MAX_SEARCH_REGEX_LENGTH + 1), "regex": "true"},
+    )
+
+    assert resp.status_code == 400
+    assert "maximum regular expression length" in resp.json()["detail"]
+
+
+# _compile_search_regex/_regex_has_nested_unbounded_repetition are shared
+# by GET /api/functions, GET /api/notebooks (its own "search"/
+# "description_search"), and GET /api/notebooks/search-content -- each of
+# which already has its own "rejects an invalid pattern"-style test
+# exercising this through the real HTTP route (see
+# test_list_notebooks_regex_rejects_a_catastrophically_backtracking_search_pattern
+# above, test_search_functions_regex_rejects_a_catastrophically_backtracking_pattern,
+# and test_search_notebook_content_regex_rejects_a_catastrophically_backtracking_pattern
+# below) -- this block instead tests the shared helpers directly and
+# exhaustively, once, rather than repeating the same battery of
+# dangerous/safe patterns at each of the three call sites.
+def test_regex_has_nested_unbounded_repetition_flags_classic_redos_shapes():
+
+    dangerous_patterns = [
+        "(a+)+",
+        "(a*)*",
+        "(a+)*",
+        "(a*)+",
+        "(.*)*",
+        "(.+)+",
+        "(?:a+)+",
+        r"(\d+)+",
+        "(a+)+b",
+    ]
+
+    for pattern_text in dangerous_patterns:
+
+        parsed = _sre_parser.parse(pattern_text)
+
+        assert _regex_has_nested_unbounded_repetition(parsed), pattern_text
+
+
+def test_regex_has_nested_unbounded_repetition_does_not_flag_ordinary_patterns():
+
+    safe_patterns = [
+        "train_model",
+        r"\w+",
+        r"def \w+\(",
+        "a+b+",
+        "(a|b)+",
+        "foo.*bar",
+        "^https?://",
+        r"\d{3}-\d{4}",
+        "(abc)+",
+        r"[a-z]+_[a-z]+",
+        r"(?=a+)b+",
+        "(foo|bar){2,5}",
+        r"(a{2,5})+",
+    ]
+
+    for pattern_text in safe_patterns:
+
+        parsed = _sre_parser.parse(pattern_text)
+
+        assert not _regex_has_nested_unbounded_repetition(parsed), pattern_text
+
+
+def test_compile_search_regex_rejects_a_nested_unbounded_repetition():
+
+    with pytest.raises(HTTPException) as exc_info:
+        _compile_search_regex("(a+)+")
+
+    assert exc_info.value.status_code == 400
+    assert "nested" in exc_info.value.detail.lower()
+
+
+def test_compile_search_regex_rejects_an_overlong_pattern():
+
+    with pytest.raises(HTTPException) as exc_info:
+        _compile_search_regex("a" * (MAX_SEARCH_REGEX_LENGTH + 1))
+
+    assert exc_info.value.status_code == 400
+    assert "maximum regular expression length" in exc_info.value.detail
+
+
+def test_compile_search_regex_rejects_a_syntactically_invalid_pattern():
+
+    with pytest.raises(HTTPException) as exc_info:
+        _compile_search_regex("(unclosed")
+
+    assert exc_info.value.status_code == 400
+    assert "not a valid regular expression" in exc_info.value.detail
+
+
+def test_compile_search_regex_uses_field_name_in_every_error_message():
+
+    for bad_pattern, expected_fragment in (
+        ("(a+)+", "nested"),
+        ("a" * (MAX_SEARCH_REGEX_LENGTH + 1), "maximum regular expression length"),
+        ("(unclosed", "not a valid regular expression"),
+    ):
+
+        with pytest.raises(HTTPException) as exc_info:
+            _compile_search_regex(bad_pattern, field_name="description_search")
+
+        assert exc_info.value.detail.startswith("description_search ")
+        assert expected_fragment in exc_info.value.detail.lower() or (
+            expected_fragment in exc_info.value.detail
+        )
+
+
+def test_compile_search_regex_returns_a_working_pattern_for_a_safe_regex():
+
+    pattern = _compile_search_regex(r"train_\w+")
+
+    assert pattern.search("train_model") is not None
+    assert pattern.search("TRAIN_MODEL") is not None  # case-insensitive
+    assert pattern.search("predict") is None
 
 
 def test_delete_notebook_removes_its_tags_sidecar_file():
