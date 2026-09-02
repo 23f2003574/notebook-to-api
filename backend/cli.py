@@ -1463,6 +1463,8 @@ def _dispatch_core_command(args):
                 print(f"  path: {data.get('path')}")
                 print(f"  overwritten: {data.get('overwritten')}")
                 print(f"  sha256: {data.get('sha256')}")
+                if data.get("was_currently_compiled"):
+                    print("  note: this was the notebook backing the currently compiled app.")
 
         else:
             # Multiple notebooks: POST /api/upload/batch instead of one
@@ -1530,6 +1532,8 @@ def _dispatch_core_command(args):
                             f"{verb} '{result.get('filename')}' "
                             f"(overwritten: {result.get('overwritten')})"
                         )
+                        if result.get("was_currently_compiled"):
+                            print("  note: this was the notebook backing the currently compiled app.")
                     else:
                         print(f"Failed '{result.get('filename')}': {result.get('detail')}")
 
@@ -4503,6 +4507,8 @@ def _dispatch_core_command(args):
                     f"version '{data.get('restored_version_id', args.version_id)}' "
                     f"on {dashboard_url}"
                 )
+                if data.get("was_currently_compiled"):
+                    print("  note: this was the notebook backing the currently compiled app.")
 
         elif args.versions_command == "restore-batch":
 
@@ -4541,6 +4547,8 @@ def _dispatch_core_command(args):
                             f"{verb} '{result['filename']}' to version "
                             f"'{result['version_id']}'"
                         )
+                        if result.get("was_currently_compiled"):
+                            print("  note: this was the notebook backing the currently compiled app.")
                     else:
                         print(
                             f"Failed to restore '{result['filename']}' to "

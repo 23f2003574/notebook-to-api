@@ -2279,6 +2279,33 @@ def test_upload_command_reports_success(tmp_path, fake_dashboard):
     assert handler.requests == ["/api/upload?overwrite=false"]
 
 
+def test_upload_command_notes_when_it_overwrote_the_compiled_notebook(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "path": "/srv/uploads/nb.ipynb",
+            "overwritten": True,
+            "was_currently_compiled": True,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["upload", str(notebook_path), "--overwrite", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "note: this was the notebook backing the currently compiled app." in proc.stdout
+
+
 def test_upload_command_passes_the_overwrite_flag_through(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
@@ -12914,6 +12941,34 @@ def test_versions_restore_command_reports_success(tmp_path, fake_dashboard):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "Restored 'nb.ipynb' to version 'v1.ipynb'" in proc.stdout
     assert handler.requests == ["/api/notebooks/nb.ipynb/versions/v1.ipynb/restore"]
+
+
+def test_versions_restore_command_notes_when_it_restored_the_compiled_notebook(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "restored_version_id": "v1.ipynb",
+            "was_currently_compiled": True,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "restore", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "note: this was the notebook backing the currently compiled app." in proc.stdout
 
 
 def test_versions_restore_command_dry_run_reports_would_restore_and_sends_dry_run_param(

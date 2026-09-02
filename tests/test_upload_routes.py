@@ -697,6 +697,88 @@ def test_upload_reports_overwritten_false_for_a_brand_new_notebook():
     assert resp.json()["overwritten"] is False
 
 
+def test_upload_overwrite_reports_was_currently_compiled_true_for_the_compiled_source():
+    """An overwrite has exactly the same staleness effect on GENERATED_DIR
+    a delete/rename already has -- DELETE /api/notebooks/{filename} (and
+    friends) already report this same fact via "was_currently_compiled";
+    this closes the identical gap for POST /api/upload?overwrite=true.
+    """
+
+    filename = "was_currently_compiled_upload_test.ipynb"
+    _compile_a_notebook(filename)
+
+    resp = client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["was_currently_compiled"] is True
+
+
+def test_upload_overwrite_reports_was_currently_compiled_false_for_an_unrelated_notebook():
+
+    compiled_filename = "was_currently_compiled_other_test.ipynb"
+    _compile_a_notebook(compiled_filename)
+
+    unrelated_filename = "was_currently_compiled_unrelated_test.ipynb"
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                unrelated_filename,
+                io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                unrelated_filename,
+                io.BytesIO(_notebook_bytes("def h2() -> int:\n    return 4\n")),
+                "application/json",
+            )
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["was_currently_compiled"] is False
+
+    os.remove(Path(UPLOAD_DIR) / unrelated_filename)
+
+
+def test_upload_dry_run_reports_was_currently_compiled_true_without_writing():
+
+    filename = "was_currently_compiled_upload_dry_run_test.ipynb"
+    _compile_a_notebook(filename)
+
+    resp = client.post(
+        "/api/upload",
+        params={"overwrite": "true", "dry_run": "true"},
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["was_currently_compiled"] is True
+
+
 def test_upload_reports_the_sha256_of_the_uploaded_content():
 
     import hashlib
@@ -1447,6 +1529,7 @@ def test_upload_batch_continues_past_a_single_invalid_file():
         "path": str(resolve_upload_path("batch_good.ipynb")),
         "overwritten": False,
         "sha256": hashlib.sha256(good_content).hexdigest(),
+        "was_currently_compiled": False,
     }
     assert bad_result["filename"] == "batch_bad.ipynb"
     assert bad_result["status"] == "error"
@@ -12834,9 +12917,43 @@ def test_restore_notebook_version_makes_it_the_current_content_again():
         "filename": filename,
         "restored_version_id": version_id,
         "dry_run": False,
+        "was_currently_compiled": False,
     }
 
     assert (Path(UPLOAD_DIR) / filename).read_bytes() == original_content
+
+
+def test_restore_notebook_version_reports_was_currently_compiled_true_for_the_compiled_source():
+    """A restore overwrites `filename`'s own current content exactly like
+    POST /api/upload?overwrite=true already does, with the identical
+    staleness effect if it's the notebook currently backing
+    GENERATED_DIR -- the same "was_currently_compiled" signal that
+    endpoint's own overwrite path now reports.
+    """
+
+    filename = "versions_restore_was_currently_compiled.ipynb"
+    _compile_a_notebook(filename)
+
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    version_id = versions[0]["version_id"]
+
+    restore_resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/restore"
+    )
+
+    assert restore_resp.status_code == 200
+    assert restore_resp.json()["was_currently_compiled"] is True
 
 
 def test_restore_notebook_version_dry_run_reports_the_plan_without_restoring():
@@ -12874,6 +12991,7 @@ def test_restore_notebook_version_dry_run_reports_the_plan_without_restoring():
         "filename": filename,
         "restored_version_id": version_id,
         "dry_run": True,
+        "was_currently_compiled": False,
     }
 
     # Nothing was actually restored: the current content is unchanged,
@@ -13014,6 +13132,67 @@ def test_restore_notebook_versions_batch_restores_each_notebook_to_its_own_versi
 
     assert (Path(UPLOAD_DIR) / filename_a).read_bytes() == original_a
     assert (Path(UPLOAD_DIR) / filename_b).read_bytes() == original_b
+
+
+def test_restore_notebook_versions_batch_reports_was_currently_compiled_per_entry():
+    """Mirrors the singular POST .../restore's own identical field --
+    only the entry naming the notebook currently backing GENERATED_DIR
+    should report True, regardless of how many other entries the same
+    batch also restores.
+    """
+
+    compiled_filename = "versions_restore_batch_compiled.ipynb"
+    _compile_a_notebook(compiled_filename)
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                compiled_filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    other_filename = "versions_restore_batch_uncompiled.ipynb"
+    client.post(
+        "/api/upload",
+        files={"file": (other_filename, io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                other_filename,
+                io.BytesIO(_notebook_bytes("def h2() -> int:\n    return 4\n")),
+                "application/json",
+            )
+        },
+    )
+
+    compiled_version = client.get(
+        f"/api/notebooks/{compiled_filename}/versions"
+    ).json()["versions"][0]["version_id"]
+    other_version = client.get(
+        f"/api/notebooks/{other_filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        "/api/notebooks/versions/restore-batch",
+        json={
+            "entries": [
+                {"filename": compiled_filename, "version_id": compiled_version},
+                {"filename": other_filename, "version_id": other_version},
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    results_by_filename = {r["filename"]: r for r in resp.json()["results"]}
+    assert results_by_filename[compiled_filename]["was_currently_compiled"] is True
+    assert results_by_filename[other_filename]["was_currently_compiled"] is False
+
+    os.remove(Path(UPLOAD_DIR) / other_filename)
 
 
 def test_restore_notebook_versions_batch_itself_snapshots_the_content_it_replaces():

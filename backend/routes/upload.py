@@ -970,6 +970,19 @@ async def _save_uploaded_notebook(
     upload lock), acceptable for an administrative capacity limit rather
     than a hard security boundary -- the *next* new-filename upload after
     that will still see the catalog at (or over) the cap and be rejected.
+
+    "was_currently_compiled" (True only for an overwrite of the exact
+    notebook currently backing GENERATED_DIR, always False for a
+    brand-new filename) is the identical flag DELETE
+    /api/notebooks/{filename} already reports for the same "this
+    operation just changed the notebook the served app was compiled
+    from" fact -- an overwrite has exactly the same staleness effect a
+    delete or rename already does, but every caller sharing this
+    function (POST /api/upload, /api/upload/batch, /api/notebooks/import,
+    /api/notebooks/import-url, and .../versions/import) previously had no
+    signal of it at all short of a separate GET /api/notebooks call to
+    check "notebook_changed_since_compile" for the same filename
+    afterward.
     """
 
     if not file.filename.endswith(".ipynb"):
@@ -1135,6 +1148,20 @@ async def _save_uploaded_notebook(
                 )
             )
 
+        # Only an overwrite of the exact file currently backing
+        # GENERATED_DIR can ever be True here -- a brand-new filename
+        # can never already match an existing compiled_path. Computed
+        # before either return below so a dry-run preview reports the
+        # identical value a real write would, the same "preview matches
+        # what a real run would produce" convention every other
+        # "was_currently_compiled" response in this file already
+        # follows (DELETE /api/notebooks/{filename} chief among them).
+        compiled_path, _, _, _ = _currently_compiled_notebook_metadata()
+
+        was_currently_compiled = (
+            compiled_path is not None and file_path.resolve() == compiled_path
+        )
+
         if dry_run:
 
             os.remove(temp_path)
@@ -1145,6 +1172,7 @@ async def _save_uploaded_notebook(
                 "path": str(file_path),
                 "overwritten": overwritten,
                 "sha256": sha256,
+                "was_currently_compiled": was_currently_compiled,
             }
 
         if overwritten:
@@ -1158,6 +1186,7 @@ async def _save_uploaded_notebook(
             "path": str(file_path),
             "overwritten": overwritten,
             "sha256": sha256,
+            "was_currently_compiled": was_currently_compiled,
         }
 
 
@@ -8856,6 +8885,15 @@ def restore_notebook_version(filename: str, version_id: str, dry_run: bool = Fal
     real. The response's own "dry_run" field echoes back whether this
     call actually restored anything, the same convention every other
     "dry_run" response in this file already follows.
+
+    "was_currently_compiled" is the identical flag DELETE
+    /api/notebooks/{filename} already reports -- a restore overwrites
+    `filename`'s own current content exactly like POST
+    /api/upload?overwrite=true already does, with the identical
+    staleness effect if it's the notebook currently backing
+    GENERATED_DIR, but previously gave no signal of that at all short of
+    a separate GET /api/notebooks call to check
+    "notebook_changed_since_compile" for the same filename afterward.
     """
 
     file_path = resolve_upload_path(filename)
@@ -8880,6 +8918,12 @@ def restore_notebook_version(filename: str, version_id: str, dry_run: bool = Fal
             detail="Notebook version not found"
         )
 
+    compiled_path, _, _, _ = _currently_compiled_notebook_metadata()
+
+    was_currently_compiled = (
+        compiled_path is not None and file_path.resolve() == compiled_path
+    )
+
     if not dry_run:
 
         with _version_lock_for(file_path.name):
@@ -8893,6 +8937,7 @@ def restore_notebook_version(filename: str, version_id: str, dry_run: bool = Fal
         "filename": filename,
         "restored_version_id": version_id,
         "dry_run": dry_run,
+        "was_currently_compiled": was_currently_compiled,
     }
 
 
@@ -8943,6 +8988,14 @@ def restore_notebook_versions_batch(data: dict):
     "success" or "error" -- without restoring anything, the identical
     preview POST /api/notebooks/{filename}/versions/delete-batch's own
     "dry_run" already provides for deleting several versions at once.
+
+    Each successful entry's own "was_currently_compiled" is the identical
+    flag POST /api/notebooks/{filename}/versions/{version_id}/restore's
+    own singular counterpart already reports -- see its own docstring for
+    why. "compiled_path" itself is resolved once, before the loop, not
+    once per entry -- it can't change mid-request (nothing here ever
+    triggers a compile), so re-reading .compile_metadata.json for every
+    entry would be pure repeated work for the same answer.
     """
 
     entries = data.get("entries")
@@ -8972,6 +9025,8 @@ def restore_notebook_versions_batch(data: dict):
             )
 
     dry_run = bool(data.get("dry_run", False))
+
+    compiled_path, _, _, _ = _currently_compiled_notebook_metadata()
 
     results = []
     succeeded_count = 0
@@ -9006,6 +9061,10 @@ def restore_notebook_versions_batch(data: dict):
                     detail="Notebook version not found"
                 )
 
+            was_currently_compiled = (
+                compiled_path is not None and file_path.resolve() == compiled_path
+            )
+
             if not dry_run:
 
                 with _version_lock_for(file_path.name):
@@ -9019,6 +9078,7 @@ def restore_notebook_versions_batch(data: dict):
                 "version_id": version_id,
                 "status": "success",
                 "restored_version_id": version_id,
+                "was_currently_compiled": was_currently_compiled,
             })
             succeeded_count += 1
 
