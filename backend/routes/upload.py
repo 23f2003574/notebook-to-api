@@ -10496,6 +10496,7 @@ def app_preview_endpoint(data: dict):
         app_code = generate_fastapi_code(
             functions, package_name,
             source_notebook_sha256=hash_notebook_file(full_path),
+            notebook_to_api_version=NOTEBOOK_TO_API_VERSION,
         )
 
     except ReservedFunctionNameError as e:

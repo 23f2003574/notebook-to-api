@@ -1275,6 +1275,7 @@ def compile_notebook_to_api(
         api_code = generate_fastapi_code(
             functions, package_name,
             source_notebook_sha256=hash_notebook_file(notebook_path),
+            notebook_to_api_version=NOTEBOOK_TO_API_VERSION,
         )
 
         # generate_fastapi_code succeeding means this compile is now

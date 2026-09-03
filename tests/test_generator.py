@@ -6,6 +6,7 @@ import pytest
 from backend.generator.api_generator import (
     GENERATED_APP_ENV_VARS,
     generate_fastapi_code,
+    RESERVED_INFRASTRUCTURE_NAMES,
     ReservedFunctionNameError,
 )
 
@@ -54,6 +55,52 @@ def test_generate_fastapi_code_defaults_source_notebook_sha256_to_none():
     code = generate_fastapi_code(functions)
 
     assert "SOURCE_NOTEBOOK_SHA256 = None" in code
+
+
+def test_generate_fastapi_code_bakes_in_the_given_notebook_to_api_version():
+    """GET / and GET /info both previously reported a hardcoded "1.0.0"
+    literal completely unrelated to which actual version of this tool
+    compiled the app -- the same "two independent, inevitably-drifting
+    hardcoded version literals" bug NOTEBOOK_TO_API_VERSION
+    (backend/compiler.py) was already introduced to deduplicate for this
+    dashboard's own GET /api/health and GET /, just never threaded
+    through to the *generated* app's own identical two literals.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions, notebook_to_api_version="0.4.2")
+
+    assert "NOTEBOOK_TO_API_VERSION = '0.4.2'" in code
+    assert "'generator_version': NOTEBOOK_TO_API_VERSION," in code
+    assert '"version": NOTEBOOK_TO_API_VERSION,' in code
+
+
+def test_generate_fastapi_code_defaults_notebook_to_api_version_to_one_point_zero_point_zero():
+    """A caller not passing "notebook_to_api_version" at all (a direct
+    unit test, most commonly -- every real compile always passes
+    compiler.py's own NOTEBOOK_TO_API_VERSION) must see this function's
+    own previous literal exactly, not a silently different default no
+    caller asked for.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "NOTEBOOK_TO_API_VERSION = '1.0.0'" in code
+
+
+def test_notebook_to_api_version_is_a_reserved_infrastructure_name():
+    """A notebook function (or module-level assignment) literally named
+    NOTEBOOK_TO_API_VERSION would silently rebind the real one at
+    module-load time -- the exact endpoint-ordering trap this reserved-
+    names set already exists to reject outright, the same protection
+    GENERATED_AT/PYTHON_VERSION (the other baked-in metadata constants)
+    already have.
+    """
+
+    assert "NOTEBOOK_TO_API_VERSION" in RESERVED_INFRASTRUCTURE_NAMES
 
 
 def _register_fake_notebook_module(monkeypatch, package_name="generated"):

@@ -789,6 +789,66 @@ print("SOURCE_NOTEBOOK_SHA256_INFO_E2E_OK")
     assert "SOURCE_NOTEBOOK_SHA256_INFO_E2E_OK" in proc.stdout
 
 
+def test_compiler_pipeline_bakes_the_real_tool_version_into_generated_endpoints(tmp_path):
+    """GET / and GET /info both previously reported a hardcoded "1.0.0"
+    literal completely unrelated to which actual version of this tool
+    compiled the app -- the same "two independent, inevitably-drifting
+    hardcoded version literals" bug NOTEBOOK_TO_API_VERSION
+    (backend/compiler.py) was already introduced to deduplicate for this
+    dashboard's own GET /api/health and GET /, just never threaded
+    through to the *generated* app's own identical two literals.
+    """
+
+    from backend.compiler import NOTEBOOK_TO_API_VERSION
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+root = client.get("/").json()
+info = client.get("/info").json()
+assert root["generator_version"] == {NOTEBOOK_TO_API_VERSION!r}, root
+assert info["version"] == {NOTEBOOK_TO_API_VERSION!r}, info
+
+print("NOTEBOOK_TO_API_VERSION_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "NOTEBOOK_TO_API_VERSION_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_dockerignore_excludes_a_real_exported_openapi_and_sdk(
     tmp_path,
 ):

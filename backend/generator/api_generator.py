@@ -14,7 +14,7 @@ from pathlib import Path
 # ordering trap.
 RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "START_TIME",
-    "GENERATED_AT", "PYTHON_VERSION", "ALLOWED_ORIGINS",
+    "GENERATED_AT", "PYTHON_VERSION", "NOTEBOOK_TO_API_VERSION", "ALLOWED_ORIGINS",
     "MAX_REQUEST_BODY_BYTES", "MaxRequestBodySizeMiddleware",
     "MAX_PENDING_TASKS",
     "verify_api_key", "custom_openapi",
@@ -253,7 +253,10 @@ def _resolve_annotation_source(type_str):
 
 
 # Template for generating the FastAPI application source code
-def generate_fastapi_code(functions, package_name="generated", source_notebook_sha256=None):
+def generate_fastapi_code(
+    functions, package_name="generated", source_notebook_sha256=None,
+    notebook_to_api_version="1.0.0",
+):
     """Generate FastAPI app code for the given functions.
 
     Each function is examined; if its name contains any of the
@@ -276,6 +279,21 @@ def generate_fastapi_code(functions, package_name="generated", source_notebook_s
     already knows which dashboard/tag to look under). None (the default,
     used by any caller not passing it) means "unknown" -- GET /info
     reports it as null, exactly as if this parameter didn't exist.
+
+    notebook_to_api_version (optional) is baked into the generated app
+    the identical way, as its own "generator_version" (GET /) and
+    "version" (GET /info) fields -- both of which, before this, were a
+    hardcoded "1.0.0" literal completely unrelated to which actual
+    version of this tool compiled the app, the same "two independent,
+    inevitably-drifting hardcoded version literals" bug NOTEBOOK_TO_API_
+    VERSION (backend/compiler.py) was already introduced to deduplicate
+    for this dashboard's own GET /api/health and GET / -- just never
+    threaded through to the *generated* app's own identical two literals.
+    compile_notebook_to_api (backend/compiler.py) always passes its own
+    NOTEBOOK_TO_API_VERSION here; the "1.0.0" default is only ever seen
+    by a caller of this function that doesn't (a direct unit test, most
+    commonly), preserving this function's previous literal exactly for
+    it rather than silently changing behavior no caller asked for.
     """
     colliding_names = sorted(
         {func["name"] for func in functions} & RESERVED_INFRASTRUCTURE_NAMES
@@ -598,6 +616,9 @@ def generate_fastapi_code(functions, package_name="generated", source_notebook_s
     lines.append(
         f"SOURCE_NOTEBOOK_SHA256 = {source_notebook_sha256!r}"
     )
+    lines.append(
+        f"NOTEBOOK_TO_API_VERSION = {notebook_to_api_version!r}"
+    )
     lines.append("")
     protected_endpoint_count = len(functions)
     endpoint_list = [
@@ -619,7 +640,7 @@ def generate_fastapi_code(functions, package_name="generated", source_notebook_s
     lines.append("    return {")
     lines.append("        'service': 'Notebook-to-API Generated Service',")
     lines.append("        'generator': 'notebook-to-api',")
-    lines.append("        'generator_version': '1.0.0',")
+    lines.append("        'generator_version': NOTEBOOK_TO_API_VERSION,")
     lines.append(
         "        'generated_at': GENERATED_AT,"
     )
@@ -754,7 +775,7 @@ def generate_fastapi_code(functions, package_name="generated", source_notebook_s
     lines.append("def service_info():")
     lines.append("    return {")
     lines.append('        "service": "Notebook-to-API Generated Service",')
-    lines.append('        "version": "1.0.0",')
+    lines.append('        "version": NOTEBOOK_TO_API_VERSION,')
     lines.append('        "status": "running",')
     lines.append(f'        "endpoints": {repr(endpoint_list)},')
     lines.append(f'        "endpoint_count": {len(endpoint_list)},')

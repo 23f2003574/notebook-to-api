@@ -17994,6 +17994,29 @@ def test_app_preview_bakes_in_the_notebooks_own_sha256():
     )
 
 
+def test_app_preview_bakes_in_the_real_tool_version():
+    """Must bake in this dashboard's own NOTEBOOK_TO_API_VERSION, the
+    same version a real POST /api/compile of the identical notebook
+    would -- otherwise this preview's own "matches what a real compile
+    would produce" guarantee silently breaks the moment the two drift.
+    """
+
+    from backend.compiler import NOTEBOOK_TO_API_VERSION
+
+    _upload_sample_notebook("app_preview_version.ipynb")
+
+    resp = client.post(
+        "/api/app-preview",
+        json={"notebook_path": "app_preview_version.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    assert (
+        f"NOTEBOOK_TO_API_VERSION = {NOTEBOOK_TO_API_VERSION!r}"
+        in resp.json()["app_code"]
+    )
+
+
 def test_app_preview_respects_only_and_exclude():
 
     content = _notebook_bytes(
