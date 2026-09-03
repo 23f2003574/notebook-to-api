@@ -348,7 +348,7 @@ _CORE_COMMANDS = frozenset({
     "list", "info", "info-batch",
     "search-functions", "search-content", "find-duplicates", "resolve-duplicates", "storage",
     "download", "export-notebooks", "delete", "delete-batch", "rename", "copy",
-    "copy-batch", "copy-many", "rename-many", "tags", "prune-versions", "prune-temp-files", "description", "deploy-history",
+    "copy-batch", "copy-many", "rename-many", "tags", "prune-versions", "prune-temp-files", "description", "source-url", "deploy-history",
     "clear-deploy-history", "compile-history", "clear-compile-history",
     "remote-compile", "remote-inspect", "remote-build",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
@@ -3441,6 +3441,72 @@ def _dispatch_core_command(args):
                     f"{data.get('failed_count', 0)} failed"
                 )
 
+    elif args.command == "source-url":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        if args.source_url_command == "get":
+
+            try:
+                response = httpx.get(
+                    f"{dashboard_url}/api/notebooks/{args.filename}/source-url",
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                source_url = data.get("source_url")
+                print(f"{args.filename}: {source_url if source_url else '(no source url)'}")
+
+        else:  # args.source_url_command == "set"
+
+            set_source_url_body = {"source_url": args.source_url}
+            if args.dry_run:
+                set_source_url_body["dry_run"] = True
+
+            try:
+                response = httpx.put(
+                    f"{dashboard_url}/api/notebooks/{args.filename}/source-url",
+                    json=set_source_url_body,
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                source_url = data.get("source_url")
+                verb = "would be set to" if data.get("dry_run") else "set to"
+                print(
+                    f"{args.filename} source url {verb}: "
+                    f"{source_url if source_url else '(cleared)'}"
+                )
+
     elif args.command == "remote-compile":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -5733,6 +5799,7 @@ def _dispatch_core_command(args):
             print(f"  max tag length: {config.get('max_tag_length')}")
             print(f"  max tags per notebook: {config.get('max_tags_per_notebook')}")
             print(f"  max description length: {config.get('max_description_length')}")
+            print(f"  max source url length: {config.get('max_source_url_length')}")
             print(f"  max deploy history entries: {config.get('max_deploy_history_entries')}")
             print(f"  max compile history entries: {config.get('max_compile_history_entries')}")
             print(f"  deploy subprocess timeout: {config.get('deploy_subprocess_timeout_seconds')}s")
@@ -8123,6 +8190,79 @@ def main():
             "\"dry_run\", \"results\": [{\"filename\", \"status\", "
             "...}, ...], \"succeeded_count\", \"failed_count\"}) instead "
             "of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    # source-url command group (view or manually correct/clear a
+    # notebook's own recorded provenance URL, via GET/PUT
+    # /api/notebooks/{filename}/source-url -- normally set automatically
+    # by `import-url`/`remote-compile`'s own POST /api/notebooks/import-url,
+    # this exists for the same reason `tags`/`description` do: correcting
+    # or clearing a value by hand without direct server access)
+    source_url_parser = subparsers.add_parser(
+        "source-url",
+        help="View or manually set/clear the recorded provenance URL on a notebook already on a running dashboard instance."
+    )
+    source_url_subparsers = source_url_parser.add_subparsers(
+        dest="source_url_command", required=True
+    )
+
+    source_url_get_parser = source_url_subparsers.add_parser(
+        "get",
+        help="Show a notebook's recorded source_url via GET /api/notebooks/{filename}/source-url."
+    )
+    source_url_get_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(source_url_get_parser)
+    source_url_get_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"filename\", \"source_url\"}) instead of a "
+            "human-readable summary, for scripting/automation."
+        )
+    )
+
+    source_url_set_parser = source_url_subparsers.add_parser(
+        "set",
+        help="Set or clear a notebook's recorded source_url via PUT /api/notebooks/{filename}/source-url."
+    )
+    source_url_set_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    source_url_set_parser.add_argument(
+        "source_url",
+        nargs="?",
+        default="",
+        help=(
+            "New provenance URL (http:// or https://), replacing the "
+            "notebook's entire existing one. Omit (or pass an empty "
+            "string) to clear it."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(source_url_set_parser)
+    source_url_set_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report the validated source_url a real call would record, "
+            "via PUT /api/notebooks/{filename}/source-url's own "
+            "\"dry_run\" body field, without replacing the notebook's "
+            "own existing recorded value."
+        )
+    )
+    source_url_set_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"dry_run\", \"filename\", \"source_url\"}) "
+            "instead of a human-readable summary, for scripting/automation."
         )
     )
 

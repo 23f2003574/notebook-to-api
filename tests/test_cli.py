@@ -9179,6 +9179,256 @@ def test_description_command_reports_a_clean_error_when_the_dashboard_is_unreach
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_source_url_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "source-url" in proc.stdout
+
+
+def test_source_url_get_command_prints_the_notebooks_source_url(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "source_url": "https://example.com/nb.ipynb",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["source-url", "get", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nb.ipynb: https://example.com/nb.ipynb" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/source-url"]
+
+
+def test_source_url_get_command_reports_no_source_url(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "filename": "nb.ipynb", "source_url": None})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["source-url", "get", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nb.ipynb: (no source url)" in proc.stdout
+
+
+def test_source_url_get_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "filename": "nb.ipynb", "source_url": "https://example.com/nb.ipynb"}
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["source-url", "get", "nb.ipynb", "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_source_url_get_command_reports_a_clean_error_for_a_missing_notebook(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook file not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["source-url", "get", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook file not found")
+
+
+def test_source_url_set_command_replaces_the_notebooks_source_url(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "source_url": "https://example.com/new.ipynb",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "source-url", "set", "nb.ipynb", "https://example.com/new.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nb.ipynb source url set to: https://example.com/new.ipynb" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/source-url"]
+    assert json.loads(handler.bodies[0]) == {"source_url": "https://example.com/new.ipynb"}
+
+
+def test_source_url_set_command_dry_run_sends_dry_run_and_prints_would_be_set_to(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": True,
+            "filename": "nb.ipynb", "source_url": "https://example.com/new.ipynb",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "source-url", "set", "nb.ipynb", "https://example.com/new.ipynb",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nb.ipynb source url would be set to: https://example.com/new.ipynb" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "source_url": "https://example.com/new.ipynb", "dry_run": True,
+    }
+
+
+def test_source_url_set_command_with_empty_string_clears_it(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "filename": "nb.ipynb", "source_url": None})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["source-url", "set", "nb.ipynb", "", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nb.ipynb source url set to: (cleared)" in proc.stdout
+
+
+def test_source_url_set_command_with_no_value_clears_it(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "filename": "nb.ipynb", "source_url": None})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["source-url", "set", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nb.ipynb source url set to: (cleared)" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {"source_url": ""}
+
+
+def test_source_url_set_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "filename": "nb.ipynb", "source_url": "https://example.com/nb.ipynb"}
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "source-url", "set", "nb.ipynb", "https://example.com/nb.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_source_url_set_command_reports_a_clean_error_for_an_invalid_value(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(400, {"detail": "Unsupported source_url 'ftp://x': only http:// and https:// URLs are accepted"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "source-url", "set", "nb.ipynb", "ftp://x",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "only http:// and https:// URLs are accepted")
+
+
+def test_source_url_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "source-url", "get", "nb.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_description_set_batch_command_is_registered():
 
     proc = _run_cli(["description", "--help"], cwd=Path.cwd())
@@ -16882,6 +17132,7 @@ def test_status_command_prints_health_and_config(tmp_path, fake_dashboard):
             "max_tag_length": 40,
             "max_tags_per_notebook": 20,
             "max_description_length": 500,
+            "max_source_url_length": 2048,
             "max_deploy_history_entries": 50,
             "max_compile_history_entries": 50,
             "deploy_subprocess_timeout_seconds": 600,
@@ -16902,6 +17153,7 @@ def test_status_command_prints_health_and_config(tmp_path, fake_dashboard):
     assert "max upload size: 10485760 bytes" in proc.stdout
     assert "max batch upload files: 50" in proc.stdout
     assert "max description length: 500" in proc.stdout
+    assert "max source url length: 2048" in proc.stdout
     assert "max deploy history entries: 50" in proc.stdout
     assert "max compile history entries: 50" in proc.stdout
     assert "notebook sort keys: name, size, uploaded_at" in proc.stdout

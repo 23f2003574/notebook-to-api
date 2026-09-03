@@ -2738,7 +2738,11 @@ def _write_notebook_source_url(notebook_filename: str, source_url: str) -> None:
     from -- called unconditionally (never optional the way tags/
     description are at upload time) by POST /api/notebooks/import-url's
     own success path below, since a real, non-dry-run call to that
-    endpoint always has one.
+    endpoint always has one. Also called (this time optionally, `None`
+    clearing it) by PUT /api/notebooks/{filename}/source-url below, for
+    an operator correcting or clearing one by hand rather than through a
+    real import-url fetch -- e.g. documenting that a directly-uploaded
+    notebook mirrors an external one, or fixing a URL that's since moved.
 
     Writes via a temp-file-then-os.replace swap in the same directory --
     the identical atomic-write pattern _write_notebook_tags/
@@ -2759,6 +2763,166 @@ def _write_notebook_source_url(notebook_filename: str, source_url: str) -> None:
         json.dump({"source_url": source_url}, f)
 
     os.replace(temp_path, sidecar_path)
+
+
+# Bounds a manually-set source_url the same way _MAX_DESCRIPTION_LENGTH
+# bounds a description -- without a cap, a single PUT
+# /api/notebooks/{filename}/source-url call could stuff an arbitrarily
+# large string into the sidecar file _write_notebook_source_url above
+# writes, and into every GET /api/notebooks(/{filename}/info) response
+# listing it back out afterward. POST /api/notebooks/import-url's own
+# fetched URL is never checked against this -- a URL long enough to
+# actually reach and fetch from is already implicitly bounded by
+# whatever HTTP client/server involved would accept, unlike a value
+# typed (or pasted) directly into this endpoint's own request body.
+_MAX_SOURCE_URL_LENGTH = 2048
+
+
+def _validate_and_normalize_source_url(source_url):
+    """Validate `source_url` and return it stripped of surrounding
+    whitespace, or None to clear it -- the manual counterpart to
+    _reject_unsafe_import_url_host's own scheme check above, but without
+    that function's DNS-resolution/private-IP safety checks: those exist
+    specifically to guard an outbound fetch POST /api/notebooks/import-url
+    itself makes, and PUT /api/notebooks/{filename}/source-url never
+    fetches `source_url` at all -- it's stored, freeform provenance
+    metadata from here on, the same "no network access, so no SSRF
+    surface" reasoning that already lets a plain string through PUT
+    .../description unchecked.
+
+    None, "", or omitting "source_url" entirely all mean "clear it", the
+    same "empty input clears the field" contract
+    _validate_and_normalize_description already establishes -- source_url
+    itself already treats None as its own "unset" value everywhere else
+    (_read_notebook_source_url's own return, "source_url" on GET
+    .../info), so this returns None here too rather than "".
+    """
+    if source_url is None:
+        return None
+
+    if not isinstance(source_url, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="source_url must be a string"
+        )
+
+    source_url = source_url.strip()
+
+    if not source_url:
+        return None
+
+    if len(source_url) > _MAX_SOURCE_URL_LENGTH:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"source_url must be at most {_MAX_SOURCE_URL_LENGTH} "
+                "characters long"
+            )
+        )
+
+    parsed = urlsplit(source_url)
+
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported source_url '{source_url}': only http:// "
+                "and https:// URLs are accepted"
+            )
+        )
+
+    return source_url
+
+
+@router.get("/notebooks/{filename}/source-url")
+def get_notebook_source_url(filename: str):
+    """Return the URL currently recorded as the notebook's own
+    provenance, or null if it has none -- the GET counterpart to PUT
+    .../source-url below, mirroring GET .../description exactly.
+
+    "source_url" is already reported alongside every other per-notebook
+    field on GET /api/notebooks, GET .../info, and POST
+    /api/notebooks/info-batch (see _notebook_metadata_entry) -- this
+    endpoint exists for the identical reason GET .../tags and GET
+    .../description each already do despite that overlap: a caller
+    interested in only this one field for one specific notebook (e.g.
+    right before a PUT .../source-url to it) shouldn't have to fetch
+    and discard the notebook's entire info/list entry just to read it
+    back first.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "source_url": _read_notebook_source_url(file_path.name),
+    }
+
+
+@router.put("/notebooks/{filename}/source-url")
+def set_notebook_source_url(filename: str, data: dict):
+    """Manually set or clear the URL recorded as a notebook's own
+    provenance.
+
+    Before this, "source_url" was only ever writable as a side effect of
+    a real POST /api/notebooks/import-url fetch (or inherited/moved by
+    copy/rename, or restored from a backup archive -- see
+    _write_notebook_source_url's own docstring) -- unlike tags and
+    description, there was no way to set, correct, or clear it directly.
+    An operator documenting that a directly-uploaded notebook mirrors an
+    external one it was never actually fetched from through this
+    dashboard, or fixing a recorded URL that's since moved (or was
+    typo'd during an import), had no way to do either short of hand-
+    editing the hidden ".{filename}.source_url.json" sidecar file
+    directly on the server -- the exact kind of direct server access
+    every other per-notebook field already avoids requiring.
+
+    A PUT, not a PATCH: this always replaces the notebook's entire
+    recorded source_url with "source_url" from the request body, the
+    same full-replace contract PUT .../tags and PUT .../description
+    already establish for their own fields. Pass null, "", or omit
+    "source_url" entirely to clear it.
+
+    "dry_run" (optional, default false) reports the exact same
+    validated, normalized "source_url" a real call would, without
+    actually replacing the notebook's own recorded value -- the same
+    preview PUT .../tags and PUT .../description's own "dry_run" already
+    provide.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    source_url = _validate_and_normalize_source_url(data.get("source_url"))
+
+    dry_run = bool(data.get("dry_run", False))
+
+    if not dry_run:
+        _write_notebook_source_url(file_path.name, source_url)
+
+    return {
+        "status": "success",
+        "dry_run": dry_run,
+        "filename": filename,
+        "source_url": source_url,
+    }
 
 
 @router.get("/tags")
@@ -12880,6 +13044,16 @@ def get_config():
     "rate_limit_per_minute" (GET /api/env-vars-preview) already uses for
     the *generated* app's own identically-shaped limiter, rather than a
     bare 0 a caller could misread as "zero requests allowed".
+
+    "max_source_url_length" (added alongside this same docstring's
+    original feature, not a separate change) is _MAX_SOURCE_URL_LENGTH --
+    the identical per-field length cap "max_description_length" already
+    surfaces here for PUT .../description, just for PUT
+    .../source-url's own "source_url" field instead: a caller wanting to
+    validate a source_url client-side before submitting it (the same
+    reason this endpoint's own docstring already gives for every other
+    field here) had no way to ask that short of triggering a real 400
+    first.
     """
 
     from backend.dashboard import allowed_origins, dashboard_rate_limit_per_minute
@@ -12895,6 +13069,7 @@ def get_config():
         "max_tag_length": _MAX_TAG_LENGTH,
         "max_tags_per_notebook": _MAX_TAGS_PER_NOTEBOOK,
         "max_description_length": _MAX_DESCRIPTION_LENGTH,
+        "max_source_url_length": _MAX_SOURCE_URL_LENGTH,
         "max_deploy_history_entries": MAX_DEPLOY_HISTORY_ENTRIES,
         "max_compile_history_entries": MAX_COMPILE_HISTORY_ENTRIES,
         "deploy_subprocess_timeout_seconds": DEPLOY_SUBPROCESS_TIMEOUT_SECONDS,

@@ -8705,6 +8705,217 @@ def test_set_notebook_description_rejects_a_description_over_the_max_length():
     assert resp.status_code == 400
 
 
+def test_get_notebook_source_url_is_null_for_a_notebook_with_none_recorded():
+
+    _upload_sample_notebook("source_url_field_unset.ipynb")
+
+    resp = client.get("/api/notebooks/source_url_field_unset.ipynb/source-url")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "success",
+        "filename": "source_url_field_unset.ipynb",
+        "source_url": None,
+    }
+
+
+def test_get_notebook_source_url_returns_404_for_missing_file():
+
+    resp = client.get("/api/notebooks/source_url_does_not_exist.ipynb/source-url")
+
+    assert resp.status_code == 404
+
+
+def test_set_notebook_source_url_returns_404_for_missing_file():
+
+    resp = client.put(
+        "/api/notebooks/source_url_does_not_exist.ipynb/source-url",
+        json={"source_url": "https://example.com/a.ipynb"},
+    )
+
+    assert resp.status_code == 404
+
+
+def test_set_notebook_source_url_persists_and_is_readable_back():
+
+    _upload_sample_notebook("source_url_field_persist.ipynb")
+
+    set_resp = client.put(
+        "/api/notebooks/source_url_field_persist.ipynb/source-url",
+        json={"source_url": "https://example.com/original.ipynb"},
+    )
+
+    assert set_resp.status_code == 200
+    assert set_resp.json() == {
+        "status": "success",
+        "dry_run": False,
+        "filename": "source_url_field_persist.ipynb",
+        "source_url": "https://example.com/original.ipynb",
+    }
+
+    get_resp = client.get("/api/notebooks/source_url_field_persist.ipynb/source-url")
+    assert get_resp.json()["source_url"] == "https://example.com/original.ipynb"
+
+    assert client.get(
+        "/api/notebooks/source_url_field_persist.ipynb/info"
+    ).json()["source_url"] == "https://example.com/original.ipynb"
+
+
+def test_set_notebook_source_url_dry_run_reports_the_normalized_value_without_writing():
+
+    _upload_sample_notebook("source_url_field_dry_run.ipynb")
+    client.put(
+        "/api/notebooks/source_url_field_dry_run.ipynb/source-url",
+        json={"source_url": "https://example.com/stale.ipynb"},
+    )
+
+    resp = client.put(
+        "/api/notebooks/source_url_field_dry_run.ipynb/source-url",
+        json={"source_url": "  https://example.com/new.ipynb  ", "dry_run": True},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "success",
+        "dry_run": True,
+        "filename": "source_url_field_dry_run.ipynb",
+        "source_url": "https://example.com/new.ipynb",
+    }
+
+    # Nothing was actually written.
+    assert client.get(
+        "/api/notebooks/source_url_field_dry_run.ipynb/source-url"
+    ).json()["source_url"] == "https://example.com/stale.ipynb"
+
+
+def test_set_notebook_source_url_strips_surrounding_whitespace():
+
+    _upload_sample_notebook("source_url_field_strip.ipynb")
+
+    resp = client.put(
+        "/api/notebooks/source_url_field_strip.ipynb/source-url",
+        json={"source_url": "   https://example.com/strip.ipynb   "},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["source_url"] == "https://example.com/strip.ipynb"
+
+
+def test_set_notebook_source_url_with_empty_string_clears_it_and_removes_the_sidecar_file():
+
+    _upload_sample_notebook("source_url_field_clear.ipynb")
+
+    client.put(
+        "/api/notebooks/source_url_field_clear.ipynb/source-url",
+        json={"source_url": "https://example.com/temporary.ipynb"},
+    )
+    assert _source_url_sidecar_path("source_url_field_clear.ipynb").is_file()
+
+    clear_resp = client.put(
+        "/api/notebooks/source_url_field_clear.ipynb/source-url",
+        json={"source_url": ""},
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json()["source_url"] is None
+    assert not _source_url_sidecar_path("source_url_field_clear.ipynb").is_file()
+
+
+def test_set_notebook_source_url_defaults_to_clearing_when_omitted():
+
+    _upload_sample_notebook("source_url_field_omitted.ipynb")
+
+    client.put(
+        "/api/notebooks/source_url_field_omitted.ipynb/source-url",
+        json={"source_url": "https://example.com/temporary.ipynb"},
+    )
+
+    resp = client.put("/api/notebooks/source_url_field_omitted.ipynb/source-url", json={})
+
+    assert resp.status_code == 200
+    assert resp.json()["source_url"] is None
+
+
+def test_set_notebook_source_url_rejects_a_non_string_value():
+
+    _upload_sample_notebook("source_url_field_not_a_string.ipynb")
+
+    resp = client.put(
+        "/api/notebooks/source_url_field_not_a_string.ipynb/source-url",
+        json={"source_url": 5},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_set_notebook_source_url_rejects_a_value_over_the_max_length():
+
+    _upload_sample_notebook("source_url_field_too_long.ipynb")
+
+    resp = client.put(
+        "/api/notebooks/source_url_field_too_long.ipynb/source-url",
+        json={"source_url": "https://example.com/" + ("x" * 2048)},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_set_notebook_source_url_rejects_a_non_http_scheme():
+
+    _upload_sample_notebook("source_url_field_bad_scheme.ipynb")
+
+    resp = client.put(
+        "/api/notebooks/source_url_field_bad_scheme.ipynb/source-url",
+        json={"source_url": "ftp://example.com/a.ipynb"},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_set_notebook_source_url_rejects_a_url_with_no_host():
+
+    _upload_sample_notebook("source_url_field_no_host.ipynb")
+
+    resp = client.put(
+        "/api/notebooks/source_url_field_no_host.ipynb/source-url",
+        json={"source_url": "https://"},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_set_notebook_source_url_overwrites_one_recorded_by_a_real_import(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+    """A manual PUT can correct a URL previously recorded automatically
+    by a real POST /api/notebooks/import-url fetch -- and vice versa, a
+    later real import-url fetch (on overwrite) still wins, since neither
+    write path is otherwise special relative to the other.
+    """
+
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/notebooks/import-url",
+        json={
+            "url": f"{base_url}/source_url_field_overwrite.ipynb",
+            "filename": "source_url_field_overwrite.ipynb",
+        },
+    )
+
+    resp = client.put(
+        "/api/notebooks/source_url_field_overwrite.ipynb/source-url",
+        json={"source_url": "https://example.com/corrected.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["source_url"] == "https://example.com/corrected.ipynb"
+    assert client.get(
+        "/api/notebooks/source_url_field_overwrite.ipynb/info"
+    ).json()["source_url"] == "https://example.com/corrected.ipynb"
+
+
 def test_notebook_list_and_info_include_the_description_field():
 
     _upload_sample_notebook("description_in_list.ipynb")
@@ -21689,6 +21900,17 @@ def test_get_config_reports_the_configured_limits():
     assert isinstance(body["max_deploy_history_entries"], int)
     assert isinstance(body["max_compile_history_entries"], int)
     assert isinstance(body["deploy_subprocess_timeout_seconds"], int)
+    assert isinstance(body["max_source_url_length"], int)
+
+
+def test_get_config_reports_the_max_source_url_length():
+
+    from backend.routes.upload import _MAX_SOURCE_URL_LENGTH
+
+    resp = client.get("/api/config")
+
+    assert resp.status_code == 200
+    assert resp.json()["max_source_url_length"] == _MAX_SOURCE_URL_LENGTH
 
 
 def test_get_config_reports_the_allowed_origins():
