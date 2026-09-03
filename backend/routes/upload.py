@@ -788,7 +788,7 @@ def _restore_version_snapshots_from_archive(archive, entry_names, versions_dir):
 def _notebook_metadata_archive_entry_names(filename: str = None):
     """The archive entry names GET /api/notebooks/{filename}/versions/export
     and GET /api/notebooks/export each write a notebook's own tags/
-    description under, and POST .../versions/import and POST
+    description/source_url under, and POST .../versions/import and POST
     /api/notebooks/import each read them back from.
 
     With `filename` given (the catalog-wide pair, which bundles several
@@ -796,24 +796,30 @@ def _notebook_metadata_archive_entry_names(filename: str = None):
     namespace each one by its own owning filename -- the same reason
     "versions/<filename>/<version_id>" is already namespaced one level
     deeper than a single notebook's own flat "versions/<version_id>"),
-    both entries sit under a "tags/"/"description/" directory keyed by
-    that filename. Without it (the single-notebook pair, whose whole
-    archive already belongs to one notebook, the same way its own
-    top-level `filename` entry needs no further namespacing either), both
-    sit flat at the archive's own root.
+    all three entries sit under a "tags/"/"description/"/"source_url/"
+    directory keyed by that filename. Without it (the single-notebook
+    pair, whose whole archive already belongs to one notebook, the same
+    way its own top-level `filename` entry needs no further namespacing
+    either), all three sit flat at the archive's own root.
     """
     if filename is None:
-        return "tags.json", "description.txt"
+        return "tags.json", "description.txt", "source_url.json"
 
-    return f"tags/{filename}.json", f"description/{filename}.txt"
+    return (
+        f"tags/{filename}.json",
+        f"description/{filename}.txt",
+        f"source_url/{filename}.json",
+    )
 
 
 def _write_notebook_metadata_to_archive(
-    archive, notebook_filename, tags_entry_name, description_entry_name
+    archive, notebook_filename, tags_entry_name, description_entry_name,
+    source_url_entry_name,
 ):
-    """Write `notebook_filename`'s own current tags/description into
-    `archive` under `tags_entry_name`/`description_entry_name`, the
-    counterpart _read_notebook_metadata_from_archive (below) reads back.
+    """Write `notebook_filename`'s own current tags/description/source_url
+    into `archive` under `tags_entry_name`/`description_entry_name`/
+    `source_url_entry_name`, the counterpart
+    _read_notebook_metadata_from_archive (below) reads back.
 
     Before this, GET .../versions/export and GET /api/notebooks/export
     both bundled a notebook's own current content (and, for the latter,
@@ -828,13 +834,23 @@ def _write_notebook_metadata_to_archive(
     them read back completely untagged and undescribed regardless of
     what they'd actually been before.
 
+    "source_url" (see _read_notebook_source_url/_write_notebook_source_url
+    above) closes the identical gap for the URL a notebook was originally
+    imported from via POST /api/notebooks/import-url -- added to this same
+    project after tags/description already had this exact restorable-
+    backup treatment, and never given it itself: a notebook restored from
+    a backup previously read back with its provenance silently lost, even
+    though tags/description already round-tripped through the exact same
+    archive.
+
     Mirrors GET /api/notebooks/{filename}/versions' own "an
     empty/absent version history is a valid state, not an error"
-    reasoning: a notebook with no tags (or no description) simply
-    contributes no entry for that field at all, rather than an empty
-    "[]"/"" one -- the identical "empty in, no file on disk" contract
-    _write_notebook_tags/_write_notebook_description already apply to
-    the sidecar files these values are read from here.
+    reasoning: a notebook with no tags (or no description, or no
+    source_url) simply contributes no entry for that field at all, rather
+    than an empty "[]"/""/null one -- the identical "empty in, no file on
+    disk" contract _write_notebook_tags/_write_notebook_description/
+    _write_notebook_source_url already apply to the sidecar files these
+    values are read from here.
     """
     tags = _read_notebook_tags(notebook_filename)
 
@@ -846,25 +862,34 @@ def _write_notebook_metadata_to_archive(
     if description:
         archive.writestr(description_entry_name, description)
 
+    source_url = _read_notebook_source_url(notebook_filename)
+
+    if source_url:
+        archive.writestr(source_url_entry_name, json.dumps({"source_url": source_url}))
+
 
 def _read_notebook_metadata_from_archive(
-    archive, tags_entry_name, description_entry_name
+    archive, tags_entry_name, description_entry_name, source_url_entry_name
 ):
-    """The `(tags, description)` _write_notebook_metadata_to_archive
+    """The `(tags, description, source_url)` _write_notebook_metadata_to_archive
     (above) wrote into `archive` under `tags_entry_name`/
-    `description_entry_name` -- each None if that entry isn't present
-    (an archive predating this feature, or a notebook that simply had
-    none of that field to begin with) or fails the identical validation
-    PUT .../tags and PUT .../description already enforce on any other
-    caller-supplied value (a hand-edited or corrupted archive).
+    `description_entry_name`/`source_url_entry_name` -- each None if that
+    entry isn't present (an archive predating this feature, or a notebook
+    that simply had none of that field to begin with) or fails the
+    identical validation PUT .../tags and PUT .../description already
+    enforce on any other caller-supplied value (a hand-edited or corrupted
+    archive); `source_url` similarly falls back to None for anything that
+    isn't a non-empty string, the same best-effort contract
+    _read_notebook_source_url already applies to a corrupt sidecar file
+    on disk.
 
     Deliberately best-effort, the same "a bad sidecar file should never
-    break X" reasoning _read_notebook_tags/_read_notebook_description
-    already apply to a corrupt tags/description sidecar file on disk --
-    a malformed tags.json/description.txt entry is incidental to what
-    POST .../versions/import and POST /api/notebooks/import each exist
-    to restore (a notebook's own content and history), not a reason to
-    fail the whole restore over.
+    break X" reasoning _read_notebook_tags/_read_notebook_description/
+    _read_notebook_source_url already apply to a corrupt sidecar file on
+    disk -- a malformed tags.json/description.txt/source_url.json entry
+    is incidental to what POST .../versions/import and POST
+    /api/notebooks/import each exist to restore (a notebook's own content
+    and history), not a reason to fail the whole restore over.
     """
     archive_names = set(archive.namelist())
 
@@ -895,7 +920,22 @@ def _read_notebook_metadata_from_archive(
         except (UnicodeDecodeError, HTTPException):
             description = None
 
-    return tags, description
+    source_url = None
+
+    if source_url_entry_name in archive_names:
+
+        try:
+
+            loaded = json.loads(archive.read(source_url_entry_name))
+            candidate = loaded.get("source_url") if isinstance(loaded, dict) else None
+
+            if isinstance(candidate, str) and candidate:
+                source_url = candidate
+
+        except ValueError:
+            source_url = None
+
+    return tags, description, source_url
 
 
 async def _save_uploaded_notebook(
@@ -1755,8 +1795,10 @@ async def import_notebooks(
 
             result = await _save_uploaded_notebook(upload_file, overwrite, dry_run=dry_run)
 
-            archived_tags, archived_description = _read_notebook_metadata_from_archive(
-                archive, *_notebook_metadata_archive_entry_names(result["filename"])
+            archived_tags, archived_description, archived_source_url = (
+                _read_notebook_metadata_from_archive(
+                    archive, *_notebook_metadata_archive_entry_names(result["filename"])
+                )
             )
 
             tags_to_apply = (
@@ -1773,6 +1815,9 @@ async def import_notebooks(
             if description_to_apply is not None and not dry_run:
                 _write_notebook_description(result["filename"], description_to_apply)
 
+            if archived_source_url is not None and not dry_run:
+                _write_notebook_source_url(result["filename"], archived_source_url)
+
             # Reports what was actually restored *from the archive* --
             # null when there was nothing archived for this entry, or
             # when an explicit "tags"/"description" query param took
@@ -1780,11 +1825,16 @@ async def import_notebooks(
             # "description_to_apply" above ended up being applied, so a
             # caller can tell the two sources apart from the response
             # alone rather than having to already know which of "tags"/
-            # "description" it itself passed.
+            # "description" it itself passed. "restored_source_url" has
+            # no such query-param override to defer to (the same "no
+            # override concept" reasoning POST /api/notebooks/{filename}/copy
+            # already applies to source_url), so it's simply what the
+            # archive carried, or null.
             result["restored_tags"] = archived_tags if normalized_tags is None else None
             result["restored_description"] = (
                 archived_description if normalized_description is None else None
             )
+            result["restored_source_url"] = archived_source_url
 
             entry_version_names = version_entries_by_filename.get(result["filename"], [])
 
@@ -7930,8 +7980,10 @@ async def import_notebook_versions(
             archive, version_entries, versions_dir
         )
 
-    archived_tags, archived_description = _read_notebook_metadata_from_archive(
-        archive, *_notebook_metadata_archive_entry_names()
+    archived_tags, archived_description, archived_source_url = (
+        _read_notebook_metadata_from_archive(
+            archive, *_notebook_metadata_archive_entry_names()
+        )
     )
 
     if archived_tags is not None:
@@ -7939,6 +7991,9 @@ async def import_notebook_versions(
 
     if archived_description is not None:
         _write_notebook_description(file_path.name, archived_description)
+
+    if archived_source_url is not None:
+        _write_notebook_source_url(file_path.name, archived_source_url)
 
     return {
         "status": "success",
@@ -7948,6 +8003,7 @@ async def import_notebook_versions(
         "imported_version_count": len(imported_version_ids),
         "restored_tags": archived_tags,
         "restored_description": archived_description,
+        "restored_source_url": archived_source_url,
     }
 
 

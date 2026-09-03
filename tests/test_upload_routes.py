@@ -2144,6 +2144,63 @@ def test_import_notebooks_dry_run_predicts_restored_tags_and_description_without
     assert not (Path(UPLOAD_DIR) / "import_meta_dry_run.ipynb").exists()
 
 
+def test_import_notebooks_restores_each_entrys_own_archived_source_url():
+
+    archive_bytes = _zip_bytes({
+        "import_source_url_a.ipynb": _notebook_bytes("def f() -> int:\n    return 1\n"),
+        "import_source_url_b.ipynb": _notebook_bytes("def g() -> int:\n    return 2\n"),
+        "source_url/import_source_url_a.ipynb.json": json.dumps(
+            {"source_url": "https://example.com/a.ipynb"}
+        ),
+    })
+
+    resp = client.post(
+        "/api/notebooks/import",
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 2
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert (
+        results_by_filename["import_source_url_a.ipynb"]["restored_source_url"]
+        == "https://example.com/a.ipynb"
+    )
+    assert results_by_filename["import_source_url_b.ipynb"]["restored_source_url"] is None
+
+    assert client.get(
+        "/api/notebooks/import_source_url_a.ipynb/info"
+    ).json()["source_url"] == "https://example.com/a.ipynb"
+    assert client.get(
+        "/api/notebooks/import_source_url_b.ipynb/info"
+    ).json()["source_url"] is None
+
+
+def test_import_notebooks_dry_run_predicts_restored_source_url_without_writing():
+
+    archive_bytes = _zip_bytes({
+        "import_source_url_dry_run.ipynb": _notebook_bytes("def f() -> int:\n    return 1\n"),
+        "source_url/import_source_url_dry_run.ipynb.json": json.dumps(
+            {"source_url": "https://example.com/dry-run.ipynb"}
+        ),
+    })
+
+    resp = client.post(
+        "/api/notebooks/import",
+        params={"dry_run": "true"},
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    result = resp.json()["results"][0]
+    assert result["restored_source_url"] == "https://example.com/dry-run.ipynb"
+
+    assert not (Path(UPLOAD_DIR) / "import_source_url_dry_run.ipynb").exists()
+    assert not _source_url_sidecar_path("import_source_url_dry_run.ipynb").exists()
+
+
 def test_export_notebooks_round_trips_each_notebooks_own_tags_and_description():
 
     client.delete("/api/notebooks?confirm=true")
@@ -2201,6 +2258,67 @@ def test_export_notebooks_round_trips_each_notebooks_own_tags_and_description():
     assert client.get(
         "/api/notebooks/export_meta_a.ipynb/description"
     ).json()["description"] == "tagged and described"
+
+
+def test_export_notebooks_round_trips_source_url(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+
+    client.delete("/api/notebooks?confirm=true")
+
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/notebooks/import-url",
+        json={"url": f"{base_url}/export_source_url_a.ipynb"},
+    )
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "export_source_url_untagged.ipynb",
+                io.BytesIO(handler.content),
+                "application/json",
+            )
+        },
+    )
+
+    export_bytes = client.get("/api/notebooks/export").content
+
+    with zipfile.ZipFile(io.BytesIO(export_bytes)) as archive:
+        assert json.loads(
+            archive.read("source_url/export_source_url_a.ipynb.json")
+        ) == {"source_url": f"{base_url}/export_source_url_a.ipynb"}
+        # A notebook that was never imported from a URL contributes no
+        # entry at all -- the same "empty/absent is a valid state, not
+        # an error" reasoning "tags/"/"description/" already follow.
+        assert (
+            "source_url/export_source_url_untagged.ipynb.json"
+            not in archive.namelist()
+        )
+
+    client.delete("/api/notebooks?confirm=true")
+
+    resp = client.post(
+        "/api/notebooks/import",
+        files={"file": ("backup.zip", io.BytesIO(export_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    results_by_filename = {r["filename"]: r for r in resp.json()["results"]}
+    assert (
+        results_by_filename["export_source_url_a.ipynb"]["restored_source_url"]
+        == f"{base_url}/export_source_url_a.ipynb"
+    )
+    assert (
+        results_by_filename["export_source_url_untagged.ipynb"]["restored_source_url"]
+        is None
+    )
+
+    assert client.get(
+        "/api/notebooks/export_source_url_a.ipynb/info"
+    ).json()["source_url"] == f"{base_url}/export_source_url_a.ipynb"
 
 
 def test_import_notebooks_dry_run_does_not_write_any_file():
@@ -11571,6 +11689,66 @@ def test_export_notebook_versions_omits_tags_and_description_entries_when_unset(
     assert body["restored_tags"] is None
     assert body["restored_description"] is None
     assert client.get(f"/api/notebooks/{new_filename}/tags").json()["tags"] == []
+
+
+def test_export_notebook_versions_round_trips_source_url(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+
+    filename = "versions_source_url_round_trip.ipynb"
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/notebooks/import-url",
+        json={"url": f"{base_url}/{filename}", "filename": filename},
+    )
+
+    export_bytes = client.get(f"/api/notebooks/{filename}/versions/export").content
+
+    with zipfile.ZipFile(io.BytesIO(export_bytes)) as archive:
+        assert json.loads(archive.read("source_url.json")) == {
+            "source_url": f"{base_url}/{filename}"
+        }
+
+    new_filename = "versions_source_url_round_trip_restored.ipynb"
+
+    import_resp = client.post(
+        f"/api/notebooks/{new_filename}/versions/import",
+        files={"file": ("backup.zip", io.BytesIO(export_bytes), "application/zip")},
+    )
+
+    assert import_resp.status_code == 200
+    body = import_resp.json()
+    assert body["restored_source_url"] == f"{base_url}/{filename}"
+
+    assert client.get(
+        f"/api/notebooks/{new_filename}/info"
+    ).json()["source_url"] == f"{base_url}/{filename}"
+
+
+def test_export_notebook_versions_omits_source_url_entry_when_unset():
+
+    filename = "versions_source_url_unset.ipynb"
+    _upload_sample_notebook(filename)
+
+    export_bytes = client.get(f"/api/notebooks/{filename}/versions/export").content
+
+    with zipfile.ZipFile(io.BytesIO(export_bytes)) as archive:
+        assert "source_url.json" not in archive.namelist()
+
+    new_filename = "versions_source_url_unset_restored.ipynb"
+
+    import_resp = client.post(
+        f"/api/notebooks/{new_filename}/versions/import",
+        files={"file": ("backup.zip", io.BytesIO(export_bytes), "application/zip")},
+    )
+
+    assert import_resp.status_code == 200
+    assert import_resp.json()["restored_source_url"] is None
+    assert client.get(
+        f"/api/notebooks/{new_filename}/info"
+    ).json()["source_url"] is None
 
 
 def test_import_notebook_versions_succeeds_with_no_version_history():
