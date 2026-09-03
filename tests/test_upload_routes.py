@@ -21715,6 +21715,26 @@ def test_get_config_reflects_a_configured_allowed_origins(monkeypatch):
     ]
 
 
+def test_get_config_reports_a_null_dashboard_rate_limit_when_disabled(monkeypatch):
+
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_RATE_LIMIT_PER_MINUTE", raising=False)
+
+    resp = client.get("/api/config")
+
+    assert resp.status_code == 200
+    assert resp.json()["dashboard_rate_limit_per_minute"] is None
+
+
+def test_get_config_reflects_a_configured_dashboard_rate_limit(monkeypatch):
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_RATE_LIMIT_PER_MINUTE", "90")
+
+    resp = client.get("/api/config")
+
+    assert resp.status_code == 200
+    assert resp.json()["dashboard_rate_limit_per_minute"] == 90
+
+
 def test_get_config_reports_the_compiling_python_version():
 
     resp = client.get("/api/config")

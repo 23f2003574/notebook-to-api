@@ -12865,13 +12865,29 @@ def get_config():
     the generated app's own rate limiter, so a caller can't tell "no cap
     configured" apart from "some real, nonzero cap" without reading this
     field back.
+
+    "dashboard_rate_limit_per_minute" (added alongside this same
+    docstring's original feature, not a separate change) is
+    dashboard_rate_limit_per_minute's (backend/dashboard.py) own reading
+    of NOTEBOOK_API_DASHBOARD_RATE_LIMIT_PER_MINUTE -- already
+    independently configurable since this dashboard's own rate-limiting
+    middleware was added, but never itself surfaced through this
+    endpoint: a caller (a frontend backing off before it actually gets a
+    429, or an operator confirming the limit they set actually took
+    effect) had no way to ask that short of the same direct environment
+    access this endpoint's own docstring already says a client
+    shouldn't need. null when disabled (the default), the same
+    "rate_limit_per_minute" (GET /api/env-vars-preview) already uses for
+    the *generated* app's own identically-shaped limiter, rather than a
+    bare 0 a caller could misread as "zero requests allowed".
     """
 
-    from backend.dashboard import allowed_origins
+    from backend.dashboard import allowed_origins, dashboard_rate_limit_per_minute
 
     return {
         "status": "success",
         "allowed_origins": allowed_origins(),
+        "dashboard_rate_limit_per_minute": dashboard_rate_limit_per_minute() or None,
         "max_upload_bytes": MAX_UPLOAD_BYTES,
         "max_batch_upload_files": MAX_BATCH_UPLOAD_FILES,
         "max_notebooks": MAX_NOTEBOOKS,

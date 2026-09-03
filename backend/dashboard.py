@@ -5,6 +5,7 @@ Serves the React dashboard frontend and provides API endpoints for compilation
 
 import os
 import sys
+import time
 from pathlib import Path
 
 # Ensure project root is in sys.path
@@ -12,8 +13,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
@@ -171,8 +173,143 @@ def allowed_origins():
     return DEFAULT_ALLOWED_ORIGINS
 
 
+def dashboard_rate_limit_per_minute():
+    """Requests a single client may make to this dashboard per rolling
+    minute before getting a 429, via NOTEBOOK_API_DASHBOARD_RATE_LIMIT_PER_MINUTE
+    -- 0 (the default) disables rate limiting entirely, the same "0 means
+    off" convention NOTEBOOK_API_MAX_NOTEBOOKS and the *generated* app's
+    own NOTEBOOK_API_RATE_LIMIT_PER_MINUTE (backend/generator/api_generator.py)
+    already establish, so this changes nothing for an existing deployment
+    until an operator opts in.
+
+    Every *generated* app this dashboard produces already gets its own
+    per-API-key rate limiter for free (see _enforce_rate_limit in
+    generate_fastapi_code) -- but this dashboard's own management API
+    (POST /api/upload, /api/compile, /api/deploy, /api/notebooks/import-url,
+    ...) had no equivalent at all: nothing stood between an open (or
+    merely misconfigured-CORS) dashboard and a caller hammering it with
+    unbounded upload/compile/deploy requests, each with a real cost this
+    process actually pays (disk writes, a subprocess `docker build`, an
+    outbound fetch to a caller-supplied URL). Read fresh on every request
+    (like dashboard_host()/dashboard_port()/dashboard_reload() above)
+    rather than cached at import time, so tests can toggle it via
+    monkeypatch without reloading this module.
+    """
+    return int(os.getenv("NOTEBOOK_API_DASHBOARD_RATE_LIMIT_PER_MINUTE", "0"))
+
+
+DASHBOARD_RATE_LIMIT_WINDOW_SECONDS = 60
+
+# Fixed window per client key -- the same {key: (window_start, count)}
+# shape and "reset once the window's fully elapsed rather than decay
+# gradually" behavior _RATE_LIMIT_WINDOWS already uses in every generated
+# app, just keyed by client IP here since this dashboard (unlike a
+# generated app) has no built-in notion of an API key every caller
+# already presents. A reverse proxy in front of this dashboard that
+# doesn't forward the real client IP would make every request appear to
+# come from the same key -- the identical caveat the generated app's own
+# per-API-key limiter already documents for the opposite case (an IP
+# unreliable behind a proxy), just unavoidable here since this dashboard
+# has nothing sturdier than the IP to key on.
+_DASHBOARD_RATE_LIMIT_WINDOWS = {}
+
+# Unlike the generated app's own API_KEYS (a small, fixed set known at
+# startup), a client key here is an arbitrary IP address -- an unbounded
+# set under sustained traffic from many distinct clients (or a spoofed-IP
+# flood). Swept opportunistically, only once the tracked-client count
+# actually crosses this threshold, so normal traffic (well under it)
+# never pays any sweep cost at all.
+_DASHBOARD_RATE_LIMIT_SWEEP_THRESHOLD = 10_000
+
+
+def _evict_stale_dashboard_rate_limit_windows(now):
+    """Drop every tracked client whose own window has already fully
+    elapsed -- called opportunistically (see
+    _DASHBOARD_RATE_LIMIT_SWEEP_THRESHOLD above), the same lazy,
+    no-background-thread eviction style _evict_expired_tasks already
+    uses in every generated app for its own TASKS dict.
+    """
+    if len(_DASHBOARD_RATE_LIMIT_WINDOWS) <= _DASHBOARD_RATE_LIMIT_SWEEP_THRESHOLD:
+        return
+
+    stale_keys = [
+        key for key, (window_start, _count) in _DASHBOARD_RATE_LIMIT_WINDOWS.items()
+        if now - window_start >= DASHBOARD_RATE_LIMIT_WINDOW_SECONDS
+    ]
+
+    for key in stale_keys:
+        _DASHBOARD_RATE_LIMIT_WINDOWS.pop(key, None)
+
+
+@app.middleware("http")
+async def _enforce_dashboard_rate_limit(request: Request, call_next):
+    """Reject a request with 429 once its own client key has made more
+    than dashboard_rate_limit_per_minute() requests inside the current
+    rolling window -- see dashboard_rate_limit_per_minute()'s own
+    docstring above for why this dashboard needs this at all.
+
+    Registered (via the @app.middleware("http") decorator, itself
+    Starlette's own sugar for add_middleware(BaseHTTPMiddleware,
+    dispatch=...)) *before* app.add_middleware(CORSMiddleware, ...)
+    below -- Starlette's own add_middleware inserts each new middleware
+    at the *front* of its internal list, and then builds the actual
+    request-handling stack by wrapping outward-in over that list in
+    reverse, so the middleware added *last* ends up outermost. Adding
+    CORSMiddleware after this one is what makes it the outermost layer,
+    not the other way around: confirmed live -- with CORSMiddleware
+    added first instead (this dashboard's own original ordering, before
+    this comment), a 429 from here never got the CORS headers this
+    dashboard's own tests below already caught. With CORSMiddleware
+    outermost, a 429 response from here still passes back out through it
+    on its way to the caller, so it still gets the same
+    Access-Control-Allow-Origin/-Credentials headers any other response
+    already would -- without that ordering, a legitimate frontend's own
+    JS could never even read this response's body to show *why* it was
+    rejected.
+    """
+    limit = dashboard_rate_limit_per_minute()
+
+    if limit > 0:
+
+        key = request.client.host if request.client else "unknown"
+        now = time.time()
+
+        _evict_stale_dashboard_rate_limit_windows(now)
+
+        window_start, count = _DASHBOARD_RATE_LIMIT_WINDOWS.get(key, (now, 0))
+
+        if now - window_start >= DASHBOARD_RATE_LIMIT_WINDOW_SECONDS:
+            window_start, count = now, 0
+
+        count += 1
+        _DASHBOARD_RATE_LIMIT_WINDOWS[key] = (window_start, count)
+
+        if count > limit:
+
+            retry_after = max(
+                1, int(DASHBOARD_RATE_LIMIT_WINDOW_SECONDS - (now - window_start))
+            )
+
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": (
+                        f"Rate limit exceeded: {limit} requests per "
+                        f"{DASHBOARD_RATE_LIMIT_WINDOW_SECONDS}s per client"
+                    )
+                },
+                headers={"Retry-After": str(retry_after)},
+            )
+
+    return await call_next(request)
+
+
 # Enable CORS for the frontend, credentialed requests restricted to a
-# known allowlist -- see allowed_origins() docstring.
+# known allowlist -- see allowed_origins() docstring. Added *after*
+# _enforce_dashboard_rate_limit above (see that middleware's own
+# docstring for why the ordering here matters) so this ends up the
+# outermost middleware, wrapping the rate limiter -- every response,
+# including a 429 from it, still gets CORS headers applied.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins(),

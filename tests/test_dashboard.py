@@ -13,10 +13,14 @@ from backend.dashboard import (
     dashboard_host,
     dashboard_log_level,
     dashboard_port,
+    dashboard_rate_limit_per_minute,
     dashboard_reload,
     dashboard_ssl_config,
+    DASHBOARD_RATE_LIMIT_WINDOW_SECONDS,
     FRONTEND_DIST_DIR,
     mount_frontend_static_files,
+    _DASHBOARD_RATE_LIMIT_WINDOWS,
+    _evict_stale_dashboard_rate_limit_windows,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +61,133 @@ def test_dashboard_port_env_var_overrides_the_default(monkeypatch):
     monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_PORT", "9231")
 
     assert dashboard_port() == 9231
+
+
+def test_dashboard_rate_limit_per_minute_defaults_to_disabled(monkeypatch):
+
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_RATE_LIMIT_PER_MINUTE", raising=False)
+
+    assert dashboard_rate_limit_per_minute() == 0
+
+
+def test_dashboard_rate_limit_per_minute_env_var_overrides_the_default(monkeypatch):
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_RATE_LIMIT_PER_MINUTE", "45")
+
+    assert dashboard_rate_limit_per_minute() == 45
+
+
+@pytest.fixture(autouse=False)
+def _clear_dashboard_rate_limit_windows():
+    _DASHBOARD_RATE_LIMIT_WINDOWS.clear()
+    try:
+        yield
+    finally:
+        _DASHBOARD_RATE_LIMIT_WINDOWS.clear()
+
+
+def test_dashboard_rate_limit_disabled_by_default_allows_unlimited_requests(
+    monkeypatch, _clear_dashboard_rate_limit_windows
+):
+
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_RATE_LIMIT_PER_MINUTE", raising=False)
+
+    for _ in range(10):
+        assert client.get("/api/health").status_code == 200
+
+
+def test_dashboard_rate_limit_returns_429_once_the_configured_limit_is_exceeded(
+    monkeypatch, _clear_dashboard_rate_limit_windows
+):
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_RATE_LIMIT_PER_MINUTE", "3")
+
+    for _ in range(3):
+        assert client.get("/api/health").status_code == 200
+
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 429
+    assert "Rate limit exceeded" in resp.json()["detail"]
+
+
+def test_dashboard_rate_limit_429_response_includes_a_positive_retry_after_header(
+    monkeypatch, _clear_dashboard_rate_limit_windows
+):
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_RATE_LIMIT_PER_MINUTE", "1")
+
+    assert client.get("/api/health").status_code == 200
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 429
+    assert int(resp.headers["retry-after"]) > 0
+
+
+def test_dashboard_rate_limit_429_response_still_gets_cors_headers(
+    monkeypatch, _clear_dashboard_rate_limit_windows
+):
+    """CORSMiddleware is added before this rate-limit middleware (see
+    _enforce_dashboard_rate_limit's own docstring), so it wraps it and
+    still adds Access-Control-Allow-Origin/-Credentials to a 429 -- without
+    that ordering, a legitimate frontend's own JS could never even read
+    this response's body to show *why* it was rejected.
+    """
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_RATE_LIMIT_PER_MINUTE", "1")
+
+    headers = {"Origin": "http://localhost:5173"}
+    assert client.get("/api/health", headers=headers).status_code == 200
+    resp = client.get("/api/health", headers=headers)
+
+    assert resp.status_code == 429
+    assert resp.headers["access-control-allow-origin"] == "http://localhost:5173"
+    assert resp.headers["access-control-allow-credentials"] == "true"
+
+
+def test_dashboard_rate_limit_resets_once_the_window_has_fully_elapsed(
+    monkeypatch, _clear_dashboard_rate_limit_windows
+):
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_RATE_LIMIT_PER_MINUTE", "1")
+
+    assert client.get("/api/health").status_code == 200
+    assert client.get("/api/health").status_code == 429
+
+    # Simulate the window having fully elapsed, rather than sleeping the
+    # test for DASHBOARD_RATE_LIMIT_WINDOW_SECONDS.
+    for key, (window_start, count) in list(_DASHBOARD_RATE_LIMIT_WINDOWS.items()):
+        _DASHBOARD_RATE_LIMIT_WINDOWS[key] = (
+            window_start - DASHBOARD_RATE_LIMIT_WINDOW_SECONDS - 1, count
+        )
+
+    assert client.get("/api/health").status_code == 200
+
+
+def test_evict_stale_dashboard_rate_limit_windows_only_sweeps_past_the_threshold(
+    monkeypatch, _clear_dashboard_rate_limit_windows
+):
+
+    import backend.dashboard as dashboard_module
+
+    monkeypatch.setattr(dashboard_module, "_DASHBOARD_RATE_LIMIT_SWEEP_THRESHOLD", 3)
+
+    now = 1_000_000.0
+    _DASHBOARD_RATE_LIMIT_WINDOWS["stale-a"] = (now - 1000, 1)
+    _DASHBOARD_RATE_LIMIT_WINDOWS["stale-b"] = (now - 1000, 1)
+    _DASHBOARD_RATE_LIMIT_WINDOWS["fresh"] = (now, 1)
+
+    # At (not past) the threshold: no-op, even though "stale-a"/"stale-b"
+    # have already fully elapsed.
+    _evict_stale_dashboard_rate_limit_windows(now)
+    assert set(_DASHBOARD_RATE_LIMIT_WINDOWS) == {"stale-a", "stale-b", "fresh"}
+
+    _DASHBOARD_RATE_LIMIT_WINDOWS["one-more"] = (now, 1)
+
+    # Past the threshold: sweeps every window that's already fully
+    # elapsed, leaving the still-current ones untouched.
+    _evict_stale_dashboard_rate_limit_windows(now)
+    assert set(_DASHBOARD_RATE_LIMIT_WINDOWS) == {"fresh", "one-more"}
 
 
 def test_root_endpoint_reports_service_metadata():

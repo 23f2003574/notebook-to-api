@@ -5741,6 +5741,11 @@ def _dispatch_core_command(args):
             print(f"  notebook sort keys: {', '.join(config.get('notebook_sort_keys', []))}")
             print(f"  notebook sort orders: {', '.join(config.get('notebook_sort_orders', []))}")
             print(f"  allowed origins: {', '.join(config.get('allowed_origins', []))}")
+            dashboard_rate_limit = config.get('dashboard_rate_limit_per_minute')
+            print(
+                "  dashboard rate limit: "
+                f"{f'{dashboard_rate_limit} requests/minute per client' if dashboard_rate_limit else 'disabled'}"
+            )
             print(f"\nCompiling Python version: {config.get('compiling_python_version')}")
 
 
