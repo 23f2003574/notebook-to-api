@@ -3872,6 +3872,147 @@ def test_get_notebook_content_sha256_header_changes_after_overwrite():
     assert first_sha256 != second_sha256
 
 
+def test_get_notebook_reports_a_quoted_etag_matching_the_content_sha256():
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("get_etag.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get("/api/notebooks/get_etag.ipynb")
+
+    assert resp.status_code == 200
+    assert resp.headers["etag"] == f'"{resp.headers["x-content-sha256"]}"'
+
+
+def test_get_notebook_returns_304_when_if_none_match_matches_the_current_etag():
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("get_conditional.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    first = client.get("/api/notebooks/get_conditional.ipynb")
+    etag = first.headers["etag"]
+
+    second = client.get(
+        "/api/notebooks/get_conditional.ipynb",
+        headers={"If-None-Match": etag},
+    )
+
+    assert second.status_code == 304
+    assert second.content == b""
+    assert second.headers["etag"] == etag
+    assert second.headers["x-content-sha256"] == first.headers["x-content-sha256"]
+
+
+def test_get_notebook_returns_304_for_a_wildcard_if_none_match():
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("get_conditional_wildcard.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get(
+        "/api/notebooks/get_conditional_wildcard.ipynb",
+        headers={"If-None-Match": "*"},
+    )
+
+    assert resp.status_code == 304
+
+
+def test_get_notebook_returns_304_for_an_unquoted_or_weak_matching_etag():
+    """A caller's own cached copy of a prior ETag may be echoed back
+    unquoted, or prefixed "W/" (a weak-validator marker) -- neither
+    changes whether the underlying content actually matches, so neither
+    should make an otherwise-matching request miss.
+    """
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("get_conditional_weak.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    content_sha256 = client.get(
+        "/api/notebooks/get_conditional_weak.ipynb"
+    ).headers["x-content-sha256"]
+
+    unquoted_resp = client.get(
+        "/api/notebooks/get_conditional_weak.ipynb",
+        headers={"If-None-Match": content_sha256},
+    )
+    assert unquoted_resp.status_code == 304
+
+    weak_resp = client.get(
+        "/api/notebooks/get_conditional_weak.ipynb",
+        headers={"If-None-Match": f'W/"{content_sha256}"'},
+    )
+    assert weak_resp.status_code == 304
+
+
+def test_get_notebook_returns_200_when_if_none_match_is_stale():
+
+    filename = "get_conditional_stale.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    stale_etag = client.get(f"/api/notebooks/{filename}").headers["etag"]
+
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.get(
+        f"/api/notebooks/{filename}", headers={"If-None-Match": stale_etag}
+    )
+
+    assert resp.status_code == 200
+    assert resp.headers["etag"] != stale_etag
+    assert resp.content
+
+
+def test_get_notebook_returns_304_for_one_matching_entry_in_a_multi_valued_if_none_match():
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("get_conditional_multi.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    etag = client.get("/api/notebooks/get_conditional_multi.ipynb").headers["etag"]
+
+    resp = client.get(
+        "/api/notebooks/get_conditional_multi.ipynb",
+        headers={"If-None-Match": f'"not-a-real-etag", {etag}'},
+    )
+
+    assert resp.status_code == 304
+
+
 def test_get_notebook_returns_404_for_missing_file():
 
     resp = client.get("/api/notebooks/does_not_exist_at_all.ipynb")
@@ -11533,6 +11674,86 @@ def test_get_notebook_version_content_sha256_header_differs_from_the_current_con
     ).headers["x-content-sha256"]
 
     assert version_sha256 != current_sha256
+
+
+def test_get_notebook_version_returns_304_when_if_none_match_matches_the_current_etag():
+
+    filename = "versions_get_conditional.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    first = client.get(f"/api/notebooks/{filename}/versions/{version_id}")
+    etag = first.headers["etag"]
+    assert etag == f'"{first.headers["x-content-sha256"]}"'
+
+    second = client.get(
+        f"/api/notebooks/{filename}/versions/{version_id}",
+        headers={"If-None-Match": etag},
+    )
+
+    assert second.status_code == 304
+    assert second.content == b""
+
+
+def test_get_notebook_version_returns_200_when_if_none_match_does_not_match():
+
+    filename = "versions_get_conditional_mismatch.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions/{version_id}",
+        headers={"If-None-Match": '"not-a-real-etag"'},
+    )
+
+    assert resp.status_code == 200
+    assert resp.content
 
 
 def test_uploading_a_brand_new_notebook_does_not_snapshot_anything():
@@ -20629,6 +20850,61 @@ def test_download_reports_a_bundle_sha256_matching_generated_checksums():
     generated_resp = client.get("/api/generated", params={"checksums": "true"})
     assert generated_resp.status_code == 200
     assert generated_resp.json()["bundle_sha256"] == bundle_sha256
+
+
+def test_download_reports_a_quoted_etag_matching_the_bundle_sha256():
+
+    filename = "download_etag_test.ipynb"
+    _compile_a_notebook(filename)
+
+    resp = client.get("/api/download")
+
+    assert resp.status_code == 200
+    assert resp.headers["etag"] == f'"{resp.headers["x-bundle-sha256"]}"'
+
+
+def test_download_returns_304_when_if_none_match_matches_the_current_etag():
+
+    filename = "download_conditional_test.ipynb"
+    _compile_a_notebook(filename)
+
+    first = client.get("/api/download")
+    etag = first.headers["etag"]
+
+    second = client.get("/api/download", headers={"If-None-Match": etag})
+
+    assert second.status_code == 304
+    assert second.content == b""
+    assert second.headers["etag"] == etag
+    assert second.headers["x-bundle-sha256"] == first.headers["x-bundle-sha256"]
+    assert (
+        second.headers["x-notebook-changed-since-compile"]
+        == first.headers["x-notebook-changed-since-compile"]
+    )
+
+
+def test_download_returns_200_after_a_recompile_changes_the_bundle():
+
+    filename = "download_conditional_recompile_test.ipynb"
+    _compile_a_notebook(filename)
+
+    stale_etag = client.get("/api/download").headers["etag"]
+
+    changed_content = _notebook_bytes(
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(changed_content), "application/json")},
+    )
+    client.post("/api/compile", json={"notebook_path": filename})
+
+    resp = client.get("/api/download", headers={"If-None-Match": stale_etag})
+
+    assert resp.status_code == 200
+    assert resp.headers["etag"] != stale_etag
+    archive = zipfile.ZipFile(io.BytesIO(resp.content))
+    assert "app.py" in archive.namelist()
 
 
 def test_download_reports_not_stale_right_after_compile():

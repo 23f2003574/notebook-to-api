@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.testclient import TestClient
 from pathlib import Path
@@ -6063,8 +6063,67 @@ def delete_notebooks_batch(data: dict):
     }
 
 
+def _if_none_match_satisfied(request: Request, etag_value: str) -> bool:
+    """True if `request`'s own "If-None-Match" header already names
+    `etag_value` (or "*") -- the standard HTTP conditional-GET signal a
+    caller who already has a previous response's own "ETag" sends back
+    to ask "has this changed since I last fetched it", so GET
+    /api/notebooks/{filename}, GET /api/notebooks/{filename}/versions/
+    {version_id}, and GET /api/download can each answer with a bodyless
+    304 instead of re-sending content a caller already has an identical
+    copy of.
+
+    Every one of those endpoints already computes this exact same
+    content hash unconditionally, for the "X-Content-SHA256"/
+    "X-Bundle-SHA256" response header this project's own content-
+    integrity convention already established -- reused here as the ETag
+    value itself (RFC 7232's own "strong validator") rather than a
+    second, independently-computed value that could disagree with what
+    that header already reports for the same bytes. Unlike Starlette's
+    own FileResponse, which sets a *weak*, stat-based ETag from mtime +
+    size on every response it builds (see set_stat_headers) but never
+    itself checks "If-None-Match" against anything at all -- confirmed
+    against the installed starlette source: FileResponse.__call__ only
+    ever branches on the "Range"/"If-Range" headers, so every one of
+    these endpoints re-sent a downloaded notebook/bundle's full body on
+    every request before this, even to a caller that already had a
+    byte-for-byte identical copy and said so.
+
+    A caller with more than one ETag cached for the same URL (e.g. a
+    browser that fetched it under different query params, or simply
+    hasn't evicted an old one yet) may send several, comma-separated,
+    per RFC 7232 -- matched against any of them, not just the first.
+    Each candidate's own optional surrounding quotes and "W/" (weak
+    validator) prefix are stripped before comparing -- this project's
+    own ETag values are always strong, but a caller echoing one back
+    with either doesn't change whether the underlying content actually
+    matches, so neither should make an otherwise-matching request miss.
+    """
+    if_none_match = request.headers.get("if-none-match")
+
+    if not if_none_match:
+        return False
+
+    if if_none_match.strip() == "*":
+        return True
+
+    for candidate in if_none_match.split(","):
+
+        candidate = candidate.strip()
+
+        if candidate.startswith("W/"):
+            candidate = candidate[2:]
+
+        candidate = candidate.strip('"')
+
+        if candidate == etag_value:
+            return True
+
+    return False
+
+
 @router.get("/notebooks/{filename}")
-def get_notebook(filename: str):
+def get_notebook(filename: str, request: Request):
     """Download a previously uploaded notebook's raw content.
 
     GET /api/notebooks lists what's been uploaded and DELETE removes it,
@@ -6085,6 +6144,15 @@ def get_notebook(filename: str):
     The identical "avoid a second round trip for a fact already
     computed while serving the file" reasoning GET /api/download's own
     "X-Notebook-Changed-Since-Compile" header already established.
+
+    Also now sent as a real "ETag" header (quoted, per RFC 7232), and
+    honored right back via "If-None-Match" -- see
+    _if_none_match_satisfied's own docstring for why this endpoint
+    previously always re-sent the full notebook regardless of whether a
+    caller already had an identical copy. A caller re-polling this
+    endpoint (a sync tool, a CI step re-checking before acting) that
+    already has the current content gets a bodyless 304 instead of the
+    same bytes all over again.
     """
 
     file_path = resolve_upload_path(filename)
@@ -6096,12 +6164,25 @@ def get_notebook(filename: str):
             detail="Notebook file not found"
         )
 
+    content_sha256 = hash_notebook_file(file_path)
+
+    if _if_none_match_satisfied(request, content_sha256):
+
+        return Response(
+            status_code=304,
+            headers={
+                "ETag": f'"{content_sha256}"',
+                "X-Content-SHA256": content_sha256,
+            },
+        )
+
     return FileResponse(
         path=file_path,
         media_type="application/x-ipynb+json",
         filename=filename,
         headers={
-            "X-Content-SHA256": hash_notebook_file(file_path),
+            "X-Content-SHA256": content_sha256,
+            "ETag": f'"{content_sha256}"',
         },
     )
 
@@ -8432,7 +8513,7 @@ def delete_notebook_versions_batch(filename: str, data: dict):
 
 
 @router.get("/notebooks/{filename}/versions/{version_id}")
-def get_notebook_version(filename: str, version_id: str):
+def get_notebook_version(filename: str, version_id: str, request: Request):
     """Download the raw content of one of a notebook's previously
     snapshotted versions, by the "version_id" GET
     /api/notebooks/{filename}/versions already lists.
@@ -8453,6 +8534,14 @@ def get_notebook_version(filename: str, version_id: str):
     content) had the identical "no way to verify integrity without a
     second round trip" gap that endpoint's own header already closed for
     current content -- this closes it for a version-pinned download too.
+
+    Also honors "If-None-Match" against that same hash, sent back as a
+    real "ETag" header -- the identical conditional-GET support GET
+    /api/notebooks/{filename} now has (see _if_none_match_satisfied's own
+    docstring), applied here so re-fetching an already-downloaded past
+    version (a version_id is immutable once snapshotted, so this can
+    only ever be a wasted re-transfer, never a real change) gets a
+    bodyless 304 instead.
     """
 
     file_path = resolve_upload_path(filename)
@@ -8477,12 +8566,25 @@ def get_notebook_version(filename: str, version_id: str):
             detail="Notebook version not found"
         )
 
+    content_sha256 = hash_notebook_file(version_path)
+
+    if _if_none_match_satisfied(request, content_sha256):
+
+        return Response(
+            status_code=304,
+            headers={
+                "ETag": f'"{content_sha256}"',
+                "X-Content-SHA256": content_sha256,
+            },
+        )
+
     return FileResponse(
         path=version_path,
         media_type="application/x-ipynb+json",
         filename=version_id,
         headers={
-            "X-Content-SHA256": hash_notebook_file(version_path),
+            "X-Content-SHA256": content_sha256,
+            "ETag": f'"{content_sha256}"',
         },
     )
 
@@ -12285,7 +12387,7 @@ def clear_compile_history(
 
 
 @router.get("/download")
-def download_generated_app():
+def download_generated_app(request: Request):
     """Download the compiled app as a zip archive.
 
     /api/compile only ever returned metadata (the function list and
@@ -12342,6 +12444,17 @@ def download_generated_app():
     them too is a comparatively small addition, not the "real work this
     endpoint's existing listing never needed" GET /api/generated's own
     checksums=false default exists to avoid.
+
+    Also honors "If-None-Match" against "X-Bundle-SHA256", sent back as a
+    real "ETag" header -- the identical conditional-GET support GET
+    /api/notebooks/{filename} now has (see _if_none_match_satisfied's own
+    docstring). "bundle_sha256" is resolved *before* this zip is actually
+    built (every file's own bytes are still read exactly once either
+    way, just for hashing before compressing instead of during it) so a
+    caller re-`remote-build`-ing an unchanged compile gets a bodyless 304
+    without this endpoint ever spending the (potentially real, for a
+    large compiled app) work of compressing a zip nobody was going to
+    read.
     """
 
     generated_path = Path(GENERATED_DIR)
@@ -12365,32 +12478,47 @@ def download_generated_app():
 
         is_stale = _currently_compiled_notebook_is_stale()
 
-        buffer = io.BytesIO()
-
+        bundle_file_paths = []
         bundled_file_details = []
+
+        for file_path in sorted(generated_path.rglob("*")):
+
+            if (
+                file_path.is_file()
+                and file_path.name not in EXCLUDED_GENERATED_FILE_NAMES
+                and not (
+                    EXCLUDED_GENERATED_DIR_NAMES & set(file_path.relative_to(generated_path).parts)
+                )
+            ):
+
+                relative_name = file_path.relative_to(generated_path)
+
+                bundle_file_paths.append((file_path, relative_name))
+
+                bundled_file_details.append({
+                    "filename": str(relative_name),
+                    "sha256": hash_notebook_file(str(file_path)),
+                })
+
+        bundle_sha256 = _bundle_sha256(bundled_file_details)
+
+        if _if_none_match_satisfied(request, bundle_sha256):
+
+            return Response(
+                status_code=304,
+                headers={
+                    "ETag": f'"{bundle_sha256}"',
+                    "X-Notebook-Changed-Since-Compile": "true" if is_stale else "false",
+                    "X-Bundle-SHA256": bundle_sha256,
+                },
+            )
+
+        buffer = io.BytesIO()
 
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
 
-            for file_path in sorted(generated_path.rglob("*")):
-
-                if (
-                    file_path.is_file()
-                    and file_path.name not in EXCLUDED_GENERATED_FILE_NAMES
-                    and not (
-                        EXCLUDED_GENERATED_DIR_NAMES & set(file_path.relative_to(generated_path).parts)
-                    )
-                ):
-
-                    relative_name = file_path.relative_to(generated_path)
-
-                    archive.write(file_path, relative_name)
-
-                    bundled_file_details.append({
-                        "filename": str(relative_name),
-                        "sha256": hash_notebook_file(str(file_path)),
-                    })
-
-        bundle_sha256 = _bundle_sha256(bundled_file_details)
+            for file_path, relative_name in bundle_file_paths:
+                archive.write(file_path, relative_name)
 
     buffer.seek(0)
 
@@ -12403,6 +12531,7 @@ def download_generated_app():
             ),
             "X-Notebook-Changed-Since-Compile": "true" if is_stale else "false",
             "X-Bundle-SHA256": bundle_sha256,
+            "ETag": f'"{bundle_sha256}"',
         }
     )
 
