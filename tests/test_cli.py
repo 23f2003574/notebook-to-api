@@ -17505,6 +17505,7 @@ def test_status_command_prints_health_and_config(tmp_path, fake_dashboard):
             "max_tags_per_notebook": 20,
             "max_description_length": 500,
             "max_source_url_length": 2048,
+            "max_search_regex_length": 200,
             "max_deploy_history_entries": 50,
             "max_compile_history_entries": 50,
             "deploy_subprocess_timeout_seconds": 600,
@@ -17526,6 +17527,7 @@ def test_status_command_prints_health_and_config(tmp_path, fake_dashboard):
     assert "max batch upload files: 50" in proc.stdout
     assert "max description length: 500" in proc.stdout
     assert "max source url length: 2048" in proc.stdout
+    assert "max search regex length: 200" in proc.stdout
     assert "max deploy history entries: 50" in proc.stdout
     assert "max compile history entries: 50" in proc.stdout
     assert "notebook sort keys: name, size, uploaded_at" in proc.stdout

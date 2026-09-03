@@ -13402,6 +13402,20 @@ def get_config():
     reason this endpoint's own docstring already gives for every other
     field here) had no way to ask that short of triggering a real 400
     first.
+
+    "max_search_regex_length" (added alongside this same docstring's
+    original feature, not a separate change) is MAX_SEARCH_REGEX_LENGTH --
+    already independently configurable via
+    NOTEBOOK_API_MAX_SEARCH_REGEX_LENGTH since GET /api/functions, GET
+    /api/notebooks' own "search"/"description_search", and GET
+    /api/notebooks/search-content's own "regex": true opt-in were all
+    given this same length cap (see _compile_search_regex above), but
+    never itself picked up here: a caller building a "regex": true
+    request client-side, wanting to validate a pattern's own length
+    before submitting it (the same reason every other length cap here
+    already exists), or simply confirming what an operator configured
+    the limit to, had no way to ask that short of triggering a real 400
+    first.
     """
 
     from backend.dashboard import allowed_origins, dashboard_rate_limit_per_minute
@@ -13418,6 +13432,7 @@ def get_config():
         "max_tags_per_notebook": _MAX_TAGS_PER_NOTEBOOK,
         "max_description_length": _MAX_DESCRIPTION_LENGTH,
         "max_source_url_length": _MAX_SOURCE_URL_LENGTH,
+        "max_search_regex_length": MAX_SEARCH_REGEX_LENGTH,
         "max_deploy_history_entries": MAX_DEPLOY_HISTORY_ENTRIES,
         "max_compile_history_entries": MAX_COMPILE_HISTORY_ENTRIES,
         "deploy_subprocess_timeout_seconds": DEPLOY_SUBPROCESS_TIMEOUT_SECONDS,

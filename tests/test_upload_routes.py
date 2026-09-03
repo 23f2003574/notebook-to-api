@@ -22589,6 +22589,7 @@ def test_get_config_reports_the_configured_limits():
     assert isinstance(body["max_compile_history_entries"], int)
     assert isinstance(body["deploy_subprocess_timeout_seconds"], int)
     assert isinstance(body["max_source_url_length"], int)
+    assert isinstance(body["max_search_regex_length"], int)
 
 
 def test_get_config_reports_the_max_source_url_length():
@@ -22599,6 +22600,27 @@ def test_get_config_reports_the_max_source_url_length():
 
     assert resp.status_code == 200
     assert resp.json()["max_source_url_length"] == _MAX_SOURCE_URL_LENGTH
+
+
+def test_get_config_reports_the_max_search_regex_length():
+
+    from backend.routes.upload import MAX_SEARCH_REGEX_LENGTH
+
+    resp = client.get("/api/config")
+
+    assert resp.status_code == 200
+    assert resp.json()["max_search_regex_length"] == MAX_SEARCH_REGEX_LENGTH
+
+
+def test_get_config_reflects_a_configured_max_search_regex_length(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_SEARCH_REGEX_LENGTH", 42)
+
+    resp = client.get("/api/config")
+
+    assert resp.json()["max_search_regex_length"] == 42
 
 
 def test_get_config_reports_the_allowed_origins():

@@ -5904,6 +5904,7 @@ def _dispatch_core_command(args):
             print(f"  max tags per notebook: {config.get('max_tags_per_notebook')}")
             print(f"  max description length: {config.get('max_description_length')}")
             print(f"  max source url length: {config.get('max_source_url_length')}")
+            print(f"  max search regex length: {config.get('max_search_regex_length')}")
             print(f"  max deploy history entries: {config.get('max_deploy_history_entries')}")
             print(f"  max compile history entries: {config.get('max_compile_history_entries')}")
             print(f"  deploy subprocess timeout: {config.get('deploy_subprocess_timeout_seconds')}s")
