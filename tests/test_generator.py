@@ -31,6 +31,7 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
         "NOTEBOOK_API_MAX_TASKS",
         "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE",
         "NOTEBOOK_API_PUBLIC_URL",
+        "NOTEBOOK_API_DISABLE_DOCS",
     }
 
     for entry in GENERATED_APP_ENV_VARS:
@@ -163,6 +164,27 @@ def test_generate_fastapi_code_bakes_the_given_public_url_into_the_servers_entry
 def test_public_url_is_a_reserved_infrastructure_name():
 
     assert "PUBLIC_URL" in RESERVED_INFRASTRUCTURE_NAMES
+
+
+def test_generate_fastapi_code_defaults_to_docs_enabled():
+    """docs_url/redoc_url/openapi_url must default to their own normal
+    FastAPI paths -- NOTEBOOK_API_DISABLE_DOCS defaults to "false", so an
+    existing deployment that never opts in sees no behavior change.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert 'DISABLE_DOCS = os.getenv("NOTEBOOK_API_DISABLE_DOCS", "false")' in code
+    assert 'docs_url=None if DISABLE_DOCS else "/docs"' in code
+    assert 'redoc_url=None if DISABLE_DOCS else "/redoc"' in code
+    assert 'openapi_url=None if DISABLE_DOCS else "/openapi.json"' in code
+
+
+def test_disable_docs_is_a_reserved_infrastructure_name():
+
+    assert "DISABLE_DOCS" in RESERVED_INFRASTRUCTURE_NAMES
 
 
 def _register_fake_notebook_module(monkeypatch, package_name="generated"):

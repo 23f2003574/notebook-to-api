@@ -15,7 +15,7 @@ from pathlib import Path
 RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "START_TIME",
     "GENERATED_AT", "PYTHON_VERSION", "NOTEBOOK_TO_API_VERSION", "ALLOWED_ORIGINS",
-    "PUBLIC_URL",
+    "PUBLIC_URL", "DISABLE_DOCS",
     "MAX_REQUEST_BODY_BYTES", "MaxRequestBodySizeMiddleware",
     "MAX_PENDING_TASKS",
     "verify_api_key", "custom_openapi",
@@ -139,6 +139,24 @@ GENERATED_APP_ENV_VARS = [
             "http://localhost:8000 no matter where the app is actually "
             "deployed, failing every one of them from a browser that "
             "isn't itself on the same machine."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_DISABLE_DOCS",
+        "default": "false",
+        "description": (
+            "Set to \"true\" to disable this app's own interactive /docs "
+            "(Swagger UI), /redoc, and /openapi.json entirely (each "
+            "returns a plain 404) -- every request this app accepts is "
+            "already authenticated via X-API-Key, but the schema and "
+            "docs UI themselves were always served with no such "
+            "requirement, exposing every endpoint's name, parameters, "
+            "and example payloads to anyone who can merely reach the "
+            "deployment, not just anyone who could actually call it. "
+            "This dashboard's own POST /api/export-openapi/export-sdk "
+            "are unaffected either way: they call this app's own "
+            "openapi() method directly (in-process, at compile/export "
+            "time), never through the HTTP routes this setting disables."
         ),
     },
 ]
@@ -385,6 +403,23 @@ def generate_fastapi_code(
         f'"{_generated_app_env_var_default("NOTEBOOK_API_PUBLIC_URL")}"'
         ')'
     )
+    # Also read before app = FastAPI(...) below -- docs_url/redoc_url/
+    # openapi_url are only ever honored at construction time; FastAPI has
+    # no supported way to toggle them afterward. Membership in a truthy
+    # set (not a bare bool(...) of the string, which -- confirmed --
+    # would treat NOTEBOOK_API_DISABLE_DOCS=false as truthy, since a
+    # non-empty string is always truthy in Python regardless of its own
+    # text) mirrors dashboard_reload()'s own identical "tolerate
+    # true/1/yes/on, case-insensitively" convention (backend/dashboard.py)
+    # for a hand-typed env var, just inverted: that one's falsy set turns
+    # a default-on behavior off, this truthy set turns a default-off
+    # behavior on.
+    lines.append(
+        'DISABLE_DOCS = os.getenv('
+        '"NOTEBOOK_API_DISABLE_DOCS", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_DISABLE_DOCS")}"'
+        ').strip().lower() in ("true", "1", "yes", "on")'
+    )
     lines.append("")
     lines.append(
         'app = FastAPI('
@@ -394,7 +429,10 @@ def generate_fastapi_code(
         'contact={"name": "Notebook-to-API"}, '
         'license_info={"name": "MIT"}, '
         'servers=[{"url": PUBLIC_URL, '
-        '"description": "This deployment"}]'
+        '"description": "This deployment"}], '
+        'docs_url=None if DISABLE_DOCS else "/docs", '
+        'redoc_url=None if DISABLE_DOCS else "/redoc", '
+        'openapi_url=None if DISABLE_DOCS else "/openapi.json"'
         ')'
     )
     lines.append("")

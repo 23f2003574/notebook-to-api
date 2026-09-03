@@ -968,6 +968,179 @@ print("OPENAPI_SERVERS_E2E_OK")
     assert "OPENAPI_SERVERS_E2E_OK" in proc.stdout
 
 
+def test_compiler_pipeline_docs_are_reachable_by_default(tmp_path):
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+assert client.get("/docs").status_code == 200
+assert client.get("/redoc").status_code == 200
+assert client.get("/openapi.json").status_code == 200
+
+print("DOCS_ENABLED_BY_DEFAULT_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "DOCS_ENABLED_BY_DEFAULT_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_disable_docs_hides_docs_but_not_the_rest_of_the_app(tmp_path):
+    """NOTEBOOK_API_DISABLE_DOCS=true must 404 /docs, /redoc, and
+    /openapi.json -- every request this app accepts is already
+    authenticated via X-API-Key, but the schema and docs UI themselves
+    were always served with no such requirement, exposing every
+    endpoint's own name, parameters, and example payloads to anyone who
+    could merely reach the deployment. Every other route (health, the
+    real notebook-derived endpoints) must keep working, and this
+    dashboard's own POST /api/export-openapi/export-sdk (which call
+    app.openapi() directly, in-process, never through the disabled HTTP
+    routes) must too.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import os
+import sys
+
+os.environ["NOTEBOOK_API_DISABLE_DOCS"] = "true"
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+assert client.get("/docs").status_code == 404
+assert client.get("/redoc").status_code == 404
+assert client.get("/openapi.json").status_code == 404
+assert client.get("/health").status_code == 200
+
+from backend.exporters.openapi_exporter import export_openapi_schema
+export_openapi_schema("generated/openapi.json", "generated")
+
+import json
+with open("generated/openapi.json") as f:
+    schema = json.load(f)
+assert "paths" in schema and schema["paths"]
+
+print("DISABLE_DOCS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "DISABLE_DOCS_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_disable_docs_accepts_common_truthy_spellings(tmp_path):
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    for truthy_value in ("true", "TRUE", "1", "yes", "on"):
+
+        workdir = tmp_path / f"workdir_{truthy_value}"
+        workdir.mkdir()
+
+        script = f"""
+import os
+import sys
+
+os.environ["NOTEBOOK_API_DISABLE_DOCS"] = {truthy_value!r}
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+assert client.get("/docs").status_code == 404, {truthy_value!r}
+
+print("TRUTHY_OK")
+"""
+
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=str(workdir),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        assert proc.returncode == 0, f"{truthy_value}: " + proc.stdout + proc.stderr
+        assert "TRUTHY_OK" in proc.stdout
+
+
 def test_compiler_pipeline_dockerignore_excludes_a_real_exported_openapi_and_sdk(
     tmp_path,
 ):
