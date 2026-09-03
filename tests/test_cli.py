@@ -10260,6 +10260,7 @@ def test_remote_inspect_command_reports_reserved_name_conflicts_skipped_and_priv
             "skipped_functions": [{"name": "load_data", "reason": "no return type"}],
             "private_functions": ["_helper"],
             "excluded_imports": ["pandas"],
+            "functions_without_docstrings": ["undocumented"],
         })
     ]
 
@@ -10278,6 +10279,8 @@ def test_remote_inspect_command_reports_reserved_name_conflicts_skipped_and_priv
     assert "- _helper" in proc.stdout
     assert "Excluded imports (opted out of requirements.txt):" in proc.stdout
     assert "- pandas" in proc.stdout
+    assert "Functions without a docstring (will get a generic OpenAPI description):" in proc.stdout
+    assert "- undocumented" in proc.stdout
     assert "Skipped functions (no endpoint will be generated):" in proc.stdout
     assert "- load_data: no return type" in proc.stdout
 

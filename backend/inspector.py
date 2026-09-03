@@ -248,6 +248,40 @@ def _duplicate_function_names(functions):
     return sorted(name for name, count in counts.items() if count > 1)
 
 
+def _functions_without_docstrings(functions):
+    """Names in `functions` (the final, post-deduplication/post-private-
+    filter list -- the same set inspect_notebook_data's own "functions"
+    field already reports, each of which becomes a real compiled
+    endpoint) that have no docstring at all, or one that's empty/all-
+    whitespace (ast.get_docstring(clean=True) already normalizes either
+    down to a falsy "docstring" field -- see extract_functions_from_code,
+    backend/parser/ast_parser.py).
+
+    generate_fastapi_code (backend/generator/api_generator.py) already
+    falls back to a generic, auto-generated OpenAPI "description" (e.g.
+    "Auto-generated endpoint for train_model. Operation ID: ...") for
+    exactly this case -- functional, but far less useful to anyone
+    reading /docs, or a client generated from openapi.json, than the
+    description a notebook author would have written themselves. Before
+    this, neither `inspect` nor `compile`'s own summary said anything
+    about which endpoints would get that fallback instead of real
+    documentation -- a notebook author only ever discovered it by
+    opening the compiled app's own /docs (or openapi.json) after the
+    fact, the exact "silently missing signal" pattern
+    "private_functions"/"excluded_imports" already close for their own
+    respective directives.
+
+    A private function (already filtered out of `functions` by the time
+    this is ever called -- see inspect_notebook_data/inspect_notebook
+    below) never becomes an endpoint at all, so its own docstring (or
+    lack of one) is irrelevant here, unlike every function actually
+    reported.
+    """
+    return sorted(
+        func["name"] for func in functions if not func.get("docstring")
+    )
+
+
 def _aggregate_skipped_functions(code_cells, exposed_function_names):
     """Skipped-function reports (see extract_skipped_functions_from_code)
     across every cell in `code_cells`, deduplicated by name and with any
@@ -418,6 +452,14 @@ def inspect_notebook(notebook_path, output_dir="generated"):
         for name in sorted(excluded_imports):
             print(f"- {name}")
 
+    functions_without_docstrings = _functions_without_docstrings(all_functions)
+
+    if functions_without_docstrings:
+        print("\nFunctions Without Docstrings (will get a generic OpenAPI description):")
+        print("-" * 20)
+        for name in functions_without_docstrings:
+            print(f"- {name}")
+
     print("\nDependencies:")
     print("-" * 20)
 
@@ -512,6 +554,12 @@ def inspect_notebook_data(
         # function of the same name with no signal anywhere that it
         # happened.
         "duplicate_functions": duplicate_function_names,
+        # See _functions_without_docstrings' own docstring -- computed
+        # from `all_functions` here specifically (post-dedup, post-
+        # private-filter), the exact same final set this same return's
+        # own "functions"/"endpoints" already report, so this can never
+        # name a function that isn't actually a real compiled endpoint.
+        "functions_without_docstrings": _functions_without_docstrings(all_functions),
     }
 
 
@@ -586,6 +634,14 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
             "(redefined; only the last definition is compiled):"
         )
         for name in data["duplicate_functions"]:
+            print(f"  {name}")
+
+    if data["functions_without_docstrings"]:
+        print(
+            f"\n{len(data['functions_without_docstrings'])} function(s) "
+            "without a docstring (will get a generic OpenAPI description):"
+        )
+        for name in data["functions_without_docstrings"]:
             print(f"  {name}")
 
 

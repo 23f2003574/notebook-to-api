@@ -3652,6 +3652,13 @@ def _dispatch_core_command(args):
                 for name in excluded_imports:
                     print(f"  - {name}")
 
+            functions_without_docstrings = data.get("functions_without_docstrings", [])
+
+            if functions_without_docstrings:
+                print("\nFunctions without a docstring (will get a generic OpenAPI description):")
+                for name in functions_without_docstrings:
+                    print(f"  - {name}")
+
             skipped_functions = data.get("skipped_functions", [])
 
             if skipped_functions:

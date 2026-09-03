@@ -16101,6 +16101,40 @@ def test_inspect_reports_an_exclude_directive_marked_import_separately():
     assert "requests" in body["dependencies"]
 
 
+def test_inspect_reports_a_function_without_a_docstring_separately():
+    """generate_fastapi_code already falls back to a generic, auto-
+    generated OpenAPI description for a function with no docstring --
+    this must name which function(s) will get that fallback, the same
+    "silently missing signal" precedent "private_functions"/
+    "excluded_imports" already close for their own directives.
+    """
+
+    content = _notebook_bytes(
+        "def documented(a: int) -> int:\n"
+        "    \"\"\"Doubles a.\"\"\"\n"
+        "    return a * 2\n\n"
+        "def undocumented(a: int) -> int:\n    return a + 1\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "inspect_no_docstring_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/inspect", json={"notebook_path": "inspect_no_docstring_test.ipynb"}
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["functions_without_docstrings"] == ["undocumented"]
+
+
 def test_inspect_reports_a_redefined_function_as_duplicate():
     """A function name defined more than once in a notebook is silently
     collapsed to its last definition by deduplicate_functions_by_name

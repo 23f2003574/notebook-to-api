@@ -13,6 +13,7 @@ from backend.inspector import (
     print_notebook_diff,
     _aggregate_skipped_functions,
     _duplicate_function_names,
+    _functions_without_docstrings,
     _list_generated_files,
     _reserved_name_conflicts,
 )
@@ -792,6 +793,173 @@ def test_print_compile_summary_omits_excluded_imports_line_when_there_are_none(
 
     output = capsys.readouterr().out
     assert "Excluded" not in output
+
+
+def test_functions_without_docstrings_finds_a_function_with_none():
+
+    functions = [
+        {"name": "documented", "docstring": "Does a thing."},
+        {"name": "undocumented", "docstring": None},
+    ]
+
+    assert _functions_without_docstrings(functions) == ["undocumented"]
+
+
+def test_functions_without_docstrings_treats_a_blank_docstring_as_missing():
+    """ast.get_docstring(clean=True) (via extract_functions_from_code)
+    already normalizes an empty/all-whitespace docstring down to a falsy
+    value -- this must treat that identically to no docstring at all.
+    """
+
+    functions = [{"name": "blank", "docstring": ""}]
+
+    assert _functions_without_docstrings(functions) == ["blank"]
+
+
+def test_functions_without_docstrings_is_empty_when_every_function_has_one():
+
+    functions = [
+        {"name": "add", "docstring": "Adds two numbers."},
+        {"name": "subtract", "docstring": "Subtracts two numbers."},
+    ]
+
+    assert _functions_without_docstrings(functions) == []
+
+
+def test_inspect_notebook_data_reports_a_function_without_a_docstring(tmp_path):
+    """generate_fastapi_code (backend/generator/api_generator.py) already
+    falls back to a generic, auto-generated OpenAPI description for a
+    function with no docstring -- but before this, nothing on `inspect`
+    or `compile`'s own summary said which endpoints would get that
+    fallback instead of real documentation, the same "silently missing
+    signal" precedent "private_functions"/"excluded_imports" already
+    close for their own directives.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def documented(a: int) -> int:\n"
+        "    \"\"\"Doubles a.\"\"\"\n"
+        "    return a * 2\n\n"
+        "def undocumented(a: int) -> int:\n"
+        "    return a + 1\n",
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    assert data["functions_without_docstrings"] == ["undocumented"]
+
+
+def test_inspect_notebook_data_functions_without_docstrings_is_empty_when_every_function_has_one(
+    tmp_path,
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n"
+        "    \"\"\"Adds a and b.\"\"\"\n"
+        "    return a + b\n",
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    assert data["functions_without_docstrings"] == []
+
+
+def test_inspect_notebook_data_functions_without_docstrings_excludes_private_functions(
+    tmp_path,
+):
+    """A private function never becomes an endpoint at all, so its own
+    missing docstring is irrelevant -- the same reasoning that already
+    excludes it from every other endpoint-relevant field here.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: private\n"
+        "def helper(a: int) -> int:\n    return a\n\n"
+        "def add(a: int, b: int) -> int:\n"
+        "    \"\"\"Adds a and b.\"\"\"\n"
+        "    return a + b\n",
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    assert data["functions_without_docstrings"] == []
+
+
+def test_inspect_notebook_report_lists_a_functions_without_docstrings_section(
+    tmp_path, capsys
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def undocumented(a: int) -> int:\n    return a\n",
+    )
+
+    inspect_notebook(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "Functions Without Docstrings (will get a generic OpenAPI description):" in output
+    section = output.split(
+        "Functions Without Docstrings (will get a generic OpenAPI description):"
+    )[1].split("Dependencies:")[0]
+    assert "- undocumented" in section
+
+
+def test_inspect_notebook_report_omits_functions_without_docstrings_section_when_none(
+    tmp_path, capsys
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n"
+        "    \"\"\"Adds a and b.\"\"\"\n"
+        "    return a + b\n",
+    )
+
+    inspect_notebook(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "Functions Without Docstrings" not in output
+
+
+def test_print_compile_summary_lists_a_function_without_a_docstring(tmp_path, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def undocumented(a: int) -> int:\n    return a\n",
+    )
+
+    print_compile_summary(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "1 function(s) without a docstring (will get a generic OpenAPI description):" in output
+    assert "  undocumented" in output
+
+
+def test_print_compile_summary_omits_functions_without_docstrings_line_when_there_are_none(
+    tmp_path, capsys
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n"
+        "    \"\"\"Adds a and b.\"\"\"\n"
+        "    return a + b\n",
+    )
+
+    print_compile_summary(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "without a docstring" not in output
 
 
 def test_inspect_notebook_data_dependencies_resolves_the_actual_distribution_name(
