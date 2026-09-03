@@ -9057,6 +9057,241 @@ def test_set_notebook_source_url_overwrites_one_recorded_by_a_real_import(
     ).json()["source_url"] == "https://example.com/corrected.ipynb"
 
 
+def test_set_notebook_source_url_batch_sets_each_notebooks_own_distinct_value():
+
+    _upload_sample_notebook("source_url_batch_a.ipynb")
+    _upload_sample_notebook("source_url_batch_b.ipynb")
+    client.put(
+        "/api/notebooks/source_url_batch_a.ipynb/source-url",
+        json={"source_url": "https://example.com/stale.ipynb"},
+    )
+
+    resp = client.post(
+        "/api/notebooks/source-url-batch",
+        json={
+            "entries": [
+                {
+                    "filename": "source_url_batch_a.ipynb",
+                    "source_url": "https://example.com/a.ipynb",
+                },
+                {
+                    "filename": "source_url_batch_b.ipynb",
+                    "source_url": "https://example.com/b.ipynb",
+                },
+            ],
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["succeeded_count"] == 2
+    assert body["failed_count"] == 0
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["source_url_batch_a.ipynb"]["status"] == "success"
+    assert (
+        results_by_filename["source_url_batch_a.ipynb"]["source_url"]
+        == "https://example.com/a.ipynb"
+    )
+    assert (
+        results_by_filename["source_url_batch_b.ipynb"]["source_url"]
+        == "https://example.com/b.ipynb"
+    )
+
+    # A full replace -- the stale value is gone.
+    assert client.get(
+        "/api/notebooks/source_url_batch_a.ipynb/source-url"
+    ).json()["source_url"] == "https://example.com/a.ipynb"
+
+
+def test_set_notebook_source_url_batch_dry_run_reports_the_plan_without_writing():
+
+    _upload_sample_notebook("source_url_batch_dry_run.ipynb")
+    client.put(
+        "/api/notebooks/source_url_batch_dry_run.ipynb/source-url",
+        json={"source_url": "https://example.com/stale.ipynb"},
+    )
+
+    resp = client.post(
+        "/api/notebooks/source-url-batch",
+        json={
+            "entries": [
+                {
+                    "filename": "source_url_batch_dry_run.ipynb",
+                    "source_url": "https://example.com/new.ipynb",
+                },
+                {"filename": "does_not_exist.ipynb", "source_url": "https://example.com/x.ipynb"},
+            ],
+            "dry_run": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["source_url_batch_dry_run.ipynb"]["status"] == "success"
+    assert (
+        results_by_filename["source_url_batch_dry_run.ipynb"]["source_url"]
+        == "https://example.com/new.ipynb"
+    )
+
+    # Nothing was actually written.
+    assert client.get(
+        "/api/notebooks/source_url_batch_dry_run.ipynb/source-url"
+    ).json()["source_url"] == "https://example.com/stale.ipynb"
+
+
+def test_set_notebook_source_url_batch_with_an_empty_value_clears_that_entry():
+
+    _upload_sample_notebook("source_url_batch_clear.ipynb")
+    client.put(
+        "/api/notebooks/source_url_batch_clear.ipynb/source-url",
+        json={"source_url": "https://example.com/temporary.ipynb"},
+    )
+
+    resp = client.post(
+        "/api/notebooks/source-url-batch",
+        json={"entries": [{"filename": "source_url_batch_clear.ipynb", "source_url": ""}]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["results"][0]["source_url"] is None
+    assert client.get(
+        "/api/notebooks/source_url_batch_clear.ipynb/source-url"
+    ).json()["source_url"] is None
+
+
+def test_set_notebook_source_url_batch_defaults_to_clearing_when_omitted():
+
+    _upload_sample_notebook("source_url_batch_omitted.ipynb")
+    client.put(
+        "/api/notebooks/source_url_batch_omitted.ipynb/source-url",
+        json={"source_url": "https://example.com/temporary.ipynb"},
+    )
+
+    resp = client.post(
+        "/api/notebooks/source-url-batch",
+        json={"entries": [{"filename": "source_url_batch_omitted.ipynb"}]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["results"][0]["source_url"] is None
+
+
+def test_set_notebook_source_url_batch_reports_a_missing_filename_without_aborting_the_rest():
+
+    _upload_sample_notebook("source_url_batch_partial.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/source-url-batch",
+        json={
+            "entries": [
+                {
+                    "filename": "source_url_batch_partial.ipynb",
+                    "source_url": "https://example.com/ok.ipynb",
+                },
+                {"filename": "does_not_exist.ipynb", "source_url": "https://example.com/ok.ipynb"},
+            ],
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["source_url_batch_partial.ipynb"]["status"] == "success"
+    assert results_by_filename["does_not_exist.ipynb"]["status"] == "error"
+    assert "not found" in results_by_filename["does_not_exist.ipynb"]["detail"]
+
+
+def test_set_notebook_source_url_batch_reports_an_invalid_value_for_just_that_entry():
+
+    _upload_sample_notebook("source_url_batch_bad_a.ipynb")
+    _upload_sample_notebook("source_url_batch_bad_b.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/source-url-batch",
+        json={
+            "entries": [
+                {
+                    "filename": "source_url_batch_bad_a.ipynb",
+                    "source_url": "https://example.com/ok.ipynb",
+                },
+                {"filename": "source_url_batch_bad_b.ipynb", "source_url": "ftp://example.com/x.ipynb"},
+            ],
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["source_url_batch_bad_a.ipynb"]["status"] == "success"
+    assert results_by_filename["source_url_batch_bad_b.ipynb"]["status"] == "error"
+    assert (
+        "only http:// and https:// URLs are accepted"
+        in results_by_filename["source_url_batch_bad_b.ipynb"]["detail"]
+    )
+
+    # The failing entry never got its source_url touched.
+    assert client.get(
+        "/api/notebooks/source_url_batch_bad_b.ipynb/source-url"
+    ).json()["source_url"] is None
+
+
+def test_set_notebook_source_url_batch_rejects_a_non_list_entries_value():
+
+    resp = client.post("/api/notebooks/source-url-batch", json={"entries": "not-a-list"})
+
+    assert resp.status_code == 400
+
+
+def test_set_notebook_source_url_batch_rejects_an_empty_entries_list():
+
+    resp = client.post("/api/notebooks/source-url-batch", json={"entries": []})
+
+    assert resp.status_code == 400
+
+
+def test_set_notebook_source_url_batch_rejects_more_entries_than_the_configured_maximum(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 1)
+
+    resp = client.post(
+        "/api/notebooks/source-url-batch",
+        json={
+            "entries": [
+                {"filename": "a.ipynb", "source_url": "https://example.com/a.ipynb"},
+                {"filename": "b.ipynb", "source_url": "https://example.com/b.ipynb"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "at most 1" in resp.json()["detail"]
+
+
+def test_set_notebook_source_url_batch_rejects_an_entry_missing_a_filename():
+
+    resp = client.post(
+        "/api/notebooks/source-url-batch",
+        json={"entries": [{"source_url": "https://example.com/a.ipynb"}]},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_notebook_list_and_info_include_the_description_field():
 
     _upload_sample_notebook("description_in_list.ipynb")

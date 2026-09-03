@@ -3473,7 +3473,7 @@ def _dispatch_core_command(args):
                 source_url = data.get("source_url")
                 print(f"{args.filename}: {source_url if source_url else '(no source url)'}")
 
-        else:  # args.source_url_command == "set"
+        elif args.source_url_command == "set":
 
             set_source_url_body = {"source_url": args.source_url}
             if args.dry_run:
@@ -3505,6 +3505,70 @@ def _dispatch_core_command(args):
                 print(
                     f"{args.filename} source url {verb}: "
                     f"{source_url if source_url else '(cleared)'}"
+                )
+
+        else:  # args.source_url_command == "set-batch"
+
+            entries = []
+
+            for raw_entry in args.entry:
+
+                if "=" not in raw_entry:
+                    raise RuntimeError(
+                        f"Invalid --entry '{raw_entry}' -- expected "
+                        "FILENAME=SOURCE_URL (an empty right-hand side "
+                        "clears that notebook's recorded source_url)."
+                    )
+
+                filename, _, source_url = raw_entry.partition("=")
+
+                entries.append({"filename": filename, "source_url": source_url})
+
+            body = {"entries": entries}
+            if args.dry_run:
+                body["dry_run"] = True
+
+            try:
+                response = httpx.post(
+                    f"{dashboard_url}/api/notebooks/source-url-batch",
+                    json=body,
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                verb = "would be set to" if data.get("dry_run") else "set to"
+
+                for result in data.get("results", []):
+
+                    if result["status"] == "success":
+                        source_url = result.get("source_url")
+                        print(
+                            f"{result['filename']} source url {verb}: "
+                            f"{source_url if source_url else '(cleared)'}"
+                        )
+                    else:
+                        print(
+                            f"Failed to set source url for {result['filename']}: "
+                            f"{result['detail']}"
+                        )
+
+                print(
+                    f"\n{data.get('succeeded_count', 0)} succeeded, "
+                    f"{data.get('failed_count', 0)} failed"
                 )
 
     elif args.command == "remote-compile":
@@ -8270,6 +8334,54 @@ def main():
             "Emit the dashboard's own JSON response "
             "({\"status\", \"dry_run\", \"filename\", \"source_url\"}) "
             "instead of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    # source-url set-batch (set/clear the recorded source_url for several
+    # notebooks at once, each getting its own explicit value, via POST
+    # /api/notebooks/source-url-batch -- distinct from `source-url set`
+    # above, which only ever replaces one notebook's own value)
+    source_url_set_batch_parser = source_url_subparsers.add_parser(
+        "set-batch",
+        help=(
+            "Set or clear the recorded source_url for several notebooks "
+            "at once, each getting its own explicit value, via POST "
+            "/api/notebooks/source-url-batch."
+        )
+    )
+    source_url_set_batch_parser.add_argument(
+        "--entry",
+        action="append",
+        required=True,
+        metavar="FILENAME=SOURCE_URL",
+        help=(
+            "One notebook's own new source_url, as FILENAME=SOURCE_URL "
+            "(an empty right-hand side clears that notebook's recorded "
+            "source_url). Repeat --entry once per notebook."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(source_url_set_batch_parser)
+    source_url_set_batch_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report the resulting source_url each entry would get (and "
+            "which would fail, e.g. an unknown filename), via POST "
+            "/api/notebooks/source-url-batch's own \"dry_run\" body "
+            "field, without replacing a single notebook's own recorded "
+            "source_url."
+        )
+    )
+    source_url_set_batch_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"dry_run\", \"results\": [{\"filename\", \"status\", "
+            "...}, ...], \"succeeded_count\", \"failed_count\"}) instead "
+            "of a human-readable summary, for scripting/automation."
         )
     )
 

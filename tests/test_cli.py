@@ -9429,6 +9429,189 @@ def test_source_url_command_reports_a_clean_error_when_the_dashboard_is_unreacha
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_source_url_set_batch_command_is_registered():
+
+    proc = _run_cli(["source-url", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "set-batch" in proc.stdout
+
+
+def test_source_url_set_batch_command_sends_one_entry_per_notebook(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {"filename": "a.ipynb", "status": "success", "source_url": "https://example.com/a.ipynb"},
+                {"filename": "b.ipynb", "status": "success", "source_url": None},
+            ],
+            "succeeded_count": 2,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "source-url", "set-batch",
+            "--entry", "a.ipynb=https://example.com/a.ipynb",
+            "--entry", "b.ipynb=",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "a.ipynb source url set to: https://example.com/a.ipynb" in proc.stdout
+    assert "b.ipynb source url set to: (cleared)" in proc.stdout
+    assert "2 succeeded, 0 failed" in proc.stdout
+    assert handler.requests == ["/api/notebooks/source-url-batch"]
+    assert json.loads(handler.bodies[0]) == {
+        "entries": [
+            {"filename": "a.ipynb", "source_url": "https://example.com/a.ipynb"},
+            {"filename": "b.ipynb", "source_url": ""},
+        ],
+    }
+
+
+def test_source_url_set_batch_command_dry_run_sends_dry_run_field(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": True,
+            "results": [
+                {"filename": "a.ipynb", "status": "success", "source_url": "https://example.com/new.ipynb"},
+            ],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "source-url", "set-batch",
+            "--entry", "a.ipynb=https://example.com/new.ipynb",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "a.ipynb source url would be set to: https://example.com/new.ipynb" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "entries": [{"filename": "a.ipynb", "source_url": "https://example.com/new.ipynb"}],
+        "dry_run": True,
+    }
+
+
+def test_source_url_set_batch_command_reports_a_partial_failure(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {"filename": "a.ipynb", "status": "success", "source_url": "https://example.com/ok.ipynb"},
+                {
+                    "filename": "b.ipynb", "status": "error",
+                    "detail": "Notebook file not found",
+                },
+            ],
+            "succeeded_count": 1,
+            "failed_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "source-url", "set-batch",
+            "--entry", "a.ipynb=https://example.com/ok.ipynb",
+            "--entry", "b.ipynb=https://example.com/ok.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "a.ipynb source url set to: https://example.com/ok.ipynb" in proc.stdout
+    assert "Failed to set source url for b.ipynb: Notebook file not found" in proc.stdout
+    assert "1 succeeded, 1 failed" in proc.stdout
+
+
+def test_source_url_set_batch_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "results": [{"filename": "a.ipynb", "status": "success", "source_url": "https://example.com/ok.ipynb"}],
+        "succeeded_count": 1,
+        "failed_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "source-url", "set-batch", "--entry", "a.ipynb=https://example.com/ok.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_source_url_set_batch_command_reports_a_clean_error_for_a_malformed_entry(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "source-url", "set-batch", "--entry", "no-equals-sign-here",
+            "--dashboard-url", "http://127.0.0.1:1",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Invalid --entry")
+
+
+def test_source_url_set_batch_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "source-url", "set-batch", "--entry", "a.ipynb=https://example.com/ok.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_description_set_batch_command_is_registered():
 
     proc = _run_cli(["description", "--help"], cwd=Path.cwd())

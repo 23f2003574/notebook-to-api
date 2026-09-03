@@ -2925,6 +2925,123 @@ def set_notebook_source_url(filename: str, data: dict):
     }
 
 
+@router.post("/notebooks/source-url-batch")
+def set_notebook_source_url_batch(data: dict):
+    """Manually set or clear the recorded provenance URL for a caller-
+    chosen set of already-uploaded notebooks in one call, each notebook
+    getting its own explicit source_url.
+
+    PUT /api/notebooks/{filename}/source-url already does this one
+    notebook at a time, and POST /api/notebooks/tags-batch/POST
+    /api/notebooks/description-batch already do the analogous "several
+    notebooks, each its own value" replacement for tags/description --
+    but there was no equivalent for source_url, so re-establishing
+    provenance URLs across many notebooks at once (e.g. importing a
+    filename->URL mapping from an external source, or bulk-correcting a
+    set of URLs that all moved together) meant one PUT .../source-url
+    call per notebook.
+
+    Takes "entries", a list of {"filename", "source_url"} objects, the
+    identical shape POST /api/notebooks/tags-batch and POST
+    /api/notebooks/description-batch already take for the same reason:
+    each entry here carries its own independent value.
+
+    "entries" itself (a non-empty list, each element an object with a
+    string "filename") is validated once, up front, as a 400 covering the
+    whole request. Each entry's own "source_url", though, is validated
+    independently via _validate_and_normalize_source_url (the exact same
+    per-value rules PUT .../source-url already enforces) as part of that
+    entry's own per-entry result, since a bad "source_url" value here
+    belongs to exactly the one entry that supplied it, not the batch as a
+    whole. Reuses the identical per-entry "one bad entry doesn't abort the
+    batch" contract POST /api/notebooks/tags-batch already established:
+    "results" reports one {"filename", "status", ...} entry per input
+    entry -- "success" (with that notebook's resulting source_url) or
+    "error" (a 404 for an unknown filename, or the same 400 a bad
+    "source_url" value alone would raise through PUT .../source-url
+    directly). Omitting "source_url" from an entry clears it, the same
+    default PUT .../source-url itself already applies.
+
+    "dry_run" (optional, default false) reports the exact same per-entry
+    "results" a real batch would -- each entry's own validated,
+    normalized "source_url" on success, or the identical "error" a real
+    write would raise -- without replacing a single notebook's own
+    recorded source_url, the same preview POST /api/notebooks/tags-batch's
+    own "dry_run" already provides for its own identical
+    replace-every-entry-unconditionally batch.
+    """
+
+    entries = data.get("entries")
+
+    if not isinstance(entries, list) or not entries:
+
+        raise HTTPException(
+            status_code=400,
+            detail="entries must be a non-empty list of objects"
+        )
+
+    _validate_batch_entry_count(entries)
+
+    for entry in entries:
+
+        if not isinstance(entry, dict) or not isinstance(entry.get("filename"), str):
+
+            raise HTTPException(
+                status_code=400,
+                detail="each entry must be an object with a string 'filename'"
+            )
+
+    dry_run = bool(data.get("dry_run", False))
+
+    results = []
+    succeeded_count = 0
+    failed_count = 0
+
+    for entry in entries:
+
+        filename = entry["filename"]
+
+        try:
+
+            file_path = resolve_upload_path(filename)
+
+            if not file_path.is_file():
+
+                raise HTTPException(
+                    status_code=404,
+                    detail="Notebook file not found"
+                )
+
+            source_url = _validate_and_normalize_source_url(entry.get("source_url"))
+
+            if not dry_run:
+                _write_notebook_source_url(file_path.name, source_url)
+
+            results.append({
+                "filename": filename,
+                "status": "success",
+                "source_url": source_url,
+            })
+            succeeded_count += 1
+
+        except HTTPException as exc:
+
+            results.append({
+                "filename": filename,
+                "status": "error",
+                "detail": exc.detail,
+            })
+            failed_count += 1
+
+    return {
+        "status": "success",
+        "dry_run": dry_run,
+        "results": results,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
+    }
+
+
 @router.get("/tags")
 def list_tags(format: str = "json"):
     """The distinct tags currently in use across every uploaded notebook,
