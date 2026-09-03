@@ -281,14 +281,27 @@ def generate_fastapi_code(
     reports it as null, exactly as if this parameter didn't exist.
 
     notebook_to_api_version (optional) is baked into the generated app
-    the identical way, as its own "generator_version" (GET /) and
-    "version" (GET /info) fields -- both of which, before this, were a
-    hardcoded "1.0.0" literal completely unrelated to which actual
+    the identical way, as its own "generator_version" (GET /), "version"
+    (GET /info), and -- unlike those first two, this one was missed the
+    first time this parameter was added, and only caught afterward --
+    the FastAPI(...) app object's own `version=` kwarg itself, which
+    `custom_openapi` (below) passes straight through to
+    get_openapi(..., version=app.version, ...) as this app's own
+    OpenAPI "info.version". All three previously carried the identical
+    hardcoded "1.0.0" literal, completely unrelated to which actual
     version of this tool compiled the app, the same "two independent,
     inevitably-drifting hardcoded version literals" bug NOTEBOOK_TO_API_
     VERSION (backend/compiler.py) was already introduced to deduplicate
     for this dashboard's own GET /api/health and GET / -- just never
-    threaded through to the *generated* app's own identical two literals.
+    threaded through to the *generated* app's own three literals. Unlike
+    "generator_version"/"version" (informational JSON fields only), a
+    stale "info.version" is user-visible in every compiled app's own
+    /docs (Swagger UI) and gets baked directly into whatever POST
+    /api/export-openapi writes out (export_openapi_schema serializes
+    app.openapi() unchanged) -- the exact schema any external tooling
+    (an API catalog, a codegen tool other than this project's own
+    generate_python_sdk/generate_typescript_sdk, which never read
+    "info.version" themselves) would read "info.version" from.
     compile_notebook_to_api (backend/compiler.py) always passes its own
     NOTEBOOK_TO_API_VERSION here; the "1.0.0" default is only ever seen
     by a caller of this function that doesn't (a direct unit test, most
@@ -349,7 +362,7 @@ def generate_fastapi_code(
         'app = FastAPI('
         'title="Notebook-to-API Generated Service", '
         'description="Automatically generated from notebook analysis.", '
-        'version="1.0.0", '
+        f'version={notebook_to_api_version!r}, '
         'contact={"name": "Notebook-to-API"}, '
         'license_info={"name": "MIT"}, '
         'servers=[{"url": "http://localhost:8000", '

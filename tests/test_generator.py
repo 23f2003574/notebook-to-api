@@ -76,6 +76,25 @@ def test_generate_fastapi_code_bakes_in_the_given_notebook_to_api_version():
     assert '"version": NOTEBOOK_TO_API_VERSION,' in code
 
 
+def test_generate_fastapi_code_bakes_the_given_version_into_the_fastapi_app_itself():
+    """A third hardcoded "1.0.0" literal missed the first time this
+    parameter was added: the FastAPI(...) app object's own `version=`
+    kwarg, which custom_openapi passes straight through as this app's
+    own OpenAPI "info.version" -- user-visible in every compiled app's
+    own /docs (Swagger UI), and baked directly into whatever POST
+    /api/export-openapi writes out (export_openapi_schema serializes
+    app.openapi() unchanged), unlike "generator_version"/"version" above
+    (informational JSON fields only).
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions, notebook_to_api_version="0.4.2")
+
+    assert "version='0.4.2'" in code
+    assert 'version="1.0.0"' not in code
+
+
 def test_generate_fastapi_code_defaults_notebook_to_api_version_to_one_point_zero_point_zero():
     """A caller not passing "notebook_to_api_version" at all (a direct
     unit test, most commonly -- every real compile always passes
@@ -89,6 +108,7 @@ def test_generate_fastapi_code_defaults_notebook_to_api_version_to_one_point_zer
     code = generate_fastapi_code(functions)
 
     assert "NOTEBOOK_TO_API_VERSION = '1.0.0'" in code
+    assert "version='1.0.0'" in code
 
 
 def test_notebook_to_api_version_is_a_reserved_infrastructure_name():

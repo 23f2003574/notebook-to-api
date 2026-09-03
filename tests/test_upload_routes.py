@@ -18011,10 +18011,14 @@ def test_app_preview_bakes_in_the_real_tool_version():
     )
 
     assert resp.status_code == 200
-    assert (
-        f"NOTEBOOK_TO_API_VERSION = {NOTEBOOK_TO_API_VERSION!r}"
-        in resp.json()["app_code"]
-    )
+    app_code = resp.json()["app_code"]
+    assert f"NOTEBOOK_TO_API_VERSION = {NOTEBOOK_TO_API_VERSION!r}" in app_code
+    # The FastAPI(...) app object's own `version=` kwarg (which feeds
+    # its OpenAPI "info.version", user-visible in /docs and baked into
+    # POST /api/export-openapi's own output) must match too -- a third,
+    # separately-hardcoded "1.0.0" literal missed the first time this
+    # was fixed.
+    assert f"version={NOTEBOOK_TO_API_VERSION!r}" in app_code
 
 
 def test_app_preview_respects_only_and_exclude():

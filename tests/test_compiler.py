@@ -849,6 +849,65 @@ print("NOTEBOOK_TO_API_VERSION_E2E_OK")
     assert "NOTEBOOK_TO_API_VERSION_E2E_OK" in proc.stdout
 
 
+def test_compiler_pipeline_bakes_the_real_tool_version_into_the_openapi_schema(tmp_path):
+    """A third hardcoded "1.0.0" literal missed the first time this was
+    fixed: the FastAPI(...) app object's own `version=` kwarg, which
+    feeds directly into this app's own OpenAPI "info.version" --
+    user-visible in every compiled app's own /docs (Swagger UI), and
+    baked directly into whatever POST /api/export-openapi writes out
+    (export_openapi_schema serializes app.openapi() unchanged).
+    """
+
+    from backend.compiler import NOTEBOOK_TO_API_VERSION
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from backend.exporters.openapi_exporter import export_openapi_schema
+export_openapi_schema("generated/openapi.json", "generated")
+
+import json
+with open("generated/openapi.json") as f:
+    schema = json.load(f)
+
+assert schema["info"]["version"] == {NOTEBOOK_TO_API_VERSION!r}, schema["info"]
+
+print("OPENAPI_INFO_VERSION_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "OPENAPI_INFO_VERSION_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_dockerignore_excludes_a_real_exported_openapi_and_sdk(
     tmp_path,
 ):
