@@ -15,6 +15,7 @@ from pathlib import Path
 RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "START_TIME",
     "GENERATED_AT", "PYTHON_VERSION", "NOTEBOOK_TO_API_VERSION", "ALLOWED_ORIGINS",
+    "PUBLIC_URL",
     "MAX_REQUEST_BODY_BYTES", "MaxRequestBodySizeMiddleware",
     "MAX_PENDING_TASKS",
     "verify_api_key", "custom_openapi",
@@ -124,6 +125,20 @@ GENERATED_APP_ENV_VARS = [
             "key, so one key being throttled never affects another. 0 "
             "(the default) disables rate limiting entirely, preserving "
             "the previous unbounded behavior."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_PUBLIC_URL",
+        "default": "http://localhost:8000",
+        "description": (
+            "The base URL this deployment is actually reachable at, "
+            "reported as this app's own OpenAPI \"servers\" entry -- what "
+            "/docs' own Swagger UI \"Try it out\" defaults its request "
+            "URL to. Left at the default outside local development, "
+            "Swagger UI keeps sending \"Try it out\" requests to "
+            "http://localhost:8000 no matter where the app is actually "
+            "deployed, failing every one of them from a browser that "
+            "isn't itself on the same machine."
         ),
     },
 ]
@@ -358,6 +373,19 @@ def generate_fastapi_code(
         lines.append(f"from typing import {', '.join(sorted(needed_typing_names))}")
     lines.append(f"import {package_name}.runtime.notebook_module as notebook_module")
     lines.append("")
+    # Read before app = FastAPI(...) below (the servers= kwarg needs it
+    # at construction time) -- see GET /api/env-vars-preview's own
+    # NOTEBOOK_API_PUBLIC_URL entry for what this actually drives, and
+    # why leaving it at the default outside local development silently
+    # breaks Swagger UI's own "Try it out" for anyone not on the same
+    # machine as the deployment.
+    lines.append(
+        'PUBLIC_URL = os.getenv('
+        '"NOTEBOOK_API_PUBLIC_URL", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_PUBLIC_URL")}"'
+        ')'
+    )
+    lines.append("")
     lines.append(
         'app = FastAPI('
         'title="Notebook-to-API Generated Service", '
@@ -365,8 +393,8 @@ def generate_fastapi_code(
         f'version={notebook_to_api_version!r}, '
         'contact={"name": "Notebook-to-API"}, '
         'license_info={"name": "MIT"}, '
-        'servers=[{"url": "http://localhost:8000", '
-        '"description": "Local development server"}]'
+        'servers=[{"url": PUBLIC_URL, '
+        '"description": "This deployment"}]'
         ')'
     )
     lines.append("")
@@ -598,11 +626,23 @@ def generate_fastapi_code(
     lines.append("    if app.openapi_schema:")
     lines.append("        return app.openapi_schema")
     lines.append("")
+    # servers=app.servers -- confirmed missing before this fix: FastAPI's
+    # own app.openapi() would include the servers=[...] this app's own
+    # constructor call above passes it automatically, but app.openapi is
+    # overridden with this function entirely (see app.openapi =
+    # custom_openapi below), and get_openapi() only ever returns what a
+    # caller explicitly asks it to build. Without this line, the
+    # PUBLIC_URL constructor kwarg above was silently discarded --
+    # confirmed live: app.openapi()["servers"] was never even a key in
+    # the resulting schema, let alone reflecting PUBLIC_URL -- so every
+    # compiled app's own /docs (Swagger UI) had no configured servers
+    # entry at all, no matter what NOTEBOOK_API_PUBLIC_URL was set to.
     lines.append("    openapi_schema = get_openapi(")
     lines.append("        title=app.title,")
     lines.append("        version=app.version,")
     lines.append("        description=app.description,")
     lines.append("        routes=app.routes,")
+    lines.append("        servers=app.servers,")
     lines.append("    )")
     lines.append("")
     lines.append("    openapi_schema.setdefault('components', {})")

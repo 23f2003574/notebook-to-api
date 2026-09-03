@@ -30,6 +30,7 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
         "NOTEBOOK_API_TASK_TTL_SECONDS",
         "NOTEBOOK_API_MAX_TASKS",
         "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE",
+        "NOTEBOOK_API_PUBLIC_URL",
     }
 
     for entry in GENERATED_APP_ENV_VARS:
@@ -121,6 +122,47 @@ def test_notebook_to_api_version_is_a_reserved_infrastructure_name():
     """
 
     assert "NOTEBOOK_TO_API_VERSION" in RESERVED_INFRASTRUCTURE_NAMES
+
+
+def test_generate_fastapi_code_passes_servers_to_get_openapi():
+    """Confirmed dead code before this fix: the FastAPI(...) constructor's
+    own servers=[...] kwarg was silently discarded, since custom_openapi
+    completely overrides app.openapi and never itself passed servers= to
+    get_openapi(...) -- app.openapi()["servers"] was never even a key in
+    the resulting schema, no matter what the constructor was given.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "servers=app.servers," in code
+
+
+def test_generate_fastapi_code_bakes_the_given_public_url_into_the_servers_entry():
+    """NOTEBOOK_API_PUBLIC_URL (read into PUBLIC_URL before app =
+    FastAPI(...), since the servers= kwarg needs it at construction time)
+    drives the same "servers" entry GET /docs' own Swagger UI "Try it
+    out" defaults its request URL to -- left at the previous hardcoded
+    "http://localhost:8000" outside local development, every "Try it
+    out" request failed from a browser that wasn't itself on the same
+    machine as the deployment.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert (
+        'PUBLIC_URL = os.getenv("NOTEBOOK_API_PUBLIC_URL", "http://localhost:8000")'
+        in code
+    )
+    assert 'servers=[{"url": PUBLIC_URL, "description": "This deployment"}]' in code
+
+
+def test_public_url_is_a_reserved_infrastructure_name():
+
+    assert "PUBLIC_URL" in RESERVED_INFRASTRUCTURE_NAMES
 
 
 def _register_fake_notebook_module(monkeypatch, package_name="generated"):

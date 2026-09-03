@@ -908,6 +908,66 @@ print("OPENAPI_INFO_VERSION_E2E_OK")
     assert "OPENAPI_INFO_VERSION_E2E_OK" in proc.stdout
 
 
+def test_compiler_pipeline_openapi_schema_reports_a_configured_public_url(tmp_path):
+    """Confirmed dead code before this fix: the FastAPI(...) constructor's
+    own servers=[...] kwarg was silently discarded by custom_openapi,
+    which never itself passed servers= to get_openapi(...) --
+    app.openapi()["servers"] was never even a key in the resulting
+    schema, no matter what NOTEBOOK_API_PUBLIC_URL was set to. Also
+    confirms the env var itself is actually read at compiled-app import
+    time (when a real deployment's own environment is in effect), not
+    baked in at compile time on this dashboard.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import os
+import sys
+
+os.environ["NOTEBOOK_API_PUBLIC_URL"] = "https://api.example.com"
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+
+schema = app.openapi()
+assert schema["servers"] == [
+    {{"url": "https://api.example.com", "description": "This deployment"}}
+], schema.get("servers")
+
+print("OPENAPI_SERVERS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "OPENAPI_SERVERS_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_dockerignore_excludes_a_real_exported_openapi_and_sdk(
     tmp_path,
 ):
