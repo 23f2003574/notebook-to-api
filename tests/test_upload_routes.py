@@ -18718,6 +18718,49 @@ def test_docker_compose_preview_does_not_touch_generated_dir(monkeypatch, tmp_pa
     assert not generated_dir.exists()
 
 
+def test_env_example_preview_requires_no_notebook_and_needs_no_body():
+
+    resp = client.get("/api/env-example-preview")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert "PORT=8000" in body["env_example"]
+    assert "NOTEBOOK_API_KEY=notebook-to-api-dev-key" in body["env_example"]
+
+
+def test_env_example_preview_matches_what_an_actual_compile_writes():
+
+    filename = "env_example_preview_match.ipynb"
+    _upload_sample_notebook(filename)
+
+    preview_resp = client.get("/api/env-example-preview")
+    assert preview_resp.status_code == 200
+    preview_body = preview_resp.json()
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": filename}
+    )
+    assert compile_resp.status_code == 200
+
+    actual_env_example = client.get(
+        "/api/generated/.env.example"
+    ).json()["content"]
+
+    assert preview_body["env_example"] == actual_env_example
+
+
+def test_env_example_preview_does_not_touch_generated_dir(monkeypatch, tmp_path):
+
+    generated_dir = tmp_path / "env_example_preview_no_side_effects"
+    monkeypatch.setattr("backend.routes.upload.GENERATED_DIR", str(generated_dir))
+
+    resp = client.get("/api/env-example-preview")
+
+    assert resp.status_code == 200
+    assert not generated_dir.exists()
+
+
 def test_env_vars_preview_requires_no_notebook_and_needs_no_body():
 
     resp = client.get("/api/env-vars-preview")

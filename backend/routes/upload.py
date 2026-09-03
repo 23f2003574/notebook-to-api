@@ -59,6 +59,7 @@ from backend.generator.docker_generator import (
     dockerfile_content,
     dockerignore_content,
     docker_compose_content,
+    env_example_content,
 )
 from backend.inspector import (
     EXCLUDED_GENERATED_DIR_NAMES,
@@ -2348,8 +2349,9 @@ def _currently_compiled_notebook_metadata():
 
 def _generated_files_modified_since_compile():
     """Whether GENERATED_DIR's own compile-produced files (app.py,
-    requirements.txt, Dockerfile, .dockerignore, docker-compose.yml, the
-    runtime module) no longer match the baseline write_compile_metadata
+    requirements.txt, Dockerfile, .dockerignore, docker-compose.yml,
+    .env.example, the runtime module) no longer match the baseline
+    write_compile_metadata
     recorded for them at compile time (see "generated_files_sha256",
     backend/compiler.py) -- the output-side mirror of
     _currently_compiled_notebook_is_stale's own input-side check: that
@@ -10771,6 +10773,33 @@ def docker_compose_preview_endpoint():
     }
 
 
+@router.get("/env-example-preview")
+def env_example_preview_endpoint():
+    """The exact .env.example text POST /api/compile now also writes into
+    GENERATED_DIR on every compile (alongside the Dockerfile/
+    .dockerignore/docker-compose.yml) -- without actually compiling
+    anything, or touching GENERATED_DIR at all.
+
+    Like GET /api/docker-compose-preview above (whose own docker-
+    compose.yml similarly never varies by notebook), takes no
+    notebook_path: env_example_content only ever depends on
+    GENERATED_APP_ENV_VARS (backend/generator/api_generator.py) -- never
+    on which notebook is being compiled.
+
+    Reuses env_example_content directly -- the same pure string-building
+    helper generate_env_example itself now calls before ever touching
+    disk -- so "env_example" below can never drift from what an actual
+    compile writes to GENERATED_DIR/.env.example, the same "can't drift
+    from the real thing" guarantee GET /api/docker-compose-preview/GET
+    /api/env-vars-preview already provide for their own artifacts.
+    """
+
+    return {
+        "status": "success",
+        "env_example": env_example_content(GENERATED_APP_ENV_VARS),
+    }
+
+
 @router.get("/env-vars-preview")
 def env_vars_preview_endpoint():
     """Every environment variable a compiled app itself recognizes to
@@ -12833,12 +12862,12 @@ def list_generated_files_endpoint(checksums: bool = False):
     reports for the currently-compiled entry: that one catches the
     *source notebook* having changed since the last compile, this one
     catches the compiled *output itself* -- app.py, requirements.txt,
-    Dockerfile, .dockerignore, docker-compose.yml, the runtime module --
-    having been hand-edited on the server since then, which nothing
-    before this could detect at all. True/False once a compile with this
-    field has actually happened; null if nothing has been compiled yet,
-    or if GENERATED_DIR was produced by a compile that predates this
-    field entirely.
+    Dockerfile, .dockerignore, docker-compose.yml, .env.example, the
+    runtime module -- having been hand-edited on the server since then,
+    which nothing before this could detect at all. True/False once a
+    compile with this field has actually happened; null if nothing has
+    been compiled yet, or if GENERATED_DIR was produced by a compile that
+    predates this field entirely.
     """
 
     with COMPILE_LOCK:

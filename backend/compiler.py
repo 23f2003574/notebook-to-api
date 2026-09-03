@@ -73,7 +73,8 @@ from backend.generator.api_generator import (
 from backend.generator.docker_generator import (
     generate_dockerfile,
     generate_dockerignore,
-    generate_docker_compose
+    generate_docker_compose,
+    generate_env_example
 )
 
 
@@ -866,6 +867,7 @@ _GENERATED_OUTPUT_RELATIVE_PATHS = (
     "Dockerfile",
     ".dockerignore",
     "docker-compose.yml",
+    ".env.example",
     os.path.join("runtime", "notebook_module.py"),
 )
 
@@ -932,9 +934,10 @@ def write_compile_metadata(
     _generated_files_sha256(output_dir, app_filename) above -- a
     baseline hash over the exact compile-produced files themselves
     (app.py, requirements.txt, Dockerfile, .dockerignore,
-    docker-compose.yml, the runtime module), taken at the very end of a
-    successful compile, once every one of those has actually been
-    written. Every hash/staleness check this dashboard already had
+    docker-compose.yml, .env.example, the runtime module), taken at the
+    very end of a successful compile, once every one of those has
+    actually been written. Every hash/staleness check this dashboard
+    already had
     compared the *source notebook's* own content against what's
     currently compiled (see "source_notebook_sha256" below) -- but
     nothing recorded whether the compiled *output itself* still matches
@@ -1348,6 +1351,13 @@ def compile_notebook_to_api(
             generate_docker_compose(
                 docker_compose_path, package_name, GENERATED_APP_ENV_VARS
             )
+
+            env_example_path = os.path.join(
+                output_dir,
+                ".env.example"
+            )
+
+            generate_env_example(env_example_path, GENERATED_APP_ENV_VARS)
 
             write_compile_metadata(
                 source_notebook_path or notebook_path,

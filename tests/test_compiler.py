@@ -34,9 +34,11 @@ from backend.compiler import (
 )
 from backend.generator.docker_generator import (
     docker_compose_content,
+    env_example_content,
     generate_dockerfile,
     generate_dockerignore,
     generate_docker_compose,
+    generate_env_example,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -558,6 +560,115 @@ def test_docker_compose_content_with_no_env_vars_still_maps_port():
     assert content_none == content
 
 
+def test_generate_dockerignore_excludes_env_example(tmp_path):
+    """.env.example (generate_env_example, backend/generator/
+    docker_generator.py) is now written into the same output directory
+    as the compiled app on every compile too -- a template for an
+    operator to copy to their own .env, never read by the running app
+    itself, the identical "never read by the app, so it shouldn't ship
+    in the image" reasoning this .dockerignore already applies to
+    Dockerfile/.dockerignore/docker-compose.yml.
+    """
+
+    output_path = tmp_path / ".dockerignore"
+
+    generate_dockerignore(str(output_path))
+
+    dockerignore = output_path.read_text(encoding="utf-8")
+    assert ".env.example" in dockerignore
+
+
+def test_env_example_content_matches_generate_env_examples_own_output(tmp_path):
+    """env_example_content is the pure string generate_env_example itself
+    writes to disk -- see dockerfile_content's own docstring for why this
+    split exists. Confirms the two can't drift apart, the same "preview
+    matches the real write" guarantee already covered for
+    dockerfile_content/generate_dockerfile above.
+    """
+
+    env_vars = [
+        {"name": "NOTEBOOK_API_KEY", "default": "dev-key", "description": "A key."},
+    ]
+
+    output_path = tmp_path / ".env.example"
+
+    generate_env_example(str(output_path), env_vars)
+
+    assert (
+        output_path.read_text(encoding="utf-8")
+        == env_example_content(env_vars)
+    )
+
+
+def test_env_example_content_lists_every_env_var_with_its_own_default_and_description():
+
+    env_vars = [
+        {
+            "name": "NOTEBOOK_API_KEY", "default": "dev-key",
+            "description": "The API key clients must present.",
+        },
+        {
+            "name": "NOTEBOOK_API_MAX_TASKS", "default": "10000",
+            "description": "Maximum pending background tasks.",
+        },
+    ]
+
+    content = env_example_content(env_vars)
+
+    assert "NOTEBOOK_API_KEY=dev-key" in content
+    assert "# The API key clients must present." in content
+    assert "NOTEBOOK_API_MAX_TASKS=10000" in content
+    assert "# Maximum pending background tasks." in content
+
+
+def test_env_example_content_always_includes_port():
+    """PORT is deliberately excluded from GENERATED_APP_ENV_VARS itself
+    (it's read by the Dockerfile's own CMD/HEALTHCHECK and docker-
+    compose.yml's own "ports" mapping, never by the compiled app) --
+    but docker_compose_content already includes it unconditionally in
+    its own "environment:" section, and this must too, for the same
+    reason: an operator commonly wants to override the host-side port
+    without touching the generated docker-compose.yml itself.
+    """
+
+    content = env_example_content([])
+
+    assert "PORT=8000" in content
+
+
+def test_env_example_content_with_no_env_vars_is_still_a_valid_file():
+
+    content = env_example_content(None)
+
+    assert "PORT=8000" in content
+    assert content == env_example_content([])
+
+
+def test_env_example_content_produces_a_value_that_can_actually_be_parsed_as_env_assignments():
+    """Every non-comment, non-blank line must be a real NAME=value
+    assignment -- the whole point is that `cp .env.example .env` alone
+    already reproduces the compiled app's own unconfigured behavior.
+    """
+
+    env_vars = [
+        {"name": "NOTEBOOK_API_KEY", "default": "dev-key", "description": "A key."},
+        {"name": "NOTEBOOK_API_MAX_TASKS", "default": "10000", "description": "Cap."},
+    ]
+
+    content = env_example_content(env_vars)
+
+    assignment_lines = [
+        line for line in content.splitlines()
+        if line and not line.startswith("#")
+    ]
+
+    assert assignment_lines == [
+        "PORT=8000",
+        "NOTEBOOK_API_KEY=dev-key",
+        "NOTEBOOK_API_MAX_TASKS=10000",
+    ]
+
+
 def test_compiler_pipeline_generates_a_docker_compose_file(tmp_path):
     """Confirmed missing before this feature: a compiled app had a
     Dockerfile but nothing to actually run it with beyond a hand-typed
@@ -588,6 +699,38 @@ def test_compiler_pipeline_generates_a_docker_compose_file(tmp_path):
     assert "    restart: unless-stopped\n" in compose
     assert "NOTEBOOK_API_KEY=${NOTEBOOK_API_KEY:-notebook-to-api-dev-key}" in compose
     assert "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE=${NOTEBOOK_API_RATE_LIMIT_PER_MINUTE:-0}" in compose
+
+
+def test_compiler_pipeline_generates_an_env_example_file(tmp_path):
+    """Confirmed missing before this feature: GET /api/env-vars-preview
+    already answered "what env vars does a compiled app recognize" as
+    structured JSON, but nothing ever actually wrote a ready-to-use
+    .env.example an operator could `cp .env.example .env` from, unlike
+    every other deployment artifact (Dockerfile, .dockerignore,
+    docker-compose.yml) a compile already writes alongside app.py.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    env_example_path = output_dir / ".env.example"
+    assert env_example_path.is_file()
+
+    env_example = env_example_path.read_text(encoding="utf-8")
+    assert "PORT=8000" in env_example
+    assert "NOTEBOOK_API_KEY=notebook-to-api-dev-key" in env_example
+    assert "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE=0" in env_example
 
 
 def test_compiler_pipeline_bakes_source_notebook_sha256_into_info_endpoint(tmp_path):
@@ -3719,6 +3862,33 @@ def test_generated_files_sha256_changes_when_a_generated_file_is_hand_edited(tmp
 
     (output_dir / "requirements.txt").write_text(
         "fastapi==0.0.0\n", encoding="utf-8"
+    )
+
+    assert _generated_files_sha256(str(output_dir)) != baseline
+
+
+def test_generated_files_sha256_changes_when_env_example_is_hand_edited(tmp_path):
+
+    from backend.compiler import _generated_files_sha256
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    baseline = _generated_files_sha256(str(output_dir))
+
+    (output_dir / ".env.example").write_text(
+        "PORT=9999\n", encoding="utf-8"
     )
 
     assert _generated_files_sha256(str(output_dir)) != baseline

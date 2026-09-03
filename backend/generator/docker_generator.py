@@ -1,3 +1,6 @@
+import textwrap
+
+
 def dockerfile_content(
     package_name="generated",
     python_version="3.11",
@@ -211,6 +214,87 @@ def generate_docker_compose(
     print(f"docker-compose.yml generated at: {output_path}")
 
 
+def env_example_content(env_vars=None):
+    """The exact .env.example text generate_env_example (below) writes to
+    disk, as a pure string -- no filesystem access at all. See
+    dockerfile_content's own docstring above for why this split exists.
+
+    GET /api/env-vars-preview (backend/routes/upload.py) already answers
+    "what environment variables does a compiled app read, and what do
+    they default to" -- but only as structured JSON. An operator actually
+    standing up a deployment (`docker compose up`, a Kubernetes Secret/
+    ConfigMap, a plain systemd EnvironmentFile) still had to transcribe
+    that JSON into a real env file by hand, one variable at a time, with
+    nothing to catch a typo'd name or a stale default the moment either
+    drifted from what the compiled app would actually read -- the exact
+    "computed but never actually handed over as a ready-to-use artifact"
+    gap docker_compose_content's own docstring already closed for
+    docker-compose.yml itself.
+
+    `env_vars` is GENERATED_APP_ENV_VARS (backend/generator/
+    api_generator.py) -- the same list docker_compose_content already
+    takes (see its own docstring for why it's passed in rather than
+    imported directly here, to avoid a circular import) -- so a value
+    here can never drift from what docker-compose.yml's own
+    "environment:" section, or GET /api/env-vars-preview, already report
+    for the same variable.
+
+    Each entry becomes a wrapped "# <description>" comment followed by
+    "NAME=default" -- a real, valid env file on its own (every value is
+    already the same default the compiled app itself falls back to), not
+    a placeholder that must be filled in before it works, so `cp
+    .env.example .env` alone already reproduces the compiled app's own
+    unconfigured behavior; only a value an operator actually wants to
+    override needs editing.
+
+    "PORT" (deliberately excluded from GENERATED_APP_ENV_VARS itself --
+    see GET /api/env-vars-preview's own docstring: it's read by the
+    Dockerfile's own CMD/HEALTHCHECK and docker-compose.yml's own "ports"
+    mapping, never by the compiled app) gets the identical unconditional
+    inclusion docker_compose_content's own "environment:" section already
+    gives it, for the same reason: a `docker compose up` deployment
+    commonly wants to override the host-side port without touching the
+    generated docker-compose.yml itself.
+    """
+    env_vars = env_vars or []
+
+    lines = [
+        "# Copy this file to .env and override any value below -- every",
+        "# one already matches the same default the compiled app (or, for",
+        "# PORT, docker-compose.yml/the Dockerfile) itself falls back to,",
+        "# so this file alone already reproduces the unconfigured behavior.",
+        "",
+        "# Host:container port docker-compose.yml's own \"ports\"/",
+        "# \"environment\" sections map, and the Dockerfile's own CMD/",
+        "# HEALTHCHECK read -- not read by the compiled app itself.",
+        "PORT=8000",
+        "",
+    ]
+
+    for entry in env_vars:
+
+        for description_line in textwrap.wrap(entry["description"], width=76):
+            lines.append(f"# {description_line}")
+
+        lines.append(f"{entry['name']}={entry['default']}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def generate_env_example(output_path="generated/.env.example", env_vars=None):
+    """Write a .env.example for the compiled app at `output_path`,
+    alongside the Dockerfile/.dockerignore/docker-compose.yml
+    generate_dockerfile/generate_dockerignore/generate_docker_compose
+    already write there on every compile -- see env_example_content's own
+    docstring above for why this exists and what it contains.
+    """
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(env_example_content(env_vars))
+
+    print(f".env.example generated at: {output_path}")
+
+
 def dockerignore_content():
     """The exact .dockerignore text generate_dockerignore (below) writes
     to disk, as a pure string -- no filesystem access at all. See
@@ -231,6 +315,7 @@ env/
 Dockerfile
 .dockerignore
 docker-compose.yml
+.env.example
 openapi.json
 openapi.yaml
 sdk/
@@ -256,6 +341,12 @@ def generate_dockerignore(output_path="generated/.dockerignore"):
     client-facing artifacts into the served image for no runtime benefit,
     the exact kind of build-context noise this .dockerignore already
     exists to keep out.
+
+    .env.example (see env_example_content above) is excluded for the same
+    reason Dockerfile/.dockerignore/docker-compose.yml already are: it
+    exists purely to hand an operator a template to copy to their own
+    `.env` before *building or running* this image, never read by the
+    running app itself.
 
     .compile_metadata.json (the literal filename write_compile_metadata
     uses -- see COMPILE_METADATA_FILENAME in backend/compiler.py, which
