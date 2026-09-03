@@ -3185,6 +3185,61 @@ def test_import_notebooks_command_passes_the_overwrite_flag_through(tmp_path, fa
     assert handler.requests == ["/api/notebooks/import?overwrite=true"]
 
 
+def test_import_notebooks_command_passes_the_expected_sha256_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "results": [], "succeeded_count": 0, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "bundle.zip"
+    _write_zip(zip_path, {"a.ipynb": b"{}"})
+
+    proc = _run_cli(
+        [
+            "import-notebooks", str(zip_path),
+            "--dashboard-url", dashboard_url, "--expected-sha256", "abc123",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/import?overwrite=false&expected_sha256=abc123"
+    ]
+
+
+def test_import_notebooks_command_reports_a_clean_error_for_a_mismatched_expected_sha256(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(400, {
+            "detail": "Uploaded archive does not match expected_sha256: expected abc, got def",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "bundle.zip"
+    _write_zip(zip_path, {"a.ipynb": b"{}"})
+
+    proc = _run_cli(
+        [
+            "import-notebooks", str(zip_path),
+            "--dashboard-url", dashboard_url, "--expected-sha256", "abc",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "does not match expected_sha256")
+
+
 def test_import_notebooks_command_passes_the_tags_flag_through(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
@@ -12885,6 +12940,62 @@ def test_versions_import_command_passes_the_overwrite_flag_through(tmp_path, fak
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert handler.requests == ["/api/notebooks/nb.ipynb/versions/import?overwrite=true"]
+
+
+def test_versions_import_command_passes_the_expected_sha256_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb", "overwritten": False,
+            "imported_version_ids": [], "imported_version_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "backup.zip"
+    _write_zip(zip_path, {"nb.ipynb": b"{}"})
+
+    proc = _run_cli(
+        [
+            "versions", "import", "nb.ipynb", str(zip_path),
+            "--dashboard-url", dashboard_url, "--expected-sha256", "abc123",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/nb.ipynb/versions/import?overwrite=false&expected_sha256=abc123"
+    ]
+
+
+def test_versions_import_command_reports_a_clean_error_for_a_mismatched_expected_sha256(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(400, {
+            "detail": "Uploaded archive does not match expected_sha256: expected abc, got def",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "backup.zip"
+    _write_zip(zip_path, {"nb.ipynb": b"{}"})
+
+    proc = _run_cli(
+        [
+            "versions", "import", "nb.ipynb", str(zip_path),
+            "--dashboard-url", dashboard_url, "--expected-sha256", "abc",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "does not match expected_sha256")
 
 
 def test_versions_import_command_json_flag_emits_the_dashboards_own_response(

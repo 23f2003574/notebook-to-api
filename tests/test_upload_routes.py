@@ -1928,6 +1928,72 @@ def test_import_notebooks_rejects_a_corrupt_zip_file():
     assert "not a valid zip archive" in resp.json()["detail"]
 
 
+def test_import_notebooks_succeeds_with_a_matching_expected_sha256():
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    archive_bytes = _zip_bytes({"import_expected_sha256_ok.ipynb": content})
+    expected = hashlib.sha256(archive_bytes).hexdigest()
+
+    resp = client.post(
+        "/api/notebooks/import",
+        params={"expected_sha256": expected},
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["results"][0]["status"] == "success"
+    assert (Path(UPLOAD_DIR) / "import_expected_sha256_ok.ipynb").is_file()
+
+
+def test_import_notebooks_rejects_a_mismatched_expected_sha256_before_writing_anything():
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    archive_bytes = _zip_bytes({"import_expected_sha256_bad.ipynb": content})
+
+    resp = client.post(
+        "/api/notebooks/import",
+        params={"expected_sha256": "0" * 64},
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 400
+    assert "does not match expected_sha256" in resp.json()["detail"]
+    assert not (Path(UPLOAD_DIR) / "import_expected_sha256_bad.ipynb").is_file()
+
+
+def test_import_notebooks_expected_sha256_is_case_insensitive():
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    archive_bytes = _zip_bytes({"import_expected_sha256_case.ipynb": content})
+    expected = hashlib.sha256(archive_bytes).hexdigest().upper()
+
+    resp = client.post(
+        "/api/notebooks/import",
+        params={"expected_sha256": expected},
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+
+
+def test_import_notebooks_rejects_a_mismatched_expected_sha256_before_a_bad_zip_check():
+    """A malformed upload is still reported as that specific, more
+    actionable error, not a bare hash mismatch, regardless of whether
+    "expected_sha256" was given -- the identical ordering
+    _save_uploaded_notebook's own check already follows for a single
+    notebook.
+    """
+
+    resp = client.post(
+        "/api/notebooks/import",
+        params={"expected_sha256": "0" * 64},
+        files={"file": ("bundle.zip", io.BytesIO(b"not a real zip"), "application/zip")},
+    )
+
+    assert resp.status_code == 400
+    assert "not a valid zip archive" in resp.json()["detail"]
+
+
 def test_import_notebooks_rejects_a_zip_with_no_ipynb_files():
 
     archive_bytes = _zip_bytes({"README.md": b"nothing to import here"})
@@ -12544,6 +12610,40 @@ def test_import_notebook_versions_rejects_a_corrupt_zip_file():
     )
 
     assert resp.status_code == 400
+
+
+def test_import_notebook_versions_succeeds_with_a_matching_expected_sha256():
+
+    filename = "versions_import_expected_sha256_ok.ipynb"
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    archive_bytes = _zip_bytes({filename: content})
+    expected = hashlib.sha256(archive_bytes).hexdigest()
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/import",
+        params={"expected_sha256": expected},
+        files={"file": ("backup.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    assert (Path(UPLOAD_DIR) / filename).is_file()
+
+
+def test_import_notebook_versions_rejects_a_mismatched_expected_sha256_before_writing_anything():
+
+    filename = "versions_import_expected_sha256_bad.ipynb"
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    archive_bytes = _zip_bytes({filename: content})
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/import",
+        params={"expected_sha256": "0" * 64},
+        files={"file": ("backup.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 400
+    assert "does not match expected_sha256" in resp.json()["detail"]
+    assert not (Path(UPLOAD_DIR) / filename).is_file()
 
 
 def test_inspect_notebook_version_reports_functions_and_dependencies_for_that_snapshot():

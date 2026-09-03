@@ -1565,6 +1565,8 @@ def _dispatch_core_command(args):
             params["description"] = args.description
         if args.dry_run:
             params["dry_run"] = True
+        if args.expected_sha256:
+            params["expected_sha256"] = args.expected_sha256
 
         try:
 
@@ -4477,6 +4479,8 @@ def _dispatch_core_command(args):
         elif args.versions_command == "import":
 
             params = {"overwrite": args.overwrite}
+            if args.expected_sha256:
+                params["expected_sha256"] = args.expected_sha256
 
             try:
 
@@ -6444,6 +6448,19 @@ def main():
             "and which would fail or collide with an already-uploaded "
             "notebook -- via POST /api/notebooks/import's own \"dry_run\" "
             "query param, without importing anything."
+        )
+    )
+    import_notebooks_parser.add_argument(
+        "--expected-sha256",
+        dest="expected_sha256",
+        default=None,
+        help=(
+            "Reject the import with an error if the local .zip's own "
+            "sha256 doesn't match, via POST /api/notebooks/import's own "
+            "?expected_sha256= query param -- e.g. the \"X-Bundle-SHA256\" "
+            "header a prior `export-notebooks` already reported for this "
+            "same archive, so a corrupted or wrong local copy is caught "
+            "before anything is written rather than silently restored."
         )
     )
     import_notebooks_parser.add_argument(
@@ -9092,6 +9109,20 @@ def main():
             "own ?overwrite=true -- without this, restoring onto a "
             "filename that already exists is rejected with a 409, "
             "exactly as overwriting it any other way already is."
+        )
+    )
+    versions_import_parser.add_argument(
+        "--expected-sha256",
+        dest="expected_sha256",
+        default=None,
+        help=(
+            "Reject the restore with an error if the local zip's own "
+            "sha256 doesn't match, via POST /api/notebooks/{filename}"
+            "/versions/import's own ?expected_sha256= query param -- "
+            "e.g. the \"X-Bundle-SHA256\" header a prior `versions "
+            "export` already reported for this same archive, so a "
+            "corrupted or wrong local copy is caught before anything is "
+            "written rather than silently restored."
         )
     )
     versions_import_parser.add_argument(

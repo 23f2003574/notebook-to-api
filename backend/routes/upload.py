@@ -1549,6 +1549,55 @@ def prune_stale_upload_temp_files(older_than_seconds: int = None, dry_run: bool 
     }
 
 
+def _verify_expected_archive_sha256(zip_bytes, expected_sha256):
+    """Raise HTTPException(400) unless `expected_sha256` (when given) is
+    exactly `zip_bytes`'s own sha256 -- the archive-level counterpart to
+    _save_uploaded_notebook's own "expected_sha256" check for a single
+    notebook's raw content.
+
+    GET /api/notebooks/export and GET /api/notebooks/{filename}/versions/
+    export already hand a caller an "X-Bundle-SHA256" for the exact same
+    archive POST /api/notebooks/import and POST
+    /api/notebooks/{filename}/versions/import each restore from -- but
+    neither import endpoint ever checked a caller's own copy of that
+    value against what it actually received, unlike every other
+    upload/download pair in this project that already closes this exact
+    "did I get exactly the bytes I meant to" gap (POST /api/upload's own
+    "expected_sha256", GET /api/download's "X-Bundle-SHA256" paired with
+    `remote-build --expected-sha256`, ...). A caller restoring a backup
+    (disaster recovery, migrating to a new server) that was itself
+    corrupted in transit, or that a script fetched the wrong file for,
+    previously found out the hard way -- content silently different from
+    what a caller thought was restored -- rather than a clean 400 up
+    front.
+
+    Compared case-insensitively against sha256's own always-lowercase
+    hexdigest, the same tolerance _save_uploaded_notebook's identical
+    check already extends to a caller's own locally-computed value.
+    Checked only after `zip_bytes` is already confirmed to be a
+    syntactically valid zip archive (both call sites open it with
+    zipfile.ZipFile first) -- a malformed upload is still reported as
+    that specific, more actionable error, not a bare hash mismatch,
+    regardless of whether "expected_sha256" was given, the identical
+    ordering _save_uploaded_notebook's own check already follows relative
+    to its own load_notebook validation.
+    """
+    if expected_sha256 is None:
+        return
+
+    actual_sha256 = hashlib.sha256(zip_bytes).hexdigest()
+
+    if expected_sha256.lower() != actual_sha256:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Uploaded archive does not match expected_sha256: "
+                f"expected {expected_sha256}, got {actual_sha256}"
+            )
+        )
+
+
 @router.post("/notebooks/import")
 async def import_notebooks(
     file: UploadFile = File(...),
@@ -1556,6 +1605,7 @@ async def import_notebooks(
     tags: str = None,
     description: str = None,
     dry_run: bool = False,
+    expected_sha256: str = None,
 ):
     """Upload every .ipynb file bundled inside a single .zip archive --
     the counterpart to GET /api/notebooks/export, which produces exactly
@@ -1692,6 +1742,16 @@ async def import_notebooks(
     what an import would do -- e.g. which entries would collide with an
     already-uploaded notebook -- before every valid entry in the archive
     was already written.
+
+    "expected_sha256" (optional) rejects the whole import with 400 if the
+    uploaded archive's own bytes don't match -- see
+    _verify_expected_archive_sha256's own docstring for why this closes
+    the same "did I get exactly the bytes I meant to" gap POST
+    /api/upload's identical query param already closes for a single
+    notebook, applied here to GET /api/notebooks/export's own
+    "X-Bundle-SHA256". Checked even under "dry_run" -- it's a read-only
+    comparison against bytes already read into memory, not one of the
+    writes "dry_run" itself exists to skip.
     """
 
     if not file.filename.endswith(".zip"):
@@ -1729,6 +1789,8 @@ async def import_notebooks(
             status_code=400,
             detail="Uploaded file is not a valid zip archive"
         )
+
+    _verify_expected_archive_sha256(zip_bytes, expected_sha256)
 
     notebook_entries = [
         name for name in archive.namelist()
@@ -8200,7 +8262,8 @@ def export_notebook_versions(filename: str, version_ids: str = None):
 
 @router.post("/notebooks/{filename}/versions/import")
 async def import_notebook_versions(
-    filename: str, file: UploadFile = File(...), overwrite: bool = False
+    filename: str, file: UploadFile = File(...), overwrite: bool = False,
+    expected_sha256: str = None,
 ):
     """Restore a notebook's current content together with its entire
     snapshotted version history from a single .zip -- the counterpart to
@@ -8269,6 +8332,14 @@ async def import_notebook_versions(
     as before this. "restored_tags"/"restored_description" report
     exactly what was restored, null when the archive carried nothing for
     that field.
+
+    "expected_sha256" (optional) rejects the whole restore with 400 if
+    the uploaded archive's own bytes don't match -- see
+    _verify_expected_archive_sha256's own docstring for why this closes
+    the same "did I get exactly the bytes I meant to" gap POST
+    /api/upload's identical query param already closes for a single
+    notebook, applied here to GET .../versions/export's own
+    "X-Bundle-SHA256".
     """
 
     if not file.filename.endswith(".zip"):
@@ -8299,6 +8370,8 @@ async def import_notebook_versions(
             status_code=400,
             detail="Uploaded file is not a valid zip archive"
         )
+
+    _verify_expected_archive_sha256(zip_bytes, expected_sha256)
 
     version_entries = [
         name for name in archive.namelist()
