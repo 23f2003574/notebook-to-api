@@ -6354,6 +6354,7 @@ def get_notebook(filename: str, request: Request):
             headers={
                 "ETag": f'"{content_sha256}"',
                 "X-Content-SHA256": content_sha256,
+                "Cache-Control": "no-cache",
             },
         )
 
@@ -6364,6 +6365,7 @@ def get_notebook(filename: str, request: Request):
         headers={
             "X-Content-SHA256": content_sha256,
             "ETag": f'"{content_sha256}"',
+            "Cache-Control": "no-cache",
         },
     )
 
@@ -8767,6 +8769,7 @@ def get_notebook_version(filename: str, version_id: str, request: Request):
             headers={
                 "ETag": f'"{content_sha256}"',
                 "X-Content-SHA256": content_sha256,
+                "Cache-Control": "no-cache",
             },
         )
 
@@ -8777,6 +8780,7 @@ def get_notebook_version(filename: str, version_id: str, request: Request):
         headers={
             "X-Content-SHA256": content_sha256,
             "ETag": f'"{content_sha256}"',
+            "Cache-Control": "no-cache",
         },
     )
 
@@ -12731,6 +12735,7 @@ def download_generated_app(request: Request):
                     "ETag": f'"{bundle_sha256}"',
                     "X-Notebook-Changed-Since-Compile": "true" if is_stale else "false",
                     "X-Bundle-SHA256": bundle_sha256,
+                    "Cache-Control": "no-cache",
                 },
             )
 
@@ -12753,6 +12758,7 @@ def download_generated_app(request: Request):
             "X-Notebook-Changed-Since-Compile": "true" if is_stale else "false",
             "X-Bundle-SHA256": bundle_sha256,
             "ETag": f'"{bundle_sha256}"',
+            "Cache-Control": "no-cache",
         }
     )
 

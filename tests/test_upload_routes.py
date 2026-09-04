@@ -3976,6 +3976,37 @@ def test_get_notebook_returns_304_when_if_none_match_matches_the_current_etag():
     assert second.headers["x-content-sha256"] == first.headers["x-content-sha256"]
 
 
+def test_get_notebook_sends_cache_control_no_cache_on_both_200_and_304():
+    """Confirmed exploitable before this fix: this endpoint sent an ETag
+    and honored If-None-Match, but never sent Cache-Control -- without
+    it, a standard HTTP cache (browser, CDN, caching proxy) has no
+    reliable signal that this response is even cacheable at all, so it
+    has nothing telling it to store the response and revalidate via
+    If-None-Match on a later request, the entire point of an ETag.
+    "no-cache" (not "no-store") means "cache this, but always revalidate
+    first" -- correct here since PATCH/overwrite can change this content
+    at any time, so a plain max-age freshness window would risk serving
+    stale content.
+    """
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("get_cache_control.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    first = client.get("/api/notebooks/get_cache_control.ipynb")
+    assert first.headers["cache-control"] == "no-cache"
+
+    second = client.get(
+        "/api/notebooks/get_cache_control.ipynb",
+        headers={"If-None-Match": first.headers["etag"]},
+    )
+    assert second.status_code == 304
+    assert second.headers["cache-control"] == "no-cache"
+
+
 def test_get_notebook_returns_304_for_a_wildcard_if_none_match():
 
     content = _notebook_bytes("def f() -> int:\n    return 1\n")
@@ -12017,6 +12048,8 @@ def test_get_notebook_version_returns_304_when_if_none_match_matches_the_current
 
     assert second.status_code == 304
     assert second.content == b""
+    assert first.headers["cache-control"] == "no-cache"
+    assert second.headers["cache-control"] == "no-cache"
 
 
 def test_get_notebook_version_returns_200_when_if_none_match_does_not_match():
@@ -21300,6 +21333,8 @@ def test_download_returns_304_when_if_none_match_matches_the_current_etag():
         second.headers["x-notebook-changed-since-compile"]
         == first.headers["x-notebook-changed-since-compile"]
     )
+    assert first.headers["cache-control"] == "no-cache"
+    assert second.headers["cache-control"] == "no-cache"
 
 
 def test_download_returns_200_after_a_recompile_changes_the_bundle():
