@@ -4727,6 +4727,72 @@ print("SECURITY_HEADERS_E2E_OK")
     assert "SECURITY_HEADERS_E2E_OK" in proc.stdout
 
 
+def test_compiler_pipeline_generated_app_stamps_x_process_time_ms(tmp_path):
+    """Confirmed exploitable before this fix: a real compiled app gave an
+    operator no way to see per-request latency at all -- no header, no
+    endpoint -- short of instrumenting it externally.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n"
+                            "    return a + b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+resp = client.get("/health")
+assert resp.status_code == 200, resp.text
+elapsed_ms = float(resp.headers["X-Process-Time-Ms"])
+assert elapsed_ms >= 0, resp.headers
+
+print("PROCESS_TIME_HEADER_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "PROCESS_TIME_HEADER_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_generated_app_gzip_compresses_a_large_response(tmp_path):
     """Confirmed exploitable before this fix: a real compiled app never
     compressed any response, no matter how large -- a caller sending

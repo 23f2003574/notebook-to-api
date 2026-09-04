@@ -423,6 +423,30 @@ async def _add_security_headers(request: Request, call_next):
 # compressed response larger than the original.
 app.add_middleware(GZipMiddleware)
 
+
+@app.middleware("http")
+async def _add_process_time_header(request: Request, call_next):
+    """Stamp X-Process-Time-Ms (wall-clock request handling time, in
+    milliseconds) on every response -- registered last, after GZip
+    itself (see that middleware's own comment on why registration order
+    determines outermost-ness), so the timer spans every other layer too
+    (rate limiting, compression, the endpoint itself), reporting what a
+    real client actually experienced rather than just handler time.
+    Before this, an operator had no way to see per-request latency for
+    this dashboard's own API short of instrumenting it externally (a
+    reverse proxy's own access log, an APM agent) -- every compiled
+    app's own equivalent latency signal (per-request X-RateLimit-Reset
+    aside) had the same gap until now.
+    """
+
+    start_time = time.perf_counter()
+    response = await call_next(request)
+    response.headers["X-Process-Time-Ms"] = (
+        f"{(time.perf_counter() - start_time) * 1000:.2f}"
+    )
+    return response
+
+
 # Include API routes
 app.include_router(upload_router)
 app.include_router(governance_metrics_router)

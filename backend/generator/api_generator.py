@@ -597,6 +597,26 @@ def generate_fastapi_code(
     # response larger than the original.
     lines.append("app.add_middleware(GZipMiddleware)")
     lines.append("")
+    # Registered last -- see _add_security_headers' own comment above for
+    # why that makes this the outermost middleware -- so the timer spans
+    # every other layer too (rate limiting, gzip compression, the
+    # endpoint itself), reporting what a real client actually
+    # experienced, not just handler time. Before this, this app gave an
+    # operator no way to see per-request latency short of instrumenting
+    # it externally (a reverse proxy's own access log, an APM agent) --
+    # every other operational signal this app exposes (uptime, task
+    # counts, rate-limit state) was already free via GET /metrics or
+    # response headers, but response latency itself had no equivalent.
+    lines.append("@app.middleware('http')")
+    lines.append("async def _add_process_time_header(request, call_next):")
+    lines.append("    start_time = time.perf_counter()")
+    lines.append("    response = await call_next(request)")
+    lines.append(
+        "    response.headers['X-Process-Time-Ms'] = "
+        "f'{(time.perf_counter() - start_time) * 1000:.2f}'"
+    )
+    lines.append("    return response")
+    lines.append("")
     # Simple in‑memory task registry used by background endpoints
     lines.append("TASKS = {}")
     lines.append(

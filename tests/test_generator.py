@@ -418,6 +418,27 @@ def test_generated_app_configures_gzip_response_compression():
     )
 
 
+def test_generated_app_stamps_x_process_time_ms_on_every_response():
+    """Confirmed exploitable before this fix: the generated app gave an
+    operator no way to see per-request latency short of instrumenting it
+    externally -- grepped for across the whole file, no X-Process-Time
+    header anywhere. Registered *after* GZipMiddleware (see that
+    middleware's own comment on registration order) so the timer spans
+    every other layer too, not just handler time.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "async def _add_process_time_header(request, call_next):" in code
+    assert "start_time = time.perf_counter()" in code
+    assert "response.headers['X-Process-Time-Ms'] = " in code
+    assert code.index("app.add_middleware(GZipMiddleware)") < code.index(
+        "async def _add_process_time_header"
+    )
+
+
 def test_notebook_function_named_max_request_body_bytes_is_rejected():
     """MAX_REQUEST_BODY_BYTES is a module-level name the generated app
     itself defines (see RESERVED_INFRASTRUCTURE_NAMES) -- same collision

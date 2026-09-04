@@ -318,6 +318,19 @@ def test_dashboard_stamps_security_headers_on_a_429_rate_limited_response(
     assert resp.headers["referrer-policy"] == "no-referrer"
 
 
+def test_dashboard_stamps_x_process_time_ms_on_a_response():
+    """Confirmed exploitable before this fix: this dashboard's own API
+    gave an operator no way to see per-request latency at all -- grepped
+    for across backend/dashboard.py, no such header anywhere.
+    """
+
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 200
+    elapsed_ms = float(resp.headers["x-process-time-ms"])
+    assert elapsed_ms >= 0
+
+
 def test_dashboard_gzip_compresses_a_response_when_the_client_accepts_it():
     """Confirmed exploitable before this fix: this dashboard's own API
     never compressed any response -- grepped for across
