@@ -145,6 +145,58 @@ def test_dashboard_rate_limit_429_response_still_gets_cors_headers(
     assert resp.headers["access-control-allow-credentials"] == "true"
 
 
+def test_dashboard_rate_limit_success_responses_include_x_ratelimit_headers(
+    monkeypatch, _clear_dashboard_rate_limit_windows
+):
+    """Confirmed exploitable before this fix: a successful (non-429)
+    response carried no rate-limit information at all -- a well-behaved
+    caller had no way to see it was about to be throttled (a low or zero
+    remaining count) short of actually hitting the 429 first. Mirrors the
+    identical X-RateLimit-Limit/-Remaining/-Reset headers every
+    *generated* app's own per-API-key limiter now sends (see
+    api_generator.py).
+    """
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_RATE_LIMIT_PER_MINUTE", "2")
+
+    first = client.get("/api/health")
+    assert first.status_code == 200
+    assert first.headers["x-ratelimit-limit"] == "2"
+    assert first.headers["x-ratelimit-remaining"] == "1"
+    assert int(first.headers["x-ratelimit-reset"]) > 0
+
+    second = client.get("/api/health")
+    assert second.status_code == 200
+    assert second.headers["x-ratelimit-remaining"] == "0"
+
+
+def test_dashboard_rate_limit_429_response_includes_x_ratelimit_headers(
+    monkeypatch, _clear_dashboard_rate_limit_windows
+):
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_RATE_LIMIT_PER_MINUTE", "1")
+
+    assert client.get("/api/health").status_code == 200
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 429
+    assert resp.headers["x-ratelimit-limit"] == "1"
+    assert resp.headers["x-ratelimit-remaining"] == "0"
+    assert int(resp.headers["x-ratelimit-reset"]) > 0
+
+
+def test_dashboard_rate_limit_disabled_by_default_sends_no_x_ratelimit_headers(
+    monkeypatch, _clear_dashboard_rate_limit_windows
+):
+
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_RATE_LIMIT_PER_MINUTE", raising=False)
+
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 200
+    assert "x-ratelimit-limit" not in resp.headers
+
+
 def test_dashboard_rate_limit_resets_once_the_window_has_fully_elapsed(
     monkeypatch, _clear_dashboard_rate_limit_windows
 ):

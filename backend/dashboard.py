@@ -284,6 +284,16 @@ async def _enforce_dashboard_rate_limit(request: Request, call_next):
         count += 1
         _DASHBOARD_RATE_LIMIT_WINDOWS[key] = (window_start, count)
 
+        # Set on every rate-limited request, not just a 429 -- the same
+        # X-RateLimit-Limit/-Remaining/-Reset contract (GitHub/Stripe/...)
+        # every *generated* app's own per-API-key limiter already sends
+        # (see _enforce_rate_limit in api_generator.py), so a well-behaved
+        # caller of this dashboard's own API can see it's about to be
+        # throttled (a low/zero Remaining) and back off on its own, rather
+        # than the only previous signal being a 429 it's already received.
+        reset_at = int(window_start + DASHBOARD_RATE_LIMIT_WINDOW_SECONDS)
+        remaining = max(0, limit - count)
+
         if count > limit:
 
             retry_after = max(
@@ -298,8 +308,19 @@ async def _enforce_dashboard_rate_limit(request: Request, call_next):
                         f"{DASHBOARD_RATE_LIMIT_WINDOW_SECONDS}s per client"
                     )
                 },
-                headers={"Retry-After": str(retry_after)},
+                headers={
+                    "Retry-After": str(retry_after),
+                    "X-RateLimit-Limit": str(limit),
+                    "X-RateLimit-Remaining": "0",
+                    "X-RateLimit-Reset": str(reset_at),
+                },
             )
+
+        response = await call_next(request)
+        response.headers["X-RateLimit-Limit"] = str(limit)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+        response.headers["X-RateLimit-Reset"] = str(reset_at)
+        return response
 
     return await call_next(request)
 

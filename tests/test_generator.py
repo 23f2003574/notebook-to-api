@@ -267,6 +267,35 @@ def test_api_key_check_still_rejects_missing_header():
     assert "if x_api_key is None or not any(" in code
 
 
+def test_rate_limit_dependency_injects_response_to_set_headers():
+    """verify_api_key must accept and forward a `response: Response`
+    parameter to _enforce_rate_limit -- confirmed exploitable before this
+    fix: without it, _enforce_rate_limit had no way to set headers on a
+    request that *succeeds*, so X-RateLimit-Limit/-Remaining/-Reset could
+    only ever be attached to the 429 it raises, never to the requests
+    leading up to it.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "from fastapi import" in code.splitlines()[0]
+    assert "Response" in code.splitlines()[0]
+    assert (
+        "def verify_api_key(response: Response, x_api_key: str = Header(None)):"
+        in code
+    )
+    assert "def _enforce_rate_limit(api_key, response):" in code
+    assert "_enforce_rate_limit(x_api_key, response)" in code
+    assert "response.headers['X-RateLimit-Limit'] = str(RATE_LIMIT_PER_MINUTE)" in code
+    assert "response.headers['X-RateLimit-Remaining'] = str(remaining)" in code
+    assert "response.headers['X-RateLimit-Reset'] = str(reset_at)" in code
+    assert "'X-RateLimit-Limit': str(RATE_LIMIT_PER_MINUTE)," in code
+    assert "'X-RateLimit-Remaining': '0'," in code
+    assert "'X-RateLimit-Reset': str(reset_at)," in code
+
+
 def test_generated_app_configures_cors_middleware_with_a_permissive_default():
     """Before this, the generated app had no CORS configuration at all --
     a browser-based frontend, the single most common way to actually

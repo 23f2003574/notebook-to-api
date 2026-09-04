@@ -121,10 +121,14 @@ GENERATED_APP_ENV_VARS = [
         "description": (
             "Maximum requests a single API key may make per rolling "
             "60-second window before being rejected with 429 (and a "
-            "Retry-After header). Tracked independently per configured "
-            "key, so one key being throttled never affects another. 0 "
-            "(the default) disables rate limiting entirely, preserving "
-            "the previous unbounded behavior."
+            "Retry-After header). Every request against this key, "
+            "successful or not, also gets X-RateLimit-Limit/"
+            "-Remaining/-Reset response headers so a well-behaved "
+            "caller can back off before actually being throttled, not "
+            "just after. Tracked independently per configured key, so "
+            "one key being throttled never affects another. 0 (the "
+            "default) disables rate limiting entirely, preserving the "
+            "previous unbounded behavior."
         ),
     },
     {
@@ -376,7 +380,7 @@ def generate_fastapi_code(
     # Imports for the generated FastAPI app
     lines.append(
         "from fastapi import FastAPI, BackgroundTasks, Header, HTTPException, "
-        "Depends, Query"
+        "Depends, Query, Response"
     )
     lines.append("from fastapi.middleware.cors import CORSMiddleware")
     lines.append("from fastapi.responses import JSONResponse")
@@ -588,7 +592,7 @@ def generate_fastapi_code(
     lines.append("RATE_LIMIT_WINDOW_SECONDS = 60")
     lines.append("_RATE_LIMIT_WINDOWS = {}")
     lines.append("")
-    lines.append("def _enforce_rate_limit(api_key):")
+    lines.append("def _enforce_rate_limit(api_key, response):")
     lines.append("    # RATE_LIMIT_PER_MINUTE <= 0 (the default) means rate")
     lines.append("    # limiting is disabled entirely -- no window is even")
     lines.append("    # tracked, so this is a no-op on the hot path for every")
@@ -606,6 +610,23 @@ def generate_fastapi_code(
     lines.append("        window_start, count = now, 0")
     lines.append("    count += 1")
     lines.append("    _RATE_LIMIT_WINDOWS[api_key] = (window_start, count)")
+    lines.append("    reset_at = int(window_start + RATE_LIMIT_WINDOW_SECONDS)")
+    lines.append("    remaining = max(0, RATE_LIMIT_PER_MINUTE - count)")
+    lines.append("    # Set on every rate-limited request, not just a 429 -- the")
+    lines.append("    # standard client contract (GitHub/Stripe/...) these three")
+    lines.append("    # headers follow lets a well-behaved caller see it's about to")
+    lines.append("    # be throttled (a low/zero Remaining) and back off on its own,")
+    lines.append("    # rather than the only previous signal being a 429 it's")
+    lines.append("    # already received. `response` is the actual Response FastAPI")
+    lines.append("    # is about to send back -- injecting it into this dependency")
+    lines.append("    # (see verify_api_key below) rather than building a separate")
+    lines.append("    # Response of its own is the documented way to mutate headers")
+    lines.append("    # on a request that succeeds; it plays no part when this")
+    lines.append("    # raises below; instead, the 429 branch attaches the same")
+    lines.append("    # three headers directly to the HTTPException itself.")
+    lines.append("    response.headers['X-RateLimit-Limit'] = str(RATE_LIMIT_PER_MINUTE)")
+    lines.append("    response.headers['X-RateLimit-Remaining'] = str(remaining)")
+    lines.append("    response.headers['X-RateLimit-Reset'] = str(reset_at)")
     lines.append("    if count > RATE_LIMIT_PER_MINUTE:")
     lines.append("        retry_after = max(")
     lines.append("            1, int(RATE_LIMIT_WINDOW_SECONDS - (now - window_start))")
@@ -616,7 +637,12 @@ def generate_fastapi_code(
     lines.append("                f'Rate limit exceeded: {RATE_LIMIT_PER_MINUTE} '")
     lines.append("                f'requests per {RATE_LIMIT_WINDOW_SECONDS}s per API key'")
     lines.append("            ),")
-    lines.append("            headers={'Retry-After': str(retry_after)},")
+    lines.append("            headers={")
+    lines.append("                'Retry-After': str(retry_after),")
+    lines.append("                'X-RateLimit-Limit': str(RATE_LIMIT_PER_MINUTE),")
+    lines.append("                'X-RateLimit-Remaining': '0',")
+    lines.append("                'X-RateLimit-Reset': str(reset_at),")
+    lines.append("            },")
     lines.append("        )")
     lines.append("")
     lines.append("def _evict_expired_tasks():")
@@ -637,7 +663,7 @@ def generate_fastapi_code(
     lines.append("    for task_id in expired_ids:")
     lines.append("        TASKS.pop(task_id, None)")
     lines.append("")
-    lines.append("def verify_api_key(x_api_key: str = Header(None)):")
+    lines.append("def verify_api_key(response: Response, x_api_key: str = Header(None)):")
     lines.append("    # hmac.compare_digest instead of != : a plain string")
     lines.append("    # comparison short-circuits on the first differing byte, which")
     lines.append("    # makes response time leak how many leading characters of a")
@@ -660,7 +686,7 @@ def generate_fastapi_code(
     lines.append("    # re-matched entry from API_KEYS) is the right identity to key")
     lines.append("    # on: the any(...) check above already proved it's exactly")
     lines.append("    # equal to one of them.")
-    lines.append("    _enforce_rate_limit(x_api_key)")
+    lines.append("    _enforce_rate_limit(x_api_key, response)")
     lines.append("")
     lines.append("from fastapi.openapi.utils import get_openapi")
     lines.append("")

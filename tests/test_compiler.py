@@ -5031,6 +5031,102 @@ print("RATE_LIMIT_429_E2E_OK")
     assert "RATE_LIMIT_429_E2E_OK" in proc.stdout
 
 
+def test_compiler_pipeline_rate_limit_sends_x_ratelimit_headers(tmp_path):
+    """Confirmed exploitable before this fix: a rate-limited request only
+    ever got a Retry-After header, and only once it had already been
+    rejected with 429 -- there was no X-RateLimit-Limit/-Remaining/-Reset
+    on a *successful* response (the standard GitHub/Stripe-style
+    contract), so a well-behaved caller had no way to see it was about to
+    be throttled and back off on its own; the only signal was a 429 it
+    had already triggered. Each header must also appear on the 429
+    response itself, with Remaining pinned to 0 there.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n"
+                            "    return a + b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import os
+import sys
+
+os.environ["NOTEBOOK_API_KEY"] = "key-a"
+os.environ["NOTEBOOK_API_RATE_LIMIT_PER_MINUTE"] = "2"
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+payload = {{"a": 1, "b": 2}}
+headers = {{"X-API-Key": "key-a"}}
+
+first = client.post("/add", json=payload, headers=headers)
+assert first.status_code == 200, first.text
+assert first.headers["X-RateLimit-Limit"] == "2", first.headers
+assert first.headers["X-RateLimit-Remaining"] == "1", first.headers
+assert int(first.headers["X-RateLimit-Reset"]) > 0, first.headers
+
+second = client.post("/add", json=payload, headers=headers)
+assert second.status_code == 200, second.text
+assert second.headers["X-RateLimit-Remaining"] == "0", second.headers
+
+third = client.post("/add", json=payload, headers=headers)
+assert third.status_code == 429, third.text
+assert third.headers["X-RateLimit-Limit"] == "2", third.headers
+assert third.headers["X-RateLimit-Remaining"] == "0", third.headers
+assert int(third.headers["X-RateLimit-Reset"]) > 0, third.headers
+
+# An unauthenticated/unlimited endpoint (rate limiting only ever applies
+# once a request has already authenticated via verify_api_key) gets none
+# of these -- confirms they're not stamped globally on every response.
+health = client.get("/health")
+assert "X-RateLimit-Limit" not in health.headers, health.headers
+
+print("RATE_LIMIT_HEADERS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "RATE_LIMIT_HEADERS_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_typing_generic_and_enum_params_work_end_to_end(tmp_path):
     """Confirmed exploitable before this fix: a parameter typed with a
     typing-module generic (List[float], Optional[str], Dict[str, Any]) or
