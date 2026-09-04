@@ -499,7 +499,8 @@ def test_tasks_endpoints_require_api_key_auth():
 
     code = generate_fastapi_code(functions)
 
-    assert "def list_tasks(_: None = Depends(verify_api_key)):" in code
+    list_tasks_signature = code[code.index("def list_tasks("):code.index("):", code.index("def list_tasks(")) + 2]
+    assert "_: None = Depends(verify_api_key)" in list_tasks_signature
     assert "def get_task(task_id: str, _: None = Depends(verify_api_key)):" in code
     assert "def delete_completed_tasks(_: None = Depends(verify_api_key)):" in code
     assert "def delete_failed_tasks(_: None = Depends(verify_api_key)):" in code
@@ -530,6 +531,79 @@ def test_background_task_creation_evicts_expired_tasks_and_stamps_created_at():
     # Eviction must run before the new task is recorded, not after --
     # otherwise the brand new task could itself be swept if TTL is 0.
     assert code.index("_evict_expired_tasks()") < code.index('TASKS[task_id] = {"status": "processing"')
+
+
+def test_list_tasks_supports_status_filter_and_pagination(monkeypatch):
+    """Confirmed exploitable before this fix: GET /tasks always returned
+    the *entire* TASKS dict with no filter and no pagination -- with
+    NOTEBOOK_API_MAX_TASKS defaulting to 10000, and each task potentially
+    carrying a large `result` payload, a single request could return an
+    enormous response body, and there was no way to ask for just e.g. the
+    failed tasks without fetching and filtering client-side.
+    """
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "status: Optional[str] = None," in code
+    assert "limit: int = Query(default=100, ge=1, le=1000)," in code
+    assert "offset: int = Query(default=0, ge=0)," in code
+    assert "matching_items.sort(key=lambda item: item[1].get('created_at', 0), reverse=True)" in code
+    assert "'matching_tasks': len(matching_items)," in code
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    namespace["TASKS"]["t-old-failed"] = {
+        "status": "failed", "created_at": 1.0, "error": "boom",
+    }
+    namespace["TASKS"]["t-new-completed"] = {
+        "status": "completed", "created_at": 3.0, "result": "ok",
+    }
+    namespace["TASKS"]["t-mid-processing"] = {
+        "status": "processing", "created_at": 2.0,
+    }
+
+    response = client.get("/tasks", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["matching_tasks"] == 3
+    assert body["limit"] == 100
+    assert body["offset"] == 0
+    # Most recently created task first.
+    assert list(body["tasks"].keys()) == [
+        "t-new-completed", "t-mid-processing", "t-old-failed",
+    ]
+
+    filtered = client.get("/tasks", params={"status": "failed"}, headers=headers)
+    assert filtered.status_code == 200
+    filtered_body = filtered.json()
+    assert filtered_body["matching_tasks"] == 1
+    assert list(filtered_body["tasks"].keys()) == ["t-old-failed"]
+
+    paginated = client.get(
+        "/tasks", params={"limit": 1, "offset": 1}, headers=headers
+    )
+    assert paginated.status_code == 200
+    paginated_body = paginated.json()
+    assert paginated_body["matching_tasks"] == 3
+    assert list(paginated_body["tasks"].keys()) == ["t-mid-processing"]
+
+    invalid_status = client.get(
+        "/tasks", params={"status": "bogus"}, headers=headers
+    )
+    assert invalid_status.status_code == 400
+    assert "Invalid status 'bogus'" in invalid_status.json()["detail"]
+
+    invalid_limit = client.get("/tasks", params={"limit": 0}, headers=headers)
+    assert invalid_limit.status_code == 422
 
 
 def test_background_endpoint_documents_the_task_response_it_actually_sends():

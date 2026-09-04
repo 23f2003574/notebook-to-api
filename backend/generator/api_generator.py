@@ -353,7 +353,10 @@ def generate_fastapi_code(
             "notebook and recompile."
         )
 
-    needed_typing_names = set()
+    # GET /tasks below always needs Optional[str] for its own `status`
+    # query param, regardless of whether any notebook function's own
+    # annotations need typing imports.
+    needed_typing_names = {"Optional"}
     for func in functions:
         for arg in func.get("args", []):
             _, typing_names = _resolve_annotation_source(arg.get("type"))
@@ -372,7 +375,8 @@ def generate_fastapi_code(
     lines = []
     # Imports for the generated FastAPI app
     lines.append(
-        "from fastapi import FastAPI, BackgroundTasks, Header, HTTPException, Depends"
+        "from fastapi import FastAPI, BackgroundTasks, Header, HTTPException, "
+        "Depends, Query"
     )
     lines.append("from fastapi.middleware.cors import CORSMiddleware")
     lines.append("from fastapi.responses import JSONResponse")
@@ -879,7 +883,23 @@ def generate_fastapi_code(
     lines.append("    }")
     lines.append("")
     lines.append("@app.get('/tasks')")
-    lines.append("def list_tasks(_: None = Depends(verify_api_key)):")
+    lines.append("def list_tasks(")
+    lines.append("    status: Optional[str] = None,")
+    lines.append("    limit: int = Query(default=100, ge=1, le=1000),")
+    lines.append("    offset: int = Query(default=0, ge=0),")
+    lines.append("    _: None = Depends(verify_api_key),")
+    lines.append("):")
+
+    lines.append("    valid_statuses = ('processing', 'completed', 'failed')")
+    lines.append("    if status is not None and status not in valid_statuses:")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=400,")
+    lines.append(
+        "            detail=f\"Invalid status '{status}'; must be one of: "
+        "{', '.join(valid_statuses)}\""
+    )
+    lines.append("        )")
+    lines.append("")
 
     lines.append("    completed_tasks = sum(")
     lines.append("        1")
@@ -899,12 +919,26 @@ def generate_fastapi_code(
     lines.append("        if task.get('status') == 'processing'")
     lines.append("    )")
 
+    lines.append("    matching_items = [")
+    lines.append("        (task_id, task)")
+    lines.append("        for task_id, task in TASKS.items()")
+    lines.append("        if status is None or task.get('status') == status")
+    lines.append("    ]")
+    lines.append(
+        "    matching_items.sort("
+        "key=lambda item: item[1].get('created_at', 0), reverse=True)"
+    )
+    lines.append("    page_items = matching_items[offset:offset + limit]")
+
     lines.append("    return {")
     lines.append("        'active_tasks': len(TASKS),")
     lines.append("        'processing_tasks': processing_tasks,")
     lines.append("        'completed_tasks': completed_tasks,")
     lines.append("        'failed_tasks': failed_tasks,")
-    lines.append("        'tasks': TASKS")
+    lines.append("        'matching_tasks': len(matching_items),")
+    lines.append("        'limit': limit,")
+    lines.append("        'offset': offset,")
+    lines.append("        'tasks': dict(page_items)")
     lines.append("    }")
     lines.append("")
     lines.append("@app.get('/tasks/{task_id}')")
