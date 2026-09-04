@@ -242,6 +242,36 @@ def test_evict_stale_dashboard_rate_limit_windows_only_sweeps_past_the_threshold
     assert set(_DASHBOARD_RATE_LIMIT_WINDOWS) == {"fresh", "one-more"}
 
 
+def test_dashboard_cors_exposes_custom_response_headers_to_cross_origin_js():
+    """Confirmed exploitable before this fix: a browser only ever exposes
+    a small built-in safelist of response headers to cross-origin JS
+    (Cache-Control, Content-Language, Content-Length, Content-Type,
+    Expires, Last-Modified, Pragma) -- ETag/X-Content-SHA256/
+    X-Bundle-SHA256/X-Notebook-Changed-Since-Compile/Content-Disposition/
+    X-RateLimit-*/Retry-After are not on it, so
+    `fetch(...).headers.get(...)` for any of them from cross-origin JS
+    always returned null, even though this dashboard sent every one of
+    them, unless CORSMiddleware's own expose_headers explicitly lists it.
+    """
+
+    resp = client.get("/api/health", headers={"Origin": "http://localhost:5173"})
+
+    assert resp.status_code == 200
+    exposed = resp.headers["access-control-expose-headers"]
+    for header in (
+        "ETag",
+        "X-Content-SHA256",
+        "X-Bundle-SHA256",
+        "X-Notebook-Changed-Since-Compile",
+        "Content-Disposition",
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "X-RateLimit-Reset",
+        "Retry-After",
+    ):
+        assert header in exposed, exposed
+
+
 def test_dashboard_stamps_security_headers_on_a_successful_response():
     """Confirmed exploitable before this fix: this dashboard's own API
     set none of X-Content-Type-Options/X-Frame-Options/Referrer-Policy on

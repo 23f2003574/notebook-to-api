@@ -469,13 +469,30 @@ def generate_fastapi_code(
         ').split(",") if o.strip()'
         '] or ["*"]'
     )
+    # Browsers only ever expose a small built-in safelist of *response*
+    # headers to cross-origin JS (Cache-Control, Content-Language,
+    # Content-Length, Content-Type, Expires, Last-Modified, Pragma) --
+    # everything else, X-RateLimit-Limit/-Remaining/-Reset and
+    # Retry-After (see _enforce_rate_limit above) included, is invisible
+    # to `fetch(...).headers.get(...)` cross-origin no matter what
+    # allow_origins/allow_headers above are set to, unless explicitly
+    # listed in expose_headers. Confirmed: response.headers.get(...) for
+    # any of these four returned null from cross-origin JS before this,
+    # even though the server sent them every time -- a browser-based
+    # frontend wanting to show "you're about to be rate limited" (the
+    # whole point of Commit #3 adding these) had no way to read them at
+    # all short of a same-origin request.
     lines.append(
         "app.add_middleware("
         "CORSMiddleware, "
         "allow_origins=ALLOWED_ORIGINS, "
         "allow_credentials=False, "
         "allow_methods=['*'], "
-        "allow_headers=['*']"
+        "allow_headers=['*'], "
+        "expose_headers=["
+        "'X-RateLimit-Limit', 'X-RateLimit-Remaining', "
+        "'X-RateLimit-Reset', 'Retry-After'"
+        "]"
         ")"
     )
     lines.append("")

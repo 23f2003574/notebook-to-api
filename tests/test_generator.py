@@ -316,6 +316,28 @@ def test_generated_app_configures_cors_middleware_with_a_permissive_default():
     assert "app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS" in code
 
 
+def test_generated_app_cors_exposes_the_rate_limit_headers_to_cross_origin_js():
+    """Confirmed exploitable before this fix: a browser only ever exposes
+    a small built-in safelist of response headers to cross-origin JS
+    (Cache-Control, Content-Language, Content-Length, Content-Type,
+    Expires, Last-Modified, Pragma) -- X-RateLimit-Limit/-Remaining/-Reset
+    and Retry-After (see _enforce_rate_limit) are not on it, so
+    `fetch(...).headers.get('X-RateLimit-Remaining')` from cross-origin JS
+    always returned null, even though the server sent the header every
+    time, unless CORSMiddleware's own expose_headers explicitly lists it.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert (
+        "expose_headers=['X-RateLimit-Limit', 'X-RateLimit-Remaining', "
+        "'X-RateLimit-Reset', 'Retry-After']"
+        in code
+    )
+
+
 def test_notebook_function_named_allowed_origins_is_rejected():
     """ALLOWED_ORIGINS is a module-level name the generated app itself
     defines (see RESERVED_INFRASTRUCTURE_NAMES) -- same collision hazard

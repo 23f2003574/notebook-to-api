@@ -338,6 +338,31 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Browsers only ever expose a small built-in safelist of *response*
+    # headers to cross-origin JS (Cache-Control, Content-Language,
+    # Content-Length, Content-Type, Expires, Last-Modified, Pragma) --
+    # everything else this dashboard's own endpoints already send (ETag/
+    # X-Content-SHA256/X-Bundle-SHA256 for conditional-GET, Content-
+    # Disposition on GET /api/download's own zip filename,
+    # X-Notebook-Changed-Since-Compile, X-RateLimit-*/Retry-After from
+    # _enforce_dashboard_rate_limit above) is invisible to
+    # `fetch(...).headers.get(...)` cross-origin no matter what
+    # allow_origins/allow_headers above are set to, unless explicitly
+    # listed here. The bundled frontend (same-origin, or a dev server
+    # proxying this API) never hit this, but any other browser-based
+    # client calling this dashboard cross-origin could never read a
+    # single one of these -- even though the server sent them every time.
+    expose_headers=[
+        "ETag",
+        "X-Content-SHA256",
+        "X-Bundle-SHA256",
+        "X-Notebook-Changed-Since-Compile",
+        "Content-Disposition",
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "X-RateLimit-Reset",
+        "Retry-After",
+    ],
 )
 
 # Collect request metrics for the governance API endpoints
