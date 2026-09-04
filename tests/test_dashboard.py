@@ -242,6 +242,52 @@ def test_evict_stale_dashboard_rate_limit_windows_only_sweeps_past_the_threshold
     assert set(_DASHBOARD_RATE_LIMIT_WINDOWS) == {"fresh", "one-more"}
 
 
+def test_dashboard_stamps_security_headers_on_a_successful_response():
+    """Confirmed exploitable before this fix: this dashboard's own API
+    set none of X-Content-Type-Options/X-Frame-Options/Referrer-Policy on
+    any response -- grepped for across backend/dashboard.py, zero hits.
+    """
+
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 200
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["x-frame-options"] == "DENY"
+    assert resp.headers["referrer-policy"] == "no-referrer"
+
+
+def test_dashboard_stamps_security_headers_on_a_404_response():
+    """Registered last (see _add_security_headers' own docstring) so it
+    wraps every other middleware -- must apply to an error response too,
+    not just a successful one.
+    """
+
+    resp = client.get("/api/this-route-does-not-exist")
+
+    assert resp.status_code == 404
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["x-frame-options"] == "DENY"
+
+
+def test_dashboard_stamps_security_headers_on_a_429_rate_limited_response(
+    monkeypatch, _clear_dashboard_rate_limit_windows
+):
+    """Registered outermost, wrapping _enforce_dashboard_rate_limit --
+    its own 429 short-circuit must still pass through this middleware's
+    call_next return and get the same headers a 200 would.
+    """
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_RATE_LIMIT_PER_MINUTE", "1")
+
+    assert client.get("/api/health").status_code == 200
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 429
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["x-frame-options"] == "DENY"
+    assert resp.headers["referrer-policy"] == "no-referrer"
+
+
 def test_root_endpoint_reports_service_metadata():
     """GET / had no test coverage at all before this."""
 

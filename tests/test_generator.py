@@ -346,6 +346,33 @@ def test_generated_app_configures_a_max_request_body_size_middleware():
     assert "app.add_middleware(MaxRequestBodySizeMiddleware)" in code
 
 
+def test_generated_app_stamps_security_headers_on_every_response():
+    """Confirmed exploitable before this fix: the generated app set none
+    of the baseline OWASP-recommended hardening headers (X-Content-Type-
+    Options, X-Frame-Options, Referrer-Policy) on any response -- grepped
+    for across the whole file, zero hits. Registered *after*
+    MaxRequestBodySizeMiddleware/CORSMiddleware (see this middleware's
+    own comment) so it ends up outermost -- these headers must land on
+    every response, not just a successful one.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "@app.middleware('http')" in code
+    assert "async def _add_security_headers(request, call_next):" in code
+    assert "response.headers['X-Content-Type-Options'] = 'nosniff'" in code
+    assert "response.headers['X-Frame-Options'] = 'DENY'" in code
+    assert "response.headers['Referrer-Policy'] = 'no-referrer'" in code
+    # Registered after (not before) MaxRequestBodySizeMiddleware -- the
+    # middleware added last ends up outermost, so this must appear later
+    # in the generated source than that registration.
+    assert code.index("app.add_middleware(MaxRequestBodySizeMiddleware)") < code.index(
+        "async def _add_security_headers"
+    )
+
+
 def test_notebook_function_named_max_request_body_bytes_is_rejected():
     """MAX_REQUEST_BODY_BYTES is a module-level name the generated app
     itself defines (see RESERVED_INFRASTRUCTURE_NAMES) -- same collision

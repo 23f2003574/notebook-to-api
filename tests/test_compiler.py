@@ -4629,6 +4629,104 @@ print("CORS_CONFIGURED_E2E_OK")
     assert "CORS_CONFIGURED_E2E_OK" in proc.stdout
 
 
+def test_compiler_pipeline_generated_app_stamps_security_headers_on_every_response(
+    tmp_path,
+):
+    """Confirmed exploitable before this fix: a real compiled app set
+    none of X-Content-Type-Options/X-Frame-Options/Referrer-Policy on any
+    response -- not the ones a client actually wants (2xx), and not the
+    ones where a browser's own default MIME-sniffing/framing behavior
+    matters just as much: a 401 (invalid key), a 413 (oversized body,
+    from MaxRequestBodySizeMiddleware -- registered *before* this new
+    middleware, so it must still see a response this middleware wraps),
+    and even /docs itself.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def add(a: int, b: int) -> int:\n"
+                            "    return a + b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import os
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+os.environ["NOTEBOOK_API_MAX_REQUEST_BYTES"] = "50"
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+
+def assert_hardened(resp):
+    assert resp.headers["X-Content-Type-Options"] == "nosniff", resp.headers
+    assert resp.headers["X-Frame-Options"] == "DENY", resp.headers
+    assert resp.headers["Referrer-Policy"] == "no-referrer", resp.headers
+
+
+success = client.post("/add", json={{"a": 1, "b": 2}}, headers=headers)
+assert success.status_code == 200, success.text
+assert_hardened(success)
+
+unauthorized = client.post("/add", json={{"a": 1, "b": 2}}, headers={{"X-API-Key": "wrong"}})
+assert unauthorized.status_code == 401, unauthorized.text
+assert_hardened(unauthorized)
+
+oversized = client.post(
+    "/add", json={{"a": 1, "b": 2, "padding": "x" * 200}}, headers=headers,
+)
+assert oversized.status_code == 413, oversized.text
+assert_hardened(oversized)
+
+docs = client.get("/docs")
+assert docs.status_code == 200, docs.text
+assert_hardened(docs)
+
+print("SECURITY_HEADERS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SECURITY_HEADERS_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_generated_app_rejects_an_oversized_request_body(tmp_path):
     """Before this, every endpoint on the generated app accepted a JSON
     request body of any size -- unlike this tool's own dashboard

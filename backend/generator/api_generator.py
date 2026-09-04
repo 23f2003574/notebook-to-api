@@ -528,6 +528,39 @@ def generate_fastapi_code(
     lines.append("")
     lines.append("app.add_middleware(MaxRequestBodySizeMiddleware)")
     lines.append("")
+    # Registered last (see MaxRequestBodySizeMiddleware/CORSMiddleware
+    # above -- the same "middleware added last ends up outermost, since
+    # Starlette's own add_middleware inserts each new one at the *front*
+    # of its internal list and then wraps outward-in over that list in
+    # reverse" rule those already rely on) so these headers land on
+    # *every* response this app ever sends, including a 413 from
+    # MaxRequestBodySizeMiddleware or a 429/401 HTTPException -- not just
+    # the successful ones a handler-level fix would only ever reach.
+    # Baseline OWASP-recommended hardening with no functional downside
+    # (unlike CORS/rate limiting, nothing here can reject a legitimate
+    # request), so -- unlike NOTEBOOK_API_DISABLE_DOCS/ALLOWED_ORIGINS/
+    # RATE_LIMIT_PER_MINUTE above -- these are unconditional, not gated
+    # behind an env var an operator has to remember to set. Every
+    # response from this app is JSON (or, unless NOTEBOOK_API_DISABLE_DOCS
+    # is set, the /docs Swagger UI's own HTML), never content meant to be
+    # framed or MIME-sniffed by a browser: X-Content-Type-Options blocks a
+    # browser from ever guessing a response is something other than what
+    # Content-Type already says it is (relevant here since notebook-
+    # author-controlled strings -- docstrings, example payloads -- flow
+    # straight into response bodies), X-Frame-Options blocks embedding any
+    # response (including /docs itself) in a third-party <iframe>, and
+    # Referrer-Policy stops this deployment's own URL (which can itself
+    # carry sensitive path segments, e.g. a task_id) from leaking into the
+    # Referer header of a request /docs' own "Try it out" -- or any link a
+    # response body might contain -- makes to a different origin.
+    lines.append("@app.middleware('http')")
+    lines.append("async def _add_security_headers(request, call_next):")
+    lines.append("    response = await call_next(request)")
+    lines.append("    response.headers['X-Content-Type-Options'] = 'nosniff'")
+    lines.append("    response.headers['X-Frame-Options'] = 'DENY'")
+    lines.append("    response.headers['Referrer-Policy'] = 'no-referrer'")
+    lines.append("    return response")
+    lines.append("")
     # Simple in‑memory task registry used by background endpoints
     lines.append("TASKS = {}")
     lines.append(

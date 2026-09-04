@@ -342,6 +342,45 @@ app.add_middleware(
 # Collect request metrics for the governance API endpoints
 register_governance_metrics_middleware(app)
 
+
+@app.middleware("http")
+async def _add_security_headers(request: Request, call_next):
+    """Stamp baseline OWASP-recommended hardening headers on every
+    response this dashboard sends -- registered last (see
+    _enforce_dashboard_rate_limit's own docstring above for why ordering
+    matters here: Starlette's add_middleware inserts each new middleware
+    at the *front* of its internal list, then wraps outward-in over that
+    list in reverse, so whichever is added last ends up outermost), so
+    these headers land on literally every response -- a 429 from the rate
+    limiter above, a CORS preflight, an upload/compile 4xx/5xx, all of
+    it -- not just the successful ones a handler-level fix would only
+    ever reach.
+
+    Unlike CORSMiddleware's own allow_origins (restricted to an explicit
+    allowlist) or dashboard_rate_limit_per_minute() (opt-in, 0 by
+    default), these are unconditional: nothing here can reject a
+    legitimate request, so there's no reason to gate baseline hardening
+    behind an env var an operator has to remember to set, the same
+    "closes an actual gap with no functional downside" reasoning
+    NOTEBOOK_API_RATE_LIMIT_PER_MINUTE's own new X-RateLimit-* headers
+    already applied. X-Content-Type-Options blocks a browser from ever
+    guessing a response is something other than what Content-Type
+    already says it is; X-Frame-Options blocks embedding any response
+    (including this dashboard's own /docs) in a third-party <iframe>;
+    Referrer-Policy stops this dashboard's own URL -- which can itself
+    carry sensitive path segments, e.g. an uploaded notebook's filename
+    in an error message -- from leaking into the Referer header of a
+    request /docs' own "Try it out", or a link in some response body,
+    makes to a different origin.
+    """
+
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
 # Include API routes
 app.include_router(upload_router)
 app.include_router(governance_metrics_router)
