@@ -6,6 +6,7 @@ Serves the React dashboard frontend and provides API endpoints for compilation
 import os
 import sys
 import time
+import uuid
 from pathlib import Path
 
 # Ensure project root is in sys.path
@@ -444,6 +445,28 @@ async def _add_process_time_header(request: Request, call_next):
     response.headers["X-Process-Time-Ms"] = (
         f"{(time.perf_counter() - start_time) * 1000:.2f}"
     )
+    return response
+
+
+@app.middleware("http")
+async def _add_request_id_header(request: Request, call_next):
+    """Stamp X-Request-ID on every response -- registered last, outermost
+    (wrapping X-Process-Time-Ms above, same reasoning as that
+    middleware's own comment), so this request's own id is present even
+    on a response an earlier layer short-circuits (a 429 from the rate
+    limiter). Honors a caller-supplied X-Request-ID instead of always
+    minting a fresh one -- e.g. from an upstream gateway that already
+    assigns one to correlate a single logical request across several
+    downstream services -- so a trace started upstream doesn't fork into
+    two disconnected ids the moment it reaches this dashboard; only
+    generates a new uuid4 when the caller didn't send one at all. Mirrors
+    the identical addition to every compiled app's own generated
+    middleware stack (api_generator.py).
+    """
+
+    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
     return response
 
 

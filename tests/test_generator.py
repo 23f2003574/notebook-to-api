@@ -439,6 +439,32 @@ def test_generated_app_stamps_x_process_time_ms_on_every_response():
     )
 
 
+def test_generated_app_stamps_x_request_id_and_honors_a_caller_supplied_one():
+    """Confirmed exploitable before this fix: the generated app never
+    surfaced a request-correlation id at all -- grepped for across the
+    whole file, no X-Request-ID anywhere -- so a caller had no shared id
+    to search server-side logs by when investigating a specific failed
+    call after the fact. Must honor a caller-supplied X-Request-ID
+    instead of always minting a fresh one, so a trace started upstream
+    (e.g. by a gateway already assigning one) isn't forked into two
+    disconnected ids.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "async def _add_request_id_header(request, call_next):" in code
+    assert (
+        "request_id = request.headers.get('X-Request-ID') or str(uuid.uuid4())"
+        in code
+    )
+    assert "response.headers['X-Request-ID'] = request_id" in code
+    assert code.index("async def _add_process_time_header") < code.index(
+        "async def _add_request_id_header"
+    )
+
+
 def test_notebook_function_named_max_request_body_bytes_is_rejected():
     """MAX_REQUEST_BODY_BYTES is a module-level name the generated app
     itself defines (see RESERVED_INFRASTRUCTURE_NAMES) -- same collision

@@ -4778,6 +4778,12 @@ assert resp.status_code == 200, resp.text
 elapsed_ms = float(resp.headers["X-Process-Time-Ms"])
 assert elapsed_ms >= 0, resp.headers
 
+auto_id_resp = client.get("/health")
+assert auto_id_resp.headers["X-Request-ID"], auto_id_resp.headers
+
+echoed_resp = client.get("/health", headers={{"X-Request-ID": "caller-supplied-xyz"}})
+assert echoed_resp.headers["X-Request-ID"] == "caller-supplied-xyz", echoed_resp.headers
+
 print("PROCESS_TIME_HEADER_E2E_OK")
 """
 

@@ -331,6 +331,30 @@ def test_dashboard_stamps_x_process_time_ms_on_a_response():
     assert elapsed_ms >= 0
 
 
+def test_dashboard_generates_an_x_request_id_when_the_caller_sends_none():
+    """Confirmed exploitable before this fix: this dashboard's own API
+    never surfaced a request-correlation id at all -- grepped for across
+    backend/dashboard.py, no X-Request-ID anywhere.
+    """
+
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 200
+    assert resp.headers["x-request-id"]
+
+
+def test_dashboard_echoes_back_a_caller_supplied_x_request_id():
+    """A trace started upstream (e.g. by a gateway that already assigns
+    its own X-Request-ID) must not be forked into a second, disconnected
+    id the moment it reaches this dashboard.
+    """
+
+    resp = client.get("/api/health", headers={"X-Request-ID": "caller-supplied-abc"})
+
+    assert resp.status_code == 200
+    assert resp.headers["x-request-id"] == "caller-supplied-abc"
+
+
 def test_dashboard_gzip_compresses_a_response_when_the_client_accepts_it():
     """Confirmed exploitable before this fix: this dashboard's own API
     never compressed any response -- grepped for across

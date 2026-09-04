@@ -617,6 +617,30 @@ def generate_fastapi_code(
     )
     lines.append("    return response")
     lines.append("")
+    # Registered last -- outermost, wrapping X-Process-Time-Ms above --
+    # so this request's own id is stamped even on a response one of the
+    # earlier layers short-circuits (a 429 from rate limiting, a 413 from
+    # MaxRequestBodySizeMiddleware). Honors a caller-supplied X-Request-ID
+    # (e.g. from an upstream gateway that already assigns one to
+    # correlate a single logical request across several downstream
+    # services) instead of always minting a fresh one, so a trace started
+    # upstream doesn't fork into two disconnected ids the moment it
+    # reaches this app; only generates a new uuid4 when the caller didn't
+    # send one at all. Before this, correlating "which request logged
+    # this error" between a caller's own logs and this app's -- e.g. to
+    # investigate a specific failed call reported after the fact, with no
+    # other identifying information -- had no shared id to search by at
+    # all.
+    lines.append("@app.middleware('http')")
+    lines.append("async def _add_request_id_header(request, call_next):")
+    lines.append(
+        "    request_id = request.headers.get('X-Request-ID') or "
+        "str(uuid.uuid4())"
+    )
+    lines.append("    response = await call_next(request)")
+    lines.append("    response.headers['X-Request-ID'] = request_id")
+    lines.append("    return response")
+    lines.append("")
     # Simple in‑memory task registry used by background endpoints
     lines.append("TASKS = {}")
     lines.append(
