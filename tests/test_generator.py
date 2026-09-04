@@ -465,6 +465,68 @@ def test_generated_app_stamps_x_request_id_and_honors_a_caller_supplied_one():
     )
 
 
+def test_generated_app_exposes_get_config_reporting_its_own_runtime_limits(monkeypatch):
+    """Confirmed exploitable before this fix: every NOTEBOOK_API_* limit
+    this app enforces (MAX_REQUEST_BODY_BYTES, TASK_TTL_SECONDS,
+    MAX_PENDING_TASKS, RATE_LIMIT_PER_MINUTE, ALLOWED_ORIGINS,
+    DISABLE_DOCS, PUBLIC_URL) was only discoverable by reading the
+    deployment's own environment directly -- shell access to the
+    container -- with /auth/info's own "rate_limit_per_minute" the sole
+    exception. The same "ask the running app what it's actually
+    configured with" gap GET /api/config already closes for this
+    dashboard's own configuration (routes/upload.py), never given an
+    equivalent here. No secrets here (API_KEYS' own values are
+    deliberately never returned), so this needs no authentication.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "@app.get('/config')" in code
+    assert "def service_config():" in code
+    for field in (
+        "'max_request_body_bytes': MAX_REQUEST_BODY_BYTES,",
+        "'task_ttl_seconds': TASK_TTL_SECONDS,",
+        "'max_pending_tasks': MAX_PENDING_TASKS,",
+        "'rate_limit_per_minute': RATE_LIMIT_PER_MINUTE or None,",
+        "'allowed_origins': ALLOWED_ORIGINS,",
+        "'disable_docs': DISABLE_DOCS,",
+        "'public_url': PUBLIC_URL,",
+    ):
+        assert field in code
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    resp = client.get("/config")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["max_request_body_bytes"] == 10 * 1024 * 1024
+    assert body["task_ttl_seconds"] == 3600
+    assert body["max_pending_tasks"] == 10000
+    assert body["rate_limit_per_minute"] is None
+    assert body["allowed_origins"] == ["*"]
+    assert body["disable_docs"] is False
+    assert body["public_url"] == "http://localhost:8000"
+
+
+def test_notebook_function_named_service_config_is_rejected():
+    """service_config is a reserved infrastructure name (GET /config) --
+    same collision hazard class as service_info/metrics/uptime.
+    """
+
+    functions = [{"name": "service_config", "args": [], "return_type": "dict"}]
+
+    with pytest.raises(ReservedFunctionNameError, match="service_config"):
+        generate_fastapi_code(functions)
+
+
 def test_notebook_function_named_max_request_body_bytes_is_rejected():
     """MAX_REQUEST_BODY_BYTES is a module-level name the generated app
     itself defines (see RESERVED_INFRASTRUCTURE_NAMES) -- same collision

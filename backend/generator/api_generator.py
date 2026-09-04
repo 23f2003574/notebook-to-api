@@ -20,7 +20,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "MAX_PENDING_TASKS",
     "verify_api_key", "custom_openapi",
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
-    "validate_auth", "service_info", "metrics", "uptime",
+    "validate_auth", "service_info", "service_config", "metrics", "uptime",
     "get_task", "list_tasks", "delete_task", "cleanup_tasks",
     "delete_completed_tasks", "delete_failed_tasks", "reset_tasks",
     "notebook_module",
@@ -932,6 +932,7 @@ def generate_fastapi_code(
     lines.append("            'health': '/health',")
     lines.append("            'ready': '/ready',")
     lines.append("            'info': '/info',")
+    lines.append("            'config': '/config',")
     lines.append("            'metrics': '/metrics',")
     lines.append("            'uptime': '/uptime'")
     lines.append("        },")
@@ -1019,6 +1020,34 @@ def generate_fastapi_code(
     lines.append('            "enabled": True,')
     lines.append('            "type": "api_key"')
     lines.append('        }')
+    lines.append("    }")
+    lines.append("")
+    # Every NOTEBOOK_API_* limit this app enforces (MAX_REQUEST_BODY_BYTES,
+    # TASK_TTL_SECONDS, MAX_PENDING_TASKS, RATE_LIMIT_PER_MINUTE,
+    # ALLOWED_ORIGINS, DISABLE_DOCS, PUBLIC_URL) was previously only
+    # discoverable by reading the deployment's own environment directly --
+    # shell access to the container, or knowledge of what was passed to
+    # `docker run -e ...` -- with /auth/info's own "rate_limiting"/
+    # "rate_limit_per_minute" the sole exception. An operator (or a
+    # caller building a client that wants to size its own retries/backoff
+    # against MAX_REQUEST_BODY_BYTES/RATE_LIMIT_PER_MINUTE without a
+    # separate 413/429 round trip first) had no way to just ask the
+    # running app what it's actually configured with -- the same gap GET
+    # /api/config already closes for this dashboard's own configuration
+    # (see routes/upload.py), just never given an equivalent here. No
+    # secrets here (API_KEYS' own values are deliberately never
+    # returned), so -- like /info/auth/status/auth/info above -- this
+    # needs no authentication of its own.
+    lines.append("@app.get('/config')")
+    lines.append("def service_config():")
+    lines.append("    return {")
+    lines.append("        'max_request_body_bytes': MAX_REQUEST_BODY_BYTES,")
+    lines.append("        'task_ttl_seconds': TASK_TTL_SECONDS,")
+    lines.append("        'max_pending_tasks': MAX_PENDING_TASKS,")
+    lines.append("        'rate_limit_per_minute': RATE_LIMIT_PER_MINUTE or None,")
+    lines.append("        'allowed_origins': ALLOWED_ORIGINS,")
+    lines.append("        'disable_docs': DISABLE_DOCS,")
+    lines.append("        'public_url': PUBLIC_URL,")
     lines.append("    }")
     lines.append("")
     lines.append("@app.get('/tasks')")
