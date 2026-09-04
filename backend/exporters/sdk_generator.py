@@ -687,10 +687,18 @@ def generate_typescript_sdk(
     lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
     lines.append("    });")
     lines.append("    if (!response.ok) {")
+    # `.status` attached to the thrown Error (not just embedded in its
+    # message) lets a caller distinguish e.g. a 401 from a 429 without
+    # regex-parsing the message string -- mirrors getTask's own identical
+    # `.status` attachment (added so waitForTask could tell a transient
+    # failure from a real one), extended here to the shared POST helper
+    # every generated per-function method routes through.
     lines.append(
-        "      throw new Error(`Request to ${path} failed with status "
-        "${response.status}`);"
+        "      const error: any = new Error(`Request to ${path} failed "
+        "with status ${response.status}`);"
     )
+    lines.append("      error.status = response.status;")
+    lines.append("      throw error;")
     lines.append("    }")
     lines.append("    return response.json();")
     lines.append("  }")
@@ -817,9 +825,11 @@ def generate_typescript_sdk(
     lines.append("    });")
     lines.append("    if (!response.ok) {")
     lines.append(
-        "      throw new Error(`Request to /tasks failed with status "
-        "${response.status}`);"
+        "      const error: any = new Error(`Request to /tasks failed "
+        "with status ${response.status}`);"
     )
+    lines.append("      error.status = response.status;")
+    lines.append("      throw error;")
     lines.append("    }")
     lines.append("    return response.json();")
     lines.append("  }")
@@ -836,9 +846,11 @@ def generate_typescript_sdk(
     lines.append("    });")
     lines.append("    if (!response.ok) {")
     lines.append(
-        "      throw new Error(`Request to /tasks/${taskId} failed with "
-        "status ${response.status}`);"
+        "      const error: any = new Error(`Request to /tasks/${taskId} "
+        "failed with status ${response.status}`);"
     )
+    lines.append("      error.status = response.status;")
+    lines.append("      throw error;")
     lines.append("    }")
     lines.append("    return response.json();")
     lines.append("  }")
@@ -855,9 +867,11 @@ def generate_typescript_sdk(
     lines.append("    });")
     lines.append("    if (!response.ok) {")
     lines.append(
-        "      throw new Error(`Request to /tasks/completed failed with "
-        "status ${response.status}`);"
+        "      const error: any = new Error(`Request to /tasks/completed "
+        "failed with status ${response.status}`);"
     )
+    lines.append("      error.status = response.status;")
+    lines.append("      throw error;")
     lines.append("    }")
     lines.append("    return response.json();")
     lines.append("  }")
@@ -874,9 +888,11 @@ def generate_typescript_sdk(
     lines.append("    });")
     lines.append("    if (!response.ok) {")
     lines.append(
-        "      throw new Error(`Request to /tasks/failed failed with "
-        "status ${response.status}`);"
+        "      const error: any = new Error(`Request to /tasks/failed "
+        "failed with status ${response.status}`);"
     )
+    lines.append("      error.status = response.status;")
+    lines.append("      throw error;")
     lines.append("    }")
     lines.append("    return response.json();")
     lines.append("  }")
@@ -907,9 +923,11 @@ def generate_typescript_sdk(
         lines.append("    });")
         lines.append("    if (!response.ok) {")
         lines.append(
-            f"      throw new Error(`Request to {infra_path} failed with "
-            "status ${response.status}`);"
+            f"      const error: any = new Error(`Request to {infra_path} "
+            "failed with status ${response.status}`);"
         )
+        lines.append("      error.status = response.status;")
+        lines.append("      throw error;")
         lines.append("    }")
         lines.append("    return response.json();")
         lines.append("  }")

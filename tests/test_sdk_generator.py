@@ -1966,6 +1966,84 @@ def test_generate_typescript_sdk_wait_for_task_still_throws_immediately_on_a_404
     assert output["callCount"] == 1
 
 
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_every_method_attaches_status_to_a_thrown_error(
+    tmp_path,
+):
+    """Confirmed exploitable before this fix: only getTask() (added so
+    waitForTask could tell a transient failure from a real one) attached
+    `.status` to the Error it throws for a non-ok response -- every other
+    method (the shared `request()` helper every per-function endpoint and
+    its own *_and_wait companion route through, listTasks, deleteTask,
+    deleteCompletedTasks, deleteFailedTasks, and each of the hardcoded
+    infra methods) still threw a bare Error with only a string message,
+    so a caller of any of *those* had no way to programmatically
+    distinguish e.g. a 401 from a 429 without regex-parsing the message.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        globalThis.fetch = async (url, opts) => ({{ ok: false, status: 429 }});
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        const calls = [
+          ["train_model", () => client.train_model({{}})],
+          ["listTasks", () => client.listTasks()],
+          ["deleteTask", () => client.deleteTask("x")],
+          ["deleteCompletedTasks", () => client.deleteCompletedTasks()],
+          ["deleteFailedTasks", () => client.deleteFailedTasks()],
+          ["health", () => client.health()],
+        ];
+
+        const results = {{}};
+        for (const [name, fn] of calls) {{
+          try {{
+            await fn();
+            results[name] = "did not throw";
+          }} catch (err) {{
+            results[name] = err.status;
+          }}
+        }}
+
+        console.log(JSON.stringify(results));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    results = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert results == {
+        "train_model": 429,
+        "listTasks": 429,
+        "deleteTask": 429,
+        "deleteCompletedTasks": 429,
+        "deleteFailedTasks": 429,
+        "health": 429,
+    }
+
+
 def test_generate_typescript_sdk_background_endpoint_gets_an_and_wait_companion(
     tmp_path,
 ):
