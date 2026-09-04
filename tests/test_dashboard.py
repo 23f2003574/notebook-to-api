@@ -288,6 +288,33 @@ def test_dashboard_stamps_security_headers_on_a_429_rate_limited_response(
     assert resp.headers["referrer-policy"] == "no-referrer"
 
 
+def test_dashboard_gzip_compresses_a_response_when_the_client_accepts_it():
+    """Confirmed exploitable before this fix: this dashboard's own API
+    never compressed any response -- grepped for across
+    backend/dashboard.py, zero hits -- even though several of its own
+    endpoints return large payloads by design (an unpaginated notebook
+    catalog, a CSV export, an exported OpenAPI schema).
+    """
+
+    resp = client.get("/api/health", headers={"Accept-Encoding": "gzip"})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-encoding"] == "gzip"
+    # httpx (TestClient's transport) transparently decodes -- confirms
+    # the compressed body still decodes back to the exact right content,
+    # not just that the header claims it's gzip.
+    assert resp.json()["status"] == "healthy"
+
+
+def test_dashboard_does_not_compress_a_response_when_the_client_does_not_accept_it():
+
+    resp = client.get("/api/health", headers={"Accept-Encoding": "identity"})
+
+    assert resp.status_code == 200
+    assert "content-encoding" not in resp.headers
+    assert resp.json()["status"] == "healthy"
+
+
 def test_root_endpoint_reports_service_metadata():
     """GET / had no test coverage at all before this."""
 

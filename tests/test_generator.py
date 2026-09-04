@@ -373,6 +373,29 @@ def test_generated_app_stamps_security_headers_on_every_response():
     )
 
 
+def test_generated_app_configures_gzip_response_compression():
+    """Confirmed exploitable before this fix: the generated app never
+    compressed any response -- grepped for across the whole file, zero
+    hits -- even though a notebook function's own result, or GET /tasks'
+    still-up-to-100-entries-per-page (see the status/limit/offset
+    pagination this file's own list_tasks adds), can be large. Registered
+    *after* _add_security_headers (see that middleware's own comment on
+    why registration order determines outermost-ness) so it compresses
+    the truly final response body, not something an inner layer might
+    still rewrite.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "from fastapi.middleware.gzip import GZipMiddleware" in code
+    assert "app.add_middleware(GZipMiddleware)" in code
+    assert code.index("async def _add_security_headers") < code.index(
+        "app.add_middleware(GZipMiddleware)"
+    )
+
+
 def test_notebook_function_named_max_request_body_bytes_is_rejected():
     """MAX_REQUEST_BODY_BYTES is a module-level name the generated app
     itself defines (see RESERVED_INFRASTRUCTURE_NAMES) -- same collision

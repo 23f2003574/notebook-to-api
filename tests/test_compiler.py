@@ -4727,6 +4727,89 @@ print("SECURITY_HEADERS_E2E_OK")
     assert "SECURITY_HEADERS_E2E_OK" in proc.stdout
 
 
+def test_compiler_pipeline_generated_app_gzip_compresses_a_large_response(tmp_path):
+    """Confirmed exploitable before this fix: a real compiled app never
+    compressed any response, no matter how large -- a caller sending
+    Accept-Encoding: gzip against an endpoint returning a large payload
+    still always got the full uncompressed body back, a real bandwidth
+    cost this app had no way to avoid on its own. Only kicks in when the
+    caller's own Accept-Encoding actually asks for it (Accept-Encoding:
+    identity must still get an uncompressed response), and the
+    decompressed content must still be exactly right either way.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def get_large_payload() -> str:\n"
+                            "    return 'x' * 2000\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import os
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+compressed = client.post(
+    "/get_large_payload", json={{}}, headers={{**headers, "Accept-Encoding": "gzip"}},
+)
+assert compressed.status_code == 200, compressed.text
+assert compressed.headers.get("content-encoding") == "gzip", compressed.headers
+assert compressed.json() == {{"result": "x" * 2000}}, compressed.json()
+
+uncompressed = client.post(
+    "/get_large_payload", json={{}}, headers={{**headers, "Accept-Encoding": "identity"}},
+)
+assert uncompressed.status_code == 200, uncompressed.text
+assert "content-encoding" not in uncompressed.headers, uncompressed.headers
+assert uncompressed.json() == {{"result": "x" * 2000}}, uncompressed.json()
+
+print("GZIP_COMPRESSION_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "GZIP_COMPRESSION_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_generated_app_rejects_an_oversized_request_body(tmp_path):
     """Before this, every endpoint on the generated app accepted a JSON
     request body of any size -- unlike this tool's own dashboard

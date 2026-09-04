@@ -383,6 +383,7 @@ def generate_fastapi_code(
         "Depends, Query, Response"
     )
     lines.append("from fastapi.middleware.cors import CORSMiddleware")
+    lines.append("from fastapi.middleware.gzip import GZipMiddleware")
     lines.append("from fastapi.responses import JSONResponse")
     lines.append("from fastapi.encoders import jsonable_encoder")
     lines.append("import anyio.to_thread")
@@ -560,6 +561,24 @@ def generate_fastapi_code(
     lines.append("    response.headers['X-Frame-Options'] = 'DENY'")
     lines.append("    response.headers['Referrer-Policy'] = 'no-referrer'")
     lines.append("    return response")
+    lines.append("")
+    # Registered last -- see _add_security_headers' own comment above for
+    # why that makes this the outermost middleware -- so it compresses
+    # the truly final response body (headers/status already finalized by
+    # every layer above), rather than something an inner layer might
+    # still rewrite. GZipMiddleware only compresses when the client's own
+    # Accept-Encoding actually says it can decode gzip, so this changes
+    # nothing for a caller that doesn't ask for it; for one that does, a
+    # large JSON response (GET /tasks -- still up to 100 entries per page
+    # even after pagination, GET /openapi.json, a notebook function
+    # returning a large result) previously always went out uncompressed,
+    # a real bandwidth/latency cost on any deployment reached over a slow
+    # or metered link that this app had no way to avoid short of a
+    # reverse proxy in front of it doing the compression itself.
+    # Starlette's own default minimum_size (500 bytes) is left as-is --
+    # below that, gzip's own framing overhead can make a compressed
+    # response larger than the original.
+    lines.append("app.add_middleware(GZipMiddleware)")
     lines.append("")
     # Simple in‑memory task registry used by background endpoints
     lines.append("TASKS = {}")

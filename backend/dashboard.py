@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -380,6 +381,22 @@ async def _add_security_headers(request: Request, call_next):
     response.headers["Referrer-Policy"] = "no-referrer"
     return response
 
+
+# Registered last -- see _add_security_headers' own docstring above for
+# why that makes this the outermost middleware -- so it compresses the
+# truly final response body, after every other layer has already
+# finished with it. Only kicks in when a caller's own Accept-Encoding
+# actually says it can decode gzip, so this changes nothing for one that
+# doesn't. Several of this dashboard's own responses are large by design
+# -- an unpaginated GET /api/notebooks catalog, a CSV export, an exported
+# OpenAPI schema, GET /api/notebooks/{filename}/versions history -- and
+# previously always went out uncompressed, a real bandwidth/latency cost
+# for any caller reached over a slow or metered link with no way to avoid
+# it short of a reverse proxy in front of this dashboard doing the
+# compression itself. Starlette's own default minimum_size (500 bytes) is
+# left as-is -- below that, gzip's own framing overhead can make a
+# compressed response larger than the original.
+app.add_middleware(GZipMiddleware)
 
 # Include API routes
 app.include_router(upload_router)
