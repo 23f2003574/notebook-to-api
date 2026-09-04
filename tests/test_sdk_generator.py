@@ -287,9 +287,9 @@ def test_generate_python_sdk_constructor_accepts_a_configurable_timeout(tmp_path
     # delete_completed_tasks, delete_failed_tasks, plus the single
     # "/train_model" path this test's own schema declares -- wait_for_task
     # makes no request of its own, it only calls self.get_task), plus the
-    # 8 hardcoded health/ready/info/metrics/uptime/auth_status/auth_info/
-    # auth_validate methods.
-    assert source.count("timeout=self.timeout") == 14
+    # 9 hardcoded health/ready/info/config/metrics/uptime/auth_status/
+    # auth_info/auth_validate methods.
+    assert source.count("timeout=self.timeout") == 15
 
 
 def test_generate_python_sdk_uses_the_configured_timeout_for_a_request(
@@ -357,9 +357,9 @@ def test_generate_typescript_sdk_constructor_accepts_a_configurable_timeout(
     # deleteCompletedTasks, deleteFailedTasks, plus the single shared
     # private `request()` helper every POST-path method -- "/train_model"
     # in this test's own schema -- funnels through, regardless of how many
-    # such paths exist), plus the 8 hardcoded health/ready/info/metrics/
-    # uptime/authStatus/authInfo/authValidate methods.
-    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 14
+    # such paths exist), plus the 9 hardcoded health/ready/info/config/
+    # metrics/uptime/authStatus/authInfo/authValidate methods.
+    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 15
 
 
 def test_generate_python_sdk_method_name_handles_multi_segment_paths(tmp_path):
@@ -1319,14 +1319,19 @@ def test_generate_python_sdk_delete_completed_and_failed_tasks_send_correct_requ
 
 
 def test_generate_python_sdk_includes_infrastructure_helpers(tmp_path):
-    """Every compiled app guarantees GET /health, /ready, /info, /metrics,
-    /uptime, /auth/status, /auth/info, and /auth/validate (see
+    """Every compiled app guarantees GET /health, /ready, /info, /config,
+    /metrics, /uptime, /auth/status, /auth/info, and /auth/validate (see
     RESERVED_INFRASTRUCTURE_NAMES in api_generator.py), but the per-path
     loop only emits a method for POST paths -- before this, a caller
-    wanting a liveness/readiness probe, service info, request metrics, or
-    auth configuration through the generated client had no way to do it
-    short of hand-writing the exact same requests.get call get_task
-    already demonstrates this client knows how to make.
+    wanting a liveness/readiness probe, service info, its own runtime
+    config, request metrics, or auth configuration through the generated
+    client had no way to do it short of hand-writing the exact same
+    requests.get call get_task already demonstrates this client knows how
+    to make. "config" (GET /config, added in Commit #12) is confirmed to
+    have been missed here even though the server-side route already
+    existed -- the exact drift class this reserved-names mechanism
+    guards the server side against, just never itself checked against
+    the client side.
     """
 
     schema_path = _write_schema(
@@ -1343,6 +1348,7 @@ def test_generate_python_sdk_includes_infrastructure_helpers(tmp_path):
     assert "def health(self) -> dict:" in source
     assert "def ready(self) -> dict:" in source
     assert "def info(self) -> dict:" in source
+    assert "def config(self) -> dict:" in source
     assert "def metrics(self) -> dict:" in source
     assert "def uptime(self) -> dict:" in source
     assert "def auth_status(self) -> dict:" in source
@@ -1387,6 +1393,7 @@ def test_generate_python_sdk_infrastructure_helpers_send_correct_requests(
     assert client.health() == {"status": "ok"}
     assert client.ready() == {"status": "ok"}
     assert client.info() == {"status": "ok"}
+    assert client.config() == {"status": "ok"}
     assert client.metrics() == {"status": "ok"}
     assert client.uptime() == {"status": "ok"}
     assert client.auth_status() == {"status": "ok"}
@@ -1397,6 +1404,7 @@ def test_generate_python_sdk_infrastructure_helpers_send_correct_requests(
         {"url": "http://localhost:8000/health", "headers": {"X-API-Key": "secret-key"}},
         {"url": "http://localhost:8000/ready", "headers": {"X-API-Key": "secret-key"}},
         {"url": "http://localhost:8000/info", "headers": {"X-API-Key": "secret-key"}},
+        {"url": "http://localhost:8000/config", "headers": {"X-API-Key": "secret-key"}},
         {"url": "http://localhost:8000/metrics", "headers": {"X-API-Key": "secret-key"}},
         {"url": "http://localhost:8000/uptime", "headers": {"X-API-Key": "secret-key"}},
         {"url": "http://localhost:8000/auth/status", "headers": {"X-API-Key": "secret-key"}},
@@ -2308,6 +2316,7 @@ def test_generate_typescript_sdk_includes_infrastructure_helpers(tmp_path):
     assert "async health(): Promise<any> {" in source
     assert "async ready(): Promise<any> {" in source
     assert "async info(): Promise<any> {" in source
+    assert "async config(): Promise<any> {" in source
     assert "async metrics(): Promise<any> {" in source
     assert "async uptime(): Promise<any> {" in source
     assert "async authStatus(): Promise<any> {" in source
@@ -2341,6 +2350,7 @@ def test_generate_typescript_sdk_infrastructure_helpers_send_correct_requests(tm
         results.push(await client.health());
         results.push(await client.ready());
         results.push(await client.info());
+        results.push(await client.config());
         results.push(await client.metrics());
         results.push(await client.uptime());
         results.push(await client.authStatus());
@@ -2366,13 +2376,14 @@ def test_generate_typescript_sdk_infrastructure_helpers_send_correct_requests(tm
         {"url": "http://localhost:8000/health", "method": "GET"},
         {"url": "http://localhost:8000/ready", "method": "GET"},
         {"url": "http://localhost:8000/info", "method": "GET"},
+        {"url": "http://localhost:8000/config", "method": "GET"},
         {"url": "http://localhost:8000/metrics", "method": "GET"},
         {"url": "http://localhost:8000/uptime", "method": "GET"},
         {"url": "http://localhost:8000/auth/status", "method": "GET"},
         {"url": "http://localhost:8000/auth/info", "method": "GET"},
         {"url": "http://localhost:8000/auth/validate", "method": "GET"},
     ]
-    assert output["results"] == [{"status": "ok"}] * 8
+    assert output["results"] == [{"status": "ok"}] * 9
 
 
 def test_sdk_pipeline_end_to_end_against_real_compiled_app(tmp_path):
@@ -2446,8 +2457,15 @@ def fake_post(url, json=None, headers=None, timeout=None):
     resp.raise_for_status = lambda: None
     return resp
 
+def fake_get(url, headers=None, timeout=None):
+    path = url.split("://", 1)[1].split("/", 1)[1]
+    resp = test_client.get("/" + path, headers=headers)
+    resp.raise_for_status = lambda: None
+    return resp
+
 fake_requests = types.ModuleType("requests")
 fake_requests.post = fake_post
+fake_requests.get = fake_get
 sys.modules["requests"] = fake_requests
 
 namespace = {{}}
@@ -2459,6 +2477,15 @@ exec(
 client = namespace["NotebookAPIClient"]("http://testserver")
 result = client.add({{"a": 2, "b": 3}})
 assert result == {{"result": 5}}, result
+
+# GET /config (added in Commit #12) reached through the generated
+# client's own config() method -- confirms this method isn't just
+# generated source text, but actually hits the real compiled app's own
+# new endpoint and gets its real runtime limits back.
+config = client.config()
+assert "max_request_body_bytes" in config, config
+assert "rate_limit_per_minute" in config, config
+
 print("SDK_E2E_OK")
 """
 

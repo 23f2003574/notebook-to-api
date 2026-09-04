@@ -21,7 +21,7 @@ from pathlib import Path
 PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "get_task", "wait_for_task", "list_tasks", "delete_task",
     "delete_completed_tasks", "delete_failed_tasks",
-    "health", "ready", "info", "metrics", "uptime",
+    "health", "ready", "info", "config", "metrics", "uptime",
     "auth_status", "auth_info", "auth_validate",
     # Confirmed exploitable: base_url/api_key/timeout are the client's
     # own __init__-set *instance attributes* (self.base_url, self.api_key,
@@ -46,7 +46,7 @@ PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
 TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "getTask", "waitForTask", "listTasks", "deleteTask",
     "deleteCompletedTasks", "deleteFailedTasks",
-    "health", "ready", "info", "metrics", "uptime",
+    "health", "ready", "info", "config", "metrics", "uptime",
     "authStatus", "authInfo", "authValidate",
     # Same hazard as PYTHON_RESERVED_CLIENT_METHOD_NAMES's base_url/
     # api_key/timeout above: baseUrl/apiKey/timeoutMs are this client's
@@ -532,23 +532,31 @@ def generate_python_sdk(
     lines.append("        response.raise_for_status()")
     lines.append("        return response.json()")
     lines.append("")
-    # health/ready/info/metrics/uptime/auth_status/auth_info/auth_validate
-    # are, like get_task/list_tasks/... above, hardcoded rather than
-    # derived from the per-path loop below: every compiled app guarantees
-    # these exact GET routes too (see RESERVED_INFRASTRUCTURE_NAMES in
-    # api_generator.py, which blocks a notebook function from ever
-    # redefining any of them), but that loop only ever emits a method for
-    # POST paths. A caller wanting a liveness/readiness probe, service
-    # info, request metrics, or auth configuration through the generated
-    # client itself -- e.g. to back a monitoring dashboard, or confirm the
-    # client's own api_key will actually be accepted before calling a real
-    # notebook endpoint with it -- previously had no way to do that short
-    # of hand-writing the exact same requests.get call get_task already
-    # demonstrates this client knows how to make.
+    # health/ready/info/config/metrics/uptime/auth_status/auth_info/
+    # auth_validate are, like get_task/list_tasks/... above, hardcoded
+    # rather than derived from the per-path loop below: every compiled app
+    # guarantees these exact GET routes too (see
+    # RESERVED_INFRASTRUCTURE_NAMES in api_generator.py, which blocks a
+    # notebook function from ever redefining any of them), but that loop
+    # only ever emits a method for POST paths. A caller wanting a
+    # liveness/readiness probe, service info, request metrics, or auth
+    # configuration through the generated client itself -- e.g. to back a
+    # monitoring dashboard, or confirm the client's own api_key will
+    # actually be accepted before calling a real notebook endpoint with
+    # it -- previously had no way to do that short of hand-writing the
+    # exact same requests.get call get_task already demonstrates this
+    # client knows how to make. "config" (GET /config, added alongside
+    # this same comment) closes the identical gap for the app's own
+    # actual runtime limits (MAX_REQUEST_BODY_BYTES, RATE_LIMIT_PER_MINUTE,
+    # ...) -- confirmed missing here even though the server-side endpoint
+    # itself already existed, the exact same class of drift
+    # RESERVED_INFRASTRUCTURE_NAMES above already guards the *server*
+    # side against, just never itself caught on this, the *client* side.
     for infra_method_name, infra_path in (
         ("health", "/health"),
         ("ready", "/ready"),
         ("info", "/info"),
+        ("config", "/config"),
         ("metrics", "/metrics"),
         ("uptime", "/uptime"),
         ("auth_status", "/auth/status"),
@@ -896,15 +904,19 @@ def generate_typescript_sdk(
     lines.append("    }")
     lines.append("    return response.json();")
     lines.append("  }")
-    # Mirrors generate_python_sdk's health/ready/info/metrics/uptime/
-    # auth_status/auth_info/auth_validate above: hardcoded rather than
-    # derived from the per-path loop below (which only emits a method for
-    # POST paths), since every compiled app guarantees these exact GET
-    # routes (see RESERVED_INFRASTRUCTURE_NAMES in api_generator.py).
+    # Mirrors generate_python_sdk's health/ready/info/config/metrics/
+    # uptime/auth_status/auth_info/auth_validate above: hardcoded rather
+    # than derived from the per-path loop below (which only emits a
+    # method for POST paths), since every compiled app guarantees these
+    # exact GET routes (see RESERVED_INFRASTRUCTURE_NAMES in
+    # api_generator.py). "config" mirrors the identical gap just closed
+    # on the Python client -- GET /config already existed server-side but
+    # had no client method of its own here either.
     for infra_method_name, infra_path in (
         ("health", "/health"),
         ("ready", "/ready"),
         ("info", "/info"),
+        ("config", "/config"),
         ("metrics", "/metrics"),
         ("uptime", "/uptime"),
         ("authStatus", "/auth/status"),
