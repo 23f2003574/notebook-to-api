@@ -364,11 +364,79 @@ def generate_python_sdk(
     lines.append(
         '        """Poll get_task(task_id) until its status leaves '
         '"processing", returning the finished task record. Raises '
-        'TimeoutError if `timeout` seconds pass first."""'
+        'TimeoutError if `timeout` seconds pass first.'
     )
+    lines.append("")
+    lines.append(
+        "        A transient failure while polling -- a network-level "
+        "error (no"
+    )
+    lines.append(
+        "        `response` at all), or a 429/502/503/504 response -- "
+        "exactly what"
+    )
+    lines.append(
+        "        NOTEBOOK_API_RATE_LIMIT_PER_MINUTE or a rolling deploy "
+        "would"
+    )
+    lines.append(
+        "        produce mid-poll -- is retried the same as an "
+        "ordinary still-"
+    )
+    lines.append(
+        '        processing task, rather than aborting the whole wait. '
+        "Any other"
+    )
+    lines.append(
+        "        error (a genuine 401/404/...) still raises immediately."
+    )
+    lines.append('        """')
     lines.append("        deadline = time.time() + timeout")
+    # Only these -- not every non-2xx status -- are retried: each is
+    # specifically a "this will very likely succeed if you just ask
+    # again shortly" signal (rate limiting, an overloaded/restarting
+    # upstream), unlike e.g. 404/401/400 (asking again changes nothing).
+    lines.append("        _TRANSIENT_STATUS_CODES = (429, 502, 503, 504)")
     lines.append("        while True:")
-    lines.append("            task = self.get_task(task_id)")
+    lines.append("            try:")
+    lines.append("                task = self.get_task(task_id)")
+    lines.append("            except Exception as exc:")
+    lines.append(
+        "                # get_task's own failure always comes from "
+        "requests.Response.raise_for_status()"
+    )
+    lines.append(
+        "                # (an HTTPError carrying the real response "
+        "on `.response`) or a connection-level"
+    )
+    lines.append(
+        "                # failure (ConnectionError/Timeout, which "
+        "carries no `.response` at all) -- either"
+    )
+    lines.append(
+        "                # way, `.response` (or its absence) is "
+        "enough to tell a transient failure from a"
+    )
+    lines.append(
+        "                # real one without needing to import/"
+        "reference requests.exceptions directly."
+    )
+    lines.append("                response = getattr(exc, 'response', None)")
+    lines.append("                status_code = getattr(response, 'status_code', None)")
+    lines.append(
+        "                if response is not None and status_code "
+        "not in _TRANSIENT_STATUS_CODES:"
+    )
+    lines.append("                    raise")
+    lines.append("                if time.time() >= deadline:")
+    lines.append("                    raise TimeoutError(")
+    lines.append(
+        '                        f"Task {task_id} did not complete within '
+        '{timeout} seconds"'
+    )
+    lines.append("                    ) from exc")
+    lines.append("                time.sleep(poll_interval)")
+    lines.append("                continue")
     lines.append("            if task.get('status') != 'processing':")
     lines.append("                return task")
     lines.append("            if time.time() >= deadline:")
@@ -637,10 +705,16 @@ def generate_typescript_sdk(
     lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
     lines.append("    });")
     lines.append("    if (!response.ok) {")
+    # `.status` attached to the thrown Error (not just embedded in its
+    # message) is what lets waitForTask below tell a transient failure
+    # (429/502/503/504) from a real one without re-parsing the message
+    # string it throws.
     lines.append(
-        "      throw new Error(`Request to /tasks/${taskId} failed with "
-        "status ${response.status}`);"
+        "      const error: any = new Error(`Request to /tasks/${taskId} "
+        "failed with status ${response.status}`);"
     )
+    lines.append("      error.status = response.status;")
+    lines.append("      throw error;")
     lines.append("    }")
     lines.append("    return response.json();")
     lines.append("  }")
@@ -649,11 +723,42 @@ def generate_typescript_sdk(
         "  async waitForTask(taskId: string, options: { pollIntervalMs?: "
         "number; timeoutMs?: number } = {}): Promise<any> {"
     )
+    # A transient failure while polling -- a network-level error (fetch
+    # itself throwing, e.g. a connection reset, or AbortSignal.timeout
+    # firing on a single stalled request -- neither carries a `.status`
+    # at all), or a 429/502/503/504 response -- exactly what
+    # NOTEBOOK_API_RATE_LIMIT_PER_MINUTE or a rolling deploy would produce
+    # mid-poll -- is retried the same as an ordinary still-processing
+    # task, rather than aborting the whole wait outright. Any other error
+    # (a genuine 401/404/...) still throws immediately. Mirrors
+    # generate_python_sdk's identical wait_for_task fix.
     lines.append("    const pollIntervalMs = options.pollIntervalMs ?? 1000;")
     lines.append("    const timeoutMs = options.timeoutMs ?? 60000;")
     lines.append("    const deadline = Date.now() + timeoutMs;")
+    lines.append("    const transientStatuses = new Set([429, 502, 503, 504]);")
     lines.append("    while (true) {")
-    lines.append("      const task = await this.getTask(taskId);")
+    lines.append("      let task: any;")
+    lines.append("      try {")
+    lines.append("        task = await this.getTask(taskId);")
+    lines.append("      } catch (err: any) {")
+    lines.append(
+        "        if (err.status !== undefined && "
+        "!transientStatuses.has(err.status)) {"
+    )
+    lines.append("          throw err;")
+    lines.append("        }")
+    lines.append("        if (Date.now() >= deadline) {")
+    lines.append(
+        "          throw new Error(`Task ${taskId} did not complete "
+        "within ${timeoutMs}ms`);"
+    )
+    lines.append("        }")
+    lines.append(
+        "        await new Promise((resolve) => setTimeout(resolve, "
+        "pollIntervalMs));"
+    )
+    lines.append("        continue;")
+    lines.append("      }")
     lines.append('      if (task.status !== "processing") {')
     lines.append("        return task;")
     lines.append("      }")

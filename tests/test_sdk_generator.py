@@ -758,7 +758,15 @@ def test_generate_python_sdk_wait_for_task_raises_for_a_not_found_task(tmp_path,
     missing 'status' key on the error body and treated it as a finished
     task, handing the error dict back to the caller as if it were the
     real result. Simulating the now-fixed 404 here confirms get_task and
-    wait_for_task actually propagate that failure instead of masking it.
+    wait_for_task actually propagate that failure instead of masking it --
+    and, now that wait_for_task retries a *transient* failure (429/502/
+    503/504) instead of raising immediately (see
+    test_generate_python_sdk_wait_for_task_retries_transient_errors_
+    before_succeeding below), that a 404 specifically -- carried on
+    FakeHTTPError's own `.response.status_code`, mirroring how a real
+    requests.exceptions.HTTPError raised by raise_for_status() always
+    carries the original response on `.response` -- is still treated as
+    permanent and propagates on the very first attempt, not retried.
     """
 
     schema_path = _write_schema(
@@ -770,18 +778,23 @@ def test_generate_python_sdk_wait_for_task_raises_for_a_not_found_task(tmp_path,
     generate_python_sdk(str(schema_path), str(output_path))
 
     class FakeHTTPError(Exception):
-        pass
+        def __init__(self, message, response=None):
+            super().__init__(message)
+            self.response = response
 
     class FakeResponse:
         status_code = 404
 
         def raise_for_status(self):
-            raise FakeHTTPError("404 Client Error: Not Found")
+            raise FakeHTTPError("404 Client Error: Not Found", response=self)
 
         def json(self):
             return {"detail": "Task abc123 not found"}
 
+    calls = []
+
     def fake_get(url, headers=None, timeout=None):
+        calls.append(1)
         return FakeResponse()
 
     fake_requests = types.ModuleType("requests")
@@ -796,8 +809,130 @@ def test_generate_python_sdk_wait_for_task_raises_for_a_not_found_task(tmp_path,
     with pytest.raises(FakeHTTPError):
         client.get_task("abc123")
 
+    calls.clear()
+
     with pytest.raises(FakeHTTPError):
         client.wait_for_task("abc123", poll_interval=0, timeout=5)
+
+    assert len(calls) == 1, "a 404 must propagate on the first attempt, not be retried"
+
+
+def test_generate_python_sdk_wait_for_task_retries_transient_errors_before_succeeding(
+    tmp_path, monkeypatch
+):
+    """Confirmed exploitable before this fix: wait_for_task's whole
+    contract, per its own docstring, is "poll until finished or timeout
+    elapses" -- but a single transient failure while polling (a 429 from
+    the generated app's own rate limiter, a 503 from a server mid-
+    restart, or a bare connection error) propagated straight out of the
+    loop and aborted the wait immediately, instead of being retried like
+    any other still-processing task. Exercises both shapes: an
+    HTTPError-style failure carrying a transient `.response.status_code`,
+    and a raw connection-level failure carrying no `.response` at all.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    class FakeHTTPError(Exception):
+        def __init__(self, message, response=None):
+            super().__init__(message)
+            self.response = response
+
+    class FakeConnectionError(Exception):
+        pass
+
+    class FakeResponse:
+        def __init__(self, status_code, payload=None):
+            self.status_code = status_code
+            self._payload = payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise FakeHTTPError(
+                    f"{self.status_code} error", response=self
+                )
+
+        def json(self):
+            return self._payload
+
+    # First call: a 503 (transient HTTP status). Second call: a bare
+    # connection error (no `.response` at all -- the real
+    # requests.exceptions.ConnectionError shape). Third call: succeeds.
+    responses = [
+        FakeResponse(503),
+        FakeConnectionError("connection reset"),
+        FakeResponse(200, {"status": "completed", "result": 42}),
+    ]
+    calls = []
+
+    def fake_get(url, headers=None, timeout=None):
+        calls.append(1)
+        response = responses[len(calls) - 1]
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    task = client.wait_for_task("abc123", poll_interval=0, timeout=5)
+
+    assert task == {"status": "completed", "result": 42}
+    assert len(calls) == 3
+
+
+def test_generate_python_sdk_wait_for_task_still_times_out_when_transient_errors_persist(
+    tmp_path, monkeypatch
+):
+    """A transient failure must still respect `timeout` -- retrying
+    forever would defeat wait_for_task's own timeout contract just as
+    badly as never retrying at all.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    class FakeHTTPError(Exception):
+        def __init__(self, message, response=None):
+            super().__init__(message)
+            self.response = response
+
+    class FakeResponse:
+        status_code = 503
+
+        def raise_for_status(self):
+            raise FakeHTTPError("503 error", response=self)
+
+    def fake_get(url, headers=None, timeout=None):
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+
+    with pytest.raises(TimeoutError):
+        client.wait_for_task("abc123", poll_interval=0, timeout=0)
 
 
 def test_generate_python_sdk_background_endpoint_gets_an_and_wait_companion(tmp_path):
@@ -1710,6 +1845,125 @@ def test_generate_typescript_sdk_wait_for_task_throws_on_timeout(tmp_path):
     output = json.loads(proc.stdout.strip().splitlines()[-1])
     assert output["threw"] is True
     assert "did not complete" in output["message"]
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_wait_for_task_retries_transient_errors_before_succeeding(
+    tmp_path,
+):
+    """Mirrors
+    test_generate_python_sdk_wait_for_task_retries_transient_errors_before_succeeding
+    for the TypeScript client: before this, waitForTask propagated *any*
+    getTask() failure straight out of the polling loop, aborting the
+    whole wait on a single transient 429/502/503/504 or network blip
+    instead of retrying it like an ordinary still-processing task.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        let callCount = 0;
+        globalThis.fetch = async (url, opts) => {{
+          callCount += 1;
+          if (callCount === 1) {{
+            return {{ ok: false, status: 503 }};
+          }}
+          if (callCount === 2) {{
+            throw new TypeError("fetch failed");
+          }}
+          return {{ ok: true, json: async () => ({{ status: "completed", result: 42 }}) }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+        const task = await client.waitForTask("abc123", {{ pollIntervalMs: 0, timeoutMs: 5000 }});
+
+        console.log(JSON.stringify({{ task, callCount }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["task"] == {"status": "completed", "result": 42}
+    assert output["callCount"] == 3
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_wait_for_task_still_throws_immediately_on_a_404(
+    tmp_path,
+):
+    """A non-transient status (404, same as
+    test_generate_python_sdk_wait_for_task_raises_for_a_not_found_task's
+    Python-side equivalent) must still propagate on the first attempt,
+    not be retried.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        let callCount = 0;
+        globalThis.fetch = async (url, opts) => {{
+          callCount += 1;
+          return {{ ok: false, status: 404 }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        try {{
+          await client.waitForTask("abc123", {{ pollIntervalMs: 0, timeoutMs: 5000 }});
+          console.log(JSON.stringify({{ threw: false, callCount }}));
+        }} catch (err) {{
+          console.log(JSON.stringify({{ threw: true, message: err.message, callCount }}));
+        }}
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["threw"] is True
+    assert "status 404" in output["message"]
+    assert output["callCount"] == 1
 
 
 def test_generate_typescript_sdk_background_endpoint_gets_an_and_wait_companion(
