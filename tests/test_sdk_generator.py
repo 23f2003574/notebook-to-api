@@ -995,7 +995,12 @@ def test_generate_python_sdk_includes_task_management_helpers(tmp_path):
     source = output_path.read_text(encoding="utf-8")
 
     ast.parse(source)
-    assert "def list_tasks(self) -> dict:" in source
+    assert (
+        "def list_tasks(\n"
+        "        self, status: str = None, limit: int = None, "
+        "offset: int = None,\n"
+        "    ) -> dict:"
+    ) in source
     assert "def delete_task(self, task_id: str) -> dict:" in source
     assert "def delete_completed_tasks(self) -> dict:" in source
     assert "def delete_failed_tasks(self) -> dict:" in source
@@ -1020,8 +1025,8 @@ def test_generate_python_sdk_list_tasks_sends_correct_request(tmp_path, monkeypa
         def json(self):
             return {"active_tasks": 0, "tasks": {}}
 
-    def fake_get(url, headers=None, timeout=None):
-        calls.append({"url": url, "headers": headers})
+    def fake_get(url, headers=None, timeout=None, params=None):
+        calls.append({"url": url, "headers": headers, "params": params})
         return FakeResponse()
 
     fake_requests = types.ModuleType("requests")
@@ -1039,7 +1044,58 @@ def test_generate_python_sdk_list_tasks_sends_correct_request(tmp_path, monkeypa
         {
             "url": "http://localhost:8000/tasks",
             "headers": {"X-API-Key": "notebook-to-api-dev-key"},
+            "params": {},
         }
+    ]
+
+
+def test_generate_python_sdk_list_tasks_forwards_status_limit_offset(tmp_path, monkeypatch):
+    """Confirmed exploitable before this fix: list_tasks() accepted no
+    arguments at all and always sent a bare `/tasks` request, so the
+    status/limit/offset filtering the generated server's own GET /tasks
+    accepts (see api_generator.py) was entirely unreachable through this
+    client -- a caller had to bypass it and issue the raw HTTP request
+    themselves to use it.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"tasks": {}}
+
+    def fake_get(url, headers=None, timeout=None, params=None):
+        calls.append(params)
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+
+    client.list_tasks(status="failed")
+    client.list_tasks(limit=10, offset=20)
+    client.list_tasks(status="completed", limit=5, offset=0)
+
+    assert calls == [
+        {"status": "failed"},
+        {"limit": 10, "offset": 20},
+        {"status": "completed", "limit": 5, "offset": 0},
     ]
 
 
@@ -1784,7 +1840,10 @@ def test_generate_typescript_sdk_includes_task_management_helpers(tmp_path):
 
     source = client_path.read_text(encoding="utf-8")
 
-    assert "async listTasks(): Promise<any> {" in source
+    assert (
+        "async listTasks(options: { status?: string; limit?: number; "
+        "offset?: number } = {}): Promise<any> {"
+    ) in source
     assert "async deleteTask(taskId: string): Promise<any> {" in source
     assert "async deleteCompletedTasks(): Promise<any> {" in source
     assert "async deleteFailedTasks(): Promise<any> {" in source
@@ -1794,6 +1853,61 @@ def test_generate_typescript_sdk_includes_task_management_helpers(tmp_path):
     shutil.which("node") is None,
     reason="requires a Node.js runtime to execute the generated TypeScript client",
 )
+def test_generate_typescript_sdk_list_tasks_forwards_status_limit_offset(tmp_path):
+    """Mirrors
+    test_generate_python_sdk_list_tasks_forwards_status_limit_offset for
+    the TypeScript client: before this, listTasks() accepted no
+    arguments and always fetched a bare `/tasks`, with no way to reach
+    the generated server's own status/limit/offset filtering short of
+    bypassing the client entirely.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const calls = [];
+        globalThis.fetch = async (url, opts) => {{
+          calls.push(url);
+          return {{ ok: true, json: async () => ({{}}) }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        await client.listTasks();
+        await client.listTasks({{ status: "failed" }});
+        await client.listTasks({{ limit: 10, offset: 20 }});
+        await client.listTasks({{ status: "completed", limit: 5, offset: 0 }});
+
+        console.log(JSON.stringify({{ calls }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["calls"] == [
+        "http://localhost:8000/tasks",
+        "http://localhost:8000/tasks?status=failed",
+        "http://localhost:8000/tasks?limit=10&offset=20",
+        "http://localhost:8000/tasks?status=completed&limit=5&offset=0",
+    ]
 def test_generate_typescript_sdk_task_management_methods_send_correct_requests(tmp_path):
 
     schema_path = _write_schema(
@@ -2202,9 +2316,9 @@ def fake_post(url, json=None, headers=None, timeout=None):
     resp.raise_for_status = lambda: None
     return resp
 
-def fake_get(url, headers=None, timeout=None):
+def fake_get(url, headers=None, timeout=None, params=None):
     path = url.split("://", 1)[1].split("/", 1)[1]
-    resp = test_client.get("/" + path, headers=headers)
+    resp = test_client.get("/" + path, headers=headers, params=params)
     resp.raise_for_status = lambda: None
     return resp
 
@@ -2248,6 +2362,16 @@ assert task_id not in client.list_tasks()["tasks"]
 second = client.train_model({{"epochs": 1}})
 second_id = second["task_id"]
 client.wait_for_task(second_id, poll_interval=0.01, timeout=5)
+
+# list_tasks' own status/limit/offset reach the real server: filtering
+# to "completed" finds the just-finished task and nothing else.
+filtered = client.list_tasks(status="completed")
+assert second_id in filtered["tasks"], filtered
+assert filtered["matching_tasks"] == 1, filtered
+
+empty_page = client.list_tasks(status="completed", limit=1, offset=1)
+assert empty_page["tasks"] == {{}}, empty_page
+
 client.delete_task(second_id)
 assert second_id not in client.list_tasks()["tasks"]
 

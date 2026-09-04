@@ -391,14 +391,44 @@ def generate_python_sdk(
     # single already-known task_id. This is the same gap wait_for_task
     # closed for polling a single task, now closed for the rest of a
     # background task's lifecycle.
-    lines.append("    def list_tasks(self) -> dict:")
+    # status/limit/offset mirror the generated server's own GET /tasks
+    # query params (see list_tasks in api_generator.py) -- before this,
+    # the only way to filter to e.g. just the failed tasks, or page
+    # through a long-running deployment's history, was to bypass this
+    # client entirely and hit the raw HTTP endpoint by hand, since this
+    # method sent no query string at all no matter how it was called.
+    # Each omitted (the default) preserves list_tasks()'s previous
+    # behavior exactly: every task, unfiltered, first page.
+    lines.append("    def list_tasks(")
     lines.append(
-        '        """List every background task, with a status-count '
-        'summary."""'
+        "        self, status: str = None, limit: int = None, "
+        "offset: int = None,"
     )
+    lines.append("    ) -> dict:")
+    lines.append(
+        '        """List background tasks, with a status-count summary.'
+    )
+    lines.append("")
+    lines.append(
+        "        status/limit/offset mirror the generated server's own "
+        "GET /tasks"
+    )
+    lines.append(
+        '        query params -- each omitted (the default) returns '
+        "every task,"
+    )
+    lines.append('        unfiltered, first page."""')
+    lines.append("        params = {}")
+    lines.append("        if status is not None:")
+    lines.append('            params["status"] = status')
+    lines.append("        if limit is not None:")
+    lines.append('            params["limit"] = limit')
+    lines.append("        if offset is not None:")
+    lines.append('            params["offset"] = offset')
     lines.append("        response = requests.get(")
     lines.append('            f"{self.base_url}/tasks",')
     lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            params=params,")
     lines.append("            timeout=self.timeout,")
     lines.append("        )")
     lines.append("        response.raise_for_status()")
@@ -646,8 +676,35 @@ def generate_typescript_sdk(
     # (see RESERVED_INFRASTRUCTURE_NAMES in api_generator.py). Closes the
     # same gap for the rest of a background task's lifecycle that
     # waitForTask already closed for polling a single known task.
-    lines.append("  async listTasks(): Promise<any> {")
-    lines.append("    const response = await fetch(`${this.baseUrl}/tasks`, {")
+    # status/limit/offset mirror the generated server's own GET /tasks
+    # query params (see list_tasks in api_generator.py) -- same gap as
+    # generate_python_sdk's identical listTasks() addition: before this,
+    # this method sent no query string at all no matter how it was
+    # called, so filtering/paginating GET /tasks meant bypassing the
+    # generated client entirely. Every option left undefined (the
+    # default) preserves listTasks()'s previous behavior exactly.
+    lines.append(
+        "  async listTasks(options: { status?: string; limit?: number; "
+        "offset?: number } = {}): Promise<any> {"
+    )
+    lines.append("    const params = new URLSearchParams();")
+    lines.append(
+        '    if (options.status !== undefined) params.set("status", '
+        "options.status);"
+    )
+    lines.append(
+        '    if (options.limit !== undefined) params.set("limit", '
+        "String(options.limit));"
+    )
+    lines.append(
+        '    if (options.offset !== undefined) params.set("offset", '
+        "String(options.offset));"
+    )
+    lines.append("    const query = params.toString();")
+    lines.append(
+        "    const response = await fetch(`${this.baseUrl}/tasks"
+        '${query ? `?${query}` : ""}`, {'
+    )
     lines.append("      headers: {")
     lines.append('        "X-API-Key": this.apiKey,')
     lines.append("      },")
