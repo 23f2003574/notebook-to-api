@@ -2375,6 +2375,9 @@ def _dispatch_core_command(args):
         if args.tag and not args.all:
             raise RuntimeError("--tag only applies together with --all.")
 
+        if args.sha256 and not args.all:
+            raise RuntimeError("--sha256 only applies together with --all.")
+
         if args.all:
             # DELETE /api/notebooks requires its own ?confirm=true before
             # it does anything (routes/upload.py) -- always passed here
@@ -2385,8 +2388,13 @@ def _dispatch_core_command(args):
             # which never deletes anything -- the endpoint's own "dry_run"
             # bypasses its "confirm" requirement for the identical reason.
             if not args.dry_run and not args.yes:
+                target_parts = []
+                if args.tag:
+                    target_parts.append(f"tagged '{args.tag}'")
+                if args.sha256:
+                    target_parts.append(f"with sha256 '{args.sha256}'")
                 target = (
-                    f"every notebook tagged '{args.tag}'" if args.tag
+                    f"every notebook {' and '.join(target_parts)}" if target_parts
                     else "ALL uploaded notebooks"
                 )
                 answer = input(f"Delete {target} on {dashboard_url}? [y/N] ")
@@ -2401,6 +2409,8 @@ def _dispatch_core_command(args):
                 params["confirm"] = "true"
             if args.tag:
                 params["tag"] = args.tag
+            if args.sha256:
+                params["sha256"] = args.sha256
 
             try:
                 response = httpx.delete(
@@ -7337,6 +7347,21 @@ def main():
             "param, leaving every other notebook untouched. Without "
             "this, --all deletes every uploaded notebook. Ignored (and "
             "rejected) without --all."
+        )
+    )
+    delete_parser.add_argument(
+        "--sha256",
+        default=None,
+        help=(
+            "With --all, only delete notebooks whose content hashes to "
+            "this exact value, via DELETE /api/notebooks's own ?sha256= "
+            "query param -- the same exact-content-match filter `list` "
+            "and `find-duplicates` already support, letting a caller "
+            "remove every copy of one specific content hash (e.g. one "
+            "reported by `find-duplicates`) regardless of which "
+            "filename(s) it currently sits under. Composes with --tag: "
+            "with both given, a notebook must match both to be deleted. "
+            "Ignored (and rejected) without --all."
         )
     )
     delete_parser.add_argument(

@@ -6233,6 +6233,116 @@ def test_delete_command_rejects_tag_without_all(tmp_path):
     _assert_clean_cli_error(proc, "--tag only applies together with --all.")
 
 
+def test_delete_command_all_flag_sends_sha256_query_param(tmp_path, fake_dashboard):
+    """Mirrors test_delete_command_all_flag_sends_tag_query_param: DELETE
+    /api/notebooks's own "sha256" filter (the same exact-content-match
+    "list"/"find-duplicates" already support) had no --sha256 flag of
+    its own here at all, even though "delete --all --tag" already
+    threads the identical sibling filter through.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "deleted_count": 1,
+            "deleted_filenames": ["a.ipynb"],
+            "currently_compiled_notebook_deleted": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "delete", "--all", "--sha256", "a" * 64,
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [f"/api/notebooks?confirm=true&sha256={'a' * 64}"]
+
+
+def test_delete_command_all_flag_sends_both_tag_and_sha256_query_params(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "deleted_count": 1,
+            "deleted_filenames": ["a.ipynb"],
+            "currently_compiled_notebook_deleted": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "delete", "--all", "--tag", "scratch", "--sha256", "a" * 64,
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        f"/api/notebooks?confirm=true&tag=scratch&sha256={'a' * 64}"
+    ]
+
+
+def test_delete_command_all_flag_with_sha256_prompts_with_the_hash_named(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = []
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli",
+            "delete", "--all", "--sha256", "a" * 64,
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=str(workdir),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        input="n\n",
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"with sha256 '{'a' * 64}'" in proc.stdout
+    assert "Aborted." in proc.stdout
+    assert handler.requests == []
+
+
+def test_delete_command_rejects_sha256_without_all(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "delete", "nb.ipynb", "--sha256", "a" * 64,
+            "--dashboard-url", "http://127.0.0.1:1", "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "--sha256 only applies together with --all.")
+
+
 def test_delete_command_rejects_both_filename_and_all(tmp_path):
 
     workdir = tmp_path / "workdir"

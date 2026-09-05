@@ -6642,6 +6642,181 @@ def test_delete_all_notebooks_scoped_by_tag_still_requires_confirm_true():
     assert resp.status_code == 400
 
 
+def test_delete_all_notebooks_scoped_by_sha256_deletes_only_matching_notebooks():
+    """Confirmed missing before this fix: GET /api/notebooks and GET
+    /api/notebooks/duplicates both already support an exact-content
+    "sha256" filter, and DELETE /api/notebooks's own docstring already
+    cites both as siblings reusing its own "tag" filter -- but never
+    itself gained the identical "sha256" filter those two siblings
+    already have. An operator who finds a bad/duplicate content hash via
+    GET /api/notebooks/duplicates (which reports every filename sharing
+    it, since a notebook can be renamed or re-uploaded under a
+    completely different name while keeping the same content) had no
+    way to remove every copy of that exact content in one call.
+    """
+
+    # Computed once and reused for both uploads -- nbformat.v4.new_code_cell
+    # stamps each cell with a random id, so two separate _notebook_bytes(...)
+    # calls with identical source text still produce different bytes (and
+    # so a different sha256); only reusing the exact same bytes object
+    # guarantees the byte-identical content this test actually needs.
+    shared_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    upload_a = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "bulk_delete_sha256_match_a.ipynb",
+                io.BytesIO(shared_content),
+                "application/json",
+            )
+        },
+    )
+    upload_b = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "bulk_delete_sha256_match_b.ipynb",
+                io.BytesIO(shared_content),
+                "application/json",
+            )
+        },
+    )
+    _upload_sample_notebook("bulk_delete_sha256_other.ipynb")
+
+    matching_sha256 = upload_a.json()["sha256"]
+    assert matching_sha256 == upload_b.json()["sha256"]
+
+    delete_resp = client.delete(
+        "/api/notebooks", params={"confirm": "true", "sha256": matching_sha256}
+    )
+
+    assert delete_resp.status_code == 200
+    body = delete_resp.json()
+    assert sorted(body["deleted_filenames"]) == [
+        "bulk_delete_sha256_match_a.ipynb",
+        "bulk_delete_sha256_match_b.ipynb",
+    ]
+    assert body["deleted_count"] == 2
+
+    list_resp = client.get("/api/notebooks")
+    filenames = {nb["filename"] for nb in list_resp.json()["notebooks"]}
+    assert "bulk_delete_sha256_match_a.ipynb" not in filenames
+    assert "bulk_delete_sha256_match_b.ipynb" not in filenames
+    # A notebook with different content is left completely untouched,
+    # even though "bulk_delete_sha256_other.ipynb" happens to share the
+    # exact same content as every other _upload_sample_notebook() call
+    # elsewhere in this file -- it just doesn't match *this* sha256.
+    assert "bulk_delete_sha256_other.ipynb" in filenames
+
+
+def test_delete_all_notebooks_scoped_by_an_unknown_sha256_deletes_nothing():
+
+    _upload_sample_notebook("bulk_delete_unknown_sha256.ipynb")
+
+    delete_resp = client.delete(
+        "/api/notebooks",
+        params={"confirm": "true", "sha256": "0" * 64},
+    )
+
+    assert delete_resp.status_code == 200
+    body = delete_resp.json()
+    assert body["deleted_count"] == 0
+    assert body["deleted_filenames"] == []
+
+    list_resp = client.get("/api/notebooks")
+    filenames = {nb["filename"] for nb in list_resp.json()["notebooks"]}
+    assert "bulk_delete_unknown_sha256.ipynb" in filenames
+
+
+def test_delete_all_notebooks_sha256_composes_with_tag():
+    """Both "tag" and "sha256" given must act as an AND, not an OR -- a
+    notebook matching only one of the two must survive, the same
+    "matches every given filter" composition GET /api/notebooks already
+    gives its own "tag"/"sha256" query params together.
+    """
+
+    shared_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    upload_tagged = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "bulk_delete_sha256_and_tag_match.ipynb",
+                io.BytesIO(shared_content),
+                "application/json",
+            )
+        },
+    )
+    matching_sha256 = upload_tagged.json()["sha256"]
+
+    client.put(
+        "/api/notebooks/bulk_delete_sha256_and_tag_match.ipynb/tags",
+        json={"tags": ["bulk-delete-sha256-and-tag"]},
+    )
+
+    # Same content (matches "sha256"), but never tagged -- must survive:
+    # matching only one of the two given filters isn't enough.
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "bulk_delete_sha256_and_tag_untagged.ipynb",
+                io.BytesIO(shared_content),
+                "application/json",
+            )
+        },
+    )
+
+    delete_resp = client.delete(
+        "/api/notebooks",
+        params={
+            "confirm": "true",
+            "sha256": matching_sha256,
+            "tag": "bulk-delete-sha256-and-tag",
+        },
+    )
+
+    assert delete_resp.status_code == 200
+    body = delete_resp.json()
+    assert body["deleted_filenames"] == ["bulk_delete_sha256_and_tag_match.ipynb"]
+
+    list_resp = client.get("/api/notebooks")
+    filenames = {nb["filename"] for nb in list_resp.json()["notebooks"]}
+    assert "bulk_delete_sha256_and_tag_match.ipynb" not in filenames
+    assert "bulk_delete_sha256_and_tag_untagged.ipynb" in filenames
+
+
+def test_delete_all_notebooks_dry_run_scoped_by_sha256_reports_only_matching_notebooks():
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "bulk_delete_sha256_dry_run.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    matching_sha256 = upload_resp.json()["sha256"]
+
+    dry_run_resp = client.delete(
+        "/api/notebooks",
+        params={"dry_run": "true", "sha256": matching_sha256},
+    )
+
+    assert dry_run_resp.status_code == 200
+    body = dry_run_resp.json()
+    assert body["dry_run"] is True
+    assert "bulk_delete_sha256_dry_run.ipynb" in body["deleted_filenames"]
+
+    # Nothing was actually deleted.
+    list_resp = client.get("/api/notebooks")
+    filenames = {nb["filename"] for nb in list_resp.json()["notebooks"]}
+    assert "bulk_delete_sha256_dry_run.ipynb" in filenames
+
+
 def test_delete_all_notebooks_flags_currently_compiled_notebook_deleted():
 
     content = _notebook_bytes(

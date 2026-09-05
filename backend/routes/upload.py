@@ -5779,7 +5779,9 @@ def notebook_storage_usage(
 
 
 @router.delete("/notebooks")
-def delete_all_notebooks(confirm: bool = False, tag: str = None, dry_run: bool = False):
+def delete_all_notebooks(
+    confirm: bool = False, tag: str = None, sha256: str = None, dry_run: bool = False,
+):
     """Remove every uploaded notebook in UPLOAD_DIR at once.
 
     GET /api/notebooks and DELETE /api/generated already form a
@@ -5845,6 +5847,26 @@ def delete_all_notebooks(confirm: bool = False, tag: str = None, dry_run: bool =
     gives an out-of-tag entry in its own response. Omitted, every
     notebook is deleted exactly as before "tag" existed.
 
+    "sha256" (optional) scopes deletion to only notebooks whose content
+    hashes to that exact value, the same exact-match GET
+    /api/notebooks?sha256= and GET /api/notebooks/duplicates?sha256=
+    already filter by -- composes with "tag" exactly like those two
+    already do (both given: a notebook must match both to be deleted).
+    GET /api/notebooks/duplicates' own docstring already notes a
+    notebook can be renamed or re-uploaded under a completely different
+    filename while keeping the same content, so filename alone can't
+    answer "delete every copy of this exact content" -- before this, an
+    operator who found a bad or unwanted content hash via GET
+    /api/notebooks/duplicates (which reports every filename sharing it)
+    had no way to remove all of them in one call the way "tag" already
+    lets a caller do for the tag axis, only a separate GET
+    /api/notebooks?sha256= to discover their filenames first, then
+    feeding that list into POST /api/notebooks/delete-batch by hand.
+    Applied before a notebook is even considered for deletion, the
+    identical "never touched at all" guarantee "tag" above already
+    gives a non-matching entry. Omitted, no notebook is excluded by
+    content on this basis, exactly as before "sha256" existed here.
+
     "dry_run" (optional, default false) reports the exact same
     "deleted_filenames"/"currently_compiled_notebook_deleted" a real call
     would, without removing a single file -- the identical preview POST
@@ -5882,6 +5904,9 @@ def delete_all_notebooks(confirm: bool = False, tag: str = None, dry_run: bool =
             continue
 
         if tag and tag not in _read_notebook_tags(entry.name):
+            continue
+
+        if sha256 and hash_notebook_file(entry) != sha256:
             continue
 
         if compiled_path is not None and entry.resolve() == compiled_path:
