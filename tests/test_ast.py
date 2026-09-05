@@ -6,6 +6,7 @@ from backend.parser.ast_parser import (
     generate_example_payload,
     generate_example_response,
     normalize_type_annotation,
+    _parse_docstring_arg_descriptions,
 )
 
 
@@ -95,6 +96,141 @@ def add(a: int, b: int) -> int:
     funcs = extract_functions_from_code(code)
 
     assert not funcs[0]["docstring"]
+
+
+def test_function_extraction_attaches_docstring_arg_descriptions():
+    """Confirmed missing before this feature: a notebook author's own
+    per-parameter documentation, sitting right there in the docstring,
+    was completely discarded -- generate_fastapi_code (api_generator.py)
+    had no choice but to fall back to a generic "Parameter 'x' of type
+    T" for every field regardless of how thoroughly it was documented.
+    """
+
+    code = '''
+def train(epochs: int, lr: float) -> str:
+    """Train the model.
+
+    Args:
+        epochs: Number of training passes over the dataset.
+        lr: Learning rate for the optimizer.
+
+    Returns:
+        A short summary string.
+    """
+    return "done"
+'''
+
+    funcs = extract_functions_from_code(code)
+    args_by_name = {arg["name"]: arg for arg in funcs[0]["args"]}
+
+    assert args_by_name["epochs"]["description"] == (
+        "Number of training passes over the dataset."
+    )
+    assert args_by_name["lr"]["description"] == (
+        "Learning rate for the optimizer."
+    )
+
+
+def test_function_extraction_arg_description_is_none_when_undocumented():
+
+    code = '''
+def add(a: int, b: int) -> int:
+    """Add two numbers."""
+    return a + b
+'''
+
+    funcs = extract_functions_from_code(code)
+
+    assert funcs[0]["args"][0]["description"] is None
+    assert funcs[0]["args"][1]["description"] is None
+
+
+def test_parse_docstring_arg_descriptions_returns_empty_dict_for_no_docstring():
+
+    assert _parse_docstring_arg_descriptions(None) == {}
+    assert _parse_docstring_arg_descriptions("") == {}
+
+
+def test_parse_docstring_arg_descriptions_returns_empty_dict_with_no_args_section():
+
+    docstring = "Just a summary, no Args: section at all."
+
+    assert _parse_docstring_arg_descriptions(docstring) == {}
+
+
+def test_parse_docstring_arg_descriptions_handles_arguments_and_parameters_headers():
+    """"Args:" is the most common Google-style header, but "Arguments:"
+    and "Parameters:" are common variants seen in the wild too.
+    """
+
+    for header in ("Args:", "Arguments:", "Parameters:"):
+
+        docstring = f"Summary.\n\n{header}\n    x: The value.\n"
+
+        assert _parse_docstring_arg_descriptions(docstring) == {
+            "x": "The value."
+        }
+
+
+def test_parse_docstring_arg_descriptions_handles_type_annotation_in_entry():
+    """A "name (type): description" entry -- the type is documented for a
+    human but never used (the function's own real annotation is always
+    authoritative for the generated field's actual type).
+    """
+
+    docstring = "Summary.\n\nArgs:\n    epochs (int): Number of passes.\n"
+
+    assert _parse_docstring_arg_descriptions(docstring) == {
+        "epochs": "Number of passes."
+    }
+
+
+def test_parse_docstring_arg_descriptions_joins_wrapped_continuation_lines():
+
+    docstring = (
+        "Summary.\n\n"
+        "Args:\n"
+        "    x: A long description that a human\n"
+        "        wrapped onto a second line.\n"
+    )
+
+    assert _parse_docstring_arg_descriptions(docstring) == {
+        "x": "A long description that a human wrapped onto a second line."
+    }
+
+
+def test_parse_docstring_arg_descriptions_stops_at_the_next_section():
+    """A "Returns:" section (or any other dedented header) must not be
+    mistaken for another documented parameter.
+    """
+
+    docstring = (
+        "Summary.\n\n"
+        "Args:\n"
+        "    x: The input.\n\n"
+        "Returns:\n"
+        "    The output.\n"
+    )
+
+    assert _parse_docstring_arg_descriptions(docstring) == {"x": "The input."}
+
+
+def test_parse_docstring_arg_descriptions_ignores_numpy_style():
+    """Only Google-style is parsed -- a NumPy-style underlined
+    "Parameters\\n----------" section has no "Args:"/"Arguments:"/
+    "Parameters:" header line at all, so this must yield {} rather than
+    a wrong or partial extraction.
+    """
+
+    docstring = (
+        "Summary.\n\n"
+        "Parameters\n"
+        "----------\n"
+        "x : int\n"
+        "    The input.\n"
+    )
+
+    assert _parse_docstring_arg_descriptions(docstring) == {}
 
 
 def test_function_extraction_skips_unparseable_code_instead_of_raising():

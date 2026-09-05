@@ -676,9 +676,31 @@ def _function_signature_key(func):
     its actual request/response contract, so an edit to just a
     function's docstring shouldn't be reported as a breaking change to
     its signature.
+
+    Each arg's own "description" (extract_functions_from_code's own
+    per-parameter docstring extraction -- see
+    _parse_docstring_arg_descriptions, backend/parser/ast_parser.py) is
+    excluded the identical way and for the identical reason: it's
+    derived entirely from the function's own docstring, not from
+    anything that changes what a caller must actually send. Confirmed
+    exploitable before this: rewording just one parameter's own Args:
+    entry (with every type/default/kind byte-for-byte identical)
+    produced a different `args` list -- since each arg dict now carries
+    that description inline -- which this function's own tuple
+    comparison then reported as a genuine signature change, the exact
+    "docstring edit reported as a breaking change" bug this function
+    otherwise already exists to prevent for the whole-function case.
     """
+    args_without_docs = tuple(
+        tuple(
+            (key, value) for key, value in sorted(arg.items())
+            if key != "description"
+        )
+        for arg in func.get("args", [])
+    )
+
     return (
-        func.get("args", []),
+        args_without_docs,
         func.get("return_type"),
         func.get("is_async", False),
     )

@@ -1266,6 +1266,155 @@ def test_field_with_no_default_is_required():
     assert "default=" not in code.split("class GreetRequest(BaseModel):")[1].split("\n\n")[0]
 
 
+def test_field_uses_docstring_arg_description_over_the_generic_fallback():
+    """Confirmed missing before this feature: extract_functions_from_code
+    (backend/parser/ast_parser.py) now attaches each parameter's own
+    Google-style "Args:" description, but generate_fastapi_code ignored
+    it entirely and always fell back to a generic "Parameter 'x' of type
+    T" -- no matter how thoroughly the notebook author had actually
+    documented the function.
+    """
+
+    functions = [
+        {
+            "name": "train",
+            "args": [
+                {
+                    "name": "epochs", "type": "int", "has_default": False,
+                    "kind": "positional",
+                    "description": "Number of training passes.",
+                },
+            ],
+            "return_type": "str",
+        }
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    assert "description='Number of training passes.'" in code
+    assert "Parameter 'epochs' of type int" not in code
+
+
+def test_field_falls_back_to_generic_description_when_undocumented():
+
+    functions = [
+        {
+            "name": "train",
+            "args": [
+                {
+                    "name": "epochs", "type": "int", "has_default": False,
+                    "kind": "positional", "description": None,
+                },
+            ],
+            "return_type": "str",
+        }
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    assert "description=\"Parameter 'epochs' of type int\"" in code
+
+
+def test_field_does_not_override_an_annotations_own_field_description():
+    """Confirmed exploitable before this fix: Pydantic merges an
+    Annotated[...] metadata's own FieldInfo with the one assigned as the
+    field's default value, and the *assigned* one's description wins on
+    conflict -- so this generator's own unconditional
+    description=repr(field_description) silently discarded a notebook
+    author's own Annotated[int, Field(description=...)] description in
+    the actual served OpenAPI schema, with nothing to indicate it had
+    been overridden.
+    """
+
+    functions = [
+        {
+            "name": "compute",
+            "args": [
+                {
+                    "name": "x",
+                    "type": 'Annotated[int, Field(gt=0, description="must be positive")]',
+                    "has_default": False, "kind": "positional",
+                    "description": None,
+                },
+            ],
+            "return_type": "int",
+        }
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    class_body = code.split("class ComputeRequest(BaseModel):")[1].split("\n\n")[0]
+
+    assert "must be positive" in class_body
+    assert "Parameter 'x' of type" not in class_body
+    # No redundant/overriding Field(...) assignment at all -- the
+    # Annotated[...] metadata already carries everything meaningful.
+    assert "= Field(" not in class_body
+
+
+def test_field_with_default_still_assigns_default_when_annotation_has_own_description():
+    """The no-assignment shortcut above only applies when there's no
+    default to assign -- a default must still be attached via
+    Field(default=...), but without an overriding description= alongside
+    it.
+    """
+
+    functions = [
+        {
+            "name": "compute",
+            "args": [
+                {
+                    "name": "x",
+                    "type": 'Annotated[int, Field(gt=0, description="must be positive")]',
+                    "has_default": True, "default": 5, "default_is_literal": True,
+                    "kind": "positional", "description": None,
+                },
+            ],
+            "return_type": "int",
+        }
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    class_body = code.split("class ComputeRequest(BaseModel):")[1].split("\n\n")[0]
+
+    assert "Field(default=5)" in class_body
+    # Exactly one "description=" -- the annotation's own, embedded
+    # inside Annotated[...]; none added by the outer assigned Field(...).
+    assert class_body.count("description=") == 1
+
+
+def test_field_prefers_annotations_own_description_over_docstring_description():
+    """When both a docstring Args: entry and the annotation's own
+    Annotated[..., Field(description=...)] document the same parameter,
+    the more explicit, closer-to-usage annotation wins -- generating a
+    redundant/conflicting outer description would be worse than just
+    leaving the one already attached directly to the field's own type.
+    """
+
+    functions = [
+        {
+            "name": "compute",
+            "args": [
+                {
+                    "name": "x",
+                    "type": 'Annotated[int, Field(description="from annotation")]',
+                    "has_default": False, "kind": "positional",
+                    "description": "from docstring",
+                },
+            ],
+            "return_type": "int",
+        }
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    class_body = code.split("class ComputeRequest(BaseModel):")[1].split("\n\n")[0]
+
+    assert "from docstring" not in class_body
+    assert "= Field(" not in class_body
+
+
 def test_typing_generic_argument_types_get_a_matching_typing_import(monkeypatch):
     """Confirmed exploitable before this fix: arg["type"] (a raw
     ast.unparse'd annotation like "List[float]" or "Optional[str]") was

@@ -1,4 +1,115 @@
 import ast
+import re
+
+
+# Matches a Google-style docstring section header introducing per-
+# parameter documentation -- see _parse_docstring_arg_descriptions below
+# for what this is for. "Parameters:" (with the trailing colon, unlike
+# NumPy's own underlined "Parameters\n----------" style, which this does
+# not attempt to parse) is accepted as a common variant seen in the wild
+# alongside Google's own "Args:"/"Arguments:".
+_ARG_SECTION_HEADER_PATTERN = re.compile(r"^(Args|Arguments|Parameters):$")
+
+# Matches one entry's own "name: description" or "name (type): description"
+# opening line within an Args:-style section, e.g. "x: The input value."
+# or "epochs (int): Number of training passes, defaults to 10." -- the
+# optional "(type)" is accepted but never used (the notebook function's
+# own real annotation, not free-text repeated in a docstring, is always
+# authoritative for the generated field's actual type).
+_ARG_ENTRY_PATTERN = re.compile(r"^([A-Za-z_]\w*)\s*(?:\([^)]*\))?\s*:\s*(.*)$")
+
+
+def _parse_docstring_arg_descriptions(docstring):
+    """{parameter_name: description} for every parameter documented in
+    `docstring`'s own Google-style "Args:"/"Arguments:"/"Parameters:"
+    section, or {} if `docstring` is empty or has no such section.
+
+    Before this, a notebook author's own per-parameter documentation --
+    already sitting right there in the function's docstring, exactly
+    where a human reading the notebook already looks -- was completely
+    discarded: extract_functions_from_code only ever kept the docstring
+    as one opaque whole-function blob (used for the endpoint's own
+    OpenAPI "description"), with nothing splitting out which sentence
+    described which parameter. generate_fastapi_code (api_generator.py)
+    had no choice but to fall back to a generic "Parameter 'x' of type
+    T" for every single field's own description, no matter how
+    thoroughly the notebook author had actually documented it.
+
+    Only Google-style is parsed (a single "Args:"-style header followed
+    by indented "name: description" entries) -- NumPy's underlined
+    "Parameters\\n----------" style and Sphinx's ":param x:" style are
+    deliberately not handled here, to keep this to one well-tested
+    convention rather than three partially-supported ones. A docstring
+    using either of those simply yields {} here, exactly as if it had no
+    per-parameter documentation at all -- the same graceful "nothing to
+    extract" fallback a docstring with no Args:-style section at all
+    already gets.
+
+    A description spanning multiple lines (a long sentence a human
+    wrapped across lines, each indented further than its own "name:"
+    line) is joined back into one description with single spaces, the
+    same normalization ast.get_docstring(clean=True) already applies to
+    the docstring as a whole.
+    """
+    if not docstring:
+        return {}
+
+    lines = docstring.splitlines()
+    descriptions = {}
+
+    in_section = False
+    section_indent = None
+    current_name = None
+    current_parts = []
+
+    def flush():
+        if current_name is not None:
+            text = " ".join(part for part in current_parts if part).strip()
+            if text:
+                descriptions[current_name] = text
+
+    for line in lines:
+        stripped = line.strip()
+
+        if not in_section:
+            if _ARG_SECTION_HEADER_PATTERN.match(stripped):
+                in_section = True
+                section_indent = None
+            continue
+
+        if not stripped:
+            # A blank line inside the section -- could just be spacing
+            # between entries (common when each is more than one
+            # sentence), so it doesn't end the section on its own; only
+            # an actual dedent (another section header, or the docstring
+            # simply ending back at a shallower indent) does that below.
+            continue
+
+        indent = len(line) - len(line.lstrip())
+
+        if section_indent is None:
+            section_indent = indent
+        elif indent < section_indent:
+            # Dedented back out of the Args:-style section entirely --
+            # e.g. a "Returns:" header at the same level "Args:" itself
+            # started at.
+            break
+
+        match = _ARG_ENTRY_PATTERN.match(stripped)
+
+        if indent == section_indent and match:
+            flush()
+            current_name = match.group(1)
+            current_parts = [match.group(2)]
+        elif current_name is not None:
+            # A continuation line, indented further than this entry's
+            # own "name:" line -- part of the same parameter's
+            # description, wrapped onto another line.
+            current_parts.append(stripped)
+
+    flush()
+
+    return descriptions
 
 
 def deduplicate_functions_by_name(functions):
@@ -201,6 +312,26 @@ def extract_functions_from_code(code):
             # back to its own auto-generated description in both cases via
             # a single falsy check.
             docstring = ast.get_docstring(node, clean=True)
+
+            # Attaches each parameter's own Google-style "Args:"
+            # description (see _parse_docstring_arg_descriptions above),
+            # if the docstring documents it -- generate_fastapi_code
+            # (api_generator.py) prefers this over its own generic
+            # "Parameter 'x' of type T" fallback whenever present. None
+            # (not simply omitted) for a parameter the docstring doesn't
+            # mention, the same "distinct from an empty string/absent"
+            # convention `docstring` above already follows, so the
+            # generator can tell "author didn't document this one"
+            # apart from "documented, but with genuinely empty text"
+            # (which _parse_docstring_arg_descriptions already never
+            # produces -- an empty description is dropped, not kept as
+            # "") via a single falsy check either way.
+            arg_descriptions = _parse_docstring_arg_descriptions(docstring)
+
+            for arg_info in args:
+                arg_info["description"] = arg_descriptions.get(
+                    arg_info["name"]
+                )
 
             function_info = {
                 "name": node.name,

@@ -302,6 +302,78 @@ def _resolve_annotation_source(type_str):
     return ast.unparse(rewritten), qualifier.typing_names
 
 
+def _annotation_has_own_field_description(type_str):
+    """Whether `type_str` (a raw `ast.unparse`d annotation, as stored in
+    arg["type"] by the parser -- the *original*, pre-
+    _resolve_annotation_source string, not its notebook_module-qualified
+    rewrite) is an `Annotated[T, ..., Field(..., description=...), ...]`
+    whose own metadata already carries a description.
+
+    generate_fastapi_code below always used to append its own
+    `description=repr(field_description)` to every field's `Field(...)`
+    call, unconditionally -- including a field whose annotation is
+    itself `Annotated[int, Field(gt=0, description="must be positive")]`,
+    a increasingly common way for a notebook author to document (and
+    constrain) a parameter directly on modern Pydantic v2. Confirmed
+    exploitable before this: Pydantic merges the `Annotated[...]`
+    metadata's own FieldInfo with the one assigned as the field's default
+    value, and the *assigned* one's "description" wins on conflict --
+    so the notebook author's own carefully-written "must be positive"
+    was silently replaced by the generic, auto-generated "Parameter 'x'
+    of type Annotated[int, Field(gt=0, description=...)]" in the actual
+    served OpenAPI schema and both generated SDK clients, with nothing
+    to indicate the author's own description had been discarded.
+    Skipping the generated description entirely whenever the annotation
+    already supplies its own leaves every other `Field(...)` argument
+    (gt, le, a default, ...) working exactly as before -- this only ever
+    suppresses the one field this codebase has no business overriding.
+    """
+    if not type_str:
+        return False
+
+    try:
+        tree = ast.parse(type_str, mode="eval").body
+    except SyntaxError:
+        return False
+
+    if not isinstance(tree, ast.Subscript):
+        return False
+
+    base = tree.value
+    base_name = (
+        base.id if isinstance(base, ast.Name)
+        else getattr(base, "attr", None)
+    )
+
+    if base_name != "Annotated":
+        return False
+
+    metadata_slice = tree.slice
+    metadata = (
+        metadata_slice.elts if isinstance(metadata_slice, ast.Tuple)
+        else [metadata_slice]
+    )
+
+    for item in metadata[1:]:
+
+        if not isinstance(item, ast.Call):
+            continue
+
+        func = item.func
+        func_name = (
+            func.id if isinstance(func, ast.Name)
+            else getattr(func, "attr", None)
+        )
+
+        if func_name != "Field":
+            continue
+
+        if any(kw.arg == "description" for kw in item.keywords):
+            return True
+
+    return False
+
+
 # Template for generating the FastAPI application source code
 def generate_fastapi_code(
     functions, package_name="generated", source_notebook_sha256=None,
@@ -1475,10 +1547,26 @@ def generate_fastapi_code(
             # corrupting the rest of the line into a SyntaxError that
             # failed to compile the *entire* generated app.py, not just
             # this one field.
-            field_description = (
-                f"Parameter '{arg_name}' "
-                f"of type {raw_arg_type or 'str'}"
-            )
+            #
+            # None (added to a `Field(...)` call below only when not
+            # None) whenever the annotation already supplies its own
+            # description via Annotated[T, Field(..., description=...)]
+            # -- see _annotation_has_own_field_description's own
+            # docstring for the silent-override bug this avoids.
+            # Otherwise prefers the notebook author's own per-parameter
+            # docstring description (extract_functions_from_code's
+            # "description", from a Google-style "Args:" section -- see
+            # _parse_docstring_arg_descriptions, backend/parser/
+            # ast_parser.py) over the generic fallback every field used
+            # to get regardless of how the function was actually
+            # documented.
+            if _annotation_has_own_field_description(raw_arg_type):
+                field_description = None
+            else:
+                field_description = arg.get("description") or (
+                    f"Parameter '{arg_name}' "
+                    f"of type {raw_arg_type or 'str'}"
+                )
 
             default_value = arg.get("default")
 
@@ -1504,18 +1592,34 @@ def generate_fastapi_code(
                     # qualified source is embedded directly as a code
                     # expression rather than a string literal.
                     default_expr, _ = _resolve_annotation_source(default_value)
+                if field_description is not None:
+                    lines.append(
+                        f'    {arg_name}: {arg_type} = Field('
+                        f'default={default_expr}, '
+                        f'description={repr(field_description)}'
+                        f')'
+                    )
+                else:
+                    lines.append(
+                        f'    {arg_name}: {arg_type} = Field('
+                        f'default={default_expr}'
+                        f')'
+                    )
+            elif field_description is not None:
                 lines.append(
                     f'    {arg_name}: {arg_type} = Field('
-                    f'default={default_expr}, '
                     f'description={repr(field_description)}'
                     f')'
                 )
             else:
-                lines.append(
-                    f'    {arg_name}: {arg_type} = Field('
-                    f'description={repr(field_description)}'
-                    f')'
-                )
+                # No default to assign, and the annotation already
+                # carries its own description (see
+                # _annotation_has_own_field_description above) -- a bare
+                # annotated field, with no assignment at all, is already
+                # a valid required Pydantic field declaration, exactly
+                # like a hand-written `Annotated[...]`-only field would
+                # be; an empty `= Field()` here would add nothing.
+                lines.append(f'    {arg_name}: {arg_type}')
         if example_payload:
             lines.append("")
             lines.append("    model_config = {")

@@ -1296,6 +1296,42 @@ def test_diff_notebook_functions_docstring_only_edit_is_not_a_change(tmp_path):
     assert diff["unchanged"] == ["add"]
 
 
+def test_diff_notebook_functions_per_arg_docstring_description_edit_is_not_a_change(
+    tmp_path,
+):
+    """Confirmed exploitable before this fix: extract_functions_from_code
+    now attaches each parameter's own Google-style "Args:" description
+    directly onto its arg dict (see _parse_docstring_arg_descriptions,
+    backend/parser/ast_parser.py) -- _function_signature_key's own tuple
+    comparison, unless it explicitly excludes that per-arg field the
+    same way it already excludes the whole-function "docstring", reports
+    a pure docstring reword (every type/default/kind byte-for-byte
+    identical) as a genuine signature change, the exact "docstring edit
+    reported as a breaking change" bug this function otherwise already
+    exists to prevent for the whole-function case above.
+    """
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(
+        old_path,
+        'def train(epochs: int) -> str:\n'
+        '    """Train.\n\n    Args:\n        epochs: How many passes.\n    """\n'
+        '    return "done"\n',
+    )
+    _write_notebook(
+        new_path,
+        'def train(epochs: int) -> str:\n'
+        '    """Train.\n\n    Args:\n        epochs: Number of training passes.\n    """\n'
+        '    return "done"\n',
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+
+    assert diff["changed"] == []
+    assert diff["unchanged"] == ["train"]
+
+
 def test_diff_notebook_functions_identical_notebooks_report_no_changes(tmp_path):
 
     notebook_path = tmp_path / "nb.ipynb"
