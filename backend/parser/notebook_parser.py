@@ -34,6 +34,48 @@ _INTROSPECTION_SUFFIX_RE = re.compile(
     r"^(\s*)[A-Za-z_][A-Za-z0-9_.]*(\(\))?\s*\?{1,2}\s*$"
 )
 
+# Cell magics whose own *body* -- everything after the "%%name ..." line
+# itself -- is never executed as Python in the notebook's own namespace at
+# all: %%writefile writes it to a file instead of running it; %%bash/%%sh/
+# %%perl/%%ruby/%%script run it as a *different* language via a subprocess;
+# %%html/%%HTML/%%javascript/%%js/%%latex/%%svg/%%markdown render it as
+# non-Python content. Contrast with %%time/%%timeit/%%capture/%%prun/
+# %%debug, deliberately excluded here -- each of those *does* execute its
+# own body as ordinary Python in the notebook's own namespace (timing it,
+# capturing its output, profiling it, ...), so a function defined inside
+# one of those really is callable from a later cell in the real kernel,
+# unlike every magic name listed below.
+NON_PYTHON_BODY_CELL_MAGICS = frozenset({
+    "writefile", "bash", "sh", "perl", "ruby", "script",
+    "html", "HTML", "javascript", "js", "latex", "svg", "markdown",
+})
+
+_NON_PYTHON_BODY_CELL_MAGIC_RE = re.compile(
+    r"^\s*%%(" + "|".join(re.escape(name) for name in NON_PYTHON_BODY_CELL_MAGICS)
+    + r")\b"
+)
+
+
+def detect_non_python_body_cell_magic(source):
+    """The cell magic name (e.g. "writefile") if `source`'s own first
+    non-blank line invokes one of NON_PYTHON_BODY_CELL_MAGICS, else None.
+
+    Only the first non-blank line is checked -- a real Jupyter cell magic
+    must be the cell's very first statement, so a "%%writefile" appearing
+    later in the cell (inside a string, a comment, or simply a syntax
+    error) is not one at all.
+    """
+    for line in source.split("\n"):
+
+        if not line.strip():
+            continue
+
+        match = _NON_PYTHON_BODY_CELL_MAGIC_RE.match(line)
+
+        return match.group(1) if match else None
+
+    return None
+
 
 def strip_magic_commands(source):
     """Comment out IPython magics, shell escapes, and object-introspection
@@ -50,7 +92,30 @@ def strip_magic_commands(source):
     with it (see is_parseable_python in ast_parser.py). Commenting the
     offending lines out instead keeps line numbers stable and preserves the
     rest of the cell as executable Python.
+
+    A cell opening with a NON_PYTHON_BODY_CELL_MAGICS magic (see
+    detect_non_python_body_cell_magic above) is handled differently: the
+    *entire* cell is commented out, not just that first line. Confirmed
+    exploitable before this: a "%%writefile helper.py" cell whose body
+    happened to be syntactically valid Python (the overwhelmingly common
+    real-world case -- %%writefile is routinely used to scaffold a .py
+    module from inside a notebook) previously had only its own
+    "%%writefile helper.py" line commented out, leaving the rest of the
+    cell -- e.g. a `def greet(name): ...` -- completely untouched. That
+    function is never actually defined in the *notebook's own* namespace
+    in a real kernel at all (it's written to helper.py, never imported or
+    executed there); calling it from a later cell in the real notebook
+    raises NameError. This tool instead silently compiled and exposed it
+    as a real, working POST /greet endpoint -- a fidelity gap between what
+    the source notebook actually does and what got served, with no
+    warning anywhere.
     """
+    if detect_non_python_body_cell_magic(source) is not None:
+        return "\n".join(
+            f"# {line}" if line.strip() else line
+            for line in source.split("\n")
+        )
+
     cleaned_lines = []
 
     for line in source.split("\n"):

@@ -1,9 +1,11 @@
 import nbformat
 
+from backend.parser.ast_parser import extract_functions_from_code
 from backend.parser.notebook_parser import (
     load_notebook,
     extract_code_cells,
-    strip_magic_commands
+    strip_magic_commands,
+    detect_non_python_body_cell_magic,
 )
 
 
@@ -66,6 +68,105 @@ def test_strip_magic_commands_does_not_touch_modulo_operator():
     source = "remainder = 10 % 3"
 
     assert strip_magic_commands(source) == source
+
+
+def test_detect_non_python_body_cell_magic_recognizes_writefile():
+
+    assert detect_non_python_body_cell_magic(
+        "%%writefile helper.py\ndef greet(name):\n    return name"
+    ) == "writefile"
+
+
+def test_detect_non_python_body_cell_magic_recognizes_other_non_python_magics():
+
+    for magic, first_line in (
+        ("bash", "%%bash"),
+        ("sh", "%%sh"),
+        ("perl", "%%perl"),
+        ("ruby", "%%ruby"),
+        ("script", "%%script bash"),
+        ("html", "%%html"),
+        ("HTML", "%%HTML"),
+        ("javascript", "%%javascript"),
+        ("js", "%%js"),
+        ("latex", "%%latex"),
+        ("svg", "%%svg"),
+        ("markdown", "%%markdown"),
+    ):
+        assert detect_non_python_body_cell_magic(f"{first_line}\nsome content") == magic
+
+
+def test_detect_non_python_body_cell_magic_ignores_magics_that_do_run_as_python():
+    """%%time/%%timeit/%%capture/%%prun/%%debug all execute their own body
+    as ordinary Python in the notebook's own namespace (timing it,
+    capturing its output, profiling it, ...) -- unlike %%writefile/%%bash/
+    etc., a function defined inside one of these really is callable from
+    a later cell in the real kernel.
+    """
+
+    for first_line in ("%%time", "%%timeit", "%%capture", "%%prun", "%%debug"):
+        assert detect_non_python_body_cell_magic(f"{first_line}\nx = 1") is None
+
+
+def test_detect_non_python_body_cell_magic_returns_none_for_plain_code():
+
+    assert detect_non_python_body_cell_magic("def add(a, b):\n    return a + b") is None
+
+
+def test_detect_non_python_body_cell_magic_skips_leading_blank_lines():
+
+    assert detect_non_python_body_cell_magic("\n\n%%writefile x.py\npass") == "writefile"
+
+
+def test_strip_magic_commands_comments_out_the_entire_writefile_cell():
+    """Confirmed exploitable before this fix: %%writefile writes its own
+    body to a file instead of executing it -- a function defined inside
+    one is never actually defined in the *notebook's own* namespace in a
+    real kernel at all. Only the "%%writefile ..." line itself was
+    commented out before this, leaving a syntactically-valid-Python body
+    (the overwhelmingly common real case: %%writefile is routinely used
+    to scaffold a .py module) completely untouched and compilable.
+    """
+
+    source = "%%writefile helper.py\ndef greet(name):\n    return name"
+
+    cleaned = strip_magic_commands(source)
+
+    assert cleaned == (
+        "# %%writefile helper.py\n# def greet(name):\n#     return name"
+    )
+    assert extract_functions_from_code(cleaned) == []
+
+
+def test_strip_magic_commands_comments_out_the_entire_bash_cell():
+
+    source = "%%bash\npip install pandas\necho done"
+
+    cleaned = strip_magic_commands(source)
+
+    assert cleaned == "# %%bash\n# pip install pandas\n# echo done"
+
+
+def test_strip_magic_commands_preserves_blank_lines_in_a_writefile_cell():
+
+    source = "%%writefile helper.py\ndef greet(name):\n\n    return name"
+
+    cleaned = strip_magic_commands(source)
+
+    assert cleaned == (
+        "# %%writefile helper.py\n# def greet(name):\n\n#     return name"
+    )
+
+
+def test_strip_magic_commands_still_executes_time_magic_body():
+    """Contrast with the %%writefile/%%bash cases above -- %%time really
+    does run its own body as Python in the notebook's own namespace, so
+    only its own magic line is commented out, exactly as before.
+    """
+
+    source = "%%time\nx = 1 + 1"
+
+    assert strip_magic_commands(source) == "# %%time\nx = 1 + 1"
 
 
 def test_extract_code_cells_strips_magics_from_notebook():

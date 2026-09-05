@@ -1487,6 +1487,64 @@ def test_compiler_pipeline_handles_magics_and_broken_cells(tmp_path):
     assert "pandas" in requirements
 
 
+def test_compiler_pipeline_does_not_expose_a_writefile_cells_own_function(tmp_path):
+    """Confirmed exploitable before this fix: %%writefile writes its own
+    cell body to a file instead of executing it in the notebook's own
+    namespace -- a real Jupyter kernel never defines a function written
+    this way at all, so a later cell calling it raises NameError. Before
+    this fix, only the "%%writefile ..." line itself was commented out,
+    leaving a syntactically-valid-Python body (the common real-world
+    case) untouched and compiled straight into a real, working endpoint
+    -- a fidelity gap between what the source notebook actually does and
+    what got served, with no warning anywhere.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "%%writefile helper_module.py\n"
+            "def greet(name: str) -> str:\n"
+            "    return f'hello {name}'\n"
+        )
+    )
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "writefile.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    app_source = (output_dir / "app.py").read_text(encoding="utf-8")
+
+    assert '"/add"' in app_source
+    assert "greet" not in app_source
+
+    runtime_module = (
+        output_dir / "runtime" / "notebook_module.py"
+    ).read_text(encoding="utf-8")
+
+    # The %%writefile cell's own body survives as inert, commented-out
+    # text (the same "keep line numbers stable" treatment strip_magic_
+    # commands already gives an ordinary magic line) -- what matters is
+    # that it defines no live, callable top-level function.
+    tree = ast.parse(runtime_module)
+    top_level_function_names = {
+        node.name for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert "greet" not in top_level_function_names
+    assert "add" in top_level_function_names
+
+
 def test_compiler_pipeline_handles_a_leftover_introspection_query(tmp_path):
     """A cell left over from interactive exploration with a trailing
     ``func?``/``?func`` IPython introspection query (inline docstring/
