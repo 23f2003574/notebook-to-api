@@ -75,6 +75,75 @@ def test_to_yaml_quotes_a_string_containing_a_tab_or_carriage_return():
     assert _to_yaml({"x": "a\rb"}) == 'x: "a\\rb"\n'
 
 
+def test_to_yaml_quotes_a_date_looking_string():
+    """Confirmed exploitable before this fix: YAML 1.1's own implicit
+    "timestamp" resolver (applied by PyYAML's SafeLoader, and in practice
+    by most other YAML 1.1 parsers a generated openapi.yaml might
+    actually be read by) reinterprets an unquoted "2024-01-01" as a real
+    date object on load, not the string this tool's own JSON export
+    (openapi.json, which has no such implicit typing) already reports
+    for the identical value -- entirely realistic content, not a
+    theoretical edge case: a notebook parameter/example value of type
+    ``date`` is exactly this shape.
+    """
+
+    text = _to_yaml({"example": "2024-01-01"})
+
+    assert text == 'example: "2024-01-01"\n'
+
+
+def test_to_yaml_quotes_a_full_iso_timestamp_looking_string():
+
+    assert (
+        _to_yaml({"example": "2024-01-01T12:00:00Z"})
+        == 'example: "2024-01-01T12:00:00Z"\n'
+    )
+    assert (
+        _to_yaml({"example": "2024-01-01 12:00:00+05:30"})
+        == 'example: "2024-01-01 12:00:00+05:30"\n'
+    )
+
+
+def test_to_yaml_quotes_a_sexagesimal_looking_string():
+    """Confirmed exploitable before this fix: YAML 1.1's own implicit
+    sexagesimal ("H:MM:SS"-shaped) int/float resolver reinterpreted an
+    unquoted "12:30:00" as the plain integer 45000 (12*3600 + 30*60) on
+    load -- an entirely ordinary value for a notebook parameter/example
+    of type ``time``.
+    """
+
+    text = _to_yaml({"example": "12:30:00"})
+
+    assert text == 'example: "12:30:00"\n'
+
+
+def test_to_yaml_quotes_a_sexagesimal_float_looking_string():
+
+    assert _to_yaml({"example": "1:15:30.5"}) == 'example: "1:15:30.5"\n'
+
+
+def test_to_yaml_quotes_a_bare_equals_sign():
+    """"=" is its own reserved YAML scalar (the "default value"/merge-key
+    tag, ``tag:yaml.org,2002:value``) -- unlike the timestamp/sexagesimal
+    cases above, an unquoted bare "=" doesn't silently change type, it
+    raises a ConstructorError on load under PyYAML's SafeLoader.
+    """
+
+    assert _to_yaml({"example": "="}) == 'example: "="\n'
+
+
+def test_to_yaml_does_not_quote_a_version_looking_string():
+    """A string merely containing digits and colons/dots in some other
+    shape (a semver-ish "v1.2.3", or a URL's own "http://host:8000"
+    already covered by test_to_yaml_renders_list_of_mappings) must not
+    be over-quoted just because it superficially resembles the
+    timestamp/sexagesimal patterns above.
+    """
+
+    assert _to_yaml({"example": "v1.2.3"}) == "example: v1.2.3\n"
+    assert _to_yaml({"example": "not-a-date-2024"}) == "example: not-a-date-2024\n"
+
+
 def test_to_yaml_renders_empty_dict_as_inline_mapping_not_a_string():
     """Confirmed exploitable before this fix: an empty dict value fell
     through to _yaml_scalar, which stringified it as the *text* "{}"
@@ -253,6 +322,78 @@ print("MULTILINE_YAML_EXPORT_OK")
             continue
         leading_spaces = len(line) - len(line.lstrip(" "))
         assert leading_spaces % 2 == 0, line
+
+
+def test_export_openapi_schema_quotes_a_date_looking_default_value_in_yaml(tmp_path):
+    """End-to-end version of test_to_yaml_quotes_a_date_looking_string: a
+    notebook parameter defaulting to a date-shaped string flows into
+    that same parameter's example value in the generated app's OpenAPI
+    schema (see example_payload in backend/parser/ast_parser.py). Before
+    the underlying fix, exporting that schema as YAML left the value
+    unquoted -- YAML 1.1's own implicit "timestamp" resolver
+    reinterprets it as a real date object on load, not the string this
+    tool's own JSON export already reports for the identical value.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "def log_event(when: str = '2024-01-01') -> str:\n"
+                            "    return when\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook, package_name_for_output_dir
+from backend.exporters.openapi_exporter import export_openapi_schema
+
+compile_notebook({str(notebook_path)!r}, "generated")
+export_openapi_schema(
+    "generated/openapi.yaml",
+    package_name_for_output_dir("generated"),
+    format="yaml",
+)
+print("DATE_YAML_EXPORT_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "DATE_YAML_EXPORT_OK" in proc.stdout
+
+    yaml_text = (workdir / "generated" / "openapi.yaml").read_text(encoding="utf-8")
+
+    assert '"2024-01-01"' in yaml_text
+    assert "when: 2024-01-01\n" not in yaml_text
 
 
 def test_export_openapi_schema_still_writes_json_by_default(tmp_path):

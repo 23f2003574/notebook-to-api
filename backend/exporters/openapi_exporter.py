@@ -1,8 +1,40 @@
 import importlib
 import json
+import re
 from pathlib import Path
 
 _YAML_RESERVED_WORDS = {"true", "false", "null", "~", "yes", "no", "on", "off"}
+
+# YAML 1.1's own implicit-typing resolvers (the ones PyYAML's
+# SafeLoader -- and, in practice, most other YAML 1.1 parsers a
+# generated openapi.yaml might actually be read by, per this module's
+# own docstring: "Swagger UI configs, API gateways, codegen" -- apply to
+# any unquoted scalar). _needs_yaml_quoting below already catches a
+# plain number ("42", "3.14") resolving to int/float instead of the
+# string this tool actually means; these two catch the identical class
+# of silent type change for a date/timestamp-looking string and a
+# sexagesimal ("H:MM:SS"-shaped) one. Confirmed exploitable before this:
+# an example payload value of "2024-01-01" (a wholly ordinary value for
+# a notebook parameter typed as a date) round-tripped through
+# yaml.safe_load as datetime.date(2024, 1, 1), and "12:30:00" as the
+# sexagesimal int 45000 -- neither the string this tool's own JSON
+# export (openapi.json, unaffected -- JSON has no such implicit typing)
+# already reports for the identical value.
+#
+# Deliberately not a byte-for-byte reproduction of PyYAML's own resolver
+# regexes (yaml/resolver.py) -- just the realistic subset an OpenAPI
+# example/default value could plausibly be: a plain date, a full
+# ISO 8601 timestamp (space or "T" separated, optional fractional
+# seconds, optional "Z"/±HH:MM offset), and a colon-separated digit
+# group (PyYAML's own sexagesimal int/float resolver, unrelated to
+# real-world timestamps but just as silently misinterpreted).
+_YAML_TIMESTAMP_RE = re.compile(
+    r"^[0-9]{4}-[0-9][0-9]-[0-9][0-9]$"
+    r"|^[0-9]{4}-[0-9][0-9]?-[0-9][0-9]?"
+    r"(?:[Tt]|[ \t]+)[0-9][0-9]?:[0-9][0-9]:[0-9][0-9](?:\.[0-9]*)?"
+    r"(?:[ \t]*(?:Z|[-+][0-9][0-9]?(?::[0-9][0-9])?))?$"
+)
+_YAML_SEXAGESIMAL_RE = re.compile(r"^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+(?:\.[0-9_]*)?$")
 
 
 def _needs_yaml_quoting(text):
@@ -10,9 +42,15 @@ def _needs_yaml_quoting(text):
         return True
     if text.lower() in _YAML_RESERVED_WORDS:
         return True
-    if text[0] in "!&*-?:,[]{}#|>'\"%@`":
+    # "=" is reserved on its own (YAML's "default value"/merge-key tag,
+    # `tag:yaml.org,2002:value`) -- a bare "=" scalar raises a
+    # ConstructorError on load rather than silently changing type like
+    # the cases above, but the fix is identical: quote it.
+    if text[0] in "!&*-?:,[]{}#|>'\"%@`=":
         return True
     if ": " in text or text.endswith(":") or " #" in text:
+        return True
+    if _YAML_TIMESTAMP_RE.match(text) or _YAML_SEXAGESIMAL_RE.match(text):
         return True
     # A plain (unquoted) YAML scalar cannot contain a literal newline,
     # carriage return, or tab without a block-scalar indicator ("|"/">")
