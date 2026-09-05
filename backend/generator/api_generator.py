@@ -767,11 +767,30 @@ def generate_fastapi_code(
     lines.append("    # rather than a periodic background loop, so it needs no extra")
     lines.append("    # scheduler/thread and behaves the same whether or not anything")
     lines.append("    # ever polls /tasks.")
+    lines.append("    #")
+    lines.append("    # A task still 'processing' is never evicted here, no matter how")
+    lines.append("    # old its created_at is. TASK_TTL_SECONDS bounds how long a")
+    lines.append("    # *finished* task's own result lingers in memory -- it was never")
+    lines.append("    # meant to be a deadline on how long the underlying notebook")
+    lines.append("    # function itself is allowed to run. Confirmed exploitable before")
+    lines.append("    # this: a background task (train/process/generate/embed/scrape --")
+    lines.append("    # routinely slow, long-running work by design) that took longer")
+    lines.append("    # than TASK_TTL_SECONDS to finish had its own TASKS entry evicted")
+    lines.append("    # by this exact sweep while still running, out from under it --")
+    lines.append("    # so _run_background_task's own eventual")
+    lines.append("    # TASKS[task_id][\"status\"] = ... write (see below) raised a bare")
+    lines.append("    # KeyError, an unhandled exception in a fire-and-forget asyncio")
+    lines.append("    # task that's silently swallowed (logged, at best, as an opaque")
+    lines.append("    # 'Task exception was never retrieved'). The task's real result")
+    lines.append("    # (or error) was lost forever, and a caller polling GET")
+    lines.append("    # /tasks/{task_id} for it saw a plain 404 instead -- indistinguishable")
+    lines.append("    # from a task_id that never existed at all.")
     lines.append("    now = time.time()")
     lines.append("    expired_ids = [")
     lines.append("        task_id")
     lines.append("        for task_id, task in TASKS.items()")
-    lines.append("        if now - task.get('created_at', now) > TASK_TTL_SECONDS")
+    lines.append("        if task.get('status') != 'processing'")
+    lines.append("        and now - task.get('created_at', now) > TASK_TTL_SECONDS")
     lines.append("    ]")
     lines.append("    for task_id in expired_ids:")
     lines.append("        TASKS.pop(task_id, None)")
@@ -1235,12 +1254,41 @@ def generate_fastapi_code(
     lines.append("@app.delete('/tasks/{task_id}')")
     lines.append("def delete_task(task_id: str, _: None = Depends(verify_api_key)):")
 
-    lines.append("    if task_id not in TASKS:")
+    lines.append("    task = TASKS.get(task_id)")
+    lines.append("")
+    lines.append("    if task is None:")
     lines.append("        raise HTTPException(")
     lines.append("            status_code=404,")
     lines.append("            detail=f'Task {task_id} not found'")
     lines.append("        )")
-
+    lines.append("")
+    # Confirmed exploitable before this: deleting a still-processing task
+    # popped its TASKS entry immediately, but the background task itself
+    # kept running -- there is no way to actually cancel work already
+    # handed to anyio.to_thread.run_sync/asyncio. When it eventually
+    # finished, _run_background_task's own TASKS[task_id][...] write (see
+    # below) raised a bare KeyError against the now-missing entry, an
+    # unhandled exception in a fire-and-forget asyncio task that's
+    # silently swallowed rather than surfaced anywhere -- permanently
+    # losing that task's real result or error with nothing to show for
+    # it. Rejecting the delete outright while a task is still processing
+    # (mirroring the 503 MAX_PENDING_TASKS already returns for "try again
+    # once some have completed") gives a caller an actionable answer
+    # instead of a delete that "succeeds" while quietly corrupting the
+    # task it just claimed to remove.
+    lines.append("    if task.get('status') == 'processing':")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=409,")
+    lines.append("            detail=(")
+    lines.append(
+        "                f'Task {task_id} is still processing and cannot be '"
+    )
+    lines.append(
+        "                'deleted -- wait for it to complete or fail first'"
+    )
+    lines.append("            ),")
+    lines.append("        )")
+    lines.append("")
     lines.append("    deleted_task = TASKS.pop(task_id)")
 
     lines.append("    return {")
@@ -1296,11 +1344,23 @@ def generate_fastapi_code(
     lines.append("        # one), the moment FastAPI's own response serialization")
     lines.append("        # ran into it.")
     lines.append("        result = jsonable_encoder(result)")
-    lines.append("        TASKS[task_id][\"status\"] = \"completed\"")
-    lines.append("        TASKS[task_id][\"result\"] = result")
+    # `task_id in TASKS` rather than an unconditional TASKS[task_id][...]
+    # write: _evict_expired_tasks above never removes a 'processing' task,
+    # but POST /tasks/reset still unconditionally clears every entry,
+    # in-flight or not (an admin nuke, by design). Without this guard, a
+    # task still running when /tasks/reset fires raised a bare KeyError
+    # here -- an unhandled exception in a fire-and-forget asyncio task,
+    # silently logged (at best) as an opaque "Task exception was never
+    # retrieved" rather than surfaced anywhere. This task's own result is
+    # honestly gone either way (the caller asked to forget it); the fix
+    # is just to let that happen quietly instead of crashing on it.
+    lines.append("        if task_id in TASKS:")
+    lines.append("            TASKS[task_id][\"status\"] = \"completed\"")
+    lines.append("            TASKS[task_id][\"result\"] = result")
     lines.append("    except Exception as e:")
-    lines.append("        TASKS[task_id][\"status\"] = \"failed\"")
-    lines.append("        TASKS[task_id][\"error\"] = str(e)")
+    lines.append("        if task_id in TASKS:")
+    lines.append("            TASKS[task_id][\"status\"] = \"failed\"")
+    lines.append("            TASKS[task_id][\"error\"] = str(e)")
     lines.append("")
     # Generate Pydantic models for request bodies
     for func in functions:

@@ -816,6 +816,117 @@ def test_list_tasks_supports_status_filter_and_pagination(monkeypatch):
     assert invalid_limit.status_code == 422
 
 
+def test_evict_expired_tasks_never_evicts_a_processing_task(monkeypatch):
+    """Confirmed exploitable before this fix: _evict_expired_tasks swept
+    out any task past TASK_TTL_SECONDS purely by created_at age, with no
+    regard for whether it was still 'processing' -- a background function
+    (train/process/generate/embed/scrape, routinely slow by design) that
+    simply took longer than the TTL to finish had its own TASKS entry
+    evicted while still running, out from under it.
+    """
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    long_ago = namespace["time"].time() - namespace["TASK_TTL_SECONDS"] - 1
+
+    namespace["TASKS"]["still-running"] = {
+        "status": "processing", "created_at": long_ago,
+    }
+    namespace["TASKS"]["long-done"] = {
+        "status": "completed", "created_at": long_ago, "result": "ok",
+    }
+
+    namespace["_evict_expired_tasks"]()
+
+    assert "still-running" in namespace["TASKS"]
+    assert "long-done" not in namespace["TASKS"]
+
+
+def test_delete_task_rejects_deletion_of_a_processing_task(monkeypatch):
+    """Confirmed exploitable before this fix: DELETE /tasks/{task_id}
+    popped a task's TASKS entry regardless of its status -- there is no
+    way to actually cancel work already handed to a background thread, so
+    deleting a still-processing task just meant _run_background_task's
+    own eventual TASKS[task_id][...] write raised a bare KeyError once
+    the task finished, an unhandled exception silently losing that task's
+    real result or error.
+    """
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    namespace["TASKS"]["still-running"] = {"status": "processing"}
+    namespace["TASKS"]["already-done"] = {"status": "completed", "result": "ok"}
+
+    conflict = client.delete("/tasks/still-running", headers=headers)
+    assert conflict.status_code == 409
+    assert "still processing" in conflict.json()["detail"]
+    assert "still-running" in namespace["TASKS"]
+
+    ok = client.delete("/tasks/already-done", headers=headers)
+    assert ok.status_code == 200
+    assert ok.json()["status"] == "completed"
+    assert "already-done" not in namespace["TASKS"]
+
+    missing = client.delete("/tasks/does-not-exist", headers=headers)
+    assert missing.status_code == 404
+
+
+def test_run_background_task_tolerates_a_missing_tasks_entry(monkeypatch):
+    """_evict_expired_tasks (above) never removes a 'processing' task, but
+    POST /tasks/reset still unconditionally clears every entry, in-flight
+    or not. Confirmed exploitable before this fix: a task still running
+    when /tasks/reset fired raised a bare KeyError from inside
+    _run_background_task once it finished -- an unhandled exception in a
+    fire-and-forget asyncio task -- for both the success path
+    (TASKS[task_id]["status"] = "completed") and the failure path
+    (TASKS[task_id]["error"] = ...), since the second raised again against
+    the same missing key.
+    """
+    import asyncio
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    run_background_task = namespace["_run_background_task"]
+
+    def succeeds():
+        return "ok"
+
+    def fails():
+        raise ValueError("boom")
+
+    # Neither task_id was ever added to TASKS -- simulating one removed
+    # out from under a still-running task by POST /tasks/reset. Must not
+    # raise, and must not resurrect the entry.
+    asyncio.run(run_background_task(succeeds, "reset-away-success"))
+    asyncio.run(run_background_task(fails, "reset-away-failure"))
+
+    assert "reset-away-success" not in namespace["TASKS"]
+    assert "reset-away-failure" not in namespace["TASKS"]
+
+
 def test_background_endpoint_documents_the_task_response_it_actually_sends():
     """Confirmed wrong before this fix: a background endpoint's decorator
     documented `example_response`/the function's own return type (e.g.
