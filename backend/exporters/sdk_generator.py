@@ -402,6 +402,228 @@ def _typescript_task_result_interface(interface_name, return_type):
     ]
 
 
+# Python annotations this codebase's own raw, `ast.unparse`d type
+# strings (arg["type"]/return_type) already use verbatim -- see
+# _python_type_to_safe_python_annotation below for why these pass
+# through unchanged while everything else doesn't.
+_PYTHON_SAFE_SCALARS = {
+    "int", "float", "str", "bool", "bytes", "complex", "None", "Any",
+}
+
+
+def _python_type_to_safe_python_annotation(type_str):
+    """The closest *safe* Python type annotation for `type_str` (a raw,
+    `ast.unparse`d Python annotation, e.g. "int", "List[str]",
+    "Optional[int]" -- the same shape arg["type"]/return_type already
+    carry throughout this codebase), or "Any" for anything not
+    recognized below.
+
+    Unlike _python_type_to_typescript's own identical-looking mapping
+    (which translates *into* TypeScript), the input here is already
+    valid Python syntax -- so this is closer to a validating pass-through
+    than a translation. That distinction matters for exactly one case:
+    a bare, unrecognized identifier (a notebook-defined class or Enum,
+    e.g. "Priority") *is* syntactically valid Python and would compile
+    fine as a literal type annotation -- but the standalone SDK client
+    file being generated here has no import for it at all, so writing it
+    through unchanged would raise a bare NameError the moment the
+    generated client module is loaded, not just a type-checker warning.
+    Falling back to "Any" instead -- always defined, always valid --
+    keeps the generated file importable regardless of what a notebook's
+    own return type annotation actually names, at the cost of losing
+    precision for exactly that one case. The identical "bounded, falls
+    back to something safely generic rather than guessing" contract
+    _python_type_to_typescript and normalize_type_annotation (backend/
+    parser/ast_parser.py) already follow for their own related purposes.
+    """
+    if not type_str:
+        return "Any"
+
+    type_str = type_str.strip()
+
+    if type_str in _PYTHON_SAFE_SCALARS:
+        return type_str
+
+    if type_str in ("dict", "Dict"):
+        return "Dict[str, Any]"
+
+    if type_str in ("list", "List"):
+        return "List[Any]"
+
+    for prefix in ("List[", "list[", "Set[", "set[", "FrozenSet[", "frozenset["):
+        if type_str.startswith(prefix):
+            inner = _bracket_inner(type_str, len(prefix) - 1)
+            return f"List[{_python_type_to_safe_python_annotation(inner)}]"
+
+    for prefix in ("Tuple[", "tuple["):
+        if type_str.startswith(prefix):
+            return "List[Any]"
+
+    for prefix in ("Dict[", "dict["):
+        if type_str.startswith(prefix):
+            inner = _bracket_inner(type_str, len(prefix) - 1)
+            parts = _split_top_level(inner)
+            value_type = (
+                _python_type_to_safe_python_annotation(parts[1])
+                if len(parts) == 2 else "Any"
+            )
+            return f"Dict[str, {value_type}]"
+
+    if type_str.startswith("Optional["):
+        inner = _bracket_inner(type_str, len("Optional"))
+        return f"Optional[{_python_type_to_safe_python_annotation(inner)}]"
+
+    if type_str.startswith("Union["):
+        inner = _bracket_inner(type_str, len("Union"))
+        mapped = [
+            _python_type_to_safe_python_annotation(part)
+            for part in _split_top_level(inner)
+        ]
+        return _join_python_union(mapped)
+
+    if type_str.startswith("Annotated["):
+        inner = _bracket_inner(type_str, len("Annotated"))
+        first_arg = _split_top_level(inner)[0]
+        return _python_type_to_safe_python_annotation(first_arg)
+
+    if "|" in type_str:
+        # A top-level PEP 604 union -- not one nested inside a generic's
+        # own arguments, which _split_top_level's own bracket-depth
+        # tracking already keeps out of this split.
+        parts = _split_top_level(type_str, "|")
+        if len(parts) > 1:
+            mapped = [
+                _python_type_to_safe_python_annotation(part) for part in parts
+            ]
+            return _join_python_union(mapped)
+
+    # An unrecognized bare identifier -- see this function's own
+    # docstring for why that must never pass through unchanged.
+    return "Any"
+
+
+def _join_python_union(mapped_types):
+    """Deduplicated Optional[T]/Union[...] source for `mapped_types` (each
+    already `_python_type_to_safe_python_annotation`-mapped) -- "None"
+    paired with exactly one other type collapses to Optional[T], matching
+    how a human would actually write that instead of Union[T, None].
+    """
+    deduped = list(dict.fromkeys(mapped_types))
+
+    if len(deduped) == 1:
+        return deduped[0]
+
+    if len(deduped) == 2 and "None" in deduped:
+        other = deduped[0] if deduped[1] == "None" else deduped[1]
+        return f"Optional[{other}]"
+
+    return f"Union[{', '.join(deduped)}]"
+
+
+_JSON_SCHEMA_TYPE_TO_PYTHON = {
+    "integer": "int", "number": "float", "string": "str", "boolean": "bool",
+    "null": "None",
+}
+
+
+def _json_schema_type_to_python(prop_schema):
+    """The closest Python type annotation for `prop_schema` (one
+    property's own JSON-schema object from an OpenAPI request body
+    model) -- the Python-client mirror of
+    _json_schema_type_to_typescript above; see its own docstring for why
+    this reads the real Pydantic-validated schema rather than
+    re-deriving a type from a raw annotation string.
+    """
+    if not isinstance(prop_schema, dict):
+        return "Any"
+
+    if "anyOf" in prop_schema:
+        mapped = [
+            _json_schema_type_to_python(sub) for sub in prop_schema["anyOf"]
+        ]
+        return _join_python_union(mapped)
+
+    schema_type = prop_schema.get("type")
+
+    if schema_type == "array":
+        return f"List[{_json_schema_type_to_python(prop_schema.get('items', {}))}]"
+
+    if schema_type == "object":
+        return "Dict[str, Any]"
+
+    return _JSON_SCHEMA_TYPE_TO_PYTHON.get(schema_type, "Any")
+
+
+def _python_typeddict_lines(class_name, required_fields, optional_fields):
+    """Python source lines defining `class_name` as a typing.TypedDict,
+    one field per entry in `required_fields`/`optional_fields` (each
+    {name: python_type_annotation}).
+
+    A TypedDict can't mark individual fields required/optional inline
+    the way a TypeScript interface's own "?:" can -- `total=` is a
+    whole-class setting. When both required and optional fields are
+    present, this splits into a required base class plus a `total=False`
+    subclass adding the optional ones, the standard, dependency-free
+    (works on Python 3.8+, no typing_extensions.NotRequired needed)
+    pattern for mixing the two in one TypedDict. When only one kind is
+    present, a single class is emitted directly instead -- the split's
+    entire purpose is representing a genuine mix, so it would just be
+    unnecessary indirection here.
+    """
+    if not required_fields and not optional_fields:
+        return [f"class {class_name}(TypedDict, total=False):", "    pass", ""]
+
+    if required_fields and optional_fields:
+        base_name = f"_{class_name}Base"
+        lines = [f"class {base_name}(TypedDict):"]
+        for name, ptype in required_fields.items():
+            lines.append(f"    {name}: {ptype}")
+        lines.append("")
+        lines.append(f"class {class_name}({base_name}, total=False):")
+        for name, ptype in optional_fields.items():
+            lines.append(f"    {name}: {ptype}")
+        lines.append("")
+        return lines
+
+    if required_fields:
+        lines = [f"class {class_name}(TypedDict):"]
+        for name, ptype in required_fields.items():
+            lines.append(f"    {name}: {ptype}")
+        lines.append("")
+        return lines
+
+    lines = [f"class {class_name}(TypedDict, total=False):"]
+    for name, ptype in optional_fields.items():
+        lines.append(f"    {name}: {ptype}")
+    lines.append("")
+    return lines
+
+
+def _python_request_typeddict_lines(class_name, request_schema):
+    """Python source lines for `class_name`, a TypedDict typing the exact
+    request body `request_schema` (see _request_body_schema above)
+    describes -- the Python-client mirror of
+    _typescript_request_interface above. A field not in
+    `request_schema`'s own "required" list (the notebook function's own
+    parameter had a default) is optional, matching the exact same "a
+    field with a default isn't required in the JSON body" contract the
+    generated server side's own Pydantic model already enforces.
+    """
+    properties = (request_schema or {}).get("properties") or {}
+    required = set((request_schema or {}).get("required") or [])
+
+    required_fields = {
+        name: _json_schema_type_to_python(prop)
+        for name, prop in properties.items() if name in required
+    }
+    optional_fields = {
+        name: _json_schema_type_to_python(prop)
+        for name, prop in properties.items() if name not in required
+    }
+
+    return _python_typeddict_lines(class_name, required_fields, optional_fields)
+
+
 def _is_background_path(methods):
     """Whether `methods` (a path's {"post": {...}, ...} operations dict
     from an OpenAPI schema this tool generated) is a background/task_id
@@ -647,7 +869,31 @@ def generate_python_sdk(
     lines.append("import os")
     lines.append("import time")
     lines.append("import requests")
+    # Confirmed missing before this feature: every generated method's
+    # own payload parameter was typed as a bare dict, with no return
+    # annotation at all -- throwing away everything mypy/pyright/an IDE
+    # could otherwise tell a caller about a typo'd field name or a wrong
+    # type, the exact same gap Commit #7 already closed for the
+    # TypeScript client. Unconditionally imported (whether or not this
+    # particular schema ends up using all of them) rather than tracked
+    # precisely per-schema -- an unused import is harmless in a generated
+    # file nothing lints, and tracking it exactly would add real
+    # complexity for no functional benefit.
+    lines.append(
+        "from typing import Any, Dict, List, Literal, Optional, TypedDict, Union"
+    )
     lines.append("")
+    # Every {Pascal}Request/{Pascal}Response/{Pascal}TaskResult TypedDict
+    # the per-path loop below builds is collected into typeddict_lines
+    # (kept separate from `lines`, the class body being built below) and
+    # spliced in at class_declaration_index, right before the class
+    # itself -- they must be defined *before* NotebookAPIClient, since a
+    # method's own `payload: TrainModelRequest` annotation is evaluated
+    # eagerly, at `def` time, when this module loads; the per-path loop
+    # that discovers what to generate for each one doesn't run until
+    # after the class declaration line below is already appended.
+    typeddict_lines = []
+    class_declaration_index = len(lines)
     lines.append("class NotebookAPIClient:")
     # Every non-2xx status a real deployment can return for reasons that
     # have nothing to do with the caller's own request being wrong --
@@ -980,8 +1226,41 @@ def generate_python_sdk(
     for path, method_name in method_names.items():
         is_background = _is_background_path(paths[path])
         description = _operation_description(paths[path])
+        pascal_name = _pascal_case(method_name)
+        request_class = f"{pascal_name}Request"
+        response_class = f"{pascal_name}Response"
+        return_type = (paths[path].get("post") or {}).get(
+            "x-notebook-to-api-return-type"
+        )
+
+        typeddict_lines.extend(
+            _python_request_typeddict_lines(
+                request_class, _request_body_schema(schema, paths[path])
+            )
+        )
+
+        if is_background:
+            typeddict_lines.extend(
+                _python_typeddict_lines(
+                    response_class,
+                    {"task_id": "str", "status": 'Literal["processing"]'},
+                    {},
+                )
+            )
+        else:
+            typeddict_lines.extend(
+                _python_typeddict_lines(
+                    response_class,
+                    {"result": _python_type_to_safe_python_annotation(return_type)},
+                    {},
+                )
+            )
+
         # Determine parameter schema (simple request body expecting JSON)
-        lines.append(f"    def {method_name}(self, payload: dict):")
+        lines.append(
+            f"    def {method_name}(self, payload: {request_class}) "
+            f"-> {response_class}:"
+        )
         if is_background:
             wait_name = wait_method_names[path]
             static_doc = (
@@ -1007,9 +1286,25 @@ def generate_python_sdk(
 
         if is_background:
             wait_name = wait_method_names[path]
+            task_result_class = f"{pascal_name}TaskResult"
+            typeddict_lines.extend(
+                _python_typeddict_lines(
+                    task_result_class,
+                    {},
+                    {
+                        "task_id": "str",
+                        "status": "str",
+                        "result": _python_type_to_safe_python_annotation(
+                            return_type
+                        ),
+                        "error": "str",
+                    },
+                )
+            )
             lines.append(
-                f"    def {wait_name}(self, payload: dict, "
-                "poll_interval: float = 1.0, timeout: float = 60.0) -> dict:"
+                f"    def {wait_name}(self, payload: {request_class}, "
+                "poll_interval: float = 1.0, timeout: float = 60.0) -> "
+                f"{task_result_class}:"
             )
             and_wait_static_doc = (
                 f"Submit `{path}` and block until the background task "
@@ -1025,6 +1320,13 @@ def generate_python_sdk(
                 "submitted['task_id'], poll_interval, timeout)"
             )
             lines.append("")
+    # Splice every TypedDict collected above in just before the class
+    # itself -- see class_declaration_index's own docstring above for
+    # why they must land there, not simply appended to the end of the
+    # file.
+    lines[class_declaration_index:class_declaration_index] = (
+        typeddict_lines + [""]
+    )
     # Write to file
     output_file = Path(output_path)
     output_file.parent.mkdir(parents=True, exist_ok=True)

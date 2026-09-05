@@ -41,7 +41,10 @@ def test_generate_python_sdk_produces_syntactically_valid_python(tmp_path):
 
     ast.parse(source)
     assert "class NotebookAPIClient:" in source
-    assert "def train_model(self, payload: dict):" in source
+    assert (
+        "def train_model(self, payload: TrainModelRequest) -> TrainModelResponse:"
+        in source
+    )
 
 
 def _exec_generated_client(output_path, monkeypatch):
@@ -387,7 +390,10 @@ def test_generate_python_sdk_method_name_handles_multi_segment_paths(tmp_path):
     source = output_path.read_text(encoding="utf-8")
 
     ast.parse(source)
-    assert "def tasks_cleanup(self, payload: dict):" in source
+    assert (
+        "def tasks_cleanup(self, payload: TasksCleanupRequest) "
+        "-> TasksCleanupResponse:" in source
+    )
 
 
 def test_generate_python_sdk_disambiguates_paths_that_collide_on_method_name(tmp_path):
@@ -413,8 +419,14 @@ def test_generate_python_sdk_disambiguates_paths_that_collide_on_method_name(tmp
     source = output_path.read_text(encoding="utf-8")
 
     ast.parse(source)
-    assert source.count("def tasks_cleanup(self, payload: dict):") == 1
-    assert source.count("def tasks_cleanup_2(self, payload: dict):") == 1
+    assert source.count(
+        "def tasks_cleanup(self, payload: TasksCleanupRequest) "
+        "-> TasksCleanupResponse:"
+    ) == 1
+    assert source.count(
+        "def tasks_cleanup_2(self, payload: TasksCleanup2Request) "
+        "-> TasksCleanup2Response:"
+    ) == 1
 
 
 @pytest.mark.parametrize(
@@ -454,9 +466,14 @@ def test_generate_python_sdk_disambiguates_a_path_colliding_with_a_hardcoded_cli
 
     source = output_path.read_text(encoding="utf-8")
 
+    pascal = _pascal_case(f"{colliding_name}_2")
+
     ast.parse(source)
     assert source.count(f"def {colliding_name}(") == 1
-    assert f"def {colliding_name}_2(self, payload: dict):" in source
+    assert (
+        f"def {colliding_name}_2(self, payload: {pascal}Request) "
+        f"-> {pascal}Response:" in source
+    )
 
 
 @pytest.mark.parametrize(
@@ -488,8 +505,13 @@ def test_generate_python_sdk_disambiguates_a_path_colliding_with_an_instance_att
 
     source = output_path.read_text(encoding="utf-8")
 
+    pascal = _pascal_case(f"{colliding_name}_2")
+
     ast.parse(source)
-    assert f"def {colliding_name}_2(self, payload: dict):" in source
+    assert (
+        f"def {colliding_name}_2(self, payload: {pascal}Request) "
+        f"-> {pascal}Response:" in source
+    )
 
 
 @pytest.mark.parametrize(
@@ -973,8 +995,9 @@ def test_generate_python_sdk_background_endpoint_gets_an_and_wait_companion(tmp_
 
     ast.parse(source)
     assert (
-        "def train_model_and_wait(self, payload: dict, "
-        "poll_interval: float = 1.0, timeout: float = 60.0) -> dict:"
+        "def train_model_and_wait(self, payload: TrainModelRequest, "
+        "poll_interval: float = 1.0, timeout: float = 60.0) -> "
+        "TrainModelTaskResult:"
         in source
     )
     assert "processing" in source.split("def train_model(")[1].split("def ")[0]
@@ -1031,15 +1054,19 @@ def test_generate_python_sdk_and_wait_disambiguates_against_a_colliding_real_end
 
     ast.parse(source)
     # The real "/train_model_and_wait" endpoint's own method.
-    assert source.count("def train_model_and_wait(self, payload: dict):") == 1
+    assert source.count(
+        "def train_model_and_wait(self, payload: TrainModelAndWaitRequest) "
+        "-> TrainModelAndWaitResponse:"
+    ) == 1
     # The synthesized companion for "/train_model" was pushed to a
     # disambiguated name instead of colliding with it.
     assert (
-        "def train_model_and_wait_2(self, payload: dict, "
-        "poll_interval: float = 1.0, timeout: float = 60.0) -> dict:"
+        "def train_model_and_wait_2(self, payload: TrainModelRequest, "
+        "poll_interval: float = 1.0, timeout: float = 60.0) -> "
+        "TrainModelTaskResult:"
         in source
     )
-    assert "def train_model_and_wait(self, payload: dict, " not in source
+    assert "def train_model_and_wait(self, payload: TrainModelAndWaitRequest, " not in source
 
 
 def test_generate_python_sdk_and_wait_submits_then_polls_to_completion(
@@ -1448,7 +1475,10 @@ def test_generate_python_sdk_infrastructure_helper_names_take_priority_over_a_co
 
     ast.parse(source)
     assert "def health(self) -> dict:" in source
-    assert "def health_2(self, payload: dict):" in source
+    assert (
+        "def health_2(self, payload: Health2Request) -> Health2Response:"
+        in source
+    )
 
 
 def _exec_python_client_with_fake_requests(output_path, monkeypatch, **fake_fns):
@@ -3747,3 +3777,333 @@ def test_generate_typescript_sdk_request_interface_falls_back_for_no_request_bod
 
     assert "export interface TasksCleanupRequest {" in source
     assert "[key: string]: unknown;" in source
+
+
+def test_python_type_to_safe_python_annotation_maps_common_scalars():
+    from backend.exporters.sdk_generator import _python_type_to_safe_python_annotation
+
+    assert _python_type_to_safe_python_annotation("int") == "int"
+    assert _python_type_to_safe_python_annotation("float") == "float"
+    assert _python_type_to_safe_python_annotation("str") == "str"
+    assert _python_type_to_safe_python_annotation("bool") == "bool"
+    assert _python_type_to_safe_python_annotation("dict") == "Dict[str, Any]"
+
+
+def test_python_type_to_safe_python_annotation_falls_back_to_any():
+    """Confirmed exploitable before this feature: a notebook-defined
+    class/Enum return type (e.g. "Priority") is syntactically valid
+    Python and would compile fine as a literal type annotation -- but
+    the standalone SDK client file has no import for it at all, so
+    writing it through unchanged would raise a bare NameError the moment
+    the generated client module is loaded, not just a type-checker
+    warning. Falling back to "Any" keeps the generated file importable
+    regardless of what a notebook's own return type annotation names.
+    """
+    from backend.exporters.sdk_generator import _python_type_to_safe_python_annotation
+
+    assert _python_type_to_safe_python_annotation("Priority") == "Any"
+    assert _python_type_to_safe_python_annotation(None) == "Any"
+    assert _python_type_to_safe_python_annotation("") == "Any"
+
+
+def test_python_type_to_safe_python_annotation_maps_generics_and_optional():
+    from backend.exporters.sdk_generator import _python_type_to_safe_python_annotation
+
+    assert _python_type_to_safe_python_annotation("List[int]") == "List[int]"
+    assert (
+        _python_type_to_safe_python_annotation("Dict[str, int]")
+        == "Dict[str, int]"
+    )
+    assert (
+        _python_type_to_safe_python_annotation("Optional[str]") == "Optional[str]"
+    )
+    assert (
+        _python_type_to_safe_python_annotation("Union[int, str]")
+        == "Union[int, str]"
+    )
+    assert _python_type_to_safe_python_annotation("int | None") == "Optional[int]"
+
+
+def test_python_type_to_safe_python_annotation_sanitizes_nested_unrecognized_names():
+    """A notebook-defined class buried inside a generic (e.g.
+    List[Priority]) must be sanitized at the level it appears, not just
+    when it's the outermost type.
+    """
+    from backend.exporters.sdk_generator import _python_type_to_safe_python_annotation
+
+    assert _python_type_to_safe_python_annotation("List[Priority]") == "List[Any]"
+    assert (
+        _python_type_to_safe_python_annotation("Optional[Priority]")
+        == "Optional[Any]"
+    )
+
+
+def test_json_schema_type_to_python_maps_common_types():
+    from backend.exporters.sdk_generator import _json_schema_type_to_python
+
+    assert _json_schema_type_to_python({"type": "integer"}) == "int"
+    assert _json_schema_type_to_python({"type": "number"}) == "float"
+    assert _json_schema_type_to_python({"type": "string"}) == "str"
+    assert _json_schema_type_to_python({"type": "boolean"}) == "bool"
+    assert _json_schema_type_to_python({"type": "object"}) == "Dict[str, Any]"
+    assert _json_schema_type_to_python({}) == "Any"
+    assert _json_schema_type_to_python(None) == "Any"
+
+
+def test_json_schema_type_to_python_maps_arrays_and_nullable_anyof():
+    from backend.exporters.sdk_generator import _json_schema_type_to_python
+
+    assert (
+        _json_schema_type_to_python({"type": "array", "items": {"type": "string"}})
+        == "List[str]"
+    )
+    assert (
+        _json_schema_type_to_python(
+            {"anyOf": [{"type": "string"}, {"type": "null"}]}
+        )
+        == "Optional[str]"
+    )
+
+
+def test_python_typeddict_lines_splits_required_and_optional_fields():
+    from backend.exporters.sdk_generator import _python_typeddict_lines
+
+    lines = _python_typeddict_lines(
+        "Foo", {"a": "int"}, {"b": "str"}
+    )
+    source = "\n".join(lines)
+
+    assert "class _FooBase(TypedDict):" in source
+    assert "    a: int" in source
+    assert "class Foo(_FooBase, total=False):" in source
+    assert "    b: str" in source
+
+
+def test_python_typeddict_lines_all_required_is_a_single_class():
+    from backend.exporters.sdk_generator import _python_typeddict_lines
+
+    lines = _python_typeddict_lines("Foo", {"a": "int"}, {})
+    source = "\n".join(lines)
+
+    assert source == "class Foo(TypedDict):\n    a: int\n"
+
+
+def test_python_typeddict_lines_all_optional_is_a_single_total_false_class():
+    from backend.exporters.sdk_generator import _python_typeddict_lines
+
+    lines = _python_typeddict_lines("Foo", {}, {"a": "int"})
+    source = "\n".join(lines)
+
+    assert source == "class Foo(TypedDict, total=False):\n    a: int\n"
+
+
+def test_python_typeddict_lines_empty_is_a_pass_only_class():
+    from backend.exporters.sdk_generator import _python_typeddict_lines
+
+    lines = _python_typeddict_lines("Foo", {}, {})
+    source = "\n".join(lines)
+
+    assert source == "class Foo(TypedDict, total=False):\n    pass\n"
+
+
+def test_generate_python_sdk_types_request_fields_from_the_real_json_schema(
+    tmp_path, monkeypatch,
+):
+    """Confirmed missing before this feature: every generated method's
+    own payload parameter was typed as a bare dict, with no return
+    annotation at all -- the exact same gap Commit #7 already closed for
+    the TypeScript client, here for Python's own mypy/pyright/IDE users.
+    """
+
+    schema = {
+        "paths": {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "x-notebook-to-api-return-type": "dict",
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TrainModelRequest"
+                                }
+                            }
+                        }
+                    },
+                }
+            }
+        },
+        "components": {
+            "schemas": {
+                "TrainModelRequest": {
+                    "properties": {
+                        "epochs": {"type": "integer"},
+                        "lr": {"type": "number", "default": 0.01},
+                        "tags": {"type": "array", "items": {"type": "string"}},
+                        "note": {
+                            "anyOf": [{"type": "string"}, {"type": "null"}]
+                        },
+                    },
+                    "required": ["epochs", "tags"],
+                }
+            }
+        },
+    }
+
+    schema_path = _write_schema(tmp_path, {})
+    schema_path.write_text(json.dumps(schema), encoding="utf-8")
+    output_path = schema_path.parent / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+    ast.parse(source)
+
+    assert "class _TrainModelRequestBase(TypedDict):" in source
+    assert "    epochs: int" in source
+    assert "    tags: List[str]" in source
+    assert "class TrainModelRequest(_TrainModelRequestBase, total=False):" in source
+    assert "    lr: float" in source
+    assert "    note: Optional[str]" in source
+    assert "class TrainModelResponse(TypedDict):" in source
+    assert "    result: Dict[str, Any]" in source
+    assert (
+        "def train_model(self, payload: TrainModelRequest) -> "
+        "TrainModelResponse:" in source
+    )
+
+    namespace = _exec_python_client_with_fake_requests(
+        output_path, monkeypatch,
+        post=lambda url, json=None, headers=None, timeout=None: types.SimpleNamespace(
+            raise_for_status=lambda: None, json=lambda: {"result": {"acc": 0.9}}
+        ),
+    )
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    result = client.train_model({"epochs": 5, "tags": ["a"]})
+
+    assert result == {"result": {"acc": 0.9}}
+    assert namespace["TrainModelRequest"].__required_keys__ == frozenset(
+        {"epochs", "tags"}
+    )
+    assert namespace["TrainModelRequest"].__optional_keys__ == frozenset(
+        {"lr", "note"}
+    )
+
+
+def test_generate_python_sdk_background_endpoint_gets_typed_submission_and_result_typeddicts(
+    tmp_path, monkeypatch,
+):
+    """A background endpoint's own two distinct response shapes -- the
+    immediate {task_id, status: "processing"} submission, and the
+    eventually-finished task record its own *_and_wait companion
+    resolves to -- must each get their own correctly-typed TypedDict,
+    not share one bare `dict` the way both used to.
+    """
+
+    schema = {
+        "paths": {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "x-notebook-to-api-async": True,
+                    "x-notebook-to-api-return-type": "float",
+                }
+            }
+        },
+    }
+
+    schema_path = _write_schema(tmp_path, {})
+    schema_path.write_text(json.dumps(schema), encoding="utf-8")
+    output_path = schema_path.parent / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+    ast.parse(source)
+
+    assert "class TrainModelResponse(TypedDict):" in source
+    assert '    status: Literal["processing"]' in source
+    assert "class TrainModelTaskResult(TypedDict, total=False):" in source
+    assert "    result: float" in source
+    assert (
+        "def train_model(self, payload: TrainModelRequest) -> "
+        "TrainModelResponse:" in source
+    )
+    assert (
+        "def train_model_and_wait(self, payload: TrainModelRequest, "
+        "poll_interval: float = 1.0, timeout: float = 60.0) -> "
+        "TrainModelTaskResult:" in source
+    )
+
+    namespace = _exec_python_client_with_fake_requests(
+        output_path, monkeypatch,
+        post=lambda url, json=None, headers=None, timeout=None: types.SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"task_id": "abc123", "status": "processing"},
+        ),
+    )
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    submitted = client.train_model({})
+
+    assert submitted == {"task_id": "abc123", "status": "processing"}
+
+
+def test_generate_python_sdk_request_typeddict_falls_back_for_no_request_body(
+    tmp_path,
+):
+    """A hardcoded built-in POST route (e.g. /tasks/cleanup, /tasks/reset)
+    has no request body schema at all -- its own {Pascal}Request
+    TypedDict must still be valid Python (a `total=False` class with
+    `pass`), not raise while being built from a missing schema.
+    """
+
+    schema_path = _write_schema(
+        tmp_path, {"/tasks/cleanup": {"post": {"operationId": "cleanup_tasks"}}}
+    )
+    output_path = schema_path.parent / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+    ast.parse(source)
+
+    assert "class TasksCleanupRequest(TypedDict, total=False):" in source
+    assert "    pass" in source
+
+
+def test_generate_python_sdk_return_type_sanitizes_a_notebook_defined_class(
+    tmp_path, monkeypatch,
+):
+    """A notebook function returning a class/Enum it defines itself (e.g.
+    "Priority") must not break the standalone generated client -- it has
+    no import for that name at all, so writing it through unchanged
+    would raise a bare NameError the moment the module loads.
+    """
+
+    schema = {
+        "paths": {
+            "/classify": {
+                "post": {
+                    "operationId": "classify",
+                    "x-notebook-to-api-return-type": "Priority",
+                }
+            }
+        },
+    }
+
+    schema_path = _write_schema(tmp_path, {})
+    schema_path.write_text(json.dumps(schema), encoding="utf-8")
+    output_path = schema_path.parent / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+    ast.parse(source)
+
+    assert "    result: Any" in source
+    assert "Priority" not in source
+
+    namespace = _exec_python_client_with_fake_requests(output_path, monkeypatch)
+    assert "NotebookAPIClient" in namespace
