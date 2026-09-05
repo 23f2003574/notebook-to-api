@@ -996,6 +996,7 @@ def test_generate_python_sdk_background_endpoint_gets_an_and_wait_companion(tmp_
     ast.parse(source)
     assert (
         "def train_model_and_wait(self, payload: TrainModelRequest, "
+        "callback_url: str = None, "
         "poll_interval: float = 1.0, timeout: float = 60.0) -> "
         "TrainModelTaskResult:"
         in source
@@ -1055,18 +1056,18 @@ def test_generate_python_sdk_and_wait_disambiguates_against_a_colliding_real_end
     ast.parse(source)
     # The real "/train_model_and_wait" endpoint's own method.
     assert source.count(
-        "def train_model_and_wait(self, payload: TrainModelAndWaitRequest) "
-        "-> TrainModelAndWaitResponse:"
+        "def train_model_and_wait(self, payload: TrainModelAndWaitRequest, "
+        "callback_url: str = None) -> TrainModelAndWaitResponse:"
     ) == 1
     # The synthesized companion for "/train_model" was pushed to a
     # disambiguated name instead of colliding with it.
     assert (
         "def train_model_and_wait_2(self, payload: TrainModelRequest, "
+        "callback_url: str = None, "
         "poll_interval: float = 1.0, timeout: float = 60.0) -> "
         "TrainModelTaskResult:"
         in source
     )
-    assert "def train_model_and_wait(self, payload: TrainModelAndWaitRequest, " not in source
 
 
 def test_generate_python_sdk_and_wait_submits_then_polls_to_completion(
@@ -1112,8 +1113,8 @@ def test_generate_python_sdk_and_wait_submits_then_polls_to_completion(
         def json(self):
             return self._payload
 
-    def fake_post(url, json=None, headers=None, timeout=None):
-        post_calls.append({"url": url, "json": json})
+    def fake_post(url, json=None, headers=None, timeout=None, params=None):
+        post_calls.append({"url": url, "json": json, "params": params})
         return FakePostResponse()
 
     get_responses = [
@@ -1138,7 +1139,11 @@ def test_generate_python_sdk_and_wait_submits_then_polls_to_completion(
 
     assert result == {"status": "completed", "result": 42}
     assert post_calls == [
-        {"url": "http://localhost:8000/train_model", "json": {"epochs": 5}}
+        {
+            "url": "http://localhost:8000/train_model",
+            "json": {"epochs": 5},
+            "params": None,
+        }
     ]
     assert get_calls == [
         "http://localhost:8000/tasks/abc123",
@@ -2452,6 +2457,7 @@ def test_generate_typescript_sdk_background_endpoint_gets_an_and_wait_companion(
 
     assert (
         "async train_model_and_wait(payload: TrainModelRequest, "
+        "callbackUrl?: string, "
         "options: { pollIntervalMs?: number; timeoutMs?: number } = {}): "
         "Promise<TrainModelTaskResult> {" in source
     )
@@ -2511,7 +2517,7 @@ def test_generate_typescript_sdk_and_wait_submits_then_polls_to_completion(tmp_p
         const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
         const client = new NotebookAPIClient("http://localhost:8000");
         const result = await client.train_model_and_wait(
-          {{ epochs: 5 }}, {{ pollIntervalMs: 0, timeoutMs: 5000 }}
+          {{ epochs: 5 }}, undefined, {{ pollIntervalMs: 0, timeoutMs: 5000 }}
         );
 
         console.log(JSON.stringify({{ result, calls }}));
@@ -3201,9 +3207,9 @@ test_client = TestClient(app)
 
 import types
 
-def fake_post(url, json=None, headers=None, timeout=None):
+def fake_post(url, json=None, headers=None, timeout=None, params=None):
     path = url.split("://", 1)[1].split("/", 1)[1]
-    resp = test_client.post("/" + path, json=json, headers=headers)
+    resp = test_client.post("/" + path, json=json, headers=headers, params=params)
     resp.raise_for_status = lambda: None
     return resp
 
@@ -3238,6 +3244,16 @@ finished = client.train_model_and_wait(
 )
 assert finished["status"] == "completed", finished
 assert finished["result"] == "trained for 3 epochs", finished
+
+# callback_url, when given, is really sent to the real compiled app as
+# a query param on the submission request -- confirmed via the app's
+# own rejection of a non-http(s) scheme (api_generator.py), proving it
+# actually reached the endpoint's own validation, not just present in
+# the generated client's own source text. (raise_for_status() is faked
+# as a no-op above, so a non-2xx response still resolves to its own
+# JSON body here rather than raising.)
+rejected = client.train_model({{"epochs": 3}}, callback_url="not-a-url")
+assert "callback_url" in rejected["detail"], rejected
 
 print("SDK_AND_WAIT_E2E_OK")
 """
@@ -3311,9 +3327,9 @@ test_client = TestClient(app)
 
 import types
 
-def fake_post(url, json=None, headers=None, timeout=None):
+def fake_post(url, json=None, headers=None, timeout=None, params=None):
     path = url.split("://", 1)[1].split("/", 1)[1]
-    resp = test_client.post("/" + path, json=json, headers=headers)
+    resp = test_client.post("/" + path, json=json, headers=headers, params=params)
     resp.raise_for_status = lambda: None
     return resp
 
@@ -3719,11 +3735,12 @@ def test_generate_typescript_sdk_background_endpoint_gets_typed_submission_and_r
     assert "export interface TrainModelTaskResult {" in source
     assert "result?: number;" in source
     assert (
-        "async train_model(payload: TrainModelRequest): "
+        "async train_model(payload: TrainModelRequest, callbackUrl?: string): "
         "Promise<TrainModelResponse> {" in source
     )
     assert (
         "async train_model_and_wait(payload: TrainModelRequest, "
+        "callbackUrl?: string, "
         "options: { pollIntervalMs?: number; timeoutMs?: number } = {}): "
         "Promise<TrainModelTaskResult> {" in source
     )
@@ -4027,18 +4044,20 @@ def test_generate_python_sdk_background_endpoint_gets_typed_submission_and_resul
     assert "class TrainModelTaskResult(TypedDict, total=False):" in source
     assert "    result: float" in source
     assert (
-        "def train_model(self, payload: TrainModelRequest) -> "
+        "def train_model(self, payload: TrainModelRequest, "
+        "callback_url: str = None) -> "
         "TrainModelResponse:" in source
     )
     assert (
         "def train_model_and_wait(self, payload: TrainModelRequest, "
+        "callback_url: str = None, "
         "poll_interval: float = 1.0, timeout: float = 60.0) -> "
         "TrainModelTaskResult:" in source
     )
 
     namespace = _exec_python_client_with_fake_requests(
         output_path, monkeypatch,
-        post=lambda url, json=None, headers=None, timeout=None: types.SimpleNamespace(
+        post=lambda url, json=None, headers=None, timeout=None, params=None: types.SimpleNamespace(
             raise_for_status=lambda: None,
             json=lambda: {"task_id": "abc123", "status": "processing"},
         ),
@@ -4107,3 +4126,307 @@ def test_generate_python_sdk_return_type_sanitizes_a_notebook_defined_class(
 
     namespace = _exec_python_client_with_fake_requests(output_path, monkeypatch)
     assert "NotebookAPIClient" in namespace
+
+
+def test_generate_python_sdk_background_method_forwards_callback_url_as_query_param(
+    tmp_path, monkeypatch,
+):
+    """Confirmed missing before this feature: the generated server side
+    has accepted an optional ?callback_url= on every background endpoint
+    since it was added (POSTing the finished task's own result there
+    instead of requiring the caller to poll get_task/wait_for_task), and
+    the OpenAPI schema itself already documents it as a real query
+    parameter on that operation -- but neither generated client ever
+    gained any way to actually reach it.
+    """
+
+    schema = {
+        "paths": {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "x-notebook-to-api-async": True,
+                }
+            }
+        },
+    }
+
+    schema_path = _write_schema(tmp_path, {})
+    schema_path.write_text(json.dumps(schema), encoding="utf-8")
+    output_path = schema_path.parent / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    calls = []
+
+    def fake_post(url, json=None, headers=None, timeout=None, params=None):
+        calls.append(params)
+        return types.SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"task_id": "abc", "status": "processing"},
+        )
+
+    namespace = _exec_python_client_with_fake_requests(
+        output_path, monkeypatch, post=fake_post
+    )
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    client.train_model({}, callback_url="https://example.test/hook")
+
+    assert calls == [{"callback_url": "https://example.test/hook"}]
+
+
+def test_generate_python_sdk_background_method_omits_params_without_callback_url(
+    tmp_path, monkeypatch,
+):
+
+    schema = {
+        "paths": {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "x-notebook-to-api-async": True,
+                }
+            }
+        },
+    }
+
+    schema_path = _write_schema(tmp_path, {})
+    schema_path.write_text(json.dumps(schema), encoding="utf-8")
+    output_path = schema_path.parent / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    calls = []
+
+    def fake_post(url, json=None, headers=None, timeout=None, params=None):
+        calls.append(params)
+        return types.SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"task_id": "abc", "status": "processing"},
+        )
+
+    namespace = _exec_python_client_with_fake_requests(
+        output_path, monkeypatch, post=fake_post
+    )
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    client.train_model({})
+
+    assert calls == [None]
+
+
+def test_generate_python_sdk_synchronous_endpoint_has_no_callback_url_parameter(
+    tmp_path,
+):
+    """callback_url is a background-only capability the generated server
+    itself never even reads for a synchronous endpoint -- its own
+    generated method must not offer a parameter that would silently do
+    nothing.
+    """
+
+    schema_path = _write_schema(
+        tmp_path, {"/add": {"post": {"operationId": "add"}}}
+    )
+    output_path = schema_path.parent / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert "def add(self, payload: AddRequest) -> AddResponse:" in source
+    assert "callback_url" not in source.split("def add(")[1].split("\n\n")[0]
+
+
+def test_generate_python_sdk_and_wait_forwards_callback_url_to_the_submission_call(
+    tmp_path, monkeypatch,
+):
+
+    schema = {
+        "paths": {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "x-notebook-to-api-async": True,
+                }
+            }
+        },
+    }
+
+    schema_path = _write_schema(tmp_path, {})
+    schema_path.write_text(json.dumps(schema), encoding="utf-8")
+    output_path = schema_path.parent / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    calls = []
+
+    def fake_post(url, json=None, headers=None, timeout=None, params=None):
+        calls.append(params)
+        return types.SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"task_id": "abc", "status": "processing"},
+        )
+
+    def fake_get(url, headers=None, timeout=None):
+        return types.SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"status": "completed", "result": 1},
+        )
+
+    namespace = _exec_python_client_with_fake_requests(
+        output_path, monkeypatch, post=fake_post, get=fake_get
+    )
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    client.train_model_and_wait(
+        {}, callback_url="https://example.test/hook", poll_interval=0, timeout=5
+    )
+
+    assert calls == [{"callback_url": "https://example.test/hook"}]
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_background_method_appends_callback_url_query_param(
+    tmp_path,
+):
+    """Mirrors
+    test_generate_python_sdk_background_method_forwards_callback_url_as_query_param
+    for the TypeScript client.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "x-notebook-to-api-async": True,
+                }
+            }
+        },
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    source = client_path.read_text(encoding="utf-8")
+    assert (
+        "async train_model(payload: TrainModelRequest, callbackUrl?: string): "
+        "Promise<TrainModelResponse> {" in source
+    )
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        let capturedUrl = null;
+        globalThis.fetch = async (url, opts) => {{
+          capturedUrl = url;
+          return {{ ok: true, json: async () => ({{ task_id: "abc", status: "processing" }}) }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        await client.train_model({{}}, "https://example.test/hook");
+        const withCallback = capturedUrl;
+
+        capturedUrl = null;
+        await client.train_model({{}});
+        const withoutCallback = capturedUrl;
+
+        console.log(JSON.stringify({{ withCallback, withoutCallback }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)], capture_output=True, text=True, timeout=30
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["withCallback"] == (
+        "http://localhost:8000/train_model?callback_url="
+        "https%3A%2F%2Fexample.test%2Fhook"
+    )
+    assert output["withoutCallback"] == "http://localhost:8000/train_model"
+
+
+def test_generate_typescript_sdk_synchronous_endpoint_has_no_callback_url_parameter(
+    tmp_path,
+):
+
+    schema_path = _write_schema(
+        tmp_path, {"/add": {"post": {"operationId": "add"}}}
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    source = client_path.read_text(encoding="utf-8")
+
+    assert "async add(payload: AddRequest): Promise<AddResponse> {" in source
+    assert "callbackUrl" not in source.split("async add(")[1].split("\n  }")[0]
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_and_wait_forwards_callback_url_to_the_submission_call(
+    tmp_path,
+):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "x-notebook-to-api-async": True,
+                }
+            }
+        },
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        let submissionUrl = null;
+        globalThis.fetch = async (url, opts) => {{
+          if ((opts && opts.method) === "POST") {{
+            submissionUrl = url;
+            return {{ ok: true, json: async () => ({{ task_id: "abc", status: "processing" }}) }};
+          }}
+          return {{ ok: true, json: async () => ({{ status: "completed", result: 1 }}) }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        await client.train_model_and_wait(
+          {{}}, "https://example.test/hook", {{ pollIntervalMs: 0, timeoutMs: 5000 }}
+        );
+
+        console.log(JSON.stringify({{ capturedUrl: submissionUrl }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)], capture_output=True, text=True, timeout=30
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["capturedUrl"] == (
+        "http://localhost:8000/train_model?callback_url="
+        "https%3A%2F%2Fexample.test%2Fhook"
+    )

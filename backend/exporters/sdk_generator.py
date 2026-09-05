@@ -1257,10 +1257,28 @@ def generate_python_sdk(
             )
 
         # Determine parameter schema (simple request body expecting JSON)
-        lines.append(
-            f"    def {method_name}(self, payload: {request_class}) "
-            f"-> {response_class}:"
-        )
+        # Confirmed missing before this feature: the generated server side
+        # has accepted an optional ?callback_url= on every background
+        # endpoint since it was added (POSTing the finished task's own
+        # result there instead of requiring the caller to poll
+        # get_task/wait_for_task), and the OpenAPI schema itself already
+        # documents it as a real query parameter on that operation -- but
+        # neither generated client ever gained any way to actually reach
+        # it, short of a caller bypassing this client entirely and
+        # building the raw HTTP request by hand. A synchronous endpoint's
+        # own method signature is left untouched -- callback_url is a
+        # background-only capability the generated server itself never
+        # even reads for one.
+        if is_background:
+            lines.append(
+                f"    def {method_name}(self, payload: {request_class}, "
+                f"callback_url: str = None) -> {response_class}:"
+            )
+        else:
+            lines.append(
+                f"    def {method_name}(self, payload: {request_class}) "
+                f"-> {response_class}:"
+            )
         if is_background:
             wait_name = wait_method_names[path]
             static_doc = (
@@ -1269,7 +1287,12 @@ def generate_python_sdk(
                 "immediately -- not the real result. Call get_task(task_id)/"
                 "wait_for_task(task_id) yourself, or use "
                 f"{wait_name}(...) to submit and block until the real "
-                "result is ready in one call."
+                "result is ready in one call.\n\n"
+                "`callback_url`, if given, is POSTed the finished task's "
+                "own record ({\"task_id\", \"status\", \"result\"/"
+                "\"error\"}) once it completes or fails -- see the "
+                "generated server's own ?callback_url= for what it "
+                "actually delivers and when."
             )
         else:
             static_doc = f"Call the `{path}` endpoint with JSON payload."
@@ -1281,6 +1304,11 @@ def generate_python_sdk(
         lines.append(f'            json=payload,')
         lines.append(f'            headers={{"X-API-Key": self.api_key}},')
         lines.append(f'            timeout=self.timeout,')
+        if is_background:
+            lines.append(
+                "            params={'callback_url': callback_url} "
+                "if callback_url else None,"
+            )
         lines.append("        ))")
         lines.append("")
 
@@ -1303,6 +1331,7 @@ def generate_python_sdk(
             )
             lines.append(
                 f"    def {wait_name}(self, payload: {request_class}, "
+                "callback_url: str = None, "
                 "poll_interval: float = 1.0, timeout: float = 60.0) -> "
                 f"{task_result_class}:"
             )
@@ -1314,7 +1343,9 @@ def generate_python_sdk(
             lines.append(
                 f"        {_python_method_docstring(description, and_wait_static_doc)}"
             )
-            lines.append(f"        submitted = self.{method_name}(payload)")
+            lines.append(
+                f"        submitted = self.{method_name}(payload, callback_url)"
+            )
             lines.append(
                 "        return self.wait_for_task("
                 "submitted['task_id'], poll_interval, timeout)"
@@ -1486,11 +1517,31 @@ def generate_typescript_sdk(
     )
     lines.append("  }")
     lines.append("")
+    # `callbackUrl` (optional -- only ever passed by a background
+    # endpoint's own generated method below) becomes a "?callback_url="
+    # query param on the request URL, via URLSearchParams the same way
+    # listTasks already builds its own query string -- confirmed missing
+    # before this feature: the generated server side has accepted this
+    # exact query param on every background endpoint since it was added
+    # (POSTing the finished task's own result there instead of requiring
+    # the caller to poll getTask/waitForTask), and the OpenAPI schema
+    # itself already documents it as a real parameter on that operation,
+    # but neither generated client ever gained any way to actually reach
+    # it, short of a caller bypassing this client entirely and building
+    # the raw HTTP request by hand.
     lines.append(
-        "  private async request(path: string, payload: unknown): Promise<any> {"
+        "  private async request(path: string, payload: unknown, "
+        "callbackUrl?: string): Promise<any> {"
     )
+    lines.append("    let url = path;")
+    lines.append("    if (callbackUrl) {")
     lines.append(
-        "    return this.requestWithRetry(path, () => fetch(`${this.baseUrl}${path}`, {"
+        '      url = `${path}?${new URLSearchParams({ '
+        'callback_url: callbackUrl }).toString()}`;'
+    )
+    lines.append("    }")
+    lines.append(
+        "    return this.requestWithRetry(url, () => fetch(`${this.baseUrl}${url}`, {"
     )
     lines.append('      method: "POST",')
     lines.append("      headers: {")
@@ -1754,15 +1805,30 @@ def generate_typescript_sdk(
                 f"Call getTask(taskId)/waitForTask(taskId) yourself, or "
                 f"use {wait_name}(...)",
                 "to submit and wait for the real result in one call.",
+                "",
+                "`callbackUrl`, if given, is POSTed the finished task's own",
+                'record ({ task_id, status, result/error }) once it '
+                "completes or fails --",
+                "see the generated server's own ?callback_url= for what "
+                "it actually delivers and when.",
             ]
         else:
             static_text_lines = [f"Calls the `{path}` endpoint with JSON payload."]
         lines.extend(_jsdoc_lines(description, static_text_lines))
-        lines.append(
-            f"  async {method_name}(payload: {request_interface}): "
-            f"Promise<{response_interface}> {{"
-        )
-        lines.append(f'    return this.request("{path}", payload);')
+        if is_background:
+            lines.append(
+                f"  async {method_name}(payload: {request_interface}, "
+                f"callbackUrl?: string): Promise<{response_interface}> {{"
+            )
+            lines.append(
+                f'    return this.request("{path}", payload, callbackUrl);'
+            )
+        else:
+            lines.append(
+                f"  async {method_name}(payload: {request_interface}): "
+                f"Promise<{response_interface}> {{"
+            )
+            lines.append(f'    return this.request("{path}", payload);')
         lines.append("  }")
 
         if is_background:
@@ -1781,10 +1847,13 @@ def generate_typescript_sdk(
             lines.extend(_jsdoc_lines(description, and_wait_static_text_lines))
             lines.append(
                 f"  async {wait_name}(payload: {request_interface}, "
+                "callbackUrl?: string, "
                 "options: { pollIntervalMs?: number; timeoutMs?: number } = "
                 f"{{}}): Promise<{task_result_interface}> {{"
             )
-            lines.append(f"    const submitted = await this.{method_name}(payload);")
+            lines.append(
+                f"    const submitted = await this.{method_name}(payload, callbackUrl);"
+            )
             lines.append(
                 "    return this.waitForTask(submitted.task_id, options);"
             )
