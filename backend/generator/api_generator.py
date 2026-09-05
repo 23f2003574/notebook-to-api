@@ -17,7 +17,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "GENERATED_AT", "PYTHON_VERSION", "NOTEBOOK_TO_API_VERSION", "ALLOWED_ORIGINS",
     "PUBLIC_URL", "DISABLE_DOCS",
     "MAX_REQUEST_BODY_BYTES", "MaxRequestBodySizeMiddleware",
-    "MAX_PENDING_TASKS",
+    "MAX_PENDING_TASKS", "WEBHOOK_TIMEOUT_SECONDS", "_deliver_task_webhook",
     "verify_api_key", "custom_openapi",
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
     "validate_auth", "service_info", "service_config", "metrics", "uptime",
@@ -129,6 +129,19 @@ GENERATED_APP_ENV_VARS = [
             "one key being throttled never affects another. 0 (the "
             "default) disables rate limiting entirely, preserving the "
             "previous unbounded behavior."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_WEBHOOK_TIMEOUT_SECONDS",
+        "default": "5",
+        "description": (
+            "How long a background task's own optional ?callback_url= "
+            "webhook delivery may take before giving up. Purely "
+            "best-effort: the task's own status/result recorded in "
+            "TASKS is never affected by webhook delivery failing, "
+            "timing out, or being misconfigured -- this only bounds "
+            "how long that one delivery attempt can block the worker "
+            "thread running it."
         ),
     },
     {
@@ -393,6 +406,10 @@ def generate_fastapi_code(
     lines.append("import sys")
     lines.append("import inspect")
     lines.append("import hmac")
+    lines.append("import json")
+    lines.append("import urllib.request")
+    lines.append("import urllib.error")
+    lines.append("from urllib.parse import urlparse")
     lines.append("from datetime import datetime")
     lines.append("import time")
     lines.append("from pydantic import BaseModel, Field")
@@ -663,6 +680,16 @@ def generate_fastapi_code(
         'MAX_PENDING_TASKS = int(os.getenv('
         '"NOTEBOOK_API_MAX_TASKS", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_MAX_TASKS")}"'
+        '))'
+    )
+    # Bounds _deliver_task_webhook's own single delivery attempt below --
+    # a caller-supplied ?callback_url= pointing at a slow or unresponsive
+    # endpoint must never be allowed to tie up a worker thread (and, by
+    # extension, this process' limited thread pool) indefinitely.
+    lines.append(
+        'WEBHOOK_TIMEOUT_SECONDS = int(os.getenv('
+        '"NOTEBOOK_API_WEBHOOK_TIMEOUT_SECONDS", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_WEBHOOK_TIMEOUT_SECONDS")}"'
         '))'
     )
     lines.append(
@@ -1063,6 +1090,7 @@ def generate_fastapi_code(
     lines.append("        'max_request_body_bytes': MAX_REQUEST_BODY_BYTES,")
     lines.append("        'task_ttl_seconds': TASK_TTL_SECONDS,")
     lines.append("        'max_pending_tasks': MAX_PENDING_TASKS,")
+    lines.append("        'webhook_timeout_seconds': WEBHOOK_TIMEOUT_SECONDS,")
     lines.append("        'rate_limit_per_minute': RATE_LIMIT_PER_MINUTE or None,")
     lines.append("        'allowed_origins': ALLOWED_ORIGINS,")
     lines.append("        'disable_docs': DISABLE_DOCS,")
@@ -1298,7 +1326,40 @@ def generate_fastapi_code(
     lines.append("    }")
 
     lines.append("")
-    lines.append("async def _run_background_task(func, task_id, *args, **kwargs):")
+    # Delivers a single best-effort POST of `payload` (the finished task's
+    # own TASKS record: status/result, or status/error) to `callback_url`,
+    # so a caller can opt out of polling get_task/wait_for_task for a
+    # background task's completion. Deliberately synchronous (urllib, not
+    # an async HTTP client) -- called only from inside
+    # anyio.to_thread.run_sync below, the same worker-thread pattern a
+    # plain (non-async) notebook function itself already runs under, for
+    # the identical reason: it must never block this app's single event
+    # loop for up to WEBHOOK_TIMEOUT_SECONDS waiting on a caller-controlled
+    # endpoint that might be slow or unresponsive. Any failure (a DNS
+    # failure, connection refused, a non-2xx response, a timeout) is
+    # swallowed here, not raised -- delivery is purely a convenience on
+    # top of the task's own real result, which is already durably recorded
+    # in TASKS by the time this is ever called; a caller who needs a
+    # guarantee should poll get_task/wait_for_task instead.
+    lines.append("def _deliver_task_webhook(callback_url, payload):")
+    lines.append("    try:")
+    lines.append("        body = json.dumps(payload).encode('utf-8')")
+    lines.append("        request = urllib.request.Request(")
+    lines.append("            callback_url,")
+    lines.append("            data=body,")
+    lines.append("            headers={'Content-Type': 'application/json'},")
+    lines.append("            method='POST',")
+    lines.append("        )")
+    lines.append(
+        "        urllib.request.urlopen(request, timeout=WEBHOOK_TIMEOUT_SECONDS).close()"
+    )
+    lines.append("    except (urllib.error.URLError, ValueError, OSError):")
+    lines.append("        pass")
+    lines.append("")
+    lines.append(
+        "async def _run_background_task(func, task_id, *args, "
+        "callback_url=None, **kwargs):"
+    )
     lines.append("    try:")
     lines.append("        # Calling a plain (non-async) notebook function directly")
     lines.append("        # here would run its entire body synchronously, inline, on")
@@ -1357,10 +1418,29 @@ def generate_fastapi_code(
     lines.append("        if task_id in TASKS:")
     lines.append("            TASKS[task_id][\"status\"] = \"completed\"")
     lines.append("            TASKS[task_id][\"result\"] = result")
+    # Built from the local outcome directly, not read back from TASKS --
+    # this must still deliver the real result even when the entry is
+    # already gone by the time we get here (POST /tasks/reset firing
+    # mid-run; see the "if task_id in TASKS" guard above), rather than
+    # silently sending a webhook with nothing in it.
+    lines.append("        if callback_url:")
+    lines.append("            await anyio.to_thread.run_sync(")
+    lines.append(
+        "                _deliver_task_webhook, callback_url, "
+        "{\"task_id\": task_id, \"status\": \"completed\", \"result\": result}"
+    )
+    lines.append("            )")
     lines.append("    except Exception as e:")
     lines.append("        if task_id in TASKS:")
     lines.append("            TASKS[task_id][\"status\"] = \"failed\"")
     lines.append("            TASKS[task_id][\"error\"] = str(e)")
+    lines.append("        if callback_url:")
+    lines.append("            await anyio.to_thread.run_sync(")
+    lines.append(
+        "                _deliver_task_webhook, callback_url, "
+        "{\"task_id\": task_id, \"status\": \"failed\", \"error\": str(e)}"
+    )
+    lines.append("            )")
     lines.append("")
     # Generate Pydantic models for request bodies
     for func in functions:
@@ -1549,7 +1629,11 @@ def generate_fastapi_code(
                 f'openapi_extra={{"x-notebook-to-api-category": "{category}", "x-notebook-to-api-async": True, "security": [{{"ApiKeyAuth": []}}]}}, '
                 f'responses={{200: {{"description": {repr(task_response_description)}, "content": {{"application/json": {{"example": {repr(task_example_response)}}}}}}}}})'
             )
-            lines.append(f"def {func_name}(req: {model_name}, background_tasks: BackgroundTasks, _: None = Depends(verify_api_key)):")
+            lines.append(
+                f"def {func_name}(req: {model_name}, background_tasks: "
+                "BackgroundTasks, callback_url: Optional[str] = None, "
+                "_: None = Depends(verify_api_key)):"
+            )
             lines.append("    _evict_expired_tasks()")
             lines.append("    if len(TASKS) >= MAX_PENDING_TASKS:")
             lines.append("        raise HTTPException(")
@@ -1560,11 +1644,41 @@ def generate_fastapi_code(
             lines.append("                'finished.'")
             lines.append("            ),")
             lines.append("        )")
+            # A caller opting into webhook delivery (rather than polling
+            # get_task/wait_for_task) supplies this per-request, not via a
+            # server-side operator setting -- so, unlike every other limit
+            # this app enforces, this is the one input here that's fully
+            # attacker/caller-controlled. Restricted to http(s) so a typo'd
+            # or malicious "file:///etc/passwd"-style scheme can't reach
+            # urllib.request.urlopen inside _deliver_task_webhook at all --
+            # validated here, before a task is even created, so the error
+            # is immediate and actionable rather than a silent delivery
+            # failure discovered only much later.
+            lines.append("    if callback_url is not None:")
+            lines.append("        if urlparse(callback_url).scheme not in ('http', 'https'):")
+            lines.append("            raise HTTPException(")
+            lines.append("                status_code=400,")
+            lines.append("                detail=(")
+            lines.append(
+                "                    'callback_url must be an http:// or '"
+            )
+            lines.append(
+                "                    'https:// URL'"
+            )
+            lines.append("                ),")
+            lines.append("            )")
             lines.append("    task_id = uuid.uuid4().hex")
             lines.append("    TASKS[task_id] = {\"status\": \"processing\", \"created_at\": time.time()}")
             # Pass positional arguments to the background function
-            args_expr = ", ".join(_call_arg_expr(arg) for arg in args)
-            lines.append(f"    background_tasks.add_task(_run_background_task, notebook_module.{func_name}, task_id, {args_expr})")
+            call_parts = (
+                [f"notebook_module.{func_name}", "task_id"]
+                + [_call_arg_expr(arg) for arg in args]
+                + ["callback_url=callback_url"]
+            )
+            lines.append(
+                "    background_tasks.add_task(_run_background_task, "
+                f"{', '.join(call_parts)})"
+            )
             lines.append("    return {\"task_id\": task_id, \"status\": \"processing\"}")
         else:
             lines.append(

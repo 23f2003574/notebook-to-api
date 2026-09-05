@@ -18837,6 +18837,7 @@ def test_env_vars_preview_requires_no_notebook_and_needs_no_body():
         "NOTEBOOK_API_TASK_TTL_SECONDS",
         "NOTEBOOK_API_MAX_TASKS",
         "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE",
+        "NOTEBOOK_API_WEBHOOK_TIMEOUT_SECONDS",
         "NOTEBOOK_API_PUBLIC_URL",
         "NOTEBOOK_API_DISABLE_DOCS",
     }

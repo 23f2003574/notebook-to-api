@@ -1,5 +1,7 @@
+import json
 import sys
 import types
+import urllib.error
 
 import pytest
 
@@ -30,6 +32,7 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
         "NOTEBOOK_API_TASK_TTL_SECONDS",
         "NOTEBOOK_API_MAX_TASKS",
         "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE",
+        "NOTEBOOK_API_WEBHOOK_TIMEOUT_SECONDS",
         "NOTEBOOK_API_PUBLIC_URL",
         "NOTEBOOK_API_DISABLE_DOCS",
     }
@@ -489,6 +492,7 @@ def test_generated_app_exposes_get_config_reporting_its_own_runtime_limits(monke
         "'max_request_body_bytes': MAX_REQUEST_BODY_BYTES,",
         "'task_ttl_seconds': TASK_TTL_SECONDS,",
         "'max_pending_tasks': MAX_PENDING_TASKS,",
+        "'webhook_timeout_seconds': WEBHOOK_TIMEOUT_SECONDS,",
         "'rate_limit_per_minute': RATE_LIMIT_PER_MINUTE or None,",
         "'allowed_origins': ALLOWED_ORIGINS,",
         "'disable_docs': DISABLE_DOCS,",
@@ -510,6 +514,7 @@ def test_generated_app_exposes_get_config_reporting_its_own_runtime_limits(monke
     assert body["max_request_body_bytes"] == 10 * 1024 * 1024
     assert body["task_ttl_seconds"] == 3600
     assert body["max_pending_tasks"] == 10000
+    assert body["webhook_timeout_seconds"] == 5
     assert body["rate_limit_per_minute"] is None
     assert body["allowed_origins"] == ["*"]
     assert body["disable_docs"] is False
@@ -622,6 +627,223 @@ def test_notebook_function_named_max_pending_tasks_is_rejected():
 
     with pytest.raises(ReservedFunctionNameError, match="MAX_PENDING_TASKS"):
         generate_fastapi_code(functions)
+
+
+def test_notebook_function_named_webhook_timeout_seconds_is_rejected():
+    """WEBHOOK_TIMEOUT_SECONDS is a module-level name the generated app
+    itself defines (see RESERVED_INFRASTRUCTURE_NAMES) -- same collision
+    hazard class as MAX_PENDING_TASKS or TASK_TTL_SECONDS.
+    """
+
+    functions = [
+        {"name": "WEBHOOK_TIMEOUT_SECONDS", "args": [], "return_type": "dict"}
+    ]
+
+    with pytest.raises(ReservedFunctionNameError, match="WEBHOOK_TIMEOUT_SECONDS"):
+        generate_fastapi_code(functions)
+
+
+def test_notebook_function_named_deliver_task_webhook_is_rejected():
+    """_deliver_task_webhook is a module-level helper the generated app
+    itself defines -- same collision hazard class as _evict_expired_tasks
+    or _run_background_task: a notebook function of this exact name would
+    silently overwrite the real helper at module-execution time.
+    """
+
+    functions = [
+        {"name": "_deliver_task_webhook", "args": [], "return_type": "dict"}
+    ]
+
+    with pytest.raises(ReservedFunctionNameError, match="_deliver_task_webhook"):
+        generate_fastapi_code(functions)
+
+
+def test_background_endpoint_rejects_non_http_callback_url(monkeypatch):
+    """A caller-supplied callback_url is fully caller-controlled input
+    (unlike every other limit this app enforces, which is set by the
+    operator) -- restricted to http(s) so a "file://" or other
+    non-network scheme can't reach urllib.request.urlopen inside
+    _deliver_task_webhook at all.
+    """
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    rejected = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "file:///etc/passwd"},
+        headers=headers,
+    )
+    assert rejected.status_code == 400
+    assert "callback_url" in rejected.json()["detail"]
+    assert namespace["TASKS"] == {}
+
+    accepted = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/hook"},
+        headers=headers,
+    )
+    assert accepted.status_code == 200
+
+
+def test_background_task_delivers_webhook_on_completion_and_failure(monkeypatch):
+    """Confirmed missing before this feature: a caller of a background
+    endpoint had no way to learn a task finished short of polling
+    get_task/wait_for_task -- there was no way to opt into being notified
+    the moment it actually completes or fails.
+    """
+    import urllib.request
+
+    functions = [
+        {"name": "process_data", "args": [], "return_type": "dict"},
+        {"name": "train_model", "args": [], "return_type": "dict"},
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: {"score": 0.9}
+
+    def _blows_up():
+        raise ValueError("training diverged")
+
+    namespace["notebook_module"].train_model = _blows_up
+
+    delivered = []
+
+    class _FakeResponse:
+        def close(self):
+            pass
+
+    def fake_urlopen(request, timeout=None):
+        delivered.append(
+            {
+                "url": request.full_url,
+                "timeout": timeout,
+                "body": json.loads(request.data.decode("utf-8")),
+            }
+        )
+        return _FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    ok_response = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/hook-ok"},
+        headers=headers,
+    )
+    assert ok_response.status_code == 200
+
+    fail_response = client.post(
+        "/train_model",
+        json={},
+        params={"callback_url": "https://example.test/hook-fail"},
+        headers=headers,
+    )
+    assert fail_response.status_code == 200
+
+    assert len(delivered) == 2
+
+    ok_call = next(c for c in delivered if c["url"] == "https://example.test/hook-ok")
+    assert ok_call["timeout"] == 5
+    assert ok_call["body"]["status"] == "completed"
+    assert ok_call["body"]["result"] == {"score": 0.9}
+    assert ok_call["body"]["task_id"] == ok_response.json()["task_id"]
+
+    fail_call = next(
+        c for c in delivered if c["url"] == "https://example.test/hook-fail"
+    )
+    assert fail_call["body"]["status"] == "failed"
+    assert "training diverged" in fail_call["body"]["error"]
+
+
+def test_background_task_without_callback_url_never_touches_urlopen(monkeypatch):
+    """The overwhelmingly common case (no callback_url given) must behave
+    exactly as before this feature -- no network call attempted at all.
+    """
+    import urllib.request
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("urlopen should never be called without callback_url")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fail_if_called)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    response = client.post("/process_data", json={}, headers=headers)
+    assert response.status_code == 200
+
+
+def test_webhook_delivery_failure_does_not_affect_task_result(monkeypatch):
+    """Webhook delivery is purely best-effort -- an unreachable/erroring
+    callback_url must never prevent the task's own real result from being
+    recorded in TASKS.
+    """
+    import urllib.request
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    def broken_urlopen(request, timeout=None):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", broken_urlopen)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    response = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/unreachable"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    task_id = response.json()["task_id"]
+    task = namespace["TASKS"][task_id]
+    assert task["status"] == "completed"
+    assert task["result"] == "ok"
 
 
 def test_route_generation():
@@ -997,7 +1219,7 @@ def test_keyword_only_arg_forwarded_by_keyword_through_background_task():
 
     assert (
         "background_tasks.add_task(_run_background_task, notebook_module.train, "
-        "task_id, req.data, epochs=req.epochs)"
+        "task_id, req.data, epochs=req.epochs, callback_url=callback_url)"
     ) in code
 
 
