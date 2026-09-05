@@ -2350,7 +2350,7 @@ def _currently_compiled_notebook_metadata():
 def _generated_files_modified_since_compile():
     """Whether GENERATED_DIR's own compile-produced files (app.py,
     requirements.txt, Dockerfile, .dockerignore, docker-compose.yml,
-    .env.example, the runtime module) no longer match the baseline
+    .env.example, README.md, the runtime module) no longer match the baseline
     write_compile_metadata
     recorded for them at compile time (see "generated_files_sha256",
     backend/compiler.py) -- the output-side mirror of
@@ -12870,8 +12870,8 @@ def list_generated_files_endpoint(checksums: bool = False):
     reports for the currently-compiled entry: that one catches the
     *source notebook* having changed since the last compile, this one
     catches the compiled *output itself* -- app.py, requirements.txt,
-    Dockerfile, .dockerignore, docker-compose.yml, .env.example, the
-    runtime module -- having been hand-edited on the server since then,
+    Dockerfile, .dockerignore, docker-compose.yml, .env.example,
+    README.md, the runtime module -- having been hand-edited on the server since then,
     which nothing before this could detect at all. True/False once a
     compile with this field has actually happened; null if nothing has
     been compiled yet, or if GENERATED_DIR was produced by a compile that

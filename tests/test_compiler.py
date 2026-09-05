@@ -472,6 +472,22 @@ def test_generate_dockerignore_excludes_docker_compose(tmp_path):
     assert "docker-compose.yml" in dockerignore
 
 
+def test_generate_dockerignore_excludes_readme(tmp_path):
+    """README.md (generate_readme, backend/generator/docker_generator.py)
+    is purely documentation for a human looking at the compiled output
+    directory or a downloaded bundle -- never read by the running app
+    itself, the identical reasoning this .dockerignore already applies to
+    .env.example/docker-compose.yml.
+    """
+
+    output_path = tmp_path / ".dockerignore"
+
+    generate_dockerignore(str(output_path))
+
+    dockerignore = output_path.read_text(encoding="utf-8")
+    assert "README.md" in dockerignore
+
+
 def test_docker_compose_content_matches_generate_docker_composes_own_output(tmp_path):
     """docker_compose_content is the pure string generate_docker_compose
     itself writes to disk -- see dockerfile_content's own docstring for
@@ -731,6 +747,81 @@ def test_compiler_pipeline_generates_an_env_example_file(tmp_path):
     assert "PORT=8000" in env_example
     assert "NOTEBOOK_API_KEY=notebook-to-api-dev-key" in env_example
     assert "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE=0" in env_example
+
+
+def test_compiler_pipeline_generates_a_readme_file(tmp_path):
+    """Confirmed missing before this feature: a compiled app shipped
+    app.py, requirements.txt, a Dockerfile/.dockerignore/docker-
+    compose.yml/.env.example, and optionally an OpenAPI export and SDK
+    clients -- but nothing telling a human what any of it actually was.
+    An operator who downloads GET /api/download's zip, or clones a deploy
+    target's repo, had no single file saying which endpoints this
+    specific compile exposes, that every one needs an X-API-Key header,
+    or even the one command that actually runs the thing they just got.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def train_model(data: list) -> dict:\n    return {}\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    readme_path = output_dir / "README.md"
+    assert readme_path.is_file()
+
+    readme = readme_path.read_text(encoding="utf-8")
+    assert readme.startswith("# generated")
+    assert "`POST /add`" in readme
+    assert (
+        "`POST /train_model` -- enqueues a background task" in readme
+    )
+    assert "X-API-Key" in readme
+    assert "docker compose up --build" in readme
+    assert "NOTEBOOK_API_KEY" in readme
+
+
+def test_compiler_pipeline_readme_reflects_only_and_exclude_filtering(tmp_path):
+    """The README's own endpoint list must reflect what this compile
+    actually exposes -- the same functions/only/exclude-filtered list
+    generate_fastapi_code itself compiles into endpoints -- not every
+    function the notebook happens to define.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir), only=["add"])
+
+    readme = (output_dir / "README.md").read_text(encoding="utf-8")
+    assert "`POST /add`" in readme
+    assert "`POST /subtract`" not in readme
 
 
 def test_compiler_pipeline_bakes_source_notebook_sha256_into_info_endpoint(tmp_path):
@@ -4241,6 +4332,38 @@ def test_generated_files_sha256_changes_when_env_example_is_hand_edited(tmp_path
 
     (output_dir / ".env.example").write_text(
         "PORT=9999\n", encoding="utf-8"
+    )
+
+    assert _generated_files_sha256(str(output_dir)) != baseline
+
+
+def test_generated_files_sha256_changes_when_readme_is_hand_edited(tmp_path):
+    """README.md is a real compile-produced artifact (generate_readme,
+    backend/generator/docker_generator.py) just like Dockerfile/
+    docker-compose.yml/.env.example -- a hand-edit to it must be detected
+    the identical way theirs already are.
+    """
+
+    from backend.compiler import _generated_files_sha256
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    baseline = _generated_files_sha256(str(output_dir))
+
+    (output_dir / "README.md").write_text(
+        "hand-edited\n", encoding="utf-8"
     )
 
     assert _generated_files_sha256(str(output_dir)) != baseline

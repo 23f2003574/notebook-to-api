@@ -74,7 +74,8 @@ from backend.generator.docker_generator import (
     generate_dockerfile,
     generate_dockerignore,
     generate_docker_compose,
-    generate_env_example
+    generate_env_example,
+    generate_readme
 )
 
 
@@ -855,7 +856,7 @@ def hash_notebook_file(notebook_path):
 # Every file a real compile actually writes into output_dir, relative to
 # it -- "app.py" itself is appended separately in
 # _generated_files_sha256 below, since its own filename is a caller-
-# supplied output_path, not a fixed literal the way these six are.
+# supplied output_path, not a fixed literal the way these seven are.
 # Deliberately a fixed list, not a generic directory walk: an operator's
 # own unrelated file dropped into output_dir by hand (or a later POST
 # /api/export-openapi/export-sdk's own openapi.json/sdk/, which a
@@ -868,6 +869,7 @@ _GENERATED_OUTPUT_RELATIVE_PATHS = (
     ".dockerignore",
     "docker-compose.yml",
     ".env.example",
+    "README.md",
     os.path.join("runtime", "notebook_module.py"),
 )
 
@@ -934,7 +936,7 @@ def write_compile_metadata(
     _generated_files_sha256(output_dir, app_filename) above -- a
     baseline hash over the exact compile-produced files themselves
     (app.py, requirements.txt, Dockerfile, .dockerignore,
-    docker-compose.yml, .env.example, the runtime module), taken at the
+    docker-compose.yml, .env.example, README.md, the runtime module), taken at the
     very end of a successful compile, once every one of those has
     actually been written. Every hash/staleness check this dashboard
     already had
@@ -1359,6 +1361,15 @@ def compile_notebook_to_api(
             )
 
             generate_env_example(env_example_path, GENERATED_APP_ENV_VARS)
+
+            readme_path = os.path.join(
+                output_dir,
+                "README.md"
+            )
+
+            generate_readme(
+                readme_path, package_name, functions, GENERATED_APP_ENV_VARS
+            )
 
             write_compile_metadata(
                 source_notebook_path or notebook_path,

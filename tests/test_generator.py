@@ -3275,3 +3275,94 @@ def test_generate_dockerignore_writes_exactly_what_dockerignore_content_returns(
     generate_dockerignore(str(output_path))
 
     assert output_path.read_text(encoding="utf-8") == dockerignore_content()
+
+
+def test_readme_content_is_a_pure_string_with_no_disk_access(tmp_path, monkeypatch):
+    from backend.generator.docker_generator import readme_content
+
+    monkeypatch.chdir(tmp_path)
+
+    content = readme_content(
+        package_name="my_app",
+        functions=[{"name": "add", "args": [], "return_type": "int"}],
+    )
+
+    assert content.startswith("# my_app")
+    assert "`POST /add`" in content
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_readme_content_marks_a_background_function_as_such():
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(
+        functions=[{"name": "train_model", "args": [], "return_type": "dict"}],
+    )
+
+    assert (
+        "`POST /train_model` -- enqueues a background task; poll "
+        "`GET /tasks/{task_id}` for the result"
+    ) in content
+
+
+def test_readme_content_does_not_mark_a_synchronous_function_as_background():
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(
+        functions=[{"name": "add", "args": [], "return_type": "int"}],
+    )
+
+    assert "`POST /add`" in content
+    assert "`POST /add` --" not in content
+
+
+def test_readme_content_with_no_functions_says_so():
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(functions=[])
+
+    assert "doesn't expose any functions yet" in content
+
+
+def test_readme_content_lists_every_env_var_with_its_own_default():
+    from backend.generator.docker_generator import readme_content
+
+    env_vars = [
+        {
+            "name": "NOTEBOOK_API_KEY",
+            "default": "notebook-to-api-dev-key",
+            "description": "API key(s) accepted on X-API-Key.",
+        },
+    ]
+
+    content = readme_content(env_vars=env_vars)
+
+    assert (
+        "`NOTEBOOK_API_KEY` (default: `notebook-to-api-dev-key`) -- "
+        "API key(s) accepted on X-API-Key."
+    ) in content
+
+
+def test_readme_content_defaults_match_generate_readmes_own_defaults():
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content()
+
+    assert content.startswith("# generated")
+
+
+def test_generate_readme_writes_exactly_what_readme_content_returns(tmp_path):
+    from backend.generator.docker_generator import readme_content, generate_readme
+
+    output_path = tmp_path / "README.md"
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+    env_vars = [
+        {"name": "NOTEBOOK_API_KEY", "default": "dev-key", "description": "d"}
+    ]
+
+    generate_readme(str(output_path), "my_app", functions, env_vars)
+
+    assert (
+        output_path.read_text(encoding="utf-8")
+        == readme_content("my_app", functions, env_vars)
+    )
