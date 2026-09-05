@@ -453,7 +453,9 @@ def test_generate_python_sdk_disambiguates_a_path_colliding_with_a_hardcoded_cli
     assert f"def {colliding_name}_2(self, payload: dict):" in source
 
 
-@pytest.mark.parametrize("colliding_name", ["base_url", "api_key", "timeout"])
+@pytest.mark.parametrize(
+    "colliding_name", ["base_url", "api_key", "timeout", "max_retries", "backoff_factor"]
+)
 def test_generate_python_sdk_disambiguates_a_path_colliding_with_an_instance_attribute(
     tmp_path, colliding_name
 ):
@@ -484,7 +486,9 @@ def test_generate_python_sdk_disambiguates_a_path_colliding_with_an_instance_att
     assert f"def {colliding_name}_2(self, payload: dict):" in source
 
 
-@pytest.mark.parametrize("colliding_name", ["baseUrl", "apiKey", "timeoutMs"])
+@pytest.mark.parametrize(
+    "colliding_name", ["baseUrl", "apiKey", "timeoutMs", "maxRetries", "backoffFactor"]
+)
 def test_generate_typescript_sdk_disambiguates_a_path_colliding_with_an_instance_field(
     tmp_path, colliding_name
 ):
@@ -1441,6 +1445,327 @@ def test_generate_python_sdk_infrastructure_helper_names_take_priority_over_a_co
     assert "def health_2(self, payload: dict):" in source
 
 
+def _exec_python_client_with_fake_requests(output_path, monkeypatch, **fake_fns):
+    """Load a generated Python client with `fake_fns` (e.g. get=..., post=...)
+    installed on a fake `requests` module, mirroring the pattern every other
+    Python-client test in this file already uses.
+    """
+    fake_requests = types.ModuleType("requests")
+    for name, fn in fake_fns.items():
+        setattr(fake_requests, name, fn)
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(
+        compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"),
+        namespace,
+    )
+    return namespace
+
+
+def test_generate_python_sdk_retries_a_transient_failure_before_succeeding(
+    tmp_path, monkeypatch
+):
+    """Confirmed missing before this feature: only wait_for_task's own
+    polling loop ever retried a transient failure -- every other call
+    this client makes (submitting a notebook function, list_tasks/
+    delete_task/..., health/ready/info/config/metrics/uptime/auth_*)
+    raised immediately on a single 429/502/503/504, even though the
+    generated server side already reports exactly when a caller should
+    retry (Retry-After/X-RateLimit-Reset).
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    class FakeHTTPError(Exception):
+        def __init__(self, response):
+            super().__init__(f"{response.status_code} error")
+            self.response = response
+
+    class FakeResponse:
+        def __init__(self, status_code, payload=None):
+            self.status_code = status_code
+            self._payload = payload
+            self.headers = {}
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise FakeHTTPError(self)
+
+        def json(self):
+            return self._payload
+
+    responses = [
+        FakeResponse(503),
+        FakeResponse(503),
+        FakeResponse(200, {"result": 42}),
+    ]
+    calls = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append(1)
+        return responses[len(calls) - 1]
+
+    namespace = _exec_python_client_with_fake_requests(
+        output_path, monkeypatch, post=fake_post
+    )
+
+    client = namespace["NotebookAPIClient"](
+        "http://localhost:8000", backoff_factor=0
+    )
+    result = client.train_model({"a": 1})
+
+    assert result == {"result": 42}
+    assert len(calls) == 3
+
+
+def test_generate_python_sdk_does_not_retry_a_non_transient_failure(
+    tmp_path, monkeypatch
+):
+    """A genuine 404/401/... must still raise on the very first attempt --
+    retrying it would just waste time reproducing the identical failure.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    class FakeHTTPError(Exception):
+        def __init__(self, response):
+            super().__init__("404 error")
+            self.response = response
+
+    class FakeResponse:
+        status_code = 404
+        headers = {}
+
+        def raise_for_status(self):
+            raise FakeHTTPError(self)
+
+    calls = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append(1)
+        return FakeResponse()
+
+    namespace = _exec_python_client_with_fake_requests(
+        output_path, monkeypatch, post=fake_post
+    )
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+
+    with pytest.raises(FakeHTTPError):
+        client.train_model({})
+
+    assert len(calls) == 1
+
+
+def test_generate_python_sdk_gives_up_after_max_retries(tmp_path, monkeypatch):
+    """A transient failure that never clears up must still eventually
+    surface to the caller, bounded by max_retries -- retrying forever
+    would just hang the caller instead of ever reporting the failure.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    class FakeHTTPError(Exception):
+        def __init__(self, response):
+            super().__init__("503 error")
+            self.response = response
+
+    class FakeResponse:
+        status_code = 503
+        headers = {}
+
+        def raise_for_status(self):
+            raise FakeHTTPError(self)
+
+    calls = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append(1)
+        return FakeResponse()
+
+    namespace = _exec_python_client_with_fake_requests(
+        output_path, monkeypatch, post=fake_post
+    )
+
+    client = namespace["NotebookAPIClient"](
+        "http://localhost:8000", max_retries=2, backoff_factor=0
+    )
+
+    with pytest.raises(FakeHTTPError):
+        client.train_model({})
+
+    assert len(calls) == 3, "1 initial attempt + 2 retries"
+
+
+def test_generate_python_sdk_max_retries_zero_disables_retry(tmp_path, monkeypatch):
+    """max_retries=0 must reproduce the exact pre-feature behavior: raise
+    on the very first transient failure, never retry at all.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    class FakeHTTPError(Exception):
+        def __init__(self, response):
+            super().__init__("503 error")
+            self.response = response
+
+    class FakeResponse:
+        status_code = 503
+        headers = {}
+
+        def raise_for_status(self):
+            raise FakeHTTPError(self)
+
+    calls = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append(1)
+        return FakeResponse()
+
+    namespace = _exec_python_client_with_fake_requests(
+        output_path, monkeypatch, post=fake_post
+    )
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000", max_retries=0)
+
+    with pytest.raises(FakeHTTPError):
+        client.train_model({})
+
+    assert len(calls) == 1
+
+
+def test_generate_python_sdk_retry_honors_retry_after_header(tmp_path, monkeypatch):
+    """A 429's own Retry-After header (the generated server always sends
+    one -- see _enforce_rate_limit in api_generator.py) must drive the
+    actual wait, not just the generic exponential backoff.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    class FakeHTTPError(Exception):
+        def __init__(self, response):
+            super().__init__("429 error")
+            self.response = response
+
+    class FakeResponse:
+        def __init__(self, status_code, headers=None, payload=None):
+            self.status_code = status_code
+            self.headers = headers or {}
+            self._payload = payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise FakeHTTPError(self)
+
+        def json(self):
+            return self._payload
+
+    responses = [
+        FakeResponse(429, headers={"Retry-After": "7"}),
+        FakeResponse(200, payload={"result": 1}),
+    ]
+    calls = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append(1)
+        return responses[len(calls) - 1]
+
+    namespace = _exec_python_client_with_fake_requests(
+        output_path, monkeypatch, post=fake_post
+    )
+
+    sleeps = []
+    namespace["time"].sleep = lambda seconds: sleeps.append(seconds)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    result = client.train_model({})
+
+    assert result == {"result": 1}
+    assert sleeps == [7.0]
+
+
+def test_generate_python_sdk_list_tasks_and_infra_methods_also_retry(
+    tmp_path, monkeypatch
+):
+    """The retry/backoff addition isn't limited to per-function POST
+    endpoints -- list_tasks/delete_task/... and the hardcoded health/
+    ready/info/... GET methods route through the identical helper.
+    """
+
+    schema_path = _write_schema(tmp_path, {})
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    class FakeHTTPError(Exception):
+        def __init__(self, response):
+            super().__init__("503 error")
+            self.response = response
+
+    class FakeResponse:
+        def __init__(self, status_code, payload=None):
+            self.status_code = status_code
+            self.headers = {}
+            self._payload = payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise FakeHTTPError(self)
+
+        def json(self):
+            return self._payload
+
+    responses = [
+        FakeResponse(503),
+        FakeResponse(200, {"status": "ok"}),
+    ]
+    calls = []
+
+    def fake_get(url, headers=None, timeout=None, params=None):
+        calls.append(1)
+        return responses[len(calls) - 1]
+
+    namespace = _exec_python_client_with_fake_requests(
+        output_path, monkeypatch, get=fake_get
+    )
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000", backoff_factor=0)
+
+    assert client.health() == {"status": "ok"}
+    assert len(calls) == 2
+
+
 def test_generate_typescript_sdk_produces_expected_structure(tmp_path):
 
     schema_path = _write_schema(
@@ -1667,6 +1992,7 @@ def test_generate_typescript_sdk_disambiguates_paths_that_collide_on_method_name
         "deleteTask",
         "deleteCompletedTasks",
         "deleteFailedTasks",
+        "request",
     ],
 )
 def test_generate_typescript_sdk_disambiguates_a_path_colliding_with_a_hardcoded_client_method(
@@ -2006,7 +2332,7 @@ def test_generate_typescript_sdk_every_method_attaches_status_to_a_thrown_error(
         globalThis.fetch = async (url, opts) => ({{ ok: false, status: 429 }});
 
         const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
-        const client = new NotebookAPIClient("http://localhost:8000");
+        const client = new NotebookAPIClient("http://localhost:8000", {{ maxRetries: 0 }});
 
         const calls = [
           ["train_model", () => client.train_model({{}})],
@@ -2384,6 +2710,274 @@ def test_generate_typescript_sdk_infrastructure_helpers_send_correct_requests(tm
         {"url": "http://localhost:8000/auth/validate", "method": "GET"},
     ]
     assert output["results"] == [{"status": "ok"}] * 9
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_retries_a_transient_failure_before_succeeding(
+    tmp_path,
+):
+    """Mirrors generate_python_sdk's identical retry addition: only
+    waitForTask's own polling loop ever retried a transient failure --
+    every other call this client makes (a per-function POST, listTasks/
+    deleteTask/..., health/ready/info/...) threw immediately on a single
+    429/502/503/504, even though the generated server side already
+    reports exactly when a caller should retry.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        globalThis.setTimeout = (fn) => fn();
+
+        let calls = 0;
+        globalThis.fetch = async (url, opts) => {{
+          calls++;
+          if (calls < 3) {{
+            return {{ ok: false, status: 503, headers: {{ get: () => null }} }};
+          }}
+          return {{ ok: true, json: async () => ({{ result: 42 }}) }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        const result = await client.train_model({{ a: 1 }});
+
+        console.log(JSON.stringify({{ result, calls }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)], capture_output=True, text=True, timeout=30
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["result"] == {"result": 42}
+    assert output["calls"] == 3
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_does_not_retry_a_non_transient_failure(tmp_path):
+    """A genuine 404/401/... must still throw on the very first attempt."""
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        globalThis.setTimeout = (fn) => {{ throw new Error("should not retry"); }};
+
+        let calls = 0;
+        globalThis.fetch = async (url, opts) => {{
+          calls++;
+          return {{ ok: false, status: 404, headers: {{ get: () => null }} }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        let status = null;
+        try {{
+          await client.train_model({{}});
+        }} catch (err) {{
+          status = err.status;
+        }}
+
+        console.log(JSON.stringify({{ status, calls }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)], capture_output=True, text=True, timeout=30
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output == {"status": 404, "calls": 1}
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_gives_up_after_max_retries(tmp_path):
+    """A transient failure that never clears up must still eventually
+    surface to the caller, bounded by maxRetries.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        globalThis.setTimeout = (fn) => fn();
+
+        let calls = 0;
+        globalThis.fetch = async (url, opts) => {{
+          calls++;
+          return {{ ok: false, status: 503, headers: {{ get: () => null }} }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000", {{ maxRetries: 2 }});
+
+        let status = null;
+        try {{
+          await client.train_model({{}});
+        }} catch (err) {{
+          status = err.status;
+        }}
+
+        console.log(JSON.stringify({{ status, calls }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)], capture_output=True, text=True, timeout=30
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output == {"status": 503, "calls": 3}, "1 initial attempt + 2 retries"
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_retry_honors_retry_after_header(tmp_path):
+    """A 429's own Retry-After header must drive the actual wait, not
+    just the generic exponential backoff.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const delays = [];
+        globalThis.setTimeout = (fn, ms) => {{ delays.push(ms); fn(); }};
+
+        let calls = 0;
+        globalThis.fetch = async (url, opts) => {{
+          calls++;
+          if (calls === 1) {{
+            return {{
+              ok: false,
+              status: 429,
+              headers: {{ get: (name) => (name === "Retry-After" ? "7" : null) }},
+            }};
+          }}
+          return {{ ok: true, json: async () => ({{ result: 1 }}) }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        const result = await client.train_model({{}});
+
+        console.log(JSON.stringify({{ result, delays }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)], capture_output=True, text=True, timeout=30
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["result"] == {"result": 1}
+    assert output["delays"] == [7000]
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_list_tasks_and_infra_methods_also_retry(tmp_path):
+    """The retry/backoff addition isn't limited to the shared POST
+    `request()` helper -- listTasks/deleteTask/... and the hardcoded
+    health/ready/info/... methods route through the identical helper.
+    """
+
+    schema_path = _write_schema(tmp_path, {})
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        globalThis.setTimeout = (fn) => fn();
+
+        let calls = 0;
+        globalThis.fetch = async (url, opts) => {{
+          calls++;
+          if (calls === 1) {{
+            return {{ ok: false, status: 503, headers: {{ get: () => null }} }};
+          }}
+          return {{ ok: true, json: async () => ({{ status: "ok" }}) }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        const result = await client.health();
+
+        console.log(JSON.stringify({{ result, calls }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)], capture_output=True, text=True, timeout=30
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output == {"result": {"status": "ok"}, "calls": 2}
 
 
 def test_sdk_pipeline_end_to_end_against_real_compiled_app(tmp_path):

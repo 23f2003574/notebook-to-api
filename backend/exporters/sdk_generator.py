@@ -34,7 +34,7 @@ PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     # to the string, not the method: calling client.base_url(...) fails
     # with "'str' object is not callable", and nothing about the method
     # definition itself signals why.
-    "base_url", "api_key", "timeout",
+    "base_url", "api_key", "timeout", "max_retries", "backoff_factor",
 })
 
 # Same hazard as PYTHON_RESERVED_CLIENT_METHOD_NAMES above, for the
@@ -54,7 +54,18 @@ TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     # this.timeoutMs), and a class can't declare a field and a method
     # under the same identifier -- "Duplicate identifier" at TypeScript
     # compile time, not just a same-named method colliding.
-    "baseUrl", "apiKey", "timeoutMs",
+    "baseUrl", "apiKey", "timeoutMs", "maxRetries", "backoffFactor",
+    # "request" was, confirmed, already missing here even before this
+    # retry/backoff addition: `private async request(path, payload)` is
+    # this client's own hardcoded POST helper every per-function endpoint
+    # routes through, but nothing stopped a notebook path sanitizing to
+    # "request" (e.g. "/request") from generating a same-named *public*
+    # method -- a duplicate identifier, "Duplicate identifier" at
+    # TypeScript compile time, the exact hazard this whole reserved-name
+    # set otherwise exists to prevent. requestWithRetry/retryDelayMs/sleep
+    # are this same retry addition's own new private helpers, reserved for
+    # the identical reason.
+    "request", "requestWithRetry", "retryDelayMs", "sleep",
 })
 
 
@@ -327,9 +338,18 @@ def generate_python_sdk(
     lines.append("import requests")
     lines.append("")
     lines.append("class NotebookAPIClient:")
+    # Every non-2xx status a real deployment can return for reasons that
+    # have nothing to do with the caller's own request being wrong --
+    # NOTEBOOK_API_RATE_LIMIT_PER_MINUTE (429), or a rolling deploy/
+    # restart briefly returning 502/503/504. wait_for_task already treats
+    # exactly these as transient while polling; _request below extends
+    # the identical judgment to every *other* call this client makes.
+    lines.append("    _TRANSIENT_STATUS_CODES = (429, 502, 503, 504)")
+    lines.append("")
     lines.append(
         "    def __init__(self, base_url: str, api_key: str = None, "
-        "timeout: float = 30.0):"
+        "timeout: float = 30.0, max_retries: int = 3, "
+        "backoff_factor: float = 0.5):"
     )
     lines.append("        self.base_url = base_url.rstrip('/')")
     lines.append("        # Generated endpoints require the same X-API-Key header the")
@@ -346,6 +366,89 @@ def generate_python_sdk(
     lines.append("        # *loop*, but each individual request it (and every other method")
     lines.append("        # here) makes had no bound of its own until now.")
     lines.append("        self.timeout = timeout")
+    # Confirmed missing before this: only wait_for_task's own polling loop
+    # ever retried a transient failure -- every other call this client
+    # makes (submitting a notebook function, list_tasks/delete_task/...,
+    # health/ready/info/config/metrics/uptime/auth_*) raised immediately
+    # on a single 429/502/503/504 or connection error, even though the
+    # generated server side already goes out of its way to report exactly
+    # when a caller should retry (X-RateLimit-Reset, Retry-After -- see
+    # _enforce_rate_limit in api_generator.py). max_retries=0 disables
+    # this entirely, preserving the previous immediate-raise behavior.
+    lines.append("        self.max_retries = max_retries")
+    lines.append("        self.backoff_factor = backoff_factor")
+    lines.append("")
+    lines.append("    def _retry_delay(self, response, attempt):")
+    lines.append(
+        '        """Seconds to wait before retrying: honors a 429\'s own '
+        "Retry-After"
+    )
+    lines.append(
+        "        header when present (the generated server always sends "
+        "one -- see"
+    )
+    lines.append(
+        "        _enforce_rate_limit in api_generator.py), else "
+        'exponential backoff."""'
+    )
+    lines.append("        if response is not None:")
+    lines.append('            retry_after = response.headers.get("Retry-After")')
+    lines.append("            if retry_after is not None:")
+    lines.append("                try:")
+    lines.append("                    return max(0.0, float(retry_after))")
+    lines.append("                except ValueError:")
+    lines.append("                    pass")
+    lines.append("        return self.backoff_factor * (2 ** attempt)")
+    lines.append("")
+    lines.append("    def _request(self, request_fn):")
+    lines.append(
+        '        """Run `request_fn` (a zero-argument callable making one '
+        'HTTP call --'
+    )
+    lines.append(
+        "        e.g. `lambda: requests.get(url, ...)` -- and returning "
+        "its raw"
+    )
+    lines.append(
+        "        response, before raise_for_status()), retrying it on a "
+        "transient"
+    )
+    lines.append(
+        "        failure (a _TRANSIENT_STATUS_CODES response, or a "
+        "connection-level"
+    )
+    lines.append(
+        "        error carrying no response at all) up to self.max_retries "
+        "times."
+    )
+    lines.append(
+        '        Any other failure (a genuine 401/404/...) still raises '
+        'immediately,'
+    )
+    lines.append(
+        '        exactly as before this existed."""'
+    )
+    lines.append("        attempt = 0")
+    lines.append("        while True:")
+    lines.append("            try:")
+    lines.append("                response = request_fn()")
+    lines.append("                response.raise_for_status()")
+    lines.append("            except Exception as exc:")
+    lines.append("                response = getattr(exc, 'response', None)")
+    lines.append("                status_code = getattr(response, 'status_code', None)")
+    lines.append(
+        "                if attempt >= self.max_retries or ("
+    )
+    lines.append(
+        "                    response is not None and "
+        "status_code not in self._TRANSIENT_STATUS_CODES"
+    )
+    lines.append("                ):")
+    lines.append("                    raise")
+    lines.append("                time.sleep(self._retry_delay(response, attempt))")
+    lines.append("                attempt += 1")
+    lines.append("                continue")
+    lines.append("            return response.json()")
     lines.append("")
     lines.append("    def get_task(self, task_id: str) -> dict:")
     lines.append('        """Fetch the current status/result of a background task."""')
@@ -493,44 +596,36 @@ def generate_python_sdk(
     lines.append('            params["limit"] = limit')
     lines.append("        if offset is not None:")
     lines.append('            params["offset"] = offset')
-    lines.append("        response = requests.get(")
+    lines.append("        return self._request(lambda: requests.get(")
     lines.append('            f"{self.base_url}/tasks",')
     lines.append('            headers={"X-API-Key": self.api_key},')
     lines.append("            params=params,")
     lines.append("            timeout=self.timeout,")
-    lines.append("        )")
-    lines.append("        response.raise_for_status()")
-    lines.append("        return response.json()")
+    lines.append("        ))")
     lines.append("")
     lines.append("    def delete_task(self, task_id: str) -> dict:")
     lines.append('        """Delete a single background task by id."""')
-    lines.append("        response = requests.delete(")
+    lines.append("        return self._request(lambda: requests.delete(")
     lines.append('            f"{self.base_url}/tasks/{task_id}",')
     lines.append('            headers={"X-API-Key": self.api_key},')
     lines.append("            timeout=self.timeout,")
-    lines.append("        )")
-    lines.append("        response.raise_for_status()")
-    lines.append("        return response.json()")
+    lines.append("        ))")
     lines.append("")
     lines.append("    def delete_completed_tasks(self) -> dict:")
     lines.append('        """Delete every task with status \'completed\'."""')
-    lines.append("        response = requests.delete(")
+    lines.append("        return self._request(lambda: requests.delete(")
     lines.append('            f"{self.base_url}/tasks/completed",')
     lines.append('            headers={"X-API-Key": self.api_key},')
     lines.append("            timeout=self.timeout,")
-    lines.append("        )")
-    lines.append("        response.raise_for_status()")
-    lines.append("        return response.json()")
+    lines.append("        ))")
     lines.append("")
     lines.append("    def delete_failed_tasks(self) -> dict:")
     lines.append('        """Delete every task with status \'failed\'."""')
-    lines.append("        response = requests.delete(")
+    lines.append("        return self._request(lambda: requests.delete(")
     lines.append('            f"{self.base_url}/tasks/failed",')
     lines.append('            headers={"X-API-Key": self.api_key},')
     lines.append("            timeout=self.timeout,")
-    lines.append("        )")
-    lines.append("        response.raise_for_status()")
-    lines.append("        return response.json()")
+    lines.append("        ))")
     lines.append("")
     # health/ready/info/config/metrics/uptime/auth_status/auth_info/
     # auth_validate are, like get_task/list_tasks/... above, hardcoded
@@ -565,13 +660,11 @@ def generate_python_sdk(
     ):
         lines.append(f"    def {infra_method_name}(self) -> dict:")
         lines.append(f'        """GET {infra_path}."""')
-        lines.append("        response = requests.get(")
+        lines.append("        return self._request(lambda: requests.get(")
         lines.append(f'            f"{{self.base_url}}{infra_path}",')
         lines.append('            headers={"X-API-Key": self.api_key},')
         lines.append("            timeout=self.timeout,")
-        lines.append("        )")
-        lines.append("        response.raise_for_status()")
-        lines.append("        return response.json()")
+        lines.append("        ))")
         lines.append("")
     for path, method_name in method_names.items():
         is_background = _is_background_path(paths[path])
@@ -593,14 +686,12 @@ def generate_python_sdk(
         lines.append(
             f"        {_python_method_docstring(description, static_doc)}"
         )
-        lines.append(f'        response = requests.post(')
+        lines.append("        return self._request(lambda: requests.post(")
         lines.append(f'            f"{{self.base_url}}{path}",')
         lines.append(f'            json=payload,')
         lines.append(f'            headers={{"X-API-Key": self.api_key}},')
         lines.append(f'            timeout=self.timeout,')
-        lines.append(f'        )')
-        lines.append("        response.raise_for_status()")
-        lines.append("        return response.json()")
+        lines.append("        ))")
         lines.append("")
 
         if is_background:
@@ -655,12 +746,17 @@ def generate_typescript_sdk(
     lines.append("export interface NotebookAPIClientOptions {")
     lines.append("  apiKey?: string;")
     lines.append("  timeoutMs?: number;")
+    lines.append("  maxRetries?: number;")
+    lines.append("  backoffFactor?: number;")
     lines.append("}")
     lines.append("")
     lines.append("export class NotebookAPIClient {")
     lines.append("  private baseUrl: string;")
     lines.append("  private apiKey: string;")
     lines.append("  private timeoutMs: number;")
+    lines.append("  private maxRetries: number;")
+    lines.append("  private backoffFactor: number;")
+    lines.append("  private static readonly TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);")
     lines.append("")
     lines.append(
         "  constructor(baseUrl: string, options: NotebookAPIClientOptions = {}) {"
@@ -680,12 +776,109 @@ def generate_typescript_sdk(
     # (and every other method here) makes had no bound of its own until
     # now -- matches the Python client's identical `timeout` addition.
     lines.append("    this.timeoutMs = options.timeoutMs ?? 30000;")
+    # Confirmed missing before this: only waitForTask's own polling loop
+    # ever retried a transient failure -- every other call this client
+    # makes (a per-function POST, listTasks/deleteTask/..., health/ready/
+    # info/config/metrics/uptime/auth*) threw immediately on a single
+    # 429/502/503/504 or network error, even though the generated server
+    # side already reports exactly when a caller should retry
+    # (X-RateLimit-Reset, Retry-After -- see _enforce_rate_limit in
+    # api_generator.py). maxRetries: 0 disables this entirely, preserving
+    # the previous immediate-throw behavior -- matches the Python
+    # client's identical max_retries/backoff_factor addition.
+    lines.append("    this.maxRetries = options.maxRetries ?? 3;")
+    lines.append("    this.backoffFactor = options.backoffFactor ?? 0.5;")
+    lines.append("  }")
+    lines.append("")
+    lines.append(
+        "  private retryDelayMs(response: Response | null, "
+        "attempt: number): number {"
+    )
+    lines.append("    if (response && response.headers) {")
+    lines.append('      const retryAfter = response.headers.get("Retry-After");')
+    lines.append("      if (retryAfter !== null) {")
+    lines.append("        const seconds = Number(retryAfter);")
+    lines.append("        if (!Number.isNaN(seconds)) {")
+    lines.append("          return Math.max(0, seconds * 1000);")
+    lines.append("        }")
+    lines.append("      }")
+    lines.append("    }")
+    lines.append(
+        "    return this.backoffFactor * 1000 * Math.pow(2, attempt);"
+    )
+    lines.append("  }")
+    lines.append("")
+    lines.append(
+        "  private async requestWithRetry(path: string, "
+        "fn: () => Promise<Response>): Promise<any> {"
+    )
+    lines.append("    let attempt = 0;")
+    lines.append("    while (true) {")
+    lines.append("      let response: Response;")
+    lines.append("      try {")
+    lines.append("        response = await fn();")
+    lines.append("      } catch (err) {")
+    lines.append("        if (attempt >= this.maxRetries) {")
+    lines.append("          throw err;")
+    lines.append("        }")
+    lines.append(
+        "        await this.sleep(this.retryDelayMs(null, attempt));"
+    )
+    lines.append("        attempt++;")
+    lines.append("        continue;")
+    lines.append("      }")
+    lines.append("      if (!response.ok) {")
+    lines.append(
+        "        if ("
+    )
+    lines.append(
+        "          NotebookAPIClient.TRANSIENT_STATUSES.has(response.status) "
+        "&&"
+    )
+    lines.append("          attempt < this.maxRetries")
+    lines.append("        ) {")
+    lines.append(
+        "          await this.sleep(this.retryDelayMs(response, "
+        "attempt));"
+    )
+    lines.append("          attempt++;")
+    lines.append("          continue;")
+    lines.append("        }")
+    # `.status` attached to the thrown Error (not just embedded in its
+    # message) lets a caller distinguish e.g. a 401 from a 429 without
+    # regex-parsing the message string -- mirrors getTask's own identical
+    # `.status` attachment (added so waitForTask could tell a transient
+    # failure from a real one), extended here to the shared retry helper
+    # every generated method other than getTask/waitForTask routes
+    # through (waitForTask already has its own transient-retry loop
+    # around getTask -- see its own docstring above -- so neither is
+    # touched here, avoiding two independent retry loops nested inside
+    # one another).
+    lines.append(
+        "        const error: any = new Error(`Request to ${path} failed "
+        "with status ${response.status}`);"
+    )
+    lines.append("        error.status = response.status;")
+    lines.append("        throw error;")
+    lines.append("      }")
+    lines.append("      return response.json();")
+    lines.append("    }")
+    lines.append("  }")
+    lines.append("")
+    lines.append(
+        "  private sleep(ms: number): Promise<void> {"
+    )
+    lines.append(
+        "    return new Promise((resolve) => setTimeout(resolve, ms));"
+    )
     lines.append("  }")
     lines.append("")
     lines.append(
         "  private async request(path: string, payload: unknown): Promise<any> {"
     )
-    lines.append("    const response = await fetch(`${this.baseUrl}${path}`, {")
+    lines.append(
+        "    return this.requestWithRetry(path, () => fetch(`${this.baseUrl}${path}`, {"
+    )
     lines.append('      method: "POST",')
     lines.append("      headers: {")
     lines.append('        "Content-Type": "application/json",')
@@ -693,22 +886,7 @@ def generate_typescript_sdk(
     lines.append("      },")
     lines.append("      body: JSON.stringify(payload),")
     lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
-    lines.append("    });")
-    lines.append("    if (!response.ok) {")
-    # `.status` attached to the thrown Error (not just embedded in its
-    # message) lets a caller distinguish e.g. a 401 from a 429 without
-    # regex-parsing the message string -- mirrors getTask's own identical
-    # `.status` attachment (added so waitForTask could tell a transient
-    # failure from a real one), extended here to the shared POST helper
-    # every generated per-function method routes through.
-    lines.append(
-        "      const error: any = new Error(`Request to ${path} failed "
-        "with status ${response.status}`);"
-    )
-    lines.append("      error.status = response.status;")
-    lines.append("      throw error;")
-    lines.append("    }")
-    lines.append("    return response.json();")
+    lines.append("    }));")
     lines.append("  }")
     lines.append("")
     lines.append("  async getTask(taskId: string): Promise<any> {")
@@ -822,87 +1000,54 @@ def generate_typescript_sdk(
         "String(options.offset));"
     )
     lines.append("    const query = params.toString();")
+    lines.append('    const path = `/tasks${query ? `?${query}` : ""}`;')
     lines.append(
-        "    const response = await fetch(`${this.baseUrl}/tasks"
-        '${query ? `?${query}` : ""}`, {'
+        "    return this.requestWithRetry(path, () => fetch(`${this.baseUrl}${path}`, {"
     )
     lines.append("      headers: {")
     lines.append('        "X-API-Key": this.apiKey,')
     lines.append("      },")
     lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
-    lines.append("    });")
-    lines.append("    if (!response.ok) {")
-    lines.append(
-        "      const error: any = new Error(`Request to /tasks failed "
-        "with status ${response.status}`);"
-    )
-    lines.append("      error.status = response.status;")
-    lines.append("      throw error;")
-    lines.append("    }")
-    lines.append("    return response.json();")
+    lines.append("    }));")
     lines.append("  }")
     lines.append("")
     lines.append("  async deleteTask(taskId: string): Promise<any> {")
+    lines.append('    const path = `/tasks/${taskId}`;')
     lines.append(
-        "    const response = await fetch(`${this.baseUrl}/tasks/${taskId}`, {"
+        "    return this.requestWithRetry(path, () => fetch(`${this.baseUrl}${path}`, {"
     )
     lines.append('      method: "DELETE",')
     lines.append("      headers: {")
     lines.append('        "X-API-Key": this.apiKey,')
     lines.append("      },")
     lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
-    lines.append("    });")
-    lines.append("    if (!response.ok) {")
-    lines.append(
-        "      const error: any = new Error(`Request to /tasks/${taskId} "
-        "failed with status ${response.status}`);"
-    )
-    lines.append("      error.status = response.status;")
-    lines.append("      throw error;")
-    lines.append("    }")
-    lines.append("    return response.json();")
+    lines.append("    }));")
     lines.append("  }")
     lines.append("")
     lines.append("  async deleteCompletedTasks(): Promise<any> {")
     lines.append(
-        "    const response = await fetch(`${this.baseUrl}/tasks/completed`, {"
+        '    return this.requestWithRetry("/tasks/completed", () => '
+        "fetch(`${this.baseUrl}/tasks/completed`, {"
     )
     lines.append('      method: "DELETE",')
     lines.append("      headers: {")
     lines.append('        "X-API-Key": this.apiKey,')
     lines.append("      },")
     lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
-    lines.append("    });")
-    lines.append("    if (!response.ok) {")
-    lines.append(
-        "      const error: any = new Error(`Request to /tasks/completed "
-        "failed with status ${response.status}`);"
-    )
-    lines.append("      error.status = response.status;")
-    lines.append("      throw error;")
-    lines.append("    }")
-    lines.append("    return response.json();")
+    lines.append("    }));")
     lines.append("  }")
     lines.append("")
     lines.append("  async deleteFailedTasks(): Promise<any> {")
     lines.append(
-        "    const response = await fetch(`${this.baseUrl}/tasks/failed`, {"
+        '    return this.requestWithRetry("/tasks/failed", () => '
+        "fetch(`${this.baseUrl}/tasks/failed`, {"
     )
     lines.append('      method: "DELETE",')
     lines.append("      headers: {")
     lines.append('        "X-API-Key": this.apiKey,')
     lines.append("      },")
     lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
-    lines.append("    });")
-    lines.append("    if (!response.ok) {")
-    lines.append(
-        "      const error: any = new Error(`Request to /tasks/failed "
-        "failed with status ${response.status}`);"
-    )
-    lines.append("      error.status = response.status;")
-    lines.append("      throw error;")
-    lines.append("    }")
-    lines.append("    return response.json();")
+    lines.append("    }));")
     lines.append("  }")
     # Mirrors generate_python_sdk's health/ready/info/config/metrics/
     # uptime/auth_status/auth_info/auth_validate above: hardcoded rather
@@ -926,22 +1071,14 @@ def generate_typescript_sdk(
         lines.append("")
         lines.append(f"  async {infra_method_name}(): Promise<any> {{")
         lines.append(
-            f"    const response = await fetch(`${{this.baseUrl}}{infra_path}`, {{"
+            f'    return this.requestWithRetry("{infra_path}", () => '
+            f"fetch(`${{this.baseUrl}}{infra_path}`, {{"
         )
         lines.append("      headers: {")
         lines.append('        "X-API-Key": this.apiKey,')
         lines.append("      },")
         lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
-        lines.append("    });")
-        lines.append("    if (!response.ok) {")
-        lines.append(
-            f"      const error: any = new Error(`Request to {infra_path} "
-            "failed with status ${response.status}`);"
-        )
-        lines.append("      error.status = response.status;")
-        lines.append("      throw error;")
-        lines.append("    }")
-        lines.append("    return response.json();")
+        lines.append("    }));")
         lines.append("  }")
     for path, method_name in method_names.items():
         is_background = _is_background_path(paths[path])
