@@ -8,7 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from backend.exporters.sdk_generator import generate_python_sdk, generate_typescript_sdk
+from backend.exporters.sdk_generator import (
+    generate_python_sdk,
+    generate_typescript_sdk,
+    _pascal_case,
+    _python_type_to_typescript,
+    _json_schema_type_to_typescript,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -1779,7 +1785,7 @@ def test_generate_typescript_sdk_produces_expected_structure(tmp_path):
     source = output_path.read_text(encoding="utf-8")
 
     assert "export class NotebookAPIClient {" in source
-    assert "async train_model(payload: Record<string, unknown>): Promise<any> {" in source
+    assert "async train_model(payload: TrainModelRequest): Promise<TrainModelResponse> {" in source
     assert "async getTask(taskId: string): Promise<any> {" in source
     assert "async waitForTask(taskId: string" in source
     # Braces must balance -- a mismatch is the most common way hand-built
@@ -1818,7 +1824,7 @@ def test_generate_typescript_sdk_method_jsdoc_includes_the_operations_descriptio
     assert "/**" in source
     assert " * Train the classifier and return its accuracy." in source
     assert (
-        "async train_model(payload: Record<string, unknown>): Promise<any> {"
+        "async train_model(payload: TrainModelRequest): Promise<TrainModelResponse> {"
         in source
     )
     assert source.count("{") == source.count("}")
@@ -1872,7 +1878,7 @@ def test_generate_typescript_sdk_jsdoc_neutralizes_a_terminator_sequence_in_the_
 
     assert "Ends with a terminator * / right here." in source
     assert (
-        "async train_model(payload: Record<string, unknown>): Promise<any> {"
+        "async train_model(payload: TrainModelRequest): Promise<TrainModelResponse> {"
         in source
     )
     assert source.count("{") == source.count("}")
@@ -1955,7 +1961,10 @@ def test_generate_typescript_sdk_method_name_handles_multi_segment_paths(tmp_pat
 
     source = output_path.read_text(encoding="utf-8")
 
-    assert "async tasks_cleanup(payload: Record<string, unknown>): Promise<any> {" in source
+    assert (
+        "async tasks_cleanup(payload: TasksCleanupRequest): "
+        "Promise<TasksCleanupResponse> {"
+    ) in source
 
 
 def test_generate_typescript_sdk_disambiguates_paths_that_collide_on_method_name(tmp_path):
@@ -1979,8 +1988,14 @@ def test_generate_typescript_sdk_disambiguates_paths_that_collide_on_method_name
 
     source = output_path.read_text(encoding="utf-8")
 
-    assert source.count("async tasks_cleanup(payload: Record<string, unknown>): Promise<any> {") == 1
-    assert source.count("async tasks_cleanup_2(payload: Record<string, unknown>): Promise<any> {") == 1
+    assert source.count(
+        "async tasks_cleanup(payload: TasksCleanupRequest): "
+        "Promise<TasksCleanupResponse> {"
+    ) == 1
+    assert source.count(
+        "async tasks_cleanup_2(payload: TasksCleanup2Request): "
+        "Promise<TasksCleanup2Response> {"
+    ) == 1
 
 
 @pytest.mark.parametrize(
@@ -2014,9 +2029,12 @@ def test_generate_typescript_sdk_disambiguates_a_path_colliding_with_a_hardcoded
 
     source = output_path.read_text(encoding="utf-8")
 
+    pascal = _pascal_case(f"{colliding_name}_2")
+
     assert source.count(f"async {colliding_name}(") == 1
     assert (
-        f"async {colliding_name}_2(payload: Record<string, unknown>): Promise<any> {{"
+        f"async {colliding_name}_2(payload: {pascal}Request): "
+        f"Promise<{pascal}Response> {{"
         in source
     )
 
@@ -2403,9 +2421,9 @@ def test_generate_typescript_sdk_background_endpoint_gets_an_and_wait_companion(
     source = client_path.read_text(encoding="utf-8")
 
     assert (
-        "async train_model_and_wait(payload: Record<string, unknown>, "
+        "async train_model_and_wait(payload: TrainModelRequest, "
         "options: { pollIntervalMs?: number; timeoutMs?: number } = {}): "
-        "Promise<any> {" in source
+        "Promise<TrainModelTaskResult> {" in source
     )
 
 
@@ -3420,3 +3438,312 @@ print("CUSTOM_DIR_OPENAPI_EXPORT_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "CUSTOM_DIR_OPENAPI_EXPORT_OK" in proc.stdout
+
+
+def test_python_type_to_typescript_maps_common_scalars():
+
+    assert _python_type_to_typescript("int") == "number"
+    assert _python_type_to_typescript("float") == "number"
+    assert _python_type_to_typescript("str") == "string"
+    assert _python_type_to_typescript("bool") == "boolean"
+    assert _python_type_to_typescript("dict") == "Record<string, unknown>"
+
+
+def test_python_type_to_typescript_falls_back_to_unknown():
+    """A notebook-defined class/Enum name, or any typing construct this
+    bounded mapper doesn't recognize, must fall back to "unknown" -- a
+    safe, always-valid TypeScript type -- rather than emitting a bare
+    identifier TypeScript has no declaration for at all.
+    """
+
+    assert _python_type_to_typescript("Priority") == "unknown"
+    assert _python_type_to_typescript(None) == "unknown"
+    assert _python_type_to_typescript("") == "unknown"
+
+
+def test_python_type_to_typescript_maps_list_and_nested_generics():
+
+    assert _python_type_to_typescript("List[int]") == "number[]"
+    assert _python_type_to_typescript("list[str]") == "string[]"
+    assert _python_type_to_typescript("List[List[int]]") == "number[][]"
+    assert _python_type_to_typescript("Dict[str, int]") == "Record<string, number>"
+    assert (
+        _python_type_to_typescript("List[Dict[str, int]]")
+        == "Record<string, number>[]"
+    )
+
+
+def test_python_type_to_typescript_maps_optional_and_union():
+
+    assert _python_type_to_typescript("Optional[int]") == "number | null"
+    assert _python_type_to_typescript("Optional[str]") == "string | null"
+    assert _python_type_to_typescript("Union[int, str]") == "number | string"
+    assert _python_type_to_typescript("int | None") == "number | null"
+    assert _python_type_to_typescript("int | str") == "number | string"
+
+
+def test_python_type_to_typescript_parenthesizes_a_union_array_element():
+    """"number | null[]" parses in TypeScript as "number | (null[])", not
+    the intended "(number | null)[]" -- a union used as an array element
+    type must be parenthesized.
+    """
+
+    assert _python_type_to_typescript("List[Optional[int]]") == "(number | null)[]"
+
+
+def test_python_type_to_typescript_unwraps_annotated():
+    """Annotated[T, ...] carries extra (non-type) metadata as its own
+    trailing arguments -- only the first one, T, is the actual type.
+    """
+
+    assert (
+        _python_type_to_typescript('Annotated[int, Field(gt=0)]') == "number"
+    )
+
+
+def test_json_schema_type_to_typescript_maps_common_types():
+
+    assert _json_schema_type_to_typescript({"type": "integer"}) == "number"
+    assert _json_schema_type_to_typescript({"type": "number"}) == "number"
+    assert _json_schema_type_to_typescript({"type": "string"}) == "string"
+    assert _json_schema_type_to_typescript({"type": "boolean"}) == "boolean"
+    assert _json_schema_type_to_typescript({"type": "object"}) == "Record<string, unknown>"
+    assert _json_schema_type_to_typescript({}) == "unknown"
+    assert _json_schema_type_to_typescript(None) == "unknown"
+
+
+def test_json_schema_type_to_typescript_maps_arrays():
+
+    assert (
+        _json_schema_type_to_typescript(
+            {"type": "array", "items": {"type": "string"}}
+        )
+        == "string[]"
+    )
+    assert (
+        _json_schema_type_to_typescript({"type": "array", "items": {}}) == "unknown[]"
+    )
+
+
+def test_json_schema_type_to_typescript_maps_nullable_anyof():
+    """Pydantic v2's own JSON schema represents Optional[str] as an
+    "anyOf" of {"type": "string"} and {"type": "null"} -- not a "type"
+    field directly.
+    """
+
+    assert (
+        _json_schema_type_to_typescript(
+            {"anyOf": [{"type": "string"}, {"type": "null"}]}
+        )
+        == "string | null"
+    )
+
+
+def test_pascal_case_converts_snake_case_method_names():
+
+    assert _pascal_case("train_model") == "TrainModel"
+    assert _pascal_case("tasks_cleanup_2") == "TasksCleanup2"
+    assert _pascal_case("add") == "Add"
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_types_request_fields_from_the_real_json_schema(
+    tmp_path,
+):
+    """Confirmed missing before this feature: every generated method's
+    own payload parameter and return value were typed as a bare
+    Record<string, unknown>/any regardless of what the notebook function
+    actually expects or returns -- throwing away the single biggest
+    practical reason to generate a *TypeScript* client over a plain JS
+    one (compile-time type checking, IDE autocomplete).
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "x-notebook-to-api-return-type": "dict",
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TrainModelRequest"
+                                }
+                            }
+                        }
+                    },
+                }
+            }
+        },
+    )
+
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    schema["components"] = {
+        "schemas": {
+            "TrainModelRequest": {
+                "properties": {
+                    "epochs": {"type": "integer"},
+                    "lr": {"type": "number", "default": 0.01},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "note": {
+                        "anyOf": [{"type": "string"}, {"type": "null"}]
+                    },
+                },
+                "required": ["epochs", "tags"],
+            }
+        }
+    }
+    schema_path.write_text(json.dumps(schema), encoding="utf-8")
+
+    client_path = tmp_path / "client.ts"
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    source = client_path.read_text(encoding="utf-8")
+
+    assert "export interface TrainModelRequest {" in source
+    assert "epochs: number;" in source
+    assert "lr?: number;" in source
+    assert "tags: string[];" in source
+    assert "note?: string | null;" in source
+    assert "export interface TrainModelResponse {" in source
+    assert "result: Record<string, unknown>;" in source
+    assert (
+        "async train_model(payload: TrainModelRequest): "
+        "Promise<TrainModelResponse> {" in source
+    )
+
+    # Braces must balance -- confirms the interface block appended after
+    # the class didn't break overall structure.
+    assert source.count("{") == source.count("}")
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        globalThis.fetch = async (url, opts) => ({{
+          ok: true,
+          json: async () => ({{ result: {{ accuracy: 0.9 }} }}),
+        }});
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        const result = await client.train_model({{
+          epochs: 5,
+          tags: ["a", "b"],
+        }});
+
+        console.log(JSON.stringify(result));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)], capture_output=True, text=True, timeout=30
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout.strip().splitlines()[-1]) == {
+        "result": {"accuracy": 0.9}
+    }
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_background_endpoint_gets_typed_submission_and_result_interfaces(
+    tmp_path,
+):
+    """A background endpoint's own two distinct response shapes -- the
+    immediate {task_id, status: "processing"} submission, and the
+    eventually-finished task record its own *_and_wait companion
+    resolves to -- must each get their own correctly-typed interface,
+    not share one generic Promise<any> the way both used to.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/train_model": {
+                "post": {
+                    "operationId": "train_model",
+                    "x-notebook-to-api-async": True,
+                    "x-notebook-to-api-return-type": "float",
+                }
+            }
+        },
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    source = client_path.read_text(encoding="utf-8")
+
+    assert "export interface TrainModelResponse {" in source
+    assert '  status: "processing";' in source
+    assert "export interface TrainModelTaskResult {" in source
+    assert "result?: number;" in source
+    assert (
+        "async train_model(payload: TrainModelRequest): "
+        "Promise<TrainModelResponse> {" in source
+    )
+    assert (
+        "async train_model_and_wait(payload: TrainModelRequest, "
+        "options: { pollIntervalMs?: number; timeoutMs?: number } = {}): "
+        "Promise<TrainModelTaskResult> {" in source
+    )
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        globalThis.fetch = async (url, opts) => ({{
+          ok: true,
+          json: async () => ({{ task_id: "abc123", status: "processing" }}),
+        }});
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        const submitted = await client.train_model({{}});
+        console.log(JSON.stringify(submitted));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)], capture_output=True, text=True, timeout=30
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout.strip().splitlines()[-1]) == {
+        "task_id": "abc123",
+        "status": "processing",
+    }
+
+
+def test_generate_typescript_sdk_request_interface_falls_back_for_no_request_body(
+    tmp_path,
+):
+    """A hardcoded built-in POST route (e.g. /tasks/cleanup, /tasks/reset)
+    has no request body schema at all -- its own {Pascal}Request
+    interface must still be valid TypeScript (an index signature),
+    not an empty, pointless `{}` body.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/tasks/cleanup": {"post": {"operationId": "cleanup_tasks"}}},
+    )
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert "export interface TasksCleanupRequest {" in source
+    assert "[key: string]: unknown;" in source

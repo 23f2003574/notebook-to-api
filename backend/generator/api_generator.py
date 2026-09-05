@@ -1836,7 +1836,23 @@ def generate_fastapi_code(
                 f'description={repr(description)}, '
                 f'tags=["{tag}"], '
                 f'operation_id="{operation_id}", '
-                f'openapi_extra={{"x-notebook-to-api-category": "{category}", "x-notebook-to-api-async": True, "security": [{{"ApiKeyAuth": []}}]}}, '
+                # "x-notebook-to-api-return-type" (the notebook function's
+                # own raw return annotation, exactly as extracted by
+                # extract_functions_from_code -- not resolved/qualified
+                # the way _resolve_annotation_source does for the actual
+                # Python model, since a downstream consumer of this
+                # schema has no notebook_module of its own to qualify
+                # against) is read by generate_typescript_sdk
+                # (backend/exporters/sdk_generator.py) the same way it
+                # already reads "x-notebook-to-api-async"/
+                # "x-notebook-to-api-category" -- an out-of-band channel
+                # for information the OpenAPI spec itself has no field
+                # for, since this endpoint's own declared 200 response
+                # schema is deliberately {} (see task_responses above):
+                # nothing about the *eventual* result a real
+                # GET /tasks/{{task_id}} will carry is otherwise
+                # discoverable from this schema at all.
+                f'openapi_extra={{"x-notebook-to-api-category": "{category}", "x-notebook-to-api-async": True, "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
                 f'responses={repr(task_responses)})'
             )
             lines.append(
@@ -1944,7 +1960,13 @@ def generate_fastapi_code(
                 f'description={repr(description)}, '
                 f'tags=["{tag}"], '
                 f'operation_id="{operation_id}", '
-                f'openapi_extra={{"x-notebook-to-api-category": "{category}", "security": [{{"ApiKeyAuth": []}}]}}, '
+                # See the background branch's own identical
+                # "x-notebook-to-api-return-type" comment above --
+                # this endpoint's own declared 200 response schema is
+                # deliberately {} too (see sync_responses above), so
+                # generate_typescript_sdk has no other way to learn what
+                # "result" actually contains.
+                f'openapi_extra={{"x-notebook-to-api-category": "{category}", "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
                 f'responses={repr(sync_responses)})'
             )
             is_async = func.get("is_async", False)

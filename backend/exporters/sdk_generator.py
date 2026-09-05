@@ -91,6 +91,317 @@ def _method_name_from_path(path: str) -> str:
     return name
 
 
+def _pascal_case(name):
+    """PascalCase identifier for `name` (a method name from
+    _build_method_names, e.g. "train_model" or "tasks_cleanup_2") -- used
+    by generate_typescript_sdk to build each function's own uniquely-named
+    {Pascal}Request/{Pascal}Response TypeScript interfaces below, instead
+    of the bare Record<string, unknown>/any every method's own payload/
+    return type used to be typed as regardless of what the notebook
+    function actually expects or returns.
+    """
+    return "".join(part[:1].upper() + part[1:] for part in name.split("_") if part)
+
+
+# Bare TypeScript equivalents for a Python annotation this tool has no
+# other way to learn the real shape of -- see
+# _python_type_to_typescript below for what these back.
+_PYTHON_SCALAR_TO_TS = {
+    "int": "number", "float": "number", "complex": "number",
+    "str": "string", "bool": "boolean", "bytes": "string",
+    "None": "null", "NoneType": "null",
+    "Any": "unknown", "object": "unknown", "dict": "Record<string, unknown>",
+}
+
+
+def _bracket_inner(type_str, open_bracket_index):
+    """The content strictly between the "[" at `open_bracket_index` and
+    its own matching "]" in `type_str`, respecting nested brackets (so
+    "List[Dict[str, int]]"'s outer brackets correctly capture the whole
+    "Dict[str, int]" inner segment, not just up to its first "]").
+    """
+    depth = 0
+
+    for index in range(open_bracket_index, len(type_str)):
+
+        if type_str[index] == "[":
+            depth += 1
+        elif type_str[index] == "]":
+            depth -= 1
+            if depth == 0:
+                return type_str[open_bracket_index + 1:index]
+
+    return type_str[open_bracket_index + 1:]
+
+
+def _split_top_level(text, separator=","):
+    """Split `text` on `separator`, ignoring one that's nested inside a
+    "[...]" -- e.g. splitting "str, Dict[str, int]" on "," must yield
+    ["str", "Dict[str, int]"], not a spurious three-way split on the
+    comma that's actually part of the nested Dict's own arguments.
+    """
+    parts = []
+    depth = 0
+    current = []
+
+    for char in text:
+
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+
+        if char == separator and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+
+    parts.append("".join(current))
+
+    return [part.strip() for part in parts]
+
+
+def _as_typescript_array_element(ts_type):
+    """`ts_type` wrapped as a TypeScript array element type -- parenthesized
+    when it's itself a union ("number | null"), since "number | null[]"
+    parses as "number | (null[])" in TypeScript, not the intended
+    "(number | null)[]".
+    """
+    return f"({ts_type})[]" if " | " in ts_type else f"{ts_type}[]"
+
+
+def _python_type_to_typescript(type_str):
+    """The closest TypeScript type for `type_str` (a raw, `ast.unparse`d
+    Python annotation, e.g. "int", "List[str]", "Optional[int]" -- the
+    same shape arg["type"]/return_type already carry throughout this
+    codebase), or "unknown" for anything not recognized below.
+
+    Before this, every generated TypeScript method's own payload
+    parameter and return value were typed as a bare Record<string,
+    unknown>/any regardless of what the notebook function actually
+    expects or returns -- throwing away the single biggest practical
+    advantage of generating a *TypeScript* client over a plain JS one
+    (compile-time type checking, IDE autocomplete) for every field of
+    every function this tool compiles.
+
+    Deliberately bounded, not a general Python-type-system-to-TypeScript
+    translator: an unrecognized name (a notebook-defined class/Enum,
+    a typing construct not handled below) falls back to "unknown" --
+    always a valid, safe TypeScript type, just not a specific one --
+    rather than guessing at a type this tool has no real way to know
+    from a bare annotation string alone. The identical "bounded, falls
+    back to something safely generic rather than guessing" contract
+    normalize_type_annotation (backend/parser/ast_parser.py) already
+    follows for a related but distinct purpose (simplifying an
+    annotation for an example value, not translating it to another
+    language's type system).
+    """
+    if not type_str:
+        return "unknown"
+
+    type_str = type_str.strip()
+
+    if type_str in _PYTHON_SCALAR_TO_TS:
+        return _PYTHON_SCALAR_TO_TS[type_str]
+
+    for prefix in ("List[", "list[", "Set[", "set[", "FrozenSet[", "frozenset["):
+        if type_str.startswith(prefix):
+            inner = _bracket_inner(type_str, len(prefix) - 1)
+            return _as_typescript_array_element(_python_type_to_typescript(inner))
+
+    for prefix in ("Tuple[", "tuple["):
+        if type_str.startswith(prefix):
+            return "unknown[]"
+
+    for prefix in ("Dict[", "dict["):
+        if type_str.startswith(prefix):
+            inner = _bracket_inner(type_str, len(prefix) - 1)
+            parts = _split_top_level(inner)
+            value_type = (
+                _python_type_to_typescript(parts[1]) if len(parts) == 2 else "unknown"
+            )
+            return f"Record<string, {value_type}>"
+
+    if type_str.startswith("Optional["):
+        inner = _bracket_inner(type_str, len("Optional") )
+        return f"{_python_type_to_typescript(inner)} | null"
+
+    if type_str.startswith("Union["):
+        inner = _bracket_inner(type_str, len("Union"))
+        mapped = [_python_type_to_typescript(part) for part in _split_top_level(inner)]
+        return " | ".join(dict.fromkeys(mapped))
+
+    if type_str.startswith("Annotated["):
+        inner = _bracket_inner(type_str, len("Annotated") )
+        first_arg = _split_top_level(inner)[0]
+        return _python_type_to_typescript(first_arg)
+
+    if "|" in type_str:
+        # A top-level PEP 604 union (e.g. "int | None") -- not one nested
+        # inside a generic's own arguments, which _split_top_level's own
+        # bracket-depth tracking already keeps out of this split.
+        parts = _split_top_level(type_str, "|")
+        if len(parts) > 1:
+            mapped = [_python_type_to_typescript(part) for part in parts]
+            return " | ".join(dict.fromkeys(mapped))
+
+    return "unknown"
+
+
+_JSON_SCHEMA_TYPE_TO_TS = {
+    "integer": "number", "number": "number", "string": "string",
+    "boolean": "boolean", "null": "null",
+}
+
+
+def _json_schema_type_to_typescript(prop_schema):
+    """The closest TypeScript type for `prop_schema` (one property's own
+    JSON-schema object from an OpenAPI request body model, e.g.
+    {"type": "integer"} or {"anyOf": [{"type": "string"}, {"type":
+    "null"}]} for an Optional[str] field) -- used to type each generated
+    method's own {Pascal}Request interface fields (see
+    _typescript_request_interface below) directly from the exact schema
+    Pydantic itself validates a real request against, rather than
+    re-deriving it from a raw Python annotation string a second time
+    (which _python_type_to_typescript above does instead, for the
+    response side, where no such schema exists at all -- see
+    generate_fastapi_code's own "x-notebook-to-api-return-type").
+    """
+    if not isinstance(prop_schema, dict):
+        return "unknown"
+
+    if "anyOf" in prop_schema:
+        mapped = [
+            _json_schema_type_to_typescript(sub) for sub in prop_schema["anyOf"]
+        ]
+        return " | ".join(dict.fromkeys(mapped))
+
+    schema_type = prop_schema.get("type")
+
+    if schema_type == "array":
+        item_type = _json_schema_type_to_typescript(prop_schema.get("items", {}))
+        return _as_typescript_array_element(item_type)
+
+    if schema_type == "object":
+        return "Record<string, unknown>"
+
+    return _JSON_SCHEMA_TYPE_TO_TS.get(schema_type, "unknown")
+
+
+def _request_body_schema(openapi_schema, methods):
+    """The {"properties", "required"} JSON-schema object backing
+    `methods`'s own POST operation request body (see
+    _json_schema_type_to_typescript above), resolved from its own
+    "$ref" against `openapi_schema`'s "components"/"schemas" -- or None
+    if it has no request body, or an unrecognized/missing $ref (a
+    schema this tool didn't itself generate).
+    """
+    post = methods.get("post") or {}
+
+    ref = (
+        post.get("requestBody", {})
+        .get("content", {})
+        .get("application/json", {})
+        .get("schema", {})
+        .get("$ref")
+    )
+
+    if not ref:
+        return None
+
+    schema_name = ref.rsplit("/", 1)[-1]
+
+    return openapi_schema.get("components", {}).get("schemas", {}).get(schema_name)
+
+
+def _typescript_request_interface(interface_name, request_schema):
+    """TypeScript source lines for `interface_name`, one field per
+    property in `request_schema` (see _request_body_schema above),
+    typed via _json_schema_type_to_typescript. A property not in
+    `request_schema`'s own "required" list (the notebook function's own
+    parameter had a default) is marked optional ("?:") -- matching the
+    exact same "a field with a default isn't required in the JSON body"
+    contract the generated server side's own Pydantic model already
+    enforces.
+
+    Falls back to a single untyped index signature when `request_schema`
+    is None or carries no properties at all (a zero-parameter function,
+    whose real request model has no fields to type) -- an empty
+    TypeScript interface body is valid but pointless busywork for a
+    caller to look at.
+    """
+    lines = [f"export interface {interface_name} {{"]
+
+    properties = (request_schema or {}).get("properties") or {}
+    required = set((request_schema or {}).get("required") or [])
+
+    if not properties:
+        lines.append("  [key: string]: unknown;")
+    else:
+        for prop_name, prop_schema in properties.items():
+            optional = "" if prop_name in required else "?"
+            ts_type = _json_schema_type_to_typescript(prop_schema)
+            lines.append(f"  {prop_name}{optional}: {ts_type};")
+
+    lines.append("}")
+
+    return lines
+
+
+def _typescript_response_interface(interface_name, return_type):
+    """TypeScript source lines for a synchronous endpoint's own
+    {Pascal}Response interface -- {"result": ...}, exactly the shape its
+    own generated `return {"result": result}` (api_generator.py) always
+    sends, typed via _python_type_to_typescript's own mapping of
+    "x-notebook-to-api-return-type".
+    """
+    return [
+        f"export interface {interface_name} {{",
+        f"  result: {_python_type_to_typescript(return_type)};",
+        "}",
+    ]
+
+
+def _typescript_task_submission_interface(interface_name):
+    """TypeScript source lines for a background endpoint's own
+    {Pascal}Response interface -- {"task_id": ..., "status":
+    "processing"}, exactly the shape its own generated `return
+    {"task_id": task_id, "status": "processing"}` (api_generator.py)
+    always sends immediately (never the notebook function's own eventual
+    result -- see _typescript_task_result_interface below for that).
+    """
+    return [
+        f"export interface {interface_name} {{",
+        "  task_id: string;",
+        '  status: "processing";',
+        "}",
+    ]
+
+
+def _typescript_task_result_interface(interface_name, return_type):
+    """TypeScript source lines for a background endpoint's own
+    {Pascal}TaskResult interface -- the finished task record its own
+    *_and_wait companion (via waitForTask) eventually resolves to: either
+    {"status": "completed", "result": ...} or {"status": "failed",
+    "error": ...} (see _run_background_task, api_generator.py). Not a
+    strict discriminated union keyed on "status" -- both "result" and
+    "error" are simply optional, which is looser than the real either/or
+    contract but avoids the extra complexity of a literal-typed union
+    for a shape a caller is expected to branch on by checking
+    `.status === "completed"` at runtime regardless of how precisely
+    this interface types it.
+    """
+    return [
+        f"export interface {interface_name} {{",
+        "  task_id?: string;",
+        "  status: string;",
+        f"  result?: {_python_type_to_typescript(return_type)};",
+        "  error?: string;",
+        "}",
+    ]
+
+
 def _is_background_path(methods):
     """Whether `methods` (a path's {"post": {...}, ...} operations dict
     from an OpenAPI schema this tool generated) is a background/task_id
@@ -1080,9 +1391,57 @@ def generate_typescript_sdk(
         lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
         lines.append("    }));")
         lines.append("  }")
+    # Collected separately from `lines` (the class body being built
+    # above) and appended after the class closes, below -- TypeScript
+    # type declarations are hoisted within a module, so declaration
+    # order relative to the class doesn't matter, but keeping the class
+    # itself uninterrupted (rather than threading interface declarations
+    # in in between its own methods) keeps the class readable as one
+    # block, matching how NotebookAPIClientOptions is already declared
+    # once, up front, rather than repeated per-method.
+    interface_lines = []
+
     for path, method_name in method_names.items():
         is_background = _is_background_path(paths[path])
         description = _operation_description(paths[path])
+        # Confirmed missing before this feature: every generated
+        # method's own payload parameter and return value were typed as
+        # a bare Record<string, unknown>/any regardless of what the
+        # notebook function actually expects or returns -- throwing away
+        # the single biggest practical reason to generate a *TypeScript*
+        # client over a plain JS one (compile-time type checking, IDE
+        # autocomplete) for every function this tool compiles. Request
+        # fields are typed straight from the real Pydantic-validated
+        # JSON schema (_json_schema_type_to_typescript); the response
+        # side has no such schema to read (api_generator.py's own
+        # declared 200 response is deliberately {}), so it's typed from
+        # "x-notebook-to-api-return-type" instead, an out-of-band
+        # extension field generate_fastapi_code stamps onto the OpenAPI
+        # operation for exactly this (see its own docstring).
+        pascal_name = _pascal_case(method_name)
+        request_interface = f"{pascal_name}Request"
+        response_interface = f"{pascal_name}Response"
+        return_type = (paths[path].get("post") or {}).get(
+            "x-notebook-to-api-return-type"
+        )
+
+        interface_lines.extend(
+            _typescript_request_interface(
+                request_interface, _request_body_schema(schema, paths[path])
+            )
+        )
+        interface_lines.append("")
+
+        if is_background:
+            interface_lines.extend(
+                _typescript_task_submission_interface(response_interface)
+            )
+        else:
+            interface_lines.extend(
+                _typescript_response_interface(response_interface, return_type)
+            )
+        interface_lines.append("")
+
         lines.append("")
         if is_background:
             wait_name = wait_method_names[path]
@@ -1098,14 +1457,19 @@ def generate_typescript_sdk(
             static_text_lines = [f"Calls the `{path}` endpoint with JSON payload."]
         lines.extend(_jsdoc_lines(description, static_text_lines))
         lines.append(
-            f"  async {method_name}(payload: Record<string, unknown>): "
-            "Promise<any> {"
+            f"  async {method_name}(payload: {request_interface}): "
+            f"Promise<{response_interface}> {{"
         )
         lines.append(f'    return this.request("{path}", payload);')
         lines.append("  }")
 
         if is_background:
             wait_name = wait_method_names[path]
+            task_result_interface = f"{pascal_name}TaskResult"
+            interface_lines.extend(
+                _typescript_task_result_interface(task_result_interface, return_type)
+            )
+            interface_lines.append("")
             lines.append("")
             and_wait_static_text_lines = [
                 f"Submits `{path}` and blocks until the background task "
@@ -1114,9 +1478,9 @@ def generate_typescript_sdk(
             ]
             lines.extend(_jsdoc_lines(description, and_wait_static_text_lines))
             lines.append(
-                f"  async {wait_name}(payload: Record<string, unknown>, "
+                f"  async {wait_name}(payload: {request_interface}, "
                 "options: { pollIntervalMs?: number; timeoutMs?: number } = "
-                "{}): Promise<any> {"
+                f"{{}}): Promise<{task_result_interface}> {{"
             )
             lines.append(f"    const submitted = await this.{method_name}(payload);")
             lines.append(
@@ -1125,6 +1489,7 @@ def generate_typescript_sdk(
             lines.append("  }")
     lines.append("}")
     lines.append("")
+    lines.extend(interface_lines)
     # Write to file
     output_file = Path(output_path)
     output_file.parent.mkdir(parents=True, exist_ok=True)
