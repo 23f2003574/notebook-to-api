@@ -17024,6 +17024,38 @@ def test_clear_deploy_history_command_sends_source_notebook_query_param(
     ]
 
 
+def test_clear_deploy_history_command_sends_sha256_query_param(
+    tmp_path, fake_dashboard
+):
+    """Mirrors test_clear_deploy_history_command_sends_source_notebook_query_param:
+    DELETE /api/deploy/history's own "source_notebook_sha256" filter had
+    no --sha256 flag of its own here at all, even though `clear-deploy-
+    history --source-notebook` already threads the sibling filename
+    filter through.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "deleted_count": 1})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "clear-deploy-history", "--sha256", "abc123",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/deploy/history?source_notebook_sha256=abc123"
+    ]
+
+
 def test_clear_deploy_history_command_json_flag_emits_the_dashboards_own_response(
     tmp_path, fake_dashboard
 ):
@@ -17467,6 +17499,37 @@ def test_clear_compile_history_command_sends_notebook_filename_query_param(
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert handler.requests == ["/api/compile/history?notebook_filename=nb.ipynb"]
+
+
+def test_clear_compile_history_command_sends_sha256_query_param(
+    tmp_path, fake_dashboard
+):
+    """Mirrors test_clear_deploy_history_command_sends_sha256_query_param
+    for compile history: DELETE /api/compile/history's own
+    "source_notebook_sha256" filter had no --sha256 flag of its own here
+    either.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "deleted_count": 1})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "clear-compile-history", "--sha256", "abc123",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/compile/history?source_notebook_sha256=abc123"
+    ]
 
 
 def test_clear_compile_history_command_json_flag_emits_the_dashboards_own_response(

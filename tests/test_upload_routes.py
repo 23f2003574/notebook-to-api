@@ -20511,6 +20511,121 @@ def test_clear_deploy_history_unknown_source_notebook_filename_deletes_nothing(
     assert client.get("/api/deploy/history").json()["entry_count"] == 1
 
 
+def test_clear_deploy_history_filters_by_source_notebook_sha256(tmp_path, monkeypatch):
+    """Confirmed missing before this fix: GET /api/deploy/history's own
+    "source_notebook_sha256" filter, matching a notebook's exact content
+    rather than whichever filename it happened to be deployed under, had
+    no DELETE counterpart -- an operator wanting to drop just one
+    (possibly since-renamed) notebook's stale deploy history by content
+    had no choice but to wipe the whole log, or fall back to
+    "source_notebook_filename" (which a rename since deploy time already
+    makes unreachable).
+    """
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_deploy_history_sha256_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    for i in range(3):
+        upload_module._append_deploy_history_entry({
+            "deployed_at": f"2024-01-0{i + 1}T00:00:00+00:00",
+            "tag": f"clear:{i}",
+            "platform": None,
+            "pushed": False,
+            "source_notebook_filename": f"renamed-{i}.ipynb",
+            "source_notebook_sha256": "abc" if i != 1 else "def",
+        })
+
+    clear_resp = client.delete(
+        "/api/deploy/history", params={"source_notebook_sha256": "def"}
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 1}
+
+    remaining = client.get("/api/deploy/history").json()
+    assert remaining["entry_count"] == 2
+    assert all(e["source_notebook_sha256"] == "abc" for e in remaining["entries"])
+
+
+def test_clear_deploy_history_unknown_source_notebook_sha256_deletes_nothing(
+    tmp_path, monkeypatch
+):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_deploy_history_unknown_sha256_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    upload_module._append_deploy_history_entry({
+        "deployed_at": "2024-01-01T00:00:00+00:00",
+        "tag": "keep:0",
+        "platform": None,
+        "pushed": False,
+        "source_notebook_filename": "keep.ipynb",
+        "source_notebook_sha256": "abc",
+    })
+
+    clear_resp = client.delete(
+        "/api/deploy/history", params={"source_notebook_sha256": "no-such-hash"}
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 0}
+    assert client.get("/api/deploy/history").json()["entry_count"] == 1
+
+
+def test_clear_deploy_history_composes_source_notebook_sha256_with_filename(
+    tmp_path, monkeypatch
+):
+    """Both given must act as an AND -- matching only one of the two
+    isn't enough, the same composition "source_notebook_filename" and
+    "older_than_days" already give each other.
+    """
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_deploy_history_sha256_and_filename_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    upload_module._append_deploy_history_entry({
+        "deployed_at": "2024-01-01T00:00:00+00:00",
+        "tag": "match",
+        "platform": None,
+        "pushed": False,
+        "source_notebook_filename": "match.ipynb",
+        "source_notebook_sha256": "abc",
+    })
+    # Matches the sha256 but not the filename -- must survive.
+    upload_module._append_deploy_history_entry({
+        "deployed_at": "2024-01-02T00:00:00+00:00",
+        "tag": "sha-only",
+        "platform": None,
+        "pushed": False,
+        "source_notebook_filename": "other.ipynb",
+        "source_notebook_sha256": "abc",
+    })
+
+    clear_resp = client.delete(
+        "/api/deploy/history",
+        params={
+            "source_notebook_sha256": "abc",
+            "source_notebook_filename": "match.ipynb",
+        },
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json()["deleted_count"] == 1
+
+    remaining = client.get("/api/deploy/history").json()
+    assert remaining["entry_count"] == 1
+    assert remaining["entries"][0]["source_notebook_filename"] == "other.ipynb"
+
+
 def test_clear_deploy_history_is_a_no_op_success_when_nothing_was_ever_deployed(
     tmp_path, monkeypatch
 ):
@@ -21216,6 +21331,73 @@ def test_clear_compile_history_filters_by_notebook_filename(tmp_path, monkeypatc
     remaining = client.get("/api/compile/history").json()
     assert remaining["entry_count"] == 2
     assert all(e["notebook_filename"] == "keep.ipynb" for e in remaining["entries"])
+
+
+def test_clear_compile_history_filters_by_source_notebook_sha256(tmp_path, monkeypatch):
+    """Mirrors test_clear_deploy_history_filters_by_source_notebook_sha256:
+    GET /api/compile/history's own "source_notebook_sha256" filter,
+    matching a notebook's exact content rather than whichever filename it
+    happened to be compiled under, had no DELETE counterpart either.
+    """
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_compile_history_sha256_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    for i in range(3):
+        upload_module._append_compile_history_entry({
+            "compiled_at": f"2024-01-0{i + 1}T00:00:00+00:00",
+            "notebook_filename": f"renamed-{i}.ipynb",
+            "source_notebook_sha256": "abc" if i != 1 else "def",
+            "only": None,
+            "exclude": None,
+            "endpoint_count": 1,
+            "dependency_count": 0,
+            "skipped_function_count": 0,
+        })
+
+    clear_resp = client.delete(
+        "/api/compile/history", params={"source_notebook_sha256": "def"}
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 1}
+
+    remaining = client.get("/api/compile/history").json()
+    assert remaining["entry_count"] == 2
+    assert all(e["source_notebook_sha256"] == "abc" for e in remaining["entries"])
+
+
+def test_clear_compile_history_unknown_source_notebook_sha256_deletes_nothing(
+    tmp_path, monkeypatch
+):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_compile_history_unknown_sha256_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    upload_module._append_compile_history_entry({
+        "compiled_at": "2024-01-01T00:00:00+00:00",
+        "notebook_filename": "keep.ipynb",
+        "source_notebook_sha256": "abc",
+        "only": None,
+        "exclude": None,
+        "endpoint_count": 1,
+        "dependency_count": 0,
+        "skipped_function_count": 0,
+    })
+
+    clear_resp = client.delete(
+        "/api/compile/history", params={"source_notebook_sha256": "no-such-hash"}
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 0}
+    assert client.get("/api/compile/history").json()["entry_count"] == 1
 
 
 def test_clear_compile_history_unknown_notebook_filename_deletes_nothing(

@@ -5644,9 +5644,14 @@ def _dispatch_core_command(args):
             # same reasoning `prune-versions`/`tags delete` already
             # prompt for. Not asked at all under --dry-run, which never
             # deletes anything.
+            target_parts = []
+            if args.source_notebook_filename:
+                target_parts.append(repr(args.source_notebook_filename))
+            if args.source_notebook_sha256:
+                target_parts.append(f"sha256 {args.source_notebook_sha256!r}")
             target = (
-                f"the deploy history for {args.source_notebook_filename!r} on "
-                f"{dashboard_url}" if args.source_notebook_filename
+                f"the deploy history for {' and '.join(target_parts)} on "
+                f"{dashboard_url}" if target_parts
                 else f"the entire deploy history on {dashboard_url}"
             )
             answer = input(f"Permanently discard {target}? [y/N] ")
@@ -5657,6 +5662,8 @@ def _dispatch_core_command(args):
         params = {}
         if args.source_notebook_filename:
             params["source_notebook_filename"] = args.source_notebook_filename
+        if args.source_notebook_sha256:
+            params["source_notebook_sha256"] = args.source_notebook_sha256
         if args.older_than_days is not None:
             params["older_than_days"] = args.older_than_days
         if args.dry_run:
@@ -5774,9 +5781,14 @@ def _dispatch_core_command(args):
             # same reasoning `clear-deploy-history` already prompts for.
             # Not asked at all under --dry-run, which never deletes
             # anything.
+            target_parts = []
+            if args.notebook_filename:
+                target_parts.append(repr(args.notebook_filename))
+            if args.source_notebook_sha256:
+                target_parts.append(f"sha256 {args.source_notebook_sha256!r}")
             target = (
-                f"the compile history for {args.notebook_filename!r} on "
-                f"{dashboard_url}" if args.notebook_filename
+                f"the compile history for {' and '.join(target_parts)} on "
+                f"{dashboard_url}" if target_parts
                 else f"the entire compile history on {dashboard_url}"
             )
             answer = input(f"Permanently discard {target}? [y/N] ")
@@ -5787,6 +5799,8 @@ def _dispatch_core_command(args):
         params = {}
         if args.notebook_filename:
             params["notebook_filename"] = args.notebook_filename
+        if args.source_notebook_sha256:
+            params["source_notebook_sha256"] = args.source_notebook_sha256
         if args.older_than_days is not None:
             params["older_than_days"] = args.older_than_days
         if args.dry_run:
@@ -10380,6 +10394,22 @@ def main():
         )
     )
     clear_deploy_history_parser.add_argument(
+        "--sha256",
+        dest="source_notebook_sha256",
+        help=(
+            "Only discard deploy history entries whose compiled source "
+            "hashes to this exact value, via DELETE /api/deploy/history's "
+            "own ?source_notebook_sha256= query param -- the same "
+            "exact-content-match filter `list`/`find-duplicates` already "
+            "support, reaching a notebook's deploy history by its actual "
+            "content even if it's since been renamed or re-uploaded under "
+            "a different filename (which --source-notebook, matching only "
+            "the filename recorded at deploy time, can't). Composes with "
+            "--source-notebook/--older-than-days: given more than one, "
+            "only entries matching all of them are discarded."
+        )
+    )
+    clear_deploy_history_parser.add_argument(
         "--older-than-days",
         type=int,
         dest="older_than_days",
@@ -10387,9 +10417,9 @@ def main():
             "Only discard deploy history entries older than this many "
             "days, via DELETE /api/deploy/history's own "
             "?older_than_days= query param. Composes with "
-            "--source-notebook: given both, only entries matching both "
-            "are discarded. Without this, age plays no part in what's "
-            "discarded."
+            "--source-notebook/--sha256: given more than one, only "
+            "entries matching all of them are discarded. Without this, "
+            "age plays no part in what's discarded."
         )
     )
     clear_deploy_history_parser.add_argument(
@@ -10555,15 +10585,32 @@ def main():
         )
     )
     clear_compile_history_parser.add_argument(
+        "--sha256",
+        dest="source_notebook_sha256",
+        help=(
+            "Only discard compile history entries whose compiled source "
+            "hashes to this exact value, via DELETE /api/compile/history's "
+            "own ?source_notebook_sha256= query param -- the same "
+            "exact-content-match filter `list`/`find-duplicates` already "
+            "support, reaching a notebook's compile history by its actual "
+            "content even if it's since been renamed or re-uploaded under "
+            "a different filename (which --notebook, matching only the "
+            "filename recorded at compile time, can't). Composes with "
+            "--notebook/--older-than-days: given more than one, only "
+            "entries matching all of them are discarded."
+        )
+    )
+    clear_compile_history_parser.add_argument(
         "--older-than-days",
         type=int,
         dest="older_than_days",
         help=(
             "Only discard compile history entries older than this many "
             "days, via DELETE /api/compile/history's own "
-            "?older_than_days= query param. Composes with --notebook: "
-            "given both, only entries matching both are discarded. "
-            "Without this, age plays no part in what's discarded."
+            "?older_than_days= query param. Composes with "
+            "--notebook/--sha256: given more than one, only entries "
+            "matching all of them are discarded. Without this, age plays "
+            "no part in what's discarded."
         )
     )
     clear_compile_history_parser.add_argument(

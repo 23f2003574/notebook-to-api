@@ -12173,6 +12173,7 @@ def _deploy_history_entry_is_older_than(entry, cutoff):
 @router.delete("/deploy/history")
 def clear_deploy_history(
     source_notebook_filename: str = None,
+    source_notebook_sha256: str = None,
     older_than_days: int = None,
     dry_run: bool = False,
 ):
@@ -12211,6 +12212,21 @@ def clear_deploy_history(
     previously had no choice but to wipe every other notebook's history
     along with it. Omitted, this clears the entire log exactly as before.
 
+    "source_notebook_sha256", when given, discards only entries with an
+    exact match on that field -- the same field GET /api/deploy/history's
+    own "source_notebook_sha256" already filters by, matching the exact
+    notebook *content* deployed rather than whichever filename it
+    happened to be uploaded under at the time. "source_notebook_filename"
+    above can't answer this: a notebook renamed or re-uploaded under a
+    different filename since being deployed leaves its own deploy history
+    entries permanently unreachable by filename, with no way to discard
+    just those without wiping every other notebook's history too.
+    Composes with "source_notebook_filename"/"older_than_days" as an AND
+    -- given more than one, only entries matching all of them are
+    discarded, the same narrowing every other multi-filter endpoint here
+    already applies. Omitted, content plays no part in what's discarded,
+    exactly as before this parameter existed.
+
     "older_than_days", when given, discards only entries whose own
     "deployed_at" is older than that many days ago -- the identical
     age-based gap DELETE /api/notebooks/versions' own "older_than_days"
@@ -12218,11 +12234,11 @@ def clear_deploy_history(
     this dashboard's deploy history log instead: before this, reclaiming
     space from old deploy history while keeping recent entries meant
     wiping the entire log (there was no way to keep only what's recent).
-    Composes with "source_notebook_filename" -- given both, only entries
-    matching *both* are discarded, the same narrowing every other
-    multi-filter endpoint here already applies. Must be a positive
-    integer; omitted, age plays no part in what's discarded, exactly as
-    before this parameter existed.
+    Composes with "source_notebook_filename"/"source_notebook_sha256" --
+    given more than one, only entries matching all of them are discarded,
+    the same narrowing every other multi-filter endpoint here already
+    applies. Must be a positive integer; omitted, age plays no part in
+    what's discarded, exactly as before this parameter existed.
 
     "dry_run" (optional, default false) reports the exact same
     "deleted_count" a real clear would, without discarding a single
@@ -12245,13 +12261,23 @@ def clear_deploy_history(
 
     entries = _read_deploy_history()
 
-    if source_notebook_filename is not None or cutoff is not None:
+    if (
+        source_notebook_filename is not None
+        or source_notebook_sha256 is not None
+        or cutoff is not None
+    ):
 
         def _should_discard(entry):
 
             if (
                 source_notebook_filename is not None
                 and entry.get("source_notebook_filename") != source_notebook_filename
+            ):
+                return False
+
+            if (
+                source_notebook_sha256 is not None
+                and entry.get("source_notebook_sha256") != source_notebook_sha256
             ):
                 return False
 
@@ -12531,6 +12557,7 @@ def _compile_history_entry_is_older_than(entry, cutoff):
 @router.delete("/compile/history")
 def clear_compile_history(
     notebook_filename: str = None,
+    source_notebook_sha256: str = None,
     older_than_days: int = None,
     dry_run: bool = False,
 ):
@@ -12562,15 +12589,32 @@ def clear_compile_history(
     opposed to DELETE /api/notebooks/versions' own catalog-wide prune).
     Omitted, this clears the entire log exactly as before.
 
+    "source_notebook_sha256", when given, discards only entries with an
+    exact match on that field -- the same field GET /api/compile/history's
+    own "source_notebook_sha256" already filters by, matching the exact
+    notebook *content* compiled rather than whichever filename it
+    happened to be uploaded under at the time. "notebook_filename" above
+    can't answer this: a notebook renamed or re-uploaded under a
+    different filename since being compiled leaves its own compile
+    history entries permanently unreachable by filename, with no way to
+    discard just those without wiping every other notebook's history
+    too -- the identical gap DELETE /api/deploy/history's own
+    "source_notebook_sha256" just closed for deploy history. Composes
+    with "notebook_filename"/"older_than_days" as an AND, the same
+    narrowing every other multi-filter endpoint here already applies.
+    Omitted, content plays no part in what's discarded, exactly as
+    before this parameter existed.
+
     "older_than_days" and "dry_run" mirror the identical two fields
     DELETE /api/deploy/history just gained -- discarding only entries
     whose own "compiled_at" is older than that many days ago (composing
-    with "notebook_filename" the same "only entries matching both" way
-    that endpoint's own two filters already compose), and previewing
-    "deleted_count" without discarding anything, respectively. Before
-    this, reclaiming space from old compile history while keeping recent
-    entries meant wiping the entire log, the identical gap that endpoint
-    docstring already describes for deploy history.
+    with "notebook_filename"/"source_notebook_sha256" the same "only
+    entries matching all of them" way that endpoint's own filters already
+    compose), and previewing "deleted_count" without discarding anything,
+    respectively. Before this, reclaiming space from old compile history
+    while keeping recent entries meant wiping the entire log, the
+    identical gap that endpoint docstring already describes for deploy
+    history.
     """
 
     if older_than_days is not None and older_than_days <= 0:
@@ -12587,13 +12631,23 @@ def clear_compile_history(
 
     entries = _read_compile_history()
 
-    if notebook_filename is not None or cutoff is not None:
+    if (
+        notebook_filename is not None
+        or source_notebook_sha256 is not None
+        or cutoff is not None
+    ):
 
         def _should_discard(entry):
 
             if (
                 notebook_filename is not None
                 and entry.get("notebook_filename") != notebook_filename
+            ):
+                return False
+
+            if (
+                source_notebook_sha256 is not None
+                and entry.get("source_notebook_sha256") != source_notebook_sha256
             ):
                 return False
 
