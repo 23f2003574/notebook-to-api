@@ -1202,6 +1202,88 @@ def test_non_background_endpoint_is_not_marked_async_and_documents_its_own_resul
     assert "'result': 3" in decorator_line
 
 
+def test_sync_endpoint_documents_401_429_and_500_in_its_openapi_schema(monkeypatch):
+    """Confirmed missing before this feature: a generated endpoint's own
+    OpenAPI schema documented only its 200 response and FastAPI's own
+    automatic 422 -- 401 (verify_api_key) and 429 (_enforce_rate_limit)
+    run ahead of every endpoint's own body via Depends(verify_api_key),
+    and a sync endpoint's own body can raise 500 (the notebook function's
+    exception, or a non-JSON-serializable return value), but none of
+    that was ever documented anywhere a caller (or a codegen tool reading
+    openapi.json) could actually see it.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    schema = namespace["app"].openapi()
+    responses = schema["paths"]["/add"]["post"]["responses"]
+
+    assert set(responses) == {"200", "401", "429", "500", "422"}
+    assert responses["401"]["description"] == "Missing or invalid X-API-Key header."
+    assert "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE" in responses["429"]["description"]
+    assert "'add' raised" in responses["500"]["description"]
+
+
+def test_background_endpoint_documents_400_401_429_and_503_in_its_openapi_schema(
+    monkeypatch,
+):
+    """Same gap as the synchronous case above, plus the two extra
+    failure modes only a background endpoint's own body can produce:
+    503 (NOTEBOOK_API_MAX_TASKS already at capacity) and 400 (a
+    caller-supplied ?callback_url= that isn't http(s)).
+    """
+
+    functions = [{"name": "train_model", "args": [], "return_type": "str"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    schema = namespace["app"].openapi()
+    responses = schema["paths"]["/train_model"]["post"]["responses"]
+
+    assert set(responses) == {"200", "400", "401", "429", "503", "422"}
+    assert "callback_url" in responses["400"]["description"]
+    assert "NOTEBOOK_API_MAX_TASKS" in responses["503"]["description"]
+    assert responses["401"]["description"] == "Missing or invalid X-API-Key header."
+
+
+def test_documented_401_response_matches_a_real_unauthenticated_request(monkeypatch):
+    """The documented 401 example must actually match what a real,
+    unauthenticated request gets back -- not just be a plausible-looking
+    but disconnected description.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    documented_example = (
+        namespace["app"].openapi()["paths"]["/add"]["post"]["responses"]["401"]
+        ["content"]["application/json"]["example"]
+    )
+
+    response = client.post("/add", json={})
+
+    assert response.status_code == 401
+    assert response.json() == documented_example
+
+
 def test_keyword_only_arg_forwarded_by_keyword_through_background_task():
 
     functions = [

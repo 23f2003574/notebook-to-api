@@ -191,6 +191,56 @@ def _generated_app_env_var_default(name):
     )
 
 
+def _auth_and_rate_limit_error_responses():
+    """The {401, 429} OpenAPI response entries every generated notebook-
+    function endpoint can actually produce, regardless of what the
+    notebook function itself does -- verify_api_key/_enforce_rate_limit
+    (both above) run via Depends(verify_api_key) before the endpoint's
+    own body ever executes, for every one of them, sync or background.
+
+    Before this, a generated endpoint's own OpenAPI schema documented
+    only its 200 response and FastAPI's own automatically-added 422
+    (Pydantic validation error) -- FastAPI has no way to infer a plain
+    dependency function's own `raise HTTPException(...)` calls the way
+    it already does for 422, so 401 (an invalid/missing X-API-Key) and
+    429 (NOTEBOOK_API_RATE_LIMIT_PER_MINUTE exceeded) were completely
+    undocumented in the served schema, /docs, and any third-party tool
+    generating a client from it -- even though every single endpoint
+    already requires passing both checks before its own body ever runs.
+    The exact numeric limit/window for 429 is a runtime NOTEBOOK_API_*
+    env var this function has no way to know at compile time (see
+    GENERATED_APP_ENV_VARS), so its own description points at the
+    variable name instead of a number that could be wrong the moment an
+    operator overrides the default.
+    """
+    return {
+        401: {
+            "description": "Missing or invalid X-API-Key header.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid API key"}
+                }
+            },
+        },
+        429: {
+            "description": (
+                "Rate limit exceeded (see "
+                "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE)."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Rate limit exceeded: 60 requests per 60s "
+                            "per API key"
+                        )
+                    }
+                }
+            },
+        },
+    }
+
+
 def _call_arg_expr(arg):
     """Render a single argument for the notebook_module.<fn>(...) call.
 
@@ -1712,6 +1762,62 @@ def generate_fastapi_code(
                 f"completed {return_type} result."
             )
             task_example_response = {"task_id": "<uuid>", "status": "processing"}
+            # A background endpoint's own two extra failure modes, on top
+            # of the {401, 429} every endpoint can already produce (see
+            # _auth_and_rate_limit_error_responses): 503 when
+            # NOTEBOOK_API_MAX_TASKS is already at capacity, and 400 for
+            # a caller-supplied ?callback_url= that isn't http(s) (see
+            # this same function's own body below) -- neither was
+            # documented anywhere in the served schema before this,
+            # despite both being real, reachable responses. The whole
+            # dict is repr()'d as one native Python object below, not
+            # hand-assembled via string concatenation the way this used
+            # to be -- repr() can never produce invalid Python source no
+            # matter what a notebook author's own docstring/return-type
+            # text contains, closing the exact class of quote-escaping
+            # bug e91b1fa already had to fix here once by hand.
+            task_responses = {
+                200: {
+                    "description": task_response_description,
+                    "content": {
+                        "application/json": {"example": task_example_response}
+                    },
+                },
+                400: {
+                    "description": (
+                        "callback_url was given but isn't an http:// or "
+                        "https:// URL."
+                    ),
+                    "content": {
+                        "application/json": {
+                            "example": {
+                                "detail": (
+                                    "callback_url must be an http:// or "
+                                    "https:// URL"
+                                )
+                            }
+                        }
+                    },
+                },
+                503: {
+                    "description": (
+                        "Too many pending background tasks (see "
+                        "NOTEBOOK_API_MAX_TASKS)."
+                    ),
+                    "content": {
+                        "application/json": {
+                            "example": {
+                                "detail": (
+                                    "Too many pending background tasks "
+                                    "(limit 10000); try again once some "
+                                    "have finished."
+                                )
+                            }
+                        }
+                    },
+                },
+                **_auth_and_rate_limit_error_responses(),
+            }
             lines.append(
                 f'@app.post("/{func_name}", '
                 f'summary="{summary}", '
@@ -1731,7 +1837,7 @@ def generate_fastapi_code(
                 f'tags=["{tag}"], '
                 f'operation_id="{operation_id}", '
                 f'openapi_extra={{"x-notebook-to-api-category": "{category}", "x-notebook-to-api-async": True, "security": [{{"ApiKeyAuth": []}}]}}, '
-                f'responses={{200: {{"description": {repr(task_response_description)}, "content": {{"application/json": {{"example": {repr(task_example_response)}}}}}}}}})'
+                f'responses={repr(task_responses)})'
             )
             lines.append(
                 f"def {func_name}(req: {model_name}, background_tasks: "
@@ -1785,6 +1891,41 @@ def generate_fastapi_code(
             )
             lines.append("    return {\"task_id\": task_id, \"status\": \"processing\"}")
         else:
+            # A synchronous endpoint's own extra failure mode, on top of
+            # the {401, 429} every endpoint can already produce (see
+            # _auth_and_rate_limit_error_responses): 500, wrapping either
+            # the notebook function's own exception or a non-JSON-
+            # serializable return value (see this same function's own
+            # body below) -- undocumented anywhere in the served schema
+            # before this. repr()'d as one native Python object, not
+            # hand-assembled via string concatenation, the same
+            # quote-escaping-proof technique the background branch above
+            # now uses too.
+            sync_responses = {
+                200: {
+                    "description": response_description,
+                    "content": {
+                        "application/json": {"example": example_response}
+                    },
+                },
+                500: {
+                    "description": (
+                        f"'{func_name}' raised an exception, or returned "
+                        "a value that isn't JSON-serializable."
+                    ),
+                    "content": {
+                        "application/json": {
+                            "example": {
+                                "detail": (
+                                    f"'{func_name}' raised ValueError: "
+                                    "<message>"
+                                )
+                            }
+                        }
+                    },
+                },
+                **_auth_and_rate_limit_error_responses(),
+            }
             lines.append(
                 f'@app.post("/{func_name}", '
                 f'summary="{summary}", '
@@ -1804,7 +1945,7 @@ def generate_fastapi_code(
                 f'tags=["{tag}"], '
                 f'operation_id="{operation_id}", '
                 f'openapi_extra={{"x-notebook-to-api-category": "{category}", "security": [{{"ApiKeyAuth": []}}]}}, '
-                f'responses={{200: {{"description": {repr(response_description)}, "content": {{"application/json": {{"example": {repr(example_response)}}}}}}}}})'
+                f'responses={repr(sync_responses)})'
             )
             is_async = func.get("is_async", False)
             def_keyword = "async def" if is_async else "def"
