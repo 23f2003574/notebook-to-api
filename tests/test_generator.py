@@ -1040,6 +1040,8 @@ def test_background_task_delivers_webhook_on_completion_and_failure(monkeypatch)
     delivered = []
 
     class _FakeResponse:
+        status = 200
+
         def close(self):
             pass
 
@@ -1183,6 +1185,8 @@ def test_webhook_delivery_omits_signature_header_when_no_secret_configured(
     captured = {}
 
     class _FakeResponse:
+        status = 200
+
         def close(self):
             pass
 
@@ -1236,6 +1240,8 @@ def test_webhook_delivery_includes_hmac_signature_when_secret_configured(
     captured = {}
 
     class _FakeResponse:
+        status = 200
+
         def close(self):
             pass
 
@@ -1295,6 +1301,8 @@ def test_webhook_delivery_signature_changes_when_secret_changes(monkeypatch):
         captured = {}
 
         class _FakeResponse:
+            status = 200
+
             def close(self):
                 pass
 
@@ -1390,6 +1398,8 @@ def test_webhook_delivery_retries_a_transient_network_error_then_succeeds(
     namespace["notebook_module"].process_data = lambda: "ok"
 
     class _FakeResponse:
+        status = 200
+
         def close(self):
             pass
 
@@ -1473,6 +1483,242 @@ def test_webhook_delivery_gives_up_after_max_retries_exhausted(monkeypatch):
     assert task["result"] == "ok"
 
 
+def test_task_record_reports_successful_webhook_delivery(monkeypatch):
+    """Confirmed missing before this feature: _deliver_task_webhook never
+    reported whether delivery actually succeeded anywhere a caller could
+    see it -- a receiver being unreachable and a receiver working fine
+    were indistinguishable from the task's own record. A successful
+    delivery must now be recorded on the task itself, reachable via GET
+    /tasks/{task_id}, not just swallowed inside the worker thread that
+    performed it.
+    """
+    import urllib.request
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    class _FakeResponse:
+        status = 204
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        urllib.request, "urlopen", lambda request, timeout=None: _FakeResponse()
+    )
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    submit_response = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/hook"},
+        headers=headers,
+    )
+    assert submit_response.status_code == 200
+    task_id = submit_response.json()["task_id"]
+
+    get_response = client.get(f"/tasks/{task_id}", headers=headers)
+    assert get_response.status_code == 200
+    webhook = get_response.json()["webhook"]
+    assert webhook == {
+        "delivered": True,
+        "attempts": 1,
+        "status_code": 204,
+        "error": None,
+    }
+
+
+def test_task_record_reports_failed_webhook_delivery(monkeypatch):
+    """The inverse of the success case above -- a callback_url that never
+    succeeds must record exactly what went wrong (and how many attempts
+    were made) on the task itself, rather than the caller having no way
+    to tell a delivery failure apart from one that simply hasn't happened
+    yet.
+    """
+    import urllib.request
+
+    monkeypatch.setenv("NOTEBOOK_API_WEBHOOK_MAX_RETRIES", "2")
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    def always_fails(request, timeout=None):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", always_fails)
+    monkeypatch.setattr("time.sleep", lambda *a, **k: None)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    submit_response = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/unreachable"},
+        headers=headers,
+    )
+    task_id = submit_response.json()["task_id"]
+
+    task = namespace["TASKS"][task_id]
+    webhook = task["webhook"]
+    assert webhook["delivered"] is False
+    # 1 initial attempt + 2 retries.
+    assert webhook["attempts"] == 3
+    assert webhook["status_code"] is None
+    assert "connection refused" in webhook["error"]
+    # A failed webhook delivery must never demote the task's own real,
+    # already-recorded result/status -- it's a separate field entirely.
+    assert task["status"] == "completed"
+    assert task["result"] == "ok"
+
+
+def test_task_record_reports_webhook_delivery_status_code_from_non_retryable_error(
+    monkeypatch
+):
+    """A non-retryable 4xx (the receiver deliberately rejecting the
+    request) must still surface its real status_code on the task record,
+    not None -- that's exactly the detail an operator debugging a
+    misconfigured receiver (wrong auth, wrong path) needs.
+    """
+    import urllib.error
+    import urllib.request
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    def rejects_with_404(request, timeout=None):
+        raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", rejects_with_404)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    submit_response = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/hook"},
+        headers=headers,
+    )
+    task_id = submit_response.json()["task_id"]
+
+    webhook = namespace["TASKS"][task_id]["webhook"]
+    assert webhook == {
+        "delivered": False,
+        "attempts": 1,
+        "status_code": 404,
+        "error": webhook["error"],
+    }
+    assert "404" in webhook["error"]
+
+
+def test_task_record_reports_webhook_attempts_after_retry_then_success(monkeypatch):
+    """attempts on the recorded webhook status must reflect the real
+    number of tries made, including retries that failed before the
+    eventual success -- not just "1", which would misrepresent every
+    delivery that needed a retry as if it had gone through cleanly on the
+    first try.
+    """
+    import urllib.request
+
+    monkeypatch.setenv("NOTEBOOK_API_WEBHOOK_MAX_RETRIES", "2")
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    class _FakeResponse:
+        status = 200
+
+        def close(self):
+            pass
+
+    attempts = []
+
+    def flaky_then_ok(request, timeout=None):
+        attempts.append(request)
+        if len(attempts) < 2:
+            raise urllib.error.URLError("connection refused")
+        return _FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", flaky_then_ok)
+    monkeypatch.setattr("time.sleep", lambda *a, **k: None)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    submit_response = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/hook"},
+        headers=headers,
+    )
+    task_id = submit_response.json()["task_id"]
+
+    webhook = namespace["TASKS"][task_id]["webhook"]
+    assert webhook["delivered"] is True
+    assert webhook["attempts"] == 2
+    assert webhook["status_code"] == 200
+
+
+def test_task_record_omits_webhook_field_when_no_callback_url_given(monkeypatch):
+    """The overwhelmingly common case (no callback_url) must gain no new
+    field at all -- "webhook" only appears on a task record when a
+    delivery was actually attempted.
+    """
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    submit_response = client.post("/process_data", json={}, headers=headers)
+    task_id = submit_response.json()["task_id"]
+
+    assert "webhook" not in namespace["TASKS"][task_id]
+
+
 def test_webhook_delivery_retries_a_5xx_http_error_then_succeeds(monkeypatch):
     """A 5xx response from the receiving endpoint is the same class of
     transient failure a connection-level error already retries -- the
@@ -1494,6 +1740,8 @@ def test_webhook_delivery_retries_a_5xx_http_error_then_succeeds(monkeypatch):
     namespace["notebook_module"].process_data = lambda: "ok"
 
     class _FakeResponse:
+        status = 200
+
         def close(self):
             pass
 
@@ -1598,6 +1846,8 @@ def test_webhook_delivery_honors_retry_after_header_on_429(monkeypatch):
     namespace["notebook_module"].process_data = lambda: "ok"
 
     class _FakeResponse:
+        status = 200
+
         def close(self):
             pass
 
@@ -1744,6 +1994,8 @@ def test_background_task_timeout_delivers_a_failed_webhook(monkeypatch):
     delivered = []
 
     class _FakeResponse:
+        status = 200
+
         def close(self):
             pass
 
@@ -1769,6 +2021,19 @@ def test_background_task_timeout_delivers_a_failed_webhook(monkeypatch):
     assert len(delivered) == 1
     assert delivered[0]["status"] == "failed"
     assert "execution timeout" in delivered[0]["error"]
+
+    # The webhook itself was successfully delivered (this fake receiver
+    # accepted it) even though the task it's reporting on failed -- the
+    # two are independent outcomes, and the recorded webhook status must
+    # reflect the delivery, not the task's own result.
+    task_id = response.json()["task_id"]
+    webhook = namespace["TASKS"][task_id]["webhook"]
+    assert webhook == {
+        "delivered": True,
+        "attempts": 1,
+        "status_code": 200,
+        "error": None,
+    }
 
 
 def test_background_task_disabled_timeout_preserves_unbounded_execution(monkeypatch):

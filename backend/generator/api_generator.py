@@ -1784,21 +1784,32 @@ def generate_fastapi_code(
     lines.append("    }")
 
     lines.append("")
-    # Delivers a single best-effort POST of `payload` (the finished task's
-    # own TASKS record: status/result, or status/error) to `callback_url`,
-    # so a caller can opt out of polling get_task/wait_for_task for a
-    # background task's completion. Deliberately synchronous (urllib, not
-    # an async HTTP client) -- called only from inside
-    # anyio.to_thread.run_sync below, the same worker-thread pattern a
-    # plain (non-async) notebook function itself already runs under, for
-    # the identical reason: it must never block this app's single event
-    # loop for up to WEBHOOK_TIMEOUT_SECONDS waiting on a caller-controlled
-    # endpoint that might be slow or unresponsive. Any failure (a DNS
-    # failure, connection refused, a non-2xx response, a timeout) is
-    # swallowed here, not raised -- delivery is purely a convenience on
-    # top of the task's own real result, which is already durably recorded
-    # in TASKS by the time this is ever called; a caller who needs a
-    # guarantee should poll get_task/wait_for_task instead.
+    # Delivers a single best-effort (well, WEBHOOK_MAX_RETRIES-effort) POST
+    # of `payload` (the finished task's own TASKS record: status/result, or
+    # status/error) to `callback_url`, so a caller can opt out of polling
+    # get_task/wait_for_task for a background task's completion.
+    # Deliberately synchronous (urllib, not an async HTTP client) -- called
+    # only from inside anyio.to_thread.run_sync below, the same
+    # worker-thread pattern a plain (non-async) notebook function itself
+    # already runs under, for the identical reason: it must never block
+    # this app's single event loop for up to WEBHOOK_TIMEOUT_SECONDS
+    # waiting on a caller-controlled endpoint that might be slow or
+    # unresponsive. Any failure (a DNS failure, connection refused, a
+    # non-2xx response, a timeout) never raises out of here -- delivery is
+    # never allowed to affect the task's own real result, which is already
+    # durably recorded in TASKS by the time this is ever called -- but,
+    # unlike before, it's no longer silently swallowed either: this now
+    # returns a plain dict ({'delivered', 'attempts', 'status_code',
+    # 'error'}) describing exactly what happened, which _run_background_task
+    # below records onto the task's own TASKS entry as its 'webhook' field.
+    # Before this, a caller who chose ?callback_url= over polling
+    # get_task/wait_for_task had no way to ever discover that delivery
+    # itself had failed (a typo'd host, a receiver that's down, one that
+    # keeps rejecting the signed body with 401) short of noticing the
+    # webhook they were expecting simply never arrived and guessing why --
+    # GET /tasks/{task_id} (which returns this exact record unmodified)
+    # now answers that directly, without requiring the caller to also stand
+    # up their own delivery logging just to debug it.
     #
     # When WEBHOOK_SECRET is configured, the request also carries an
     # X-Webhook-Signature: sha256=<hex hmac> header -- computed over the
@@ -1818,6 +1829,7 @@ def generate_fastapi_code(
     # is empty (the default), so an existing receiver that predates this
     # feature keeps working unmodified.
     lines.append("def _deliver_task_webhook(callback_url, payload):")
+    lines.append("    attempt = 0")
     lines.append("    try:")
     lines.append("        body = json.dumps(payload).encode('utf-8')")
     lines.append("        headers = {'Content-Type': 'application/json'}")
@@ -1846,7 +1858,6 @@ def generate_fastapi_code(
     # every retry (and the time.sleep between them) stays off this app's
     # single event loop, the identical reason a single attempt already
     # never blocked it.
-    lines.append("        attempt = 0")
     lines.append("        while True:")
     lines.append("            try:")
     lines.append("                request = urllib.request.Request(")
@@ -1855,17 +1866,28 @@ def generate_fastapi_code(
     lines.append("                    headers=headers,")
     lines.append("                    method='POST',")
     lines.append("                )")
-    lines.append(
-        "                urllib.request.urlopen("
-        "request, timeout=WEBHOOK_TIMEOUT_SECONDS).close()"
-    )
-    lines.append("                return")
+    lines.append("                response = urllib.request.urlopen(")
+    lines.append("                    request, timeout=WEBHOOK_TIMEOUT_SECONDS")
+    lines.append("                )")
+    lines.append("                status_code = response.status")
+    lines.append("                response.close()")
+    lines.append("                return {")
+    lines.append("                    'delivered': True,")
+    lines.append("                    'attempts': attempt + 1,")
+    lines.append("                    'status_code': status_code,")
+    lines.append("                    'error': None,")
+    lines.append("                }")
     lines.append("            except urllib.error.HTTPError as e:")
     lines.append("                retryable = e.code == 429 or e.code >= 500")
     lines.append(
         "                if not retryable or attempt >= WEBHOOK_MAX_RETRIES:"
     )
-    lines.append("                    return")
+    lines.append("                    return {")
+    lines.append("                        'delivered': False,")
+    lines.append("                        'attempts': attempt + 1,")
+    lines.append("                        'status_code': e.code,")
+    lines.append("                        'error': str(e),")
+    lines.append("                    }")
     # A 429's own Retry-After header (RFC 9110 -- seconds, or an HTTP
     # date; only the seconds form is honored here, the same bounded
     # subset _enforce_rate_limit's own 429 responses always send rather
@@ -1885,9 +1907,14 @@ def generate_fastapi_code(
     )
     lines.append("                except ValueError:")
     lines.append("                    delay = None")
-    lines.append("            except (urllib.error.URLError, OSError):")
+    lines.append("            except (urllib.error.URLError, OSError) as e:")
     lines.append("                if attempt >= WEBHOOK_MAX_RETRIES:")
-    lines.append("                    return")
+    lines.append("                    return {")
+    lines.append("                        'delivered': False,")
+    lines.append("                        'attempts': attempt + 1,")
+    lines.append("                        'status_code': None,")
+    lines.append("                        'error': str(e),")
+    lines.append("                    }")
     lines.append("                delay = None")
     lines.append("            if delay is None:")
     lines.append(
@@ -1903,8 +1930,13 @@ def generate_fastapi_code(
     # already exists to bound elsewhere in this file.
     lines.append("            time.sleep(min(delay, 30))")
     lines.append("            attempt += 1")
-    lines.append("    except (urllib.error.URLError, ValueError, OSError):")
-    lines.append("        pass")
+    lines.append("    except (urllib.error.URLError, ValueError, OSError) as e:")
+    lines.append("        return {")
+    lines.append("            'delivered': False,")
+    lines.append("            'attempts': attempt + 1,")
+    lines.append("            'status_code': None,")
+    lines.append("            'error': str(e),")
+    lines.append("        }")
     lines.append("")
     lines.append(
         "async def _run_background_task(func, task_id, *args, "
@@ -1992,14 +2024,20 @@ def generate_fastapi_code(
     # this must still deliver the real result even when the entry is
     # already gone by the time we get here (POST /tasks/reset firing
     # mid-run; see the "if task_id in TASKS" guard above), rather than
-    # silently sending a webhook with nothing in it.
+    # silently sending a webhook with nothing in it. The delivery outcome
+    # itself is recorded back onto the (still-guarded, for the identical
+    # /tasks/reset reason) TASKS entry as "webhook", so a caller polling
+    # GET /tasks/{task_id} instead of relying on the webhook arriving can
+    # actually see whether it did.
     lines.append("        if callback_url:")
-    lines.append("            await anyio.to_thread.run_sync(")
+    lines.append("            webhook_result = await anyio.to_thread.run_sync(")
     lines.append(
         "                _deliver_task_webhook, callback_url, "
         "{\"task_id\": task_id, \"status\": \"completed\", \"result\": result}"
     )
     lines.append("            )")
+    lines.append("            if task_id in TASKS:")
+    lines.append("                TASKS[task_id][\"webhook\"] = webhook_result")
     # A separate except clause from the generic Exception one below,
     # rather than letting it fall through to that one's own str(e) --
     # anyio.fail_after's own TimeoutError carries no message at all
@@ -2016,23 +2054,27 @@ def generate_fastapi_code(
     lines.append("            TASKS[task_id][\"status\"] = \"failed\"")
     lines.append("            TASKS[task_id][\"error\"] = timeout_error")
     lines.append("        if callback_url:")
-    lines.append("            await anyio.to_thread.run_sync(")
+    lines.append("            webhook_result = await anyio.to_thread.run_sync(")
     lines.append(
         "                _deliver_task_webhook, callback_url, "
         "{\"task_id\": task_id, \"status\": \"failed\", \"error\": timeout_error}"
     )
     lines.append("            )")
+    lines.append("            if task_id in TASKS:")
+    lines.append("                TASKS[task_id][\"webhook\"] = webhook_result")
     lines.append("    except Exception as e:")
     lines.append("        if task_id in TASKS:")
     lines.append("            TASKS[task_id][\"status\"] = \"failed\"")
     lines.append("            TASKS[task_id][\"error\"] = str(e)")
     lines.append("        if callback_url:")
-    lines.append("            await anyio.to_thread.run_sync(")
+    lines.append("            webhook_result = await anyio.to_thread.run_sync(")
     lines.append(
         "                _deliver_task_webhook, callback_url, "
         "{\"task_id\": task_id, \"status\": \"failed\", \"error\": str(e)}"
     )
     lines.append("            )")
+    lines.append("            if task_id in TASKS:")
+    lines.append("                TASKS[task_id][\"webhook\"] = webhook_result")
     lines.append("")
     # Generate Pydantic models for request bodies
     for func in functions:
