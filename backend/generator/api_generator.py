@@ -43,6 +43,23 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # on regardless of what NOTEBOOK_API_JSON_LOGS is actually set to, on
     # every request this app ever serves.
     "JSON_REQUEST_LOGS",
+    # Read AND written by name from inside _track_http_metrics' own body
+    # (below), which runs on literally every request this app serves,
+    # then read again by name from inside metrics()/metrics_prometheus'
+    # own bodies -- the identical "module-level dict maintained by a
+    # request-scoped middleware, then reported by GET /metrics/GET
+    # /metrics/prometheus" exposure TASKS' own entry above already
+    # carries for background-task bookkeeping, just for this app's own
+    # plain HTTP request counters instead. A notebook function named
+    # "_HTTP_METRICS" would rebind this to a function object at
+    # module-execution time; _track_http_metrics'
+    # `_HTTP_METRICS['total'] += 1` then raises "'function' object is
+    # not subscriptable" on the very next request this app serves --
+    # taking down *every* endpoint, not just one with any relation to
+    # the colliding name, the same "one bad name breaks a subsystem
+    # every request depends on" exposure _enforce_rate_limit's own entry
+    # above already documents for the rate limiter.
+    "_HTTP_METRICS",
     # Assigned this compile's own real content hash once, at module load
     # (see write_generated_api's own caller), then read back verbatim by
     # GET /info below -- a notebook function of this exact name would
@@ -1086,6 +1103,65 @@ def generate_fastapi_code(
     lines.append("        }), flush=True)")
     lines.append("    return response")
     lines.append("")
+    # GET /metrics/GET /metrics/prometheus below already report this
+    # app's own *background-task* throughput (via _task_status_counts,
+    # reading TASKS) -- but neither one has ever said anything about the
+    # app's own plain HTTP traffic: how many requests it's actually
+    # served, or how many of them ended in a client (4xx) or server
+    # (5xx) error. A Prometheus instance scraping GET /metrics/prometheus
+    # (or a human reading GET /metrics) could learn "3 tasks are
+    # currently processing" but never "this app has served 40,000
+    # requests today, 200 of them 5xx" -- the single most basic question
+    # a real Prometheus/Grafana setup asks of *any* HTTP service, with no
+    # earlier commit ever adding anywhere this app actually counted a
+    # request at all, background task or not.
+    #
+    # A plain module-level dict, like TASKS/_RATE_LIMIT_WINDOWS above --
+    # updated unconditionally on every request (not gated behind an env
+    # var the way NOTEBOOK_API_JSON_LOGS is) since incrementing a handful
+    # of int/float counters is the same negligible per-request cost
+    # _task_status_counts already treats TASKS bookkeeping as, not the
+    # real work (a subprocess, a disk write, a line printed to stdout)
+    # NOTEBOOK_API_JSON_LOGS' own docstring reasons an operator might
+    # actually want an opt-out for.
+    lines.append(
+        "_HTTP_METRICS = {"
+        "'total': 0, "
+        "'status_1xx': 0, 'status_2xx': 0, 'status_3xx': 0, "
+        "'status_4xx': 0, 'status_5xx': 0, "
+        "'duration_ms_sum': 0.0"
+        "}"
+    )
+    lines.append("")
+    # Registered last -- outermost, wrapping every other middleware above
+    # (see _add_request_id_header's own comment for why "registered last"
+    # means outermost) -- so this reads back the *final* status_code and
+    # X-Process-Time-Ms an earlier layer already set, including one that
+    # short-circuits the request entirely before it ever reaches a real
+    # endpoint (a 429 from rate limiting, a 413 from
+    # MaxRequestBodySizeMiddleware): those still count as a real request
+    # this app spent real time handling, the identical "still fires on a
+    # short-circuited response" guarantee _log_request_json's own
+    # docstring above already documents for JSON access logging, just
+    # applied to this counter instead. response.status_code // 100 turns
+    # 200/201/404/500/... into the exact same "status_class" bucket a
+    # human skimming a dashboard actually reasons in, rather than one
+    # label per distinct status code, which would fragment a single
+    # meaningful signal (2xx vs 4xx vs 5xx) across dozens of near-
+    # identical series for no operational benefit.
+    lines.append("@app.middleware('http')")
+    lines.append("async def _track_http_metrics(request, call_next):")
+    lines.append("    response = await call_next(request)")
+    lines.append("    _HTTP_METRICS['total'] += 1")
+    lines.append(
+        "    _HTTP_METRICS[f'status_{response.status_code // 100}xx'] += 1"
+    )
+    lines.append(
+        "    _HTTP_METRICS['duration_ms_sum'] += float("
+        "response.headers.get('X-Process-Time-Ms', '0'))"
+    )
+    lines.append("    return response")
+    lines.append("")
     # Simple in‑memory task registry used by background endpoints
     lines.append("TASKS = {}")
     lines.append(
@@ -1754,7 +1830,25 @@ def generate_fastapi_code(
     lines.append("        'total_tasks': len(TASKS),")
     lines.append("        'processing': processing,")
     lines.append("        'completed': completed,")
-    lines.append("        'failed': failed")
+    lines.append("        'failed': failed,")
+    # Purely additive alongside the four task fields above -- an existing
+    # consumer reading only "total_tasks"/"processing"/"completed"/
+    # "failed" (this endpoint's own shape since before this feature)
+    # keeps working unchanged; a new one gets this app's own HTTP
+    # request throughput (see _HTTP_METRICS' own comment above) without
+    # a second, separate call.
+    lines.append("        'http_requests_total': _HTTP_METRICS['total'],")
+    lines.append("        'http_requests_by_status_class': {")
+    lines.append("            '1xx': _HTTP_METRICS['status_1xx'],")
+    lines.append("            '2xx': _HTTP_METRICS['status_2xx'],")
+    lines.append("            '3xx': _HTTP_METRICS['status_3xx'],")
+    lines.append("            '4xx': _HTTP_METRICS['status_4xx'],")
+    lines.append("            '5xx': _HTTP_METRICS['status_5xx'],")
+    lines.append("        },")
+    lines.append(
+        "        'http_request_duration_ms_sum': "
+        "_HTTP_METRICS['duration_ms_sum'],"
+    )
     lines.append("    }")
 
     # GET /metrics above has served this dashboard-shaped JSON summary
@@ -1817,6 +1911,61 @@ def generate_fastapi_code(
     )
     lines.append("        '# TYPE notebook_api_uptime_seconds counter\\n'")
     lines.append("        f'notebook_api_uptime_seconds {uptime_seconds}\\n'")
+    # A "status_class" label rather than one metric per distinct status
+    # code -- 200/201/404/500/... collapse into the same "2xx"/"4xx"/
+    # "5xx" bucket a human skimming a dashboard already reasons in (see
+    # _track_http_metrics' own comment above), the same choice
+    # deliberately made there. Always emits all five buckets, even ones
+    # still at 0 -- like notebook_api_tasks_processing/_completed/_failed
+    # above, a series that only appears once its count first goes
+    # non-zero would leave a gap at the start of any graph plotting it
+    # from this app's own startup, rather than a flat, honest 0.
+    lines.append(
+        "        '# HELP notebook_api_http_requests_total Total number "
+        "of HTTP requests this app has handled, by response status "
+        "class.\\n'"
+    )
+    lines.append(
+        "        '# TYPE notebook_api_http_requests_total counter\\n'"
+    )
+    lines.append("        f'notebook_api_http_requests_total"
+                  "{{status_class=\"1xx\"}} "
+                  "{_HTTP_METRICS[\"status_1xx\"]}\\n'")
+    lines.append("        f'notebook_api_http_requests_total"
+                  "{{status_class=\"2xx\"}} "
+                  "{_HTTP_METRICS[\"status_2xx\"]}\\n'")
+    lines.append("        f'notebook_api_http_requests_total"
+                  "{{status_class=\"3xx\"}} "
+                  "{_HTTP_METRICS[\"status_3xx\"]}\\n'")
+    lines.append("        f'notebook_api_http_requests_total"
+                  "{{status_class=\"4xx\"}} "
+                  "{_HTTP_METRICS[\"status_4xx\"]}\\n'")
+    lines.append("        f'notebook_api_http_requests_total"
+                  "{{status_class=\"5xx\"}} "
+                  "{_HTTP_METRICS[\"status_5xx\"]}\\n'")
+    # A counter, not a Prometheus Summary/Histogram (which this hand-
+    # rolled exposition writer -- no prometheus_client dependency
+    # anywhere in this generated app -- has no machinery to emit
+    # quantiles/buckets for): the "_sum"/"_count" naming convention real
+    # Prometheus Summary types already use, so an operator graphing
+    # average per-request latency over a window can still do so with
+    # rate(notebook_api_http_request_duration_ms_sum[5m]) /
+    # rate(notebook_api_http_requests_total{status_class=~".."}[5m]) (or
+    # any other status_class-aggregated total), the identical query
+    # shape a real Summary's own "_sum"/"_count" pair would support.
+    lines.append(
+        "        '# HELP notebook_api_http_request_duration_ms_sum "
+        "Total accumulated wall-clock time, in milliseconds, spent "
+        "handling every HTTP request this app has served.\\n'"
+    )
+    lines.append(
+        "        '# TYPE notebook_api_http_request_duration_ms_sum "
+        "counter\\n'"
+    )
+    lines.append(
+        "        f'notebook_api_http_request_duration_ms_sum "
+        "{_HTTP_METRICS[\"duration_ms_sum\"]}\\n'"
+    )
     lines.append("    )")
     # The Prometheus text exposition format's own registered media type --
     # not "text/plain" alone, which a real Prometheus scraper (and

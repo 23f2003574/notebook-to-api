@@ -729,8 +729,26 @@ def test_generated_app_exposes_get_metrics_as_json(monkeypatch):
 
     assert resp.status_code == 200
     body = resp.json()
+
+    # duration_ms_sum is real wall-clock time accumulated across the one
+    # request made above -- non-deterministic, so only its type/sign is
+    # checked, not an exact value; everything else compares exactly.
+    duration_ms_sum = body.pop("http_request_duration_ms_sum")
+    assert isinstance(duration_ms_sum, float)
+    assert duration_ms_sum >= 0
+
     assert body == {
         "total_tasks": 1, "processing": 0, "completed": 1, "failed": 0,
+        # The one POST /train_model above -- a 200 -- and nothing else:
+        # GET /metrics' own request hasn't been counted yet at the point
+        # its own handler builds this response body (see
+        # _track_http_metrics' own comment -- it increments _HTTP_METRICS
+        # only *after* call_next returns, i.e. after this exact dict was
+        # already built).
+        "http_requests_total": 1,
+        "http_requests_by_status_class": {
+            "1xx": 0, "2xx": 1, "3xx": 0, "4xx": 0, "5xx": 0,
+        },
     }
 
 
@@ -772,6 +790,67 @@ def test_generated_app_exposes_get_metrics_prometheus(monkeypatch):
     assert "notebook_api_tasks_failed 0" in body
     assert "# TYPE notebook_api_uptime_seconds counter" in body
     assert "notebook_api_uptime_seconds " in body
+
+    # The one POST /train_model above -- a 200, bucketed "2xx" -- and
+    # every other status_class still present at 0 (see
+    # _track_http_metrics' own comment: always emits all five buckets so
+    # a graph plotting one from this app's own startup has no gap at the
+    # start).
+    assert "# HELP notebook_api_http_requests_total" in body
+    assert "# TYPE notebook_api_http_requests_total counter" in body
+    assert 'notebook_api_http_requests_total{status_class="1xx"} 0' in body
+    assert 'notebook_api_http_requests_total{status_class="2xx"} 1' in body
+    assert 'notebook_api_http_requests_total{status_class="3xx"} 0' in body
+    assert 'notebook_api_http_requests_total{status_class="4xx"} 0' in body
+    assert 'notebook_api_http_requests_total{status_class="5xx"} 0' in body
+    assert "# TYPE notebook_api_http_request_duration_ms_sum counter" in body
+    assert "notebook_api_http_request_duration_ms_sum " in body
+
+
+def test_generated_app_metrics_prometheus_counts_a_client_error(monkeypatch):
+    """A request the rate limiter/auth layer rejects outright (a missing
+    X-API-Key, here) still counts as real request-handling time this app
+    actually spent -- _track_http_metrics is registered outermost,
+    wrapping verify_api_key's own 401 the same way _log_request_json
+    already wraps every other short-circuited response (see that
+    middleware's own comment), so a caller hammering this app with bad
+    credentials is still visible here as 4xx traffic, not silently
+    invisible to this counter.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].add = lambda a, b: a + b
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+
+    resp = client.post("/add", json={"a": 1, "b": 2})
+    assert resp.status_code == 401
+
+    prom = client.get("/metrics/prometheus")
+    assert 'notebook_api_http_requests_total{status_class="4xx"} 1' in prom.text
+    assert 'notebook_api_http_requests_total{status_class="2xx"} 0' in prom.text
+
+
+def test_notebook_function_named_http_metrics_is_rejected():
+    """_HTTP_METRICS is a module-level dict both _track_http_metrics (a
+    middleware that runs on literally every request) and
+    metrics()/metrics_prometheus() read/write by name -- same collision
+    hazard class as TASKS.
+    """
+
+    functions = [
+        {"name": "_HTTP_METRICS", "args": [], "return_type": "dict"}
+    ]
+
+    with pytest.raises(ReservedFunctionNameError, match="_HTTP_METRICS"):
+        generate_fastapi_code(functions)
 
 
 def test_generated_app_metrics_prometheus_requires_no_api_key(monkeypatch):
