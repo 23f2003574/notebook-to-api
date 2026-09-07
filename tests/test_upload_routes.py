@@ -20025,6 +20025,8 @@ def test_env_vars_preview_requires_no_notebook_and_needs_no_body():
         "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE",
         "NOTEBOOK_API_WEBHOOK_TIMEOUT_SECONDS",
         "NOTEBOOK_API_WEBHOOK_SECRET",
+        "NOTEBOOK_API_WEBHOOK_MAX_RETRIES",
+        "NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS",
         "NOTEBOOK_API_PUBLIC_URL",
         "NOTEBOOK_API_DISABLE_DOCS",
     }
@@ -20036,6 +20038,8 @@ def test_env_vars_preview_requires_no_notebook_and_needs_no_body():
     assert env_vars["NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS"]["default"] == "0"
     assert env_vars["NOTEBOOK_API_RATE_LIMIT_PER_MINUTE"]["default"] == "0"
     assert env_vars["NOTEBOOK_API_WEBHOOK_SECRET"]["default"] == ""
+    assert env_vars["NOTEBOOK_API_WEBHOOK_MAX_RETRIES"]["default"] == "0"
+    assert env_vars["NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS"]["default"] == "0.5"
     assert env_vars["NOTEBOOK_API_PUBLIC_URL"]["default"] == "http://localhost:8000"
     assert env_vars["NOTEBOOK_API_DISABLE_DOCS"]["default"] == "false"
 

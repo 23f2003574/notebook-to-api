@@ -35,6 +35,8 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
         "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE",
         "NOTEBOOK_API_WEBHOOK_TIMEOUT_SECONDS",
         "NOTEBOOK_API_WEBHOOK_SECRET",
+        "NOTEBOOK_API_WEBHOOK_MAX_RETRIES",
+        "NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS",
         "NOTEBOOK_API_PUBLIC_URL",
         "NOTEBOOK_API_DISABLE_DOCS",
     }
@@ -496,6 +498,8 @@ def test_generated_app_exposes_get_config_reporting_its_own_runtime_limits(monke
         "'max_pending_tasks': MAX_PENDING_TASKS,",
         "'webhook_timeout_seconds': WEBHOOK_TIMEOUT_SECONDS,",
         "'webhook_signing_enabled': bool(WEBHOOK_SECRET),",
+        "'webhook_max_retries': WEBHOOK_MAX_RETRIES,",
+        "'webhook_retry_backoff_seconds': WEBHOOK_RETRY_BACKOFF_SECONDS,",
         "'rate_limit_per_minute': RATE_LIMIT_PER_MINUTE or None,",
         "'allowed_origins': ALLOWED_ORIGINS,",
         "'disable_docs': DISABLE_DOCS,",
@@ -519,6 +523,8 @@ def test_generated_app_exposes_get_config_reporting_its_own_runtime_limits(monke
     assert body["max_pending_tasks"] == 10000
     assert body["webhook_timeout_seconds"] == 5
     assert body["webhook_signing_enabled"] is False
+    assert body["webhook_max_retries"] == 0
+    assert body["webhook_retry_backoff_seconds"] == 0.5
     assert body["rate_limit_per_minute"] is None
     assert body["allowed_origins"] == ["*"]
     assert body["disable_docs"] is False
@@ -920,6 +926,36 @@ def test_notebook_function_named_webhook_secret_is_rejected():
         generate_fastapi_code(functions)
 
 
+def test_notebook_function_named_webhook_max_retries_is_rejected():
+    """WEBHOOK_MAX_RETRIES is a module-level name the generated app itself
+    defines (see RESERVED_INFRASTRUCTURE_NAMES) -- same collision hazard
+    class as WEBHOOK_TIMEOUT_SECONDS or WEBHOOK_SECRET.
+    """
+
+    functions = [
+        {"name": "WEBHOOK_MAX_RETRIES", "args": [], "return_type": "dict"}
+    ]
+
+    with pytest.raises(ReservedFunctionNameError, match="WEBHOOK_MAX_RETRIES"):
+        generate_fastapi_code(functions)
+
+
+def test_notebook_function_named_webhook_retry_backoff_seconds_is_rejected():
+    """WEBHOOK_RETRY_BACKOFF_SECONDS is a module-level name the generated
+    app itself defines (see RESERVED_INFRASTRUCTURE_NAMES) -- same
+    collision hazard class as WEBHOOK_MAX_RETRIES.
+    """
+
+    functions = [
+        {"name": "WEBHOOK_RETRY_BACKOFF_SECONDS", "args": [], "return_type": "dict"}
+    ]
+
+    with pytest.raises(
+        ReservedFunctionNameError, match="WEBHOOK_RETRY_BACKOFF_SECONDS"
+    ):
+        generate_fastapi_code(functions)
+
+
 def test_notebook_function_named_deliver_task_webhook_is_rejected():
     """_deliver_task_webhook is a module-level helper the generated app
     itself defines -- same collision hazard class as _evict_expired_tasks
@@ -1286,6 +1322,316 @@ def test_webhook_delivery_signature_changes_when_secret_changes(monkeypatch):
     signature_b = _deliver_with_secret("secret-b")
 
     assert signature_a != signature_b
+
+
+def test_webhook_delivery_default_max_retries_is_zero_makes_exactly_one_attempt(
+    monkeypatch
+):
+    """NOTEBOOK_API_WEBHOOK_MAX_RETRIES defaults to 0 -- a single
+    best-effort attempt, exactly the behavior this app had before retries
+    existed at all. A failing delivery must not be retried by default.
+    """
+    import urllib.request
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    attempts = []
+
+    def always_fails(request, timeout=None):
+        attempts.append(request)
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", always_fails)
+    monkeypatch.setattr("time.sleep", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("time.sleep should never be called with 0 retries")
+    ))
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    response = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/unreachable"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert len(attempts) == 1
+
+
+def test_webhook_delivery_retries_a_transient_network_error_then_succeeds(
+    monkeypatch
+):
+    """NOTEBOOK_API_WEBHOOK_MAX_RETRIES > 0 must actually retry a
+    connection-level failure (the identical class of transient failure a
+    real receiving endpoint's own restart/deploy/overload would produce)
+    instead of giving up on the first attempt.
+    """
+    import urllib.request
+
+    monkeypatch.setenv("NOTEBOOK_API_WEBHOOK_MAX_RETRIES", "2")
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    class _FakeResponse:
+        def close(self):
+            pass
+
+    attempts = []
+
+    def flaky_then_ok(request, timeout=None):
+        attempts.append(request)
+        if len(attempts) < 3:
+            raise urllib.error.URLError("connection refused")
+        return _FakeResponse()
+
+    sleeps = []
+
+    monkeypatch.setattr(urllib.request, "urlopen", flaky_then_ok)
+    monkeypatch.setattr("time.sleep", lambda seconds: sleeps.append(seconds))
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    response = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/hook"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert len(attempts) == 3
+    # Exponential backoff, doubling per attempt from the default base of
+    # 0.5s (0.5, 1.0) -- only two sleeps since the third attempt succeeds.
+    assert sleeps == [0.5, 1.0]
+
+
+def test_webhook_delivery_gives_up_after_max_retries_exhausted(monkeypatch):
+    """A callback_url that never succeeds must still eventually give up --
+    exactly NOTEBOOK_API_WEBHOOK_MAX_RETRIES retries, never an infinite
+    loop -- and, like every other webhook failure, must never affect the
+    task's own real recorded result.
+    """
+    import urllib.request
+
+    monkeypatch.setenv("NOTEBOOK_API_WEBHOOK_MAX_RETRIES", "2")
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    attempts = []
+
+    def always_fails(request, timeout=None):
+        attempts.append(request)
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", always_fails)
+    monkeypatch.setattr("time.sleep", lambda *a, **k: None)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    response = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/unreachable"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    # 1 initial attempt + 2 retries.
+    assert len(attempts) == 3
+
+    task_id = response.json()["task_id"]
+    task = namespace["TASKS"][task_id]
+    assert task["status"] == "completed"
+    assert task["result"] == "ok"
+
+
+def test_webhook_delivery_retries_a_5xx_http_error_then_succeeds(monkeypatch):
+    """A 5xx response from the receiving endpoint is the same class of
+    transient failure a connection-level error already retries -- the
+    receiver is (or was, at the moment of that response) having its own
+    problem, not deliberately rejecting this request.
+    """
+    import urllib.error
+    import urllib.request
+
+    monkeypatch.setenv("NOTEBOOK_API_WEBHOOK_MAX_RETRIES", "1")
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    class _FakeResponse:
+        def close(self):
+            pass
+
+    attempts = []
+
+    def fails_once_with_503(request, timeout=None):
+        attempts.append(request)
+        if len(attempts) == 1:
+            raise urllib.error.HTTPError(
+                request.full_url, 503, "Service Unavailable", {}, None
+            )
+        return _FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fails_once_with_503)
+    monkeypatch.setattr("time.sleep", lambda *a, **k: None)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    response = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/hook"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert len(attempts) == 2
+
+
+def test_webhook_delivery_does_not_retry_a_non_retryable_4xx_http_error(
+    monkeypatch
+):
+    """A 4xx response other than 429 means the receiver deliberately
+    rejected this exact request -- retrying an unchanged body against it
+    again can only ever fail the same way, so this must never retry it
+    even with retries otherwise enabled.
+    """
+    import urllib.error
+    import urllib.request
+
+    monkeypatch.setenv("NOTEBOOK_API_WEBHOOK_MAX_RETRIES", "3")
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    attempts = []
+
+    def rejects_with_404(request, timeout=None):
+        attempts.append(request)
+        raise urllib.error.HTTPError(
+            request.full_url, 404, "Not Found", {}, None
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", rejects_with_404)
+    monkeypatch.setattr("time.sleep", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("a non-retryable 4xx must never be retried")
+    ))
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    response = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/hook"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert len(attempts) == 1
+
+
+def test_webhook_delivery_honors_retry_after_header_on_429(monkeypatch):
+    """A 429 response's own Retry-After header (seconds form) must drive
+    the wait before the next attempt instead of the computed exponential
+    backoff -- the receiving endpoint told this app exactly how long to
+    wait, the identical "honor Retry-After instead of guessing" behavior
+    the generated SDK clients' own retry logic already gives a 429.
+    """
+    import urllib.error
+    import urllib.request
+
+    monkeypatch.setenv("NOTEBOOK_API_WEBHOOK_MAX_RETRIES", "1")
+    monkeypatch.setenv("NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS", "0.5")
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    class _FakeResponse:
+        def close(self):
+            pass
+
+    attempts = []
+
+    def fails_once_with_429(request, timeout=None):
+        attempts.append(request)
+        if len(attempts) == 1:
+            raise urllib.error.HTTPError(
+                request.full_url, 429, "Too Many Requests",
+                {"Retry-After": "12"}, None,
+            )
+        return _FakeResponse()
+
+    sleeps = []
+
+    monkeypatch.setattr(urllib.request, "urlopen", fails_once_with_429)
+    monkeypatch.setattr("time.sleep", lambda seconds: sleeps.append(seconds))
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    response = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/hook"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert len(attempts) == 2
+    # 12s from Retry-After, not the computed 0.5s exponential backoff.
+    assert sleeps == [12.0]
 
 
 def test_notebook_function_named_task_execution_timeout_seconds_is_rejected():

@@ -18,6 +18,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "PUBLIC_URL", "DISABLE_DOCS",
     "MAX_REQUEST_BODY_BYTES", "MaxRequestBodySizeMiddleware",
     "MAX_PENDING_TASKS", "WEBHOOK_TIMEOUT_SECONDS", "WEBHOOK_SECRET",
+    "WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_BACKOFF_SECONDS",
     "TASK_EXECUTION_TIMEOUT_SECONDS",
     # Read by name from inside _evict_expired_tasks' own body -- the
     # identical "referenced by name inside a helper every background
@@ -297,6 +298,45 @@ GENERATED_APP_ENV_VARS = [
             "contract GitHub/Stripe webhooks already use. Empty (the "
             "default) sends the webhook unsigned, exactly as before this "
             "existed."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_WEBHOOK_MAX_RETRIES",
+        "default": "0",
+        "description": (
+            "How many additional attempts a background task's own "
+            "optional ?callback_url= webhook delivery gets after an "
+            "initial attempt that fails with a network-level error "
+            "(connection refused, DNS failure, WEBHOOK_TIMEOUT_SECONDS "
+            "itself elapsing) or a 429/5xx response -- the exact same "
+            "class of failure a real receiving endpoint's own transient "
+            "restart/deploy/overload would produce. A 4xx response other "
+            "than 429 is never retried (the receiver deliberately "
+            "rejected this exact request; retrying an unchanged body "
+            "against it again would only ever fail the same way). Each "
+            "retry waits NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS, "
+            "doubling per attempt and capped at 30s, honoring a 429 "
+            "response's own Retry-After header when present instead of "
+            "guessing. 0 (the default) disables this entirely -- a "
+            "single best-effort attempt, exactly as before this existed. "
+            "Every attempt still only ever runs inside the worker thread "
+            "already backing this one delivery (see _run_background_task), "
+            "never the event loop, so retrying here can't block any other "
+            "request; a task's own recorded result in TASKS is still "
+            "never affected by webhook delivery failing after every "
+            "retry is exhausted."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS",
+        "default": "0.5",
+        "description": (
+            "Base delay, in seconds, between a background task's own "
+            "webhook delivery retries (see "
+            "NOTEBOOK_API_WEBHOOK_MAX_RETRIES) -- doubles each attempt "
+            "(0.5s, 1s, 2s, ... by default) up to a fixed 30s cap, unless "
+            "a 429 response's own Retry-After header names a longer wait. "
+            "Unused when NOTEBOOK_API_WEBHOOK_MAX_RETRIES is 0."
         ),
     },
     {
@@ -998,6 +1038,26 @@ def generate_fastapi_code(
         f'"{_generated_app_env_var_default("NOTEBOOK_API_WEBHOOK_SECRET")}"'
         ')'
     )
+    # Read by _deliver_task_webhook below to decide how many additional
+    # attempts a failed delivery gets -- 0 (the default) preserves the
+    # previous single-best-effort-attempt behavior exactly, the same
+    # "0 means off" convention TASK_EXECUTION_TIMEOUT_SECONDS/
+    # RATE_LIMIT_PER_MINUTE's own defaults already follow.
+    lines.append(
+        'WEBHOOK_MAX_RETRIES = int(os.getenv('
+        '"NOTEBOOK_API_WEBHOOK_MAX_RETRIES", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_WEBHOOK_MAX_RETRIES")}"'
+        '))'
+    )
+    # Read by _deliver_task_webhook below as the base delay between
+    # retries -- float, not int, so a sub-second base delay (the default,
+    # 0.5s) stays exact instead of truncating to 0.
+    lines.append(
+        'WEBHOOK_RETRY_BACKOFF_SECONDS = float(os.getenv('
+        '"NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS")}"'
+        '))'
+    )
     lines.append(
         '# A comma-separated list, not a single value, so a key can be'
     )
@@ -1402,6 +1462,10 @@ def generate_fastapi_code(
     )
     lines.append("        'webhook_timeout_seconds': WEBHOOK_TIMEOUT_SECONDS,")
     lines.append("        'webhook_signing_enabled': bool(WEBHOOK_SECRET),")
+    lines.append("        'webhook_max_retries': WEBHOOK_MAX_RETRIES,")
+    lines.append(
+        "        'webhook_retry_backoff_seconds': WEBHOOK_RETRY_BACKOFF_SECONDS,"
+    )
     lines.append("        'rate_limit_per_minute': RATE_LIMIT_PER_MINUTE or None,")
     lines.append("        'allowed_origins': ALLOWED_ORIGINS,")
     lines.append("        'disable_docs': DISABLE_DOCS,")
@@ -1766,15 +1830,79 @@ def generate_fastapi_code(
     lines.append(
         "            headers['X-Webhook-Signature'] = f'sha256={signature}'"
     )
-    lines.append("        request = urllib.request.Request(")
-    lines.append("            callback_url,")
-    lines.append("            data=body,")
-    lines.append("            headers=headers,")
-    lines.append("            method='POST',")
-    lines.append("        )")
+    # attempt/while loop below: WEBHOOK_MAX_RETRIES (0 by default,
+    # preserving the previous single-best-effort-attempt behavior
+    # exactly) additional tries after a retryable failure -- a
+    # network-level error (connection refused, DNS failure,
+    # WEBHOOK_TIMEOUT_SECONDS itself elapsing, caught by the
+    # (URLError, OSError) branch below) or a 429/5xx HTTPError, the same
+    # class of transient failure a real receiving endpoint's own
+    # restart/deploy/overload would produce. A 4xx HTTPError other than
+    # 429 returns immediately without retrying at all: the receiver
+    # deliberately rejected this exact, unchanged request, so retrying it
+    # again can only ever fail the same way. Still runs entirely inside
+    # the worker thread already backing this one delivery (see
+    # _run_background_task's own anyio.to_thread.run_sync call site) --
+    # every retry (and the time.sleep between them) stays off this app's
+    # single event loop, the identical reason a single attempt already
+    # never blocked it.
+    lines.append("        attempt = 0")
+    lines.append("        while True:")
+    lines.append("            try:")
+    lines.append("                request = urllib.request.Request(")
+    lines.append("                    callback_url,")
+    lines.append("                    data=body,")
+    lines.append("                    headers=headers,")
+    lines.append("                    method='POST',")
+    lines.append("                )")
     lines.append(
-        "        urllib.request.urlopen(request, timeout=WEBHOOK_TIMEOUT_SECONDS).close()"
+        "                urllib.request.urlopen("
+        "request, timeout=WEBHOOK_TIMEOUT_SECONDS).close()"
     )
+    lines.append("                return")
+    lines.append("            except urllib.error.HTTPError as e:")
+    lines.append("                retryable = e.code == 429 or e.code >= 500")
+    lines.append(
+        "                if not retryable or attempt >= WEBHOOK_MAX_RETRIES:"
+    )
+    lines.append("                    return")
+    # A 429's own Retry-After header (RFC 9110 -- seconds, or an HTTP
+    # date; only the seconds form is honored here, the same bounded
+    # subset _enforce_rate_limit's own 429 responses always send rather
+    # than a date) takes priority over the computed exponential backoff
+    # below when present and parseable -- the receiving endpoint told
+    # this app exactly how long to wait, the identical "honor Retry-After
+    # instead of guessing" behavior the generated SDK clients' own
+    # wait_for_task/waitForTask retry loop already gives a 429 response.
+    lines.append(
+        "                retry_after = "
+        "e.headers.get('Retry-After') if e.headers else None"
+    )
+    lines.append("                try:")
+    lines.append(
+        "                    delay = "
+        "float(retry_after) if retry_after is not None else None"
+    )
+    lines.append("                except ValueError:")
+    lines.append("                    delay = None")
+    lines.append("            except (urllib.error.URLError, OSError):")
+    lines.append("                if attempt >= WEBHOOK_MAX_RETRIES:")
+    lines.append("                    return")
+    lines.append("                delay = None")
+    lines.append("            if delay is None:")
+    lines.append(
+        "                delay = "
+        "WEBHOOK_RETRY_BACKOFF_SECONDS * (2 ** attempt)"
+    )
+    # Capped at 30s regardless of source (a computed backoff that's
+    # already grown large after several retries, or a Retry-After value
+    # the receiving endpoint itself sent) -- this worker thread is one of
+    # this process' limited pool (the same one every synchronous
+    # notebook-function endpoint also runs on), so an unbounded wait here
+    # is the identical starvation risk TASK_EXECUTION_TIMEOUT_SECONDS
+    # already exists to bound elsewhere in this file.
+    lines.append("            time.sleep(min(delay, 30))")
+    lines.append("            attempt += 1")
     lines.append("    except (urllib.error.URLError, ValueError, OSError):")
     lines.append("        pass")
     lines.append("")
