@@ -18,6 +18,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -51,6 +52,7 @@ from backend.compiler import (
     package_name_for_output_dir,
     resolve_requirements,
     update_compile_metadata_source_notebook,
+    write_runtime_module,
 )
 from backend.generator.api_generator import (
     GENERATED_APP_ENV_VARS,
@@ -11425,6 +11427,236 @@ def env_vars_preview_endpoint():
     return {
         "status": "success",
         "environment_variables": GENERATED_APP_ENV_VARS,
+    }
+
+
+@router.post("/openapi-preview")
+def openapi_preview_endpoint(data: dict):
+    """The exact OpenAPI schema POST /api/export-openapi would produce for
+    an already-uploaded notebook -- without actually compiling it,
+    touching GENERATED_DIR (or whatever it currently backs) at all, or
+    requiring a prior POST /api/compile to have ever run.
+
+    Every other compile-produced artifact already has a preview reachable
+    before a real compile -- POST /api/app-preview (app.py), POST
+    /api/requirements-preview (requirements.txt), POST /api/readme-preview
+    (README.md), GET /api/dockerfile-preview/GET
+    /api/docker-compose-preview/GET /api/env-example-preview/GET
+    /api/k8s-preview -- but the OpenAPI schema itself, the one artifact a
+    caller most likely actually wants before ever compiling (exact
+    parameter names/types, which fields are required, response models,
+    the {401, 429} error responses every notebook-function endpoint
+    carries -- see _auth_and_rate_limit_error_responses), had no preview
+    at all. Before this, seeing it meant POST /api/compile-ing the
+    notebook for real (replacing whatever GENERATED_DIR currently serves,
+    live, for every other caller of this dashboard), then POST
+    /api/export-openapi-ing that compile, just to answer "what would this
+    actually generate" -- a much heavier round trip than POST
+    /api/app-preview's own source-level answer to the same question, and
+    the one POST /api/app-preview's own docstring explicitly couldn't
+    give: generate_fastapi_code returns Python *source text*, not a
+    computed schema -- reading exact request/response shapes back out of
+    that text means mentally executing FastAPI/Pydantic's own schema
+    generation by eye.
+
+    Unlike every sibling preview endpoint above, an OpenAPI schema isn't a
+    pure function of generate_fastapi_code's own output -- app.openapi()
+    is FastAPI's own runtime introspection of a live, imported
+    `FastAPI()` app object, the identical mechanism export_openapi_schema
+    (backend/exporters/openapi_exporter.py) already relies on for an
+    actually-compiled app. So this writes the exact same app_code
+    POST /api/app-preview would return -- plus the runtime module
+    write_runtime_module already writes on every real compile -- into a
+    throwaway temporary directory (never GENERATED_DIR) under a random,
+    single-use package name, imports it, calls its own app.openapi(), and
+    removes every trace of it (the temporary directory itself, and the
+    random package name's own entries in sys.modules/sys.path) before
+    returning -- the same "import the compiled app in-process" technique
+    POST /api/compile's own "smoke_test" (see _run_compile_smoke_test
+    above) and `compile --smoke-test` (see _run_local_compile_smoke_test,
+    cli.py) already use, just against a disposable directory instead of a
+    real compile's own output. The random package name exists solely to
+    dodge sys.modules collisions with whatever GENERATED_DIR's own
+    package name (e.g. "generated") might already be cached as in this
+    long-running dashboard process -- generate_fastapi_code never embeds
+    package_name anywhere the schema itself could observe (it's used only
+    for the runtime module's own import line), so the schema this returns
+    is identical to what a real compile under GENERATED_DIR's own
+    package_name would produce.
+
+    Same caveat _run_compile_smoke_test's own docstring already spells
+    out: this imports the generated app inside *this dashboard process's
+    own* Python environment, not inside a fresh container built from a
+    real compile's own requirements.txt. A notebook importing a
+    third-party package genuinely only ever installed in a real deploy
+    target's own image (never on the machine running this dashboard) will
+    legitimately fail this preview with a 422, even though an actual
+    compile -- which never imports the notebook's own code at all, only
+    parses it -- would still succeed.
+
+    "package_name" always reflects GENERATED_DIR's own basename -- the
+    same package name an actual POST /api/compile of this notebook would
+    use, and the same value POST /api/app-preview's own identical field
+    already reports -- not the random, disposable one actually used to
+    perform the import above.
+
+    "only"/"exclude"/"version_id" mirror POST /api/app-preview's own
+    exactly (see its docstring) -- an invalid value gets the identical
+    400 here that it would there, a reserved-name collision the identical
+    400 POST /api/compile itself would raise for the same notebook, and
+    "version_id" previews the schema for one of "notebook_path"'s own
+    previously snapshotted versions instead of its current content.
+    """
+
+    notebook_path = data.get("notebook_path")
+
+    if not notebook_path:
+
+        raise HTTPException(
+            status_code=400,
+            detail="notebook_path is required"
+        )
+
+    only = data.get("only")
+    exclude = data.get("exclude")
+    version_id = data.get("version_id")
+
+    for field_name, field_value in (("only", only), ("exclude", exclude)):
+
+        if field_value is not None and (
+            not isinstance(field_value, list)
+            or not all(isinstance(item, str) for item in field_value)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name} must be a list of strings"
+            )
+
+    if only and exclude:
+
+        raise HTTPException(
+            status_code=400,
+            detail="only and exclude can't both be given -- choose one."
+        )
+
+    full_path = _resolve_preview_content_path(notebook_path, version_id)
+
+    # Unique per call -- never GENERATED_DIR's own package_name -- so this
+    # can never collide with (or evict) whatever this long-running
+    # dashboard process may already have cached in sys.modules for a real
+    # compiled app. See this endpoint's own docstring for why the schema
+    # itself is unaffected by which package name is actually used here.
+    temp_package_name = f"_notebook_to_api_openapi_preview_{uuid.uuid4().hex}"
+
+    try:
+
+        notebook = load_notebook(str(full_path))
+
+        code_cells = [
+            cell for cell in extract_code_cells(notebook)
+            if is_parseable_python(cell)
+        ]
+
+        functions = []
+
+        for cell in code_cells:
+            functions.extend(extract_functions_from_code(cell))
+
+        functions = deduplicate_functions_by_name(functions)
+
+        functions, exclude = _drop_private_functions(
+            functions, code_cells, only, exclude
+        )
+
+        functions = _filter_functions_by_name(functions, only, exclude)
+
+        package_name = package_name_for_output_dir(GENERATED_DIR)
+
+        app_code = generate_fastapi_code(
+            functions, temp_package_name,
+            source_notebook_sha256=hash_notebook_file(full_path),
+            notebook_to_api_version=NOTEBOOK_TO_API_VERSION,
+        )
+
+    except ReservedFunctionNameError as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+
+    except MALFORMED_NOTEBOOK_ERRORS as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+        )
+
+    except ValueError as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Preview error: {str(e)}"
+        )
+
+    with tempfile.TemporaryDirectory(
+        prefix="notebook_to_api_openapi_preview_"
+    ) as temp_root:
+
+        temp_output_dir = os.path.join(temp_root, temp_package_name)
+
+        # Creates temp_output_dir itself (parents=True) along with
+        # temp_output_dir/runtime/ -- identical layout a real compile
+        # writes under GENERATED_DIR, just rooted at a throwaway
+        # directory instead.
+        write_runtime_module(code_cells, temp_output_dir)
+
+        with open(
+            os.path.join(temp_output_dir, "app.py"), "w", encoding="utf-8"
+        ) as f:
+            f.write(app_code)
+
+        sys.path.insert(0, temp_root)
+
+        try:
+
+            module = importlib.import_module(f"{temp_package_name}.app")
+
+            schema = module.app.openapi()
+
+        except Exception as e:
+
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Generated app failed to import while building the "
+                    f"OpenAPI preview: {e}. If the notebook imports a "
+                    "third-party package not installed in this dashboard's "
+                    "own Python environment, this can fail here even "
+                    "though a real POST /api/compile (which never imports "
+                    "the notebook's own code, only parses it) would still "
+                    "succeed -- see this endpoint's own docstring."
+                )
+            )
+
+        finally:
+
+            _evict_compiled_app_from_module_cache(temp_package_name)
+            sys.path.remove(temp_root)
+
+    return {
+        "status": "success",
+        "notebook": notebook_path,
+        "version_id": version_id,
+        "package_name": package_name,
+        "schema": schema,
     }
 
 

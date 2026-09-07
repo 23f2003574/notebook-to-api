@@ -18763,6 +18763,288 @@ def test_app_preview_returns_404_for_an_unknown_version_id():
     assert resp.status_code == 404
 
 
+def test_openapi_preview_matches_what_an_actual_compile_and_export_produces():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "openapi_preview_match.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    preview_resp = client.post(
+        "/api/openapi-preview",
+        json={"notebook_path": "openapi_preview_match.ipynb"},
+    )
+    assert preview_resp.status_code == 200
+    preview_body = preview_resp.json()
+    assert preview_body["status"] == "success"
+    assert preview_body["notebook"] == "openapi_preview_match.ipynb"
+    assert preview_body["package_name"] == "generated"
+    assert "/add" in preview_body["schema"]["paths"]
+
+    compile_resp = client.post(
+        "/api/compile",
+        json={"notebook_path": "openapi_preview_match.ipynb"},
+    )
+    assert compile_resp.status_code == 200
+
+    export_resp = client.post("/api/export-openapi", json={"format": "json"})
+    assert export_resp.status_code == 200
+
+    assert preview_body["schema"]["paths"]["/add"] == (
+        export_resp.json()["schema"]["paths"]["/add"]
+    )
+
+
+def test_openapi_preview_respects_only_and_exclude():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "openapi_preview_only.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post(
+        "/api/openapi-preview",
+        json={"notebook_path": "openapi_preview_only.ipynb", "only": ["add"]},
+    )
+
+    assert resp.status_code == 200
+    paths = resp.json()["schema"]["paths"]
+    assert "/add" in paths
+    assert "/subtract" not in paths
+
+
+def test_openapi_preview_never_exposes_a_private_directive_marked_function():
+
+    content = _notebook_bytes(
+        "# notebook-to-api: private\n"
+        "def helper(x: int) -> int:\n    return x\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "openapi_preview_private.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    resp = client.post(
+        "/api/openapi-preview",
+        json={"notebook_path": "openapi_preview_private.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    paths = resp.json()["schema"]["paths"]
+    assert "/add" in paths
+    assert "/helper" not in paths
+
+
+def test_openapi_preview_does_not_touch_generated_dir(monkeypatch, tmp_path):
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "openapi_preview_no_side_effects.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    generated_dir = tmp_path / "openapi_preview_generated"
+    monkeypatch.setattr("backend.routes.upload.GENERATED_DIR", str(generated_dir))
+
+    resp = client.post(
+        "/api/openapi-preview",
+        json={"notebook_path": "openapi_preview_no_side_effects.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    assert not generated_dir.exists()
+
+
+def test_openapi_preview_leaves_no_temp_directory_or_module_behind():
+
+    _upload_sample_notebook("openapi_preview_cleanup.ipynb")
+
+    modules_before = set(sys.modules)
+    path_before = list(sys.path)
+
+    resp = client.post(
+        "/api/openapi-preview",
+        json={"notebook_path": "openapi_preview_cleanup.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    assert sys.path == path_before
+
+    leaked_modules = {
+        name for name in sys.modules if name.startswith("_notebook_to_api_openapi_preview_")
+    }
+    assert not leaked_modules
+    assert set(sys.modules) - modules_before == set()
+
+
+def test_openapi_preview_returns_404_for_a_missing_notebook():
+
+    resp = client.post(
+        "/api/openapi-preview", json={"notebook_path": "does_not_exist.ipynb"}
+    )
+
+    assert resp.status_code == 404
+
+
+def test_openapi_preview_returns_400_for_a_malformed_notebook_file():
+
+    filename = "openapi_preview_malformed.ipynb"
+    file_path = os.path.join(UPLOAD_DIR, filename)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("not valid json at all")
+
+    resp = client.post("/api/openapi-preview", json={"notebook_path": filename})
+
+    assert resp.status_code == 400
+
+
+def test_openapi_preview_requires_a_notebook_path():
+
+    resp = client.post("/api/openapi-preview", json={})
+
+    assert resp.status_code == 400
+
+
+def test_openapi_preview_rejects_both_only_and_exclude():
+
+    _upload_sample_notebook("openapi_preview_only_exclude.ipynb")
+
+    resp = client.post(
+        "/api/openapi-preview",
+        json={
+            "notebook_path": "openapi_preview_only_exclude.ipynb",
+            "only": ["f"],
+            "exclude": ["f"],
+        },
+    )
+
+    assert resp.status_code == 400
+
+
+def test_openapi_preview_returns_400_for_a_reserved_function_name():
+
+    content = _notebook_bytes(
+        "def health_check() -> dict:\n    return {}\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "openapi_preview_reserved.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/openapi-preview",
+        json={"notebook_path": "openapi_preview_reserved.ipynb"},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_openapi_preview_with_version_id_previews_that_snapshots_source():
+
+    filename = "openapi_preview_version_id.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def old_func() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def new_func() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(f"/api/notebooks/{filename}/versions").json()["versions"][0]["version_id"]
+
+    version_resp = client.post(
+        "/api/openapi-preview", json={"notebook_path": filename, "version_id": version_id}
+    )
+
+    assert version_resp.status_code == 200
+    body = version_resp.json()
+    assert body["version_id"] == version_id
+    assert "/old_func" in body["schema"]["paths"]
+    assert "/new_func" not in body["schema"]["paths"]
+
+    current_resp = client.post("/api/openapi-preview", json={"notebook_path": filename})
+    current_paths = current_resp.json()["schema"]["paths"]
+    assert "/new_func" in current_paths
+    assert "/old_func" not in current_paths
+
+
+def test_openapi_preview_returns_404_for_an_unknown_version_id():
+
+    filename = "openapi_preview_version_id_unknown.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.post(
+        "/api/openapi-preview",
+        json={"notebook_path": filename, "version_id": "does-not-exist.ipynb"},
+    )
+
+    assert resp.status_code == 404
+
+
 def test_readme_preview_matches_what_an_actual_compile_writes():
 
     content = _notebook_bytes(
