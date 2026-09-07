@@ -25083,3 +25083,444 @@ def test_get_config_never_leaks_the_upload_or_generated_directory_path():
     assert "upload_dir" not in resp.json()
     assert "generated_dir" not in resp.json()
     assert UPLOAD_DIR not in body_text
+
+
+def _upload_and_create_one_version(filename):
+    """Upload `filename`, then overwrite it once so it has exactly one
+    snapshotted version. Returns that version's own version_id.
+    """
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(versions) == 1
+    return versions[0]["version_id"]
+
+
+def test_get_notebook_version_note_defaults_to_empty_string():
+
+    filename = "version_note_default.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    resp = client.get(f"/api/notebooks/{filename}/versions/{version_id}/note")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "success",
+        "filename": filename,
+        "version_id": version_id,
+        "note": "",
+    }
+
+
+def test_set_notebook_version_note_round_trips_through_get():
+
+    filename = "version_note_round_trip.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    put_resp = client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "known-good, before the refactor"},
+    )
+
+    assert put_resp.status_code == 200
+    assert put_resp.json() == {
+        "status": "success",
+        "filename": filename,
+        "version_id": version_id,
+        "note": "known-good, before the refactor",
+    }
+
+    get_resp = client.get(f"/api/notebooks/{filename}/versions/{version_id}/note")
+    assert get_resp.json()["note"] == "known-good, before the refactor"
+
+
+def test_set_notebook_version_note_strips_surrounding_whitespace():
+
+    filename = "version_note_strip.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    resp = client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "  padded note  "},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["note"] == "padded note"
+
+
+def test_set_notebook_version_note_empty_string_clears_it():
+
+    filename = "version_note_clear.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "temporary"},
+    )
+    clear_resp = client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": ""},
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json()["note"] == ""
+
+    from backend.routes.upload import _version_notes_sidecar_path
+    assert not _version_notes_sidecar_path(filename).is_file()
+
+
+def test_set_notebook_version_note_does_not_affect_another_versions_note():
+
+    filename = "version_note_independent.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(versions) == 2
+    first_id, second_id = versions[0]["version_id"], versions[1]["version_id"]
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{first_id}/note",
+        json={"note": "first note"},
+    )
+    client.put(
+        f"/api/notebooks/{filename}/versions/{second_id}/note",
+        json={"note": "second note"},
+    )
+
+    assert client.get(
+        f"/api/notebooks/{filename}/versions/{first_id}/note"
+    ).json()["note"] == "first note"
+    assert client.get(
+        f"/api/notebooks/{filename}/versions/{second_id}/note"
+    ).json()["note"] == "second note"
+
+
+def test_set_notebook_version_note_rejects_a_non_string_value():
+
+    filename = "version_note_bad_type.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    resp = client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": 123},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_set_notebook_version_note_rejects_a_note_over_the_max_length():
+
+    from backend.routes.upload import _MAX_VERSION_NOTE_LENGTH
+
+    filename = "version_note_too_long.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    resp = client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "x" * (_MAX_VERSION_NOTE_LENGTH + 1)},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_get_notebook_version_note_returns_404_for_missing_notebook():
+
+    resp = client.get(
+        "/api/notebooks/version_note_no_notebook.ipynb/versions/x/note"
+    )
+    assert resp.status_code == 404
+
+
+def test_get_notebook_version_note_returns_404_for_an_unknown_version_id():
+
+    _upload_sample_notebook("version_note_unknown_version.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/version_note_unknown_version.ipynb/versions/"
+        "does-not-exist.ipynb/note"
+    )
+    assert resp.status_code == 404
+
+
+def test_set_notebook_version_note_returns_404_for_an_unknown_version_id():
+
+    _upload_sample_notebook("version_note_set_unknown_version.ipynb")
+
+    resp = client.put(
+        "/api/notebooks/version_note_set_unknown_version.ipynb/versions/"
+        "does-not-exist.ipynb/note",
+        json={"note": "hello"},
+    )
+    assert resp.status_code == 404
+
+
+def test_list_notebook_versions_notes_reports_each_versions_own_note():
+
+    filename = "version_note_list.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    noted_id, unnoted_id = versions[0]["version_id"], versions[1]["version_id"]
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{noted_id}/note",
+        json={"note": "labeled"},
+    )
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions", params={"notes": "true"}
+    )
+
+    assert resp.status_code == 200
+    by_id = {v["version_id"]: v["note"] for v in resp.json()["versions"]}
+    assert by_id[noted_id] == "labeled"
+    assert by_id[unnoted_id] == ""
+
+
+def test_list_notebook_versions_omits_note_field_by_default():
+
+    filename = "version_note_list_default.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "labeled"},
+    )
+
+    resp = client.get(f"/api/notebooks/{filename}/versions")
+
+    assert "note" not in resp.json()["versions"][0]
+
+
+def test_list_notebook_versions_notes_csv_format_adds_a_note_column():
+
+    filename = "version_note_list_csv.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "csv-note"},
+    )
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"notes": "true", "format": "csv"},
+    )
+
+    assert resp.status_code == 200
+    rows = resp.text.strip().splitlines()
+    assert rows[0] == "version_id,size_bytes,saved_at,note"
+    assert rows[1].endswith(",csv-note")
+
+
+def test_delete_notebook_version_also_discards_its_note():
+
+    filename = "version_note_delete_cleanup.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "will be discarded"},
+    )
+
+    delete_resp = client.delete(
+        f"/api/notebooks/{filename}/versions/{version_id}"
+    )
+    assert delete_resp.status_code == 200
+
+    from backend.routes.upload import _version_notes_sidecar_path
+    assert not _version_notes_sidecar_path(filename).is_file()
+
+
+def test_delete_notebook_versions_batch_also_discards_their_notes():
+
+    filename = "version_note_batch_delete_cleanup.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "will be discarded"},
+    )
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/delete-batch",
+        json={"version_ids": [version_id]},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["succeeded_count"] == 1
+
+    from backend.routes.upload import _version_notes_sidecar_path
+    assert not _version_notes_sidecar_path(filename).is_file()
+
+
+def test_clear_notebook_versions_also_discards_their_notes():
+
+    filename = "version_note_clear_all_cleanup.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "will be discarded"},
+    )
+
+    resp = client.delete(f"/api/notebooks/{filename}/versions")
+    assert resp.status_code == 200
+
+    from backend.routes.upload import _version_notes_sidecar_path
+    assert not _version_notes_sidecar_path(filename).is_file()
+
+
+def test_delete_notebook_also_discards_its_version_notes_sidecar():
+
+    filename = "version_note_notebook_delete_cleanup.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "will be discarded"},
+    )
+
+    resp = client.delete(f"/api/notebooks/{filename}")
+    assert resp.status_code == 200
+
+    from backend.routes.upload import _version_notes_sidecar_path
+    assert not _version_notes_sidecar_path(filename).is_file()
+
+
+def test_rename_notebook_moves_its_version_notes_to_the_new_name():
+
+    filename = "version_note_rename_source.ipynb"
+    new_filename = "version_note_rename_target.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "moves along with the rename"},
+    )
+
+    resp = client.patch(
+        f"/api/notebooks/{filename}", json={"new_filename": new_filename}
+    )
+    assert resp.status_code == 200
+
+    get_resp = client.get(
+        f"/api/notebooks/{new_filename}/versions/{version_id}/note"
+    )
+    assert get_resp.status_code == 200
+    assert get_resp.json()["note"] == "moves along with the rename"
+
+    from backend.routes.upload import _version_notes_sidecar_path
+    assert not _version_notes_sidecar_path(filename).is_file()
+
+
+def test_get_config_reports_max_version_note_length():
+
+    from backend.routes.upload import _MAX_VERSION_NOTE_LENGTH
+
+    resp = client.get("/api/config")
+
+    assert resp.status_code == 200
+    assert resp.json()["max_version_note_length"] == _MAX_VERSION_NOTE_LENGTH

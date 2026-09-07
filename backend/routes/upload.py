@@ -673,6 +673,173 @@ def _notebook_versions_dir(notebook_filename: str) -> Path:
     return Path(UPLOAD_DIR) / UPLOAD_VERSIONS_DIRNAME / notebook_filename
 
 
+# Same reasoning _MAX_DESCRIPTION_LENGTH already gives for a notebook's own
+# freeform description, applied to a single version snapshot's own note
+# instead -- a version note is meant to be a short, git-commit-message-like
+# label ("before the refactor", "known-good, pre-incident"), not a second
+# description, so it gets its own, shorter cap rather than reusing
+# _MAX_DESCRIPTION_LENGTH.
+_MAX_VERSION_NOTE_LENGTH = 500
+
+
+def _version_notes_sidecar_path(notebook_filename: str) -> Path:
+    """Path to the hidden JSON sidecar file that stores every note a
+    caller has ever attached to one of `notebook_filename`'s own
+    snapshotted versions -- the same ".<filename>.<thing>.json"
+    hidden-sidecar convention _tags_sidecar_path/_description_sidecar_path
+    already establish, just one file per *notebook* (not one per version
+    snapshot: MAX_NOTEBOOK_VERSIONS-many tiny sidecar files per notebook
+    would be real clutter for no benefit GET .../versions' own single
+    already-paginated listing doesn't already provide) holding a
+    {"notes": {version_id: note}} mapping instead of one scalar field.
+
+    `notebook_filename` is always a notebook's own already-validated
+    Path.name, never raw, unresolved client input directly -- same
+    precondition _tags_sidecar_path already documents for the identical
+    reason.
+    """
+    return Path(UPLOAD_DIR) / f".{notebook_filename}.version_notes.json"
+
+
+def _read_all_version_notes(notebook_filename: str) -> dict:
+    """Every note currently recorded for any of `notebook_filename`'s own
+    versions, as a {version_id: note} dict -- {} if it has none (no
+    sidecar file yet, the common case: most versions are never annotated
+    at all), or one that's missing/unreadable/corrupt. A version note is
+    optional, best-effort metadata, the same reasoning
+    _read_notebook_description's own docstring already gives for a
+    notebook's description -- a bad sidecar file should never break GET
+    .../versions over it.
+
+    Silently drops any entry whose own key or value isn't a string (a
+    hand-edited or corrupted sidecar file), rather than raising or
+    surfacing a malformed value -- the same "best-effort, never crash a
+    read over it" contract every field of this dict's own read path
+    already extends to the file as a whole.
+    """
+    sidecar_path = _version_notes_sidecar_path(notebook_filename)
+
+    if not sidecar_path.is_file():
+        return {}
+
+    try:
+
+        with open(sidecar_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+    except (OSError, ValueError):
+        return {}
+
+    notes = data.get("notes")
+
+    if not isinstance(notes, dict):
+        return {}
+
+    return {
+        version_id: note for version_id, note in notes.items()
+        if isinstance(version_id, str) and isinstance(note, str) and note
+    }
+
+
+def _read_version_note(notebook_filename: str, version_id: str) -> str:
+    """The note currently recorded for one specific version of
+    `notebook_filename`, or "" if it has none -- the identical "" default
+    _read_notebook_description already returns for a notebook with no
+    description of its own.
+    """
+    return _read_all_version_notes(notebook_filename).get(version_id, "")
+
+
+def _write_version_note(notebook_filename: str, version_id: str, note: str) -> None:
+    """Persist `note` (already validated/stripped by the caller) as the
+    note for `version_id`, one of `notebook_filename`'s own snapshotted
+    versions -- merging into whatever other versions' own notes this
+    notebook already has recorded, rather than _write_notebook_description's
+    own whole-file overwrite: unlike a notebook's tags/description (one
+    scalar value per notebook), this sidecar file holds one entry *per
+    version*, so setting one version's own note must never discard
+    another's.
+
+    Removes `version_id`'s own entry entirely (not an empty "" value) when
+    `note` is empty, and removes the whole sidecar file once no version
+    has a note left at all -- the identical "empty in, no trace left on
+    disk" contract _write_notebook_description's own docstring already
+    establishes, just per-entry here rather than whole-file.
+
+    Writes via a temp-file-then-os.replace swap in the same directory --
+    the identical atomic-write pattern _write_notebook_description already
+    uses -- so a concurrent reader (GET .../note, GET .../versions with
+    "notes": true) never observes a partially-written sidecar file.
+    """
+    sidecar_path = _version_notes_sidecar_path(notebook_filename)
+
+    notes = _read_all_version_notes(notebook_filename)
+
+    if note:
+        notes[version_id] = note
+    else:
+        notes.pop(version_id, None)
+
+    if not notes:
+        sidecar_path.unlink(missing_ok=True)
+        return
+
+    upload_root = Path(UPLOAD_DIR).resolve()
+    temp_path = (
+        upload_root / f".{notebook_filename}.version_notes.{uuid.uuid4().hex}.part"
+    )
+
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump({"notes": notes}, f)
+
+    os.replace(temp_path, sidecar_path)
+
+
+def _remove_version_note(notebook_filename: str, version_id: str) -> None:
+    """Discard `version_id`'s own note, if it has one -- called from every
+    place a version snapshot itself is discarded (a single DELETE
+    .../versions/{version_id}, a batch delete, an age-based prune, a
+    whole-notebook clear), so a note never silently outlives the version
+    snapshot it was actually attached to and end up describing a
+    version_id GET .../versions can no longer even list.
+    """
+    _write_version_note(notebook_filename, version_id, "")
+
+
+def _validate_and_normalize_version_note(note) -> str:
+    """Validate `note` and return it stripped of surrounding whitespace --
+    the same "must be a string, at most a fixed length after stripping"
+    check _validate_and_normalize_description already performs for a
+    notebook's own description, applied here to one version's own note
+    and _MAX_VERSION_NOTE_LENGTH instead.
+
+    `note` comes straight from a raw JSON body field, not a
+    Pydantic-validated type, so it can be any type at all -- the same
+    reason _validate_and_normalize_description's own isinstance check
+    exists for "description".
+    """
+    if not isinstance(note, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="note must be a string"
+        )
+
+    note = note.strip()
+
+    if len(note) > _MAX_VERSION_NOTE_LENGTH:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"note must be at most {_MAX_VERSION_NOTE_LENGTH} "
+                "characters long"
+            )
+        )
+
+    return note
+
+
 def _prune_notebook_versions(versions_dir: Path) -> None:
     """Remove the oldest snapshots in `versions_dir` beyond
     MAX_NOTEBOOK_VERSIONS, oldest first.
@@ -681,6 +848,14 @@ def _prune_notebook_versions(versions_dir: Path) -> None:
     _snapshot_current_notebook_version below), so sorting by name alone
     already sorts oldest-to-newest -- no need to stat every file just to
     order them.
+
+    Also discards any note _write_version_note recorded against one of
+    the evicted version_ids (see _remove_version_note) -- this is an
+    automatic, age-based eviction exactly like every other version
+    deletion path in this file, so a note must not silently outlive the
+    snapshot it was attached to here either. `versions_dir.name` is
+    `notebook_filename` itself (see _notebook_versions_dir above), so no
+    separate parameter is needed just to resolve the notes sidecar.
     """
     if not versions_dir.is_dir():
         return
@@ -694,6 +869,7 @@ def _prune_notebook_versions(versions_dir: Path) -> None:
 
     for stale in version_files[:max(excess, 0)]:
         stale.unlink(missing_ok=True)
+        _remove_version_note(versions_dir.name, stale.name)
 
 
 def _snapshot_current_notebook_version(file_path: Path) -> None:
@@ -5273,6 +5449,7 @@ def resolve_duplicate_notebooks(data: dict = None):
                 _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
                 _description_sidecar_path(file_path.name).unlink(missing_ok=True)
                 _source_url_sidecar_path(file_path.name).unlink(missing_ok=True)
+                _version_notes_sidecar_path(file_path.name).unlink(missing_ok=True)
                 shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
 
             deleted_filenames.append({
@@ -6061,6 +6238,7 @@ def delete_all_notebooks(
             _tags_sidecar_path(entry.name).unlink(missing_ok=True)
             _description_sidecar_path(entry.name).unlink(missing_ok=True)
             _source_url_sidecar_path(entry.name).unlink(missing_ok=True)
+            _version_notes_sidecar_path(entry.name).unlink(missing_ok=True)
             shutil.rmtree(_notebook_versions_dir(entry.name), ignore_errors=True)
 
         deleted_filenames.append(entry.name)
@@ -6186,6 +6364,7 @@ def prune_all_notebook_versions(
                 if saved_at < cutoff:
                     if not dry_run:
                         version_file.unlink()
+                        _remove_version_note(entry.name, version_file.name)
                     deleted_version_ids.append(version_file.name)
 
         if deleted_version_ids:
@@ -6230,7 +6409,8 @@ def delete_notebook(filename: str, dry_run: bool = False):
     short of a separate GET /api/notebooks call beforehand to check.
 
     Also removes this notebook's tags sidecar file, description sidecar
-    file, and version history directory, if it has any of them -- see
+    file, version-notes sidecar file (see _version_notes_sidecar_path),
+    and version history directory, if it has any of them -- see
     delete_all_notebooks' own identical cleanup above for why any one
     left behind must not silently carry over to a future notebook
     re-uploaded under the same filename.
@@ -6266,6 +6446,7 @@ def delete_notebook(filename: str, dry_run: bool = False):
             _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
             _description_sidecar_path(file_path.name).unlink(missing_ok=True)
             _source_url_sidecar_path(file_path.name).unlink(missing_ok=True)
+            _version_notes_sidecar_path(file_path.name).unlink(missing_ok=True)
             shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
 
         except Exception as e:
@@ -6385,6 +6566,7 @@ def delete_notebooks_batch(data: dict):
                 _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
                 _description_sidecar_path(file_path.name).unlink(missing_ok=True)
                 _source_url_sidecar_path(file_path.name).unlink(missing_ok=True)
+                _version_notes_sidecar_path(file_path.name).unlink(missing_ok=True)
                 shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
 
             results.append({
@@ -6961,6 +7143,22 @@ def _rename_notebook_to(old_path: Path, new_filename, overwrite: bool, dry_run: 
             os.replace(old_source_url_path, new_source_url_path)
         else:
             new_source_url_path.unlink(missing_ok=True)
+
+        # A version's own note (see PUT .../versions/{version_id}/note) is
+        # keyed by version_id, and version_id itself never changes across
+        # a rename -- so this moves along with the rest of a notebook's
+        # version-history metadata for the exact same reason the versions
+        # directory itself does just below: without this, a rename would
+        # silently strand every note this notebook's versions carry under
+        # a filename nothing points at anymore, while its new name reads
+        # back as never having had any at all.
+        old_version_notes_path = _version_notes_sidecar_path(old_path.name)
+        new_version_notes_path = _version_notes_sidecar_path(new_path.name)
+
+        if old_version_notes_path.is_file():
+            os.replace(old_version_notes_path, new_version_notes_path)
+        else:
+            new_version_notes_path.unlink(missing_ok=True)
 
         old_versions_dir = _notebook_versions_dir(old_path.name)
         new_versions_dir = _notebook_versions_dir(new_path.name)
@@ -8061,6 +8259,7 @@ def set_notebook_description_batch(data: dict):
 def list_notebook_versions(
     filename: str, limit: int = None, offset: int = 0, format: str = "json",
     saved_after: str = None, saved_before: str = None, checksums: bool = False,
+    notes: bool = False,
 ):
     """List a previously uploaded notebook's snapshotted previous
     versions, newest first.
@@ -8133,6 +8332,25 @@ def list_notebook_versions(
     from before this existed. Off by default -- hashing every snapshot is
     real work this endpoint's existing listing never needed, most callers
     don't need either.
+
+    "notes" (optional, default false) additionally pairs each "versions"
+    entry with its own "note" -- whatever a caller last set via PUT
+    .../versions/{version_id}/note (see _read_version_note), "" for a
+    version that's never had one. Before this endpoint had a "notes"
+    field at all, telling one snapshot apart from another beyond its bare
+    "version_id"/"saved_at" (e.g. "which of these five is the one I
+    labeled 'before the refactor'") meant either remembering version_ids
+    by heart or issuing one GET .../note per entry -- the identical N+1
+    round trip "checksums" above already closes for a version's own
+    content hash, just for its note instead. Applies to the exact same
+    paginated "versions" every other field here already reflects, so it
+    composes with "limit"/"offset"/"saved_after"/"saved_before"/
+    "checksums" identically; CSV export gains a matching "note" column
+    only when "notes" is given, so a plain `format=csv` request's own
+    column set is unchanged from before this existed. Off by default --
+    reading a notebook's whole version-notes sidecar file is real work
+    this endpoint's existing listing never needed, most callers don't
+    need either.
     """
 
     if format not in ("json", "csv"):
@@ -8223,6 +8441,18 @@ def list_notebook_versions(
                 str(versions_dir / entry["version_id"])
             )
 
+    # Read once per request, not once per entry -- the same "one sidecar
+    # read, not N" reasoning _read_all_version_notes' own single-file
+    # storage already makes this cheap for, unlike "checksums" above
+    # (which has no equivalent whole-notebook shortcut: hashing one
+    # version's content says nothing about another's).
+    if notes:
+
+        all_notes = _read_all_version_notes(file_path.name)
+
+        for entry in paginated_versions:
+            entry["note"] = all_notes.get(entry["version_id"], "")
+
     if format == "csv":
 
         buffer = io.StringIO()
@@ -8231,6 +8461,8 @@ def list_notebook_versions(
         header = ["version_id", "size_bytes", "saved_at"]
         if checksums:
             header.append("sha256")
+        if notes:
+            header.append("note")
 
         writer.writerow(header)
 
@@ -8239,6 +8471,8 @@ def list_notebook_versions(
             row = [entry["version_id"], entry["size_bytes"], entry["saved_at"]]
             if checksums:
                 row.append(entry["sha256"])
+            if notes:
+                row.append(entry["note"])
 
             writer.writerow(row)
 
@@ -8704,6 +8938,7 @@ def clear_notebook_versions(
 
             if not dry_run:
                 shutil.rmtree(versions_dir, ignore_errors=True)
+                _version_notes_sidecar_path(file_path.name).unlink(missing_ok=True)
 
         else:
 
@@ -8726,6 +8961,7 @@ def clear_notebook_versions(
 
                         if not dry_run:
                             version_file.unlink()
+                            _remove_version_note(file_path.name, version_file.name)
 
                         deleted_version_ids.append(version_file.name)
 
@@ -8848,6 +9084,7 @@ def delete_notebook_versions_batch(filename: str, data: dict):
 
                 if not dry_run:
                     version_path.unlink()
+                    _remove_version_note(file_path.name, version_id)
 
                 results.append({
                     "version_id": version_id,
@@ -8951,6 +9188,125 @@ def get_notebook_version(filename: str, version_id: str, request: Request):
             "Cache-Control": "no-cache",
         },
     )
+
+
+@router.get("/notebooks/{filename}/versions/{version_id}/note")
+def get_notebook_version_note(filename: str, version_id: str):
+    """The freeform note, if any, a caller has previously attached to one
+    of `filename`'s own snapshotted versions -- via PUT on this exact
+    same URL, below.
+
+    A snapshotted version (see GET .../versions above) carries nothing
+    describing it beyond its own "version_id"/"size_bytes"/"saved_at" --
+    an auto-generated timestamp, not something a human picked. Before
+    this, telling apart *why* a particular snapshot mattered (e.g. "this
+    is the one right before the bad refactor", "known-good, keep this
+    one around") meant remembering it out-of-band -- a chat message, a
+    spreadsheet kept alongside this dashboard -- since nothing about the
+    version itself, or this dashboard's own record of it, could hold that
+    context. The same gap PUT /api/notebooks/{filename}/description
+    already closed for a whole notebook, just for one specific historical
+    snapshot of it instead.
+
+    Returns "" (not 404) for a version that exists but has never had a
+    note set -- the identical "absence of a note is a valid, ordinary
+    state, not an error" reasoning GET /api/notebooks/{filename}/
+    description's own docstring already establishes for a notebook with
+    no description; a 404 here is reserved for `filename` or `version_id`
+    itself not actually existing, checked the same way GET
+    .../versions/{version_id} already does.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    versions_dir = _notebook_versions_dir(file_path.name)
+
+    version_path = _resolve_path_within(
+        str(versions_dir), version_id, "notebook version"
+    )
+
+    if not version_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook version not found"
+        )
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "version_id": version_id,
+        "note": _read_version_note(file_path.name, version_id),
+    }
+
+
+@router.put("/notebooks/{filename}/versions/{version_id}/note")
+def set_notebook_version_note(filename: str, version_id: str, data: dict):
+    """Set (or clear) the freeform note attached to one of `filename`'s
+    own snapshotted versions -- see GET on this exact same URL, above,
+    for why this exists.
+
+    "note" (required in the request body) replaces this version's own
+    previously-recorded note outright, the same "PUT means replace, not
+    merge" contract PUT /api/notebooks/{filename}/description already
+    follows for a whole notebook's description -- there is no separate
+    "append"/"clear" verb; passing "" clears it, the identical "empty
+    string means no note, not a real empty one" contract
+    _write_version_note's own docstring already documents. Validated the
+    same way -- must be a string, at most _MAX_VERSION_NOTE_LENGTH
+    characters after stripping surrounding whitespace -- via
+    _validate_and_normalize_version_note, a 400 (not 500) for anything
+    else, the identical validation PUT .../description already performs
+    for its own field via _validate_and_normalize_description.
+
+    404s on an unknown `filename` or `version_id` exactly like GET on
+    this same URL does, checked before "note" is even read from the
+    request body -- a caller can't accidentally create a note for a
+    version_id that was never actually snapshotted (e.g. a typo'd one),
+    unlike a notebook's tags/description, which exist independently of
+    any single version and so have no equivalent existence check to make
+    here.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    versions_dir = _notebook_versions_dir(file_path.name)
+
+    version_path = _resolve_path_within(
+        str(versions_dir), version_id, "notebook version"
+    )
+
+    if not version_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook version not found"
+        )
+
+    note = _validate_and_normalize_version_note(data.get("note"))
+
+    _write_version_note(file_path.name, version_id, note)
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "version_id": version_id,
+        "note": note,
+    }
 
 
 @router.get("/notebooks/{filename}/versions/{version_id}/inspect")
@@ -9852,6 +10208,7 @@ def delete_notebook_version(filename: str, version_id: str, dry_run: bool = Fals
         with _version_lock_for(file_path.name):
 
             version_path.unlink()
+            _remove_version_note(file_path.name, version_id)
 
     return {
         "status": "success",
@@ -14555,6 +14912,16 @@ def get_config():
     the *generated* app's own identically-shaped limiter, rather than a
     bare 0 a caller could misread as "zero requests allowed".
 
+    "max_version_note_length" (added alongside this same docstring's
+    original feature, not a separate change) is _MAX_VERSION_NOTE_LENGTH
+    -- the identical per-field length cap "max_description_length"
+    already surfaces here for PUT .../description, just for PUT
+    .../versions/{version_id}/note's own "note" field instead: a caller
+    wanting to validate a version note client-side before submitting it
+    (the same reason this endpoint's own docstring already gives for
+    every other field here) had no way to ask that short of triggering a
+    real 400 from that endpoint first.
+
     "max_source_url_length" (added alongside this same docstring's
     original feature, not a separate change) is _MAX_SOURCE_URL_LENGTH --
     the identical per-field length cap "max_description_length" already
@@ -14615,6 +14982,7 @@ def get_config():
         "max_tag_length": _MAX_TAG_LENGTH,
         "max_tags_per_notebook": _MAX_TAGS_PER_NOTEBOOK,
         "max_description_length": _MAX_DESCRIPTION_LENGTH,
+        "max_version_note_length": _MAX_VERSION_NOTE_LENGTH,
         "max_source_url_length": _MAX_SOURCE_URL_LENGTH,
         "max_search_regex_length": MAX_SEARCH_REGEX_LENGTH,
         "max_deploy_history_entries": MAX_DEPLOY_HISTORY_ENTRIES,
