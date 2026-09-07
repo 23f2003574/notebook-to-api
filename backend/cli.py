@@ -4931,6 +4931,63 @@ def _dispatch_core_command(args):
                 if sha256:
                     print(f"  sha256: {sha256}")
 
+        elif args.versions_command == "note-get":
+
+            try:
+                response = httpx.get(
+                    f"{dashboard_url}/api/notebooks/{args.filename}/versions/{args.version_id}/note",
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                note = data.get("note", "")
+                print(
+                    f"{args.filename} version '{args.version_id}': "
+                    f"{note if note else '(no note)'}"
+                )
+
+        elif args.versions_command == "note-set":
+
+            try:
+                response = httpx.put(
+                    f"{dashboard_url}/api/notebooks/{args.filename}/versions/{args.version_id}/note",
+                    json={"note": args.note},
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                note = data.get("note", "")
+                print(
+                    f"{args.filename} version '{args.version_id}' note set "
+                    f"to: {note if note else '(cleared)'}"
+                )
+
         elif args.versions_command == "inspect":
 
             try:
@@ -9924,6 +9981,76 @@ def main():
             "({\"status\", \"filename\", \"version_id\", \"path\", "
             "\"size_bytes\", \"sha256\"}) instead of a human-readable "
             "summary, for scripting/automation."
+        )
+    )
+
+    # versions note-get / note-set (view or replace the freeform note
+    # attached to one specific snapshotted version, via GET/PUT
+    # /api/notebooks/{filename}/versions/{version_id}/note -- the
+    # per-version counterpart to the top-level `description get`/
+    # `description set` commands above, just scoped to one snapshot
+    # instead of the whole notebook, and named "note-get"/"note-set"
+    # rather than nesting a third subparsers level under `versions`)
+    versions_note_get_parser = versions_subparsers.add_parser(
+        "note-get",
+        help=(
+            "Show the note attached to one of a notebook's snapshotted "
+            "versions via GET /api/notebooks/{filename}/versions/"
+            "{version_id}/note."
+        )
+    )
+    versions_note_get_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    versions_note_get_parser.add_argument(
+        "version_id",
+        help="Version id whose note to show, as reported by `versions list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(versions_note_get_parser)
+    versions_note_get_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"filename\", \"version_id\", \"note\"}) "
+            "instead of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    versions_note_set_parser = versions_subparsers.add_parser(
+        "note-set",
+        help=(
+            "Replace the note attached to one of a notebook's snapshotted "
+            "versions via PUT /api/notebooks/{filename}/versions/"
+            "{version_id}/note."
+        )
+    )
+    versions_note_set_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    versions_note_set_parser.add_argument(
+        "version_id",
+        help="Version id whose note to replace, as reported by `versions list`."
+    )
+    versions_note_set_parser.add_argument(
+        "note",
+        help=(
+            "New note, replacing the version's entire existing one -- "
+            "the same replace-not-append contract PUT .../versions/"
+            "{version_id}/note itself has. Pass an empty string to clear "
+            "it."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(versions_note_set_parser)
+    versions_note_set_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"filename\", \"version_id\", \"note\"}) "
+            "instead of a human-readable summary, for scripting/automation."
         )
     )
 

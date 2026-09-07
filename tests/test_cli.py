@@ -13797,6 +13797,235 @@ def test_versions_get_command_reports_a_clean_error_for_a_missing_version(
     _assert_clean_cli_error(proc, "Notebook version not found")
 
 
+def test_versions_note_get_command_prints_the_versions_note(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "version_id": "v1.ipynb", "note": "known-good, keep this one",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "note-get", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nb.ipynb version 'v1.ipynb': known-good, keep this one" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions/v1.ipynb/note"]
+
+
+def test_versions_note_get_command_reports_no_note(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "version_id": "v1.ipynb", "note": "",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "note-get", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nb.ipynb version 'v1.ipynb': (no note)" in proc.stdout
+
+
+def test_versions_note_get_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "filename": "nb.ipynb",
+        "version_id": "v1.ipynb", "note": "hello",
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "note-get", "nb.ipynb", "v1.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_versions_note_get_command_reports_a_clean_error_for_a_missing_version(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook version not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "note-get", "nb.ipynb", "does-not-exist.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook version not found")
+
+
+def test_versions_note_set_command_replaces_the_versions_note(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "version_id": "v1.ipynb", "note": "right before the bad refactor",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "note-set", "nb.ipynb", "v1.ipynb",
+            "right before the bad refactor",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (
+        "nb.ipynb version 'v1.ipynb' note set to: right before the bad refactor"
+        in proc.stdout
+    )
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions/v1.ipynb/note"]
+    assert json.loads(handler.bodies[0]) == {"note": "right before the bad refactor"}
+
+
+def test_versions_note_set_command_with_empty_string_clears_it(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "version_id": "v1.ipynb", "note": "",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "note-set", "nb.ipynb", "v1.ipynb", "",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nb.ipynb version 'v1.ipynb' note set to: (cleared)" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {"note": ""}
+
+
+def test_versions_note_set_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "filename": "nb.ipynb",
+        "version_id": "v1.ipynb", "note": "hello",
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "note-set", "nb.ipynb", "v1.ipynb", "hello",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_versions_note_set_command_reports_a_clean_error_for_an_invalid_value(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(400, {"detail": "note must be at most 2000 characters long"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "note-set", "nb.ipynb", "v1.ipynb", "too long",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "note must be at most 2000 characters long")
+
+
+def test_versions_note_set_command_reports_a_clean_error_for_a_missing_version(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook version not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "note-set", "nb.ipynb", "does-not-exist.ipynb", "hello",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook version not found")
+
+
 def test_versions_inspect_command_is_registered():
 
     proc = _run_cli(["versions", "--help"], cwd=Path.cwd())
