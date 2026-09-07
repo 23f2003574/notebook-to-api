@@ -20423,6 +20423,7 @@ def test_env_vars_preview_requires_no_notebook_and_needs_no_body():
         "NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS",
         "NOTEBOOK_API_PUBLIC_URL",
         "NOTEBOOK_API_DISABLE_DOCS",
+        "NOTEBOOK_API_JSON_LOGS",
     }
     assert env_vars["NOTEBOOK_API_KEY"]["default"] == "notebook-to-api-dev-key"
     assert env_vars["NOTEBOOK_API_ALLOWED_ORIGINS"]["default"] == "*"
@@ -20436,6 +20437,7 @@ def test_env_vars_preview_requires_no_notebook_and_needs_no_body():
     assert env_vars["NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS"]["default"] == "0.5"
     assert env_vars["NOTEBOOK_API_PUBLIC_URL"]["default"] == "http://localhost:8000"
     assert env_vars["NOTEBOOK_API_DISABLE_DOCS"]["default"] == "false"
+    assert env_vars["NOTEBOOK_API_JSON_LOGS"]["default"] == "false"
 
     for entry in body["environment_variables"]:
         assert entry["description"]

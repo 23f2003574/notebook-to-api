@@ -39,6 +39,7 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
         "NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS",
         "NOTEBOOK_API_PUBLIC_URL",
         "NOTEBOOK_API_DISABLE_DOCS",
+        "NOTEBOOK_API_JSON_LOGS",
     }
 
     for entry in GENERATED_APP_ENV_VARS:
@@ -472,6 +473,180 @@ def test_generated_app_stamps_x_request_id_and_honors_a_caller_supplied_one():
     )
 
 
+def test_generated_app_configures_a_json_request_log_middleware_registered_outermost():
+    """Confirmed missing before this feature: the only per-request record
+    this app ever produced was uvicorn's own default plain-text access
+    log line, with no request_id of its own and no duration -- grepped
+    for across the whole file, no structured per-request logging
+    anywhere. Registered *after* _add_request_id_header (see that
+    middleware's own comment on registration order) so it reads back the
+    *final* X-Request-ID/X-Process-Time-Ms headers that middleware and
+    _add_process_time_header already set, rather than re-deriving either
+    one itself.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert (
+        'JSON_REQUEST_LOGS = os.getenv("NOTEBOOK_API_JSON_LOGS", "false")'
+        '.strip().lower() in ("true", "1", "yes", "on")' in code
+    )
+    assert "async def _log_request_json(request, call_next):" in code
+    assert "if JSON_REQUEST_LOGS:" in code
+    assert "print(json.dumps({" in code
+    assert "'request_id': response.headers.get('X-Request-ID')," in code
+    assert "'method': request.method," in code
+    assert "'path': request.url.path," in code
+    assert "'status_code': response.status_code," in code
+    assert (
+        "'duration_ms': float(response.headers.get('X-Process-Time-Ms', "
+        "'0'))," in code
+    )
+    assert code.index("async def _add_request_id_header") < code.index(
+        "async def _log_request_json"
+    )
+
+
+def test_json_request_logs_are_off_by_default(monkeypatch, capsys):
+    """NOTEBOOK_API_JSON_LOGS unset must reproduce this app's previous
+    stdout output exactly -- no JSON line printed at all, only whatever
+    uvicorn's own access log (not exercised by TestClient) would produce.
+    """
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].add = lambda a=0, b=0: a + b
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    capsys.readouterr()  # discard any startup output
+    resp = client.post(
+        "/add", json={"a": 1, "b": 2},
+        headers={"X-API-Key": "notebook-to-api-dev-key"},
+    )
+    assert resp.status_code == 200
+
+    assert capsys.readouterr().out == ""
+
+
+def test_json_request_logs_emit_a_structured_line_matching_the_response_headers(
+    monkeypatch, capsys
+):
+    """When enabled, the printed JSON line's own "request_id"/
+    "status_code" must match the exact X-Request-ID/status this same
+    response actually carries -- reused, not re-derived, from
+    _add_request_id_header/_add_process_time_header's own headers, so
+    a caller correlating its own logs against those headers can never
+    see this line disagree with them.
+    """
+
+    monkeypatch.setenv("NOTEBOOK_API_JSON_LOGS", "true")
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].add = lambda a=0, b=0: a + b
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    capsys.readouterr()
+    resp = client.post(
+        "/add", json={"a": 1, "b": 2},
+        headers={"X-API-Key": "notebook-to-api-dev-key", "X-Request-ID": "abc-123"},
+    )
+    assert resp.status_code == 200
+
+    printed_lines = [
+        line for line in capsys.readouterr().out.splitlines() if line.strip()
+    ]
+    assert len(printed_lines) == 1
+
+    log_entry = json.loads(printed_lines[0])
+    assert log_entry["request_id"] == "abc-123" == resp.headers["X-Request-ID"]
+    assert log_entry["method"] == "POST"
+    assert log_entry["path"] == "/add"
+    assert log_entry["status_code"] == 200 == resp.status_code
+    assert log_entry["duration_ms"] == float(resp.headers["X-Process-Time-Ms"])
+    assert isinstance(log_entry["timestamp"], float)
+
+
+def test_json_request_logs_accepts_common_truthy_spellings(monkeypatch, capsys):
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    for truthy_value in ("true", "TRUE", "1", "yes", "on"):
+
+        monkeypatch.setenv("NOTEBOOK_API_JSON_LOGS", truthy_value)
+
+        code = generate_fastapi_code(functions)
+
+        _register_fake_notebook_module(monkeypatch)
+        namespace = {}
+        exec(compile(code, "<generated>", "exec"), namespace)
+        namespace["notebook_module"].add = lambda a=0, b=0: a + b
+
+        from fastapi.testclient import TestClient
+
+        client = TestClient(namespace["app"])
+        capsys.readouterr()
+        resp = client.post(
+            "/add", json={"a": 1, "b": 2},
+            headers={"X-API-Key": "notebook-to-api-dev-key"},
+        )
+        assert resp.status_code == 200
+        assert capsys.readouterr().out.strip() != "", truthy_value
+
+
+def test_json_request_logs_and_json_module_are_reserved_infrastructure_names():
+    """JSON_REQUEST_LOGS -- see its own RESERVED_INFRASTRUCTURE_NAMES
+    entry: a notebook function of this exact name wouldn't crash
+    anything, but would silently turn JSON request logging permanently
+    on (a function object's truthiness is always True) regardless of
+    NOTEBOOK_API_JSON_LOGS. "json" -- _log_request_json's own
+    json.dumps({...}) call, reached on every request once enabled, plus
+    the pre-existing _deliver_task_webhook's own json.dumps(payload).
+    """
+
+    assert "JSON_REQUEST_LOGS" in RESERVED_INFRASTRUCTURE_NAMES
+    assert "json" in RESERVED_INFRASTRUCTURE_NAMES
+
+
+def test_notebook_function_named_json_request_logs_is_rejected():
+
+    functions = [{"name": "JSON_REQUEST_LOGS", "args": [], "return_type": "dict"}]
+
+    with pytest.raises(ReservedFunctionNameError, match="JSON_REQUEST_LOGS"):
+        generate_fastapi_code(functions)
+
+
+def test_notebook_function_named_json_is_rejected():
+    """Confirmed exploitable before this fix: `def json(...):` compiled
+    fine and silently overwrote the real `json` module reference at
+    module-execution time -- the next _log_request_json (with
+    NOTEBOOK_API_JSON_LOGS enabled) or _deliver_task_webhook (background
+    task webhook delivery) call reached it via json.dumps(...) and
+    crashed with "'function' object has no attribute 'dumps'".
+    """
+
+    functions = [{"name": "json", "args": [], "return_type": "dict"}]
+
+    with pytest.raises(ReservedFunctionNameError, match="json"):
+        generate_fastapi_code(functions)
+
+
 def test_generated_app_exposes_get_config_reporting_its_own_runtime_limits(monkeypatch):
     """Confirmed exploitable before this fix: every NOTEBOOK_API_* limit
     this app enforces (MAX_REQUEST_BODY_BYTES, TASK_TTL_SECONDS,
@@ -504,6 +679,7 @@ def test_generated_app_exposes_get_config_reporting_its_own_runtime_limits(monke
         "'allowed_origins': ALLOWED_ORIGINS,",
         "'disable_docs': DISABLE_DOCS,",
         "'public_url': PUBLIC_URL,",
+        "'json_logs_enabled': JSON_REQUEST_LOGS,",
     ):
         assert field in code
 
@@ -529,6 +705,7 @@ def test_generated_app_exposes_get_config_reporting_its_own_runtime_limits(monke
     assert body["allowed_origins"] == ["*"]
     assert body["disable_docs"] is False
     assert body["public_url"] == "http://localhost:8000"
+    assert body["json_logs_enabled"] is False
 
 
 def test_generated_app_exposes_get_metrics_as_json(monkeypatch):

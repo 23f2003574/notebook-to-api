@@ -31,6 +31,18 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # against it -- now a function object, not a number -- raises inside
     # _evict_expired_tasks on its very next invocation).
     "TASK_TTL_SECONDS",
+    # Read by name from inside _log_request_json's own body (below) --
+    # the identical "boolean constant read by name inside a helper that
+    # runs on every request" exposure TASK_TTL_SECONDS' own entry above
+    # already documents, just for the JSON access-log middleware instead
+    # of task eviction. A notebook function named "JSON_REQUEST_LOGS"
+    # wouldn't crash anything (unlike TASK_TTL_SECONDS' own comparison-
+    # against-a-function-object failure) -- `if JSON_REQUEST_LOGS:` would
+    # simply evaluate a function object's truthiness, which Python always
+    # treats as True, silently turning JSON request logging permanently
+    # on regardless of what NOTEBOOK_API_JSON_LOGS is actually set to, on
+    # every request this app ever serves.
+    "JSON_REQUEST_LOGS",
     # Assigned this compile's own real content hash once, at module load
     # (see write_generated_api's own caller), then read back verbatim by
     # GET /info below -- a notebook function of this exact name would
@@ -117,6 +129,23 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     #     uuid.uuid4(), a process-time header's own time.perf_counter())
     #     -- a collision broke even GET /health, an endpoint with no
     #     relationship to the colliding name at all.
+    #   - "json": read by name inside _log_request_json (below), also
+    #     middleware run on literally every response once
+    #     NOTEBOOK_API_JSON_LOGS is enabled -- json.dumps({...}) against a
+    #     collision raises "'function' object has no attribute 'dumps'",
+    #     the identical "one bad name takes down every endpoint" exposure
+    #     "hmac"'s own entry above already documents. Also closes an
+    #     identical, narrower-blast-radius exposure that predates this
+    #     middleware entirely: _deliver_task_webhook's own json.dumps(
+    #     payload) (background-task webhook delivery) reads this exact
+    #     same module-global "json" by name too, at call time -- confirmed
+    #     never itself caught when this file's other imports were first
+    #     audited (the commit that added _deliver_task_webhook predates
+    #     the one that audited imports), the same "never itself audited
+    #     for what else in this file has grown the same shape since" gap
+    #     this project's own git history already names for the six
+    #     reserved infrastructure names and RESERVED_INFRASTRUCTURE_NAMES'
+    #     own top-level-import audit before it.
     #   - "jsonable_encoder": called on *every* synchronous endpoint's
     #     own return value before it's ever sent back -- a collision
     #     turned an entirely successful `add(1, 2) -> 3` into a 500
@@ -154,7 +183,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     #   - "urlparse": used to validate a background endpoint's own
     #     callback_url scheme -- a collision turned that same validation
     #     path into an unhandled 500 instead of a clean 400.
-    # Every other top-level import (os, sys, json, FastAPI, BaseModel,
+    # Every other top-level import (os, sys, FastAPI, BaseModel,
     # CORSMiddleware, GZipMiddleware, Field, Header, Query, Response,
     # JSONResponse, anyio, datetime, functools, inspect, urllib) was
     # individually tested the identical way and confirmed *not* reachable
@@ -164,8 +193,9 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # any notebook function could be) rather than read back by name
     # later, so a notebook function reusing one of those names is
     # confirmed harmless today. Not reserving them is a deliberate,
-    # verified choice, not an oversight matching the ones above.
-    "hmac", "uuid", "time", "jsonable_encoder", "Depends", "BackgroundTasks",
+    # verified choice, not an oversight matching the ones above. "json" is
+    # no longer among them -- see its own bullet above.
+    "hmac", "uuid", "time", "json", "jsonable_encoder", "Depends", "BackgroundTasks",
     "HTTPException", "Optional", "get_openapi", "urlparse",
 })
 
@@ -369,6 +399,29 @@ GENERATED_APP_ENV_VARS = [
             "are unaffected either way: they call this app's own "
             "openapi() method directly (in-process, at compile/export "
             "time), never through the HTTP routes this setting disables."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_JSON_LOGS",
+        "default": "false",
+        "description": (
+            "Set to \"true\" to additionally emit one JSON-formatted "
+            "access-log line per request to stdout -- {\"timestamp\", "
+            "\"request_id\", \"method\", \"path\", \"status_code\", "
+            "\"duration_ms\"} -- alongside uvicorn's own default "
+            "plain-text access log, which this setting never disables or "
+            "replaces. \"request_id\"/\"duration_ms\" are read straight "
+            "back off the exact same X-Request-ID/X-Process-Time-Ms "
+            "response headers this app's own request-id/process-time "
+            "middleware already set on every response, so a value logged "
+            "here can never drift from what a caller correlating its own "
+            "logs against those headers already sees. Off by default -- "
+            "uvicorn's own access log already covers every existing "
+            "deployment's needs unchanged; a log-aggregation pipeline "
+            "(Datadog, CloudWatch Logs Insights, an ELK stack, ...) that "
+            "wants structured, machine-parseable per-request records "
+            "instead of grepping uvicorn's own free-text line opts in "
+            "here."
         ),
     },
 ]
@@ -975,6 +1028,63 @@ def generate_fastapi_code(
     lines.append("    response.headers['X-Request-ID'] = request_id")
     lines.append("    return response")
     lines.append("")
+    # Registered last -- outermost, wrapping every other middleware above
+    # (see _add_request_id_header's own comment above for why "registered
+    # last" means outermost) -- so this reads back the *final*
+    # X-Request-ID/X-Process-Time-Ms headers _add_request_id_header/
+    # _add_process_time_header already set on every response, guaranteeing
+    # "request_id"/"duration_ms" below can never drift from what a caller
+    # correlating its own logs against those exact same headers already
+    # sees, rather than this middleware re-deriving either one itself.
+    #
+    # Before this, the only per-request record this app ever produced was
+    # uvicorn's own default access log line -- free-text ("INFO:
+    # 127.0.0.1:54321 - \"POST /add HTTP/1.1\" 200 OK"), with no
+    # request_id of its own and no duration -- the opposite of what a real
+    # log-aggregation pipeline needs to index and query on. Worse,
+    # grepping `docker logs` for one specific X-Request-ID a caller
+    # already got back in a response header -- the exact scenario
+    # _add_request_id_header's own docstring above names as the reason
+    # that header exists at all -- found nothing: this app never itself
+    # logged that id anywhere, only ever handed it back in a header the
+    # caller's own tooling would have to already be capturing on its own
+    # side to use.
+    #
+    # Off by default (NOTEBOOK_API_JSON_LOGS unset/"false") -- purely
+    # additive alongside uvicorn's own access log, never a disable or
+    # replacement of it, so an existing deployment that hasn't opted in
+    # sees byte-for-byte the same stdout output as before this existed.
+    # print(..., flush=True) rather than the stdlib logging module: this
+    # app configures no logging of its own anywhere else (uvicorn
+    # configures its own independently), and PYTHONUNBUFFERED=1 (see the
+    # generated Dockerfile) already exists specifically so a print() here
+    # reaches `docker logs`/a log-aggregation pipeline in real time, not
+    # sitting in a buffer.
+    lines.append(
+        'JSON_REQUEST_LOGS = os.getenv('
+        '"NOTEBOOK_API_JSON_LOGS", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_JSON_LOGS")}"'
+        ').strip().lower() in ("true", "1", "yes", "on")'
+    )
+    lines.append("@app.middleware('http')")
+    lines.append("async def _log_request_json(request, call_next):")
+    lines.append("    response = await call_next(request)")
+    lines.append("    if JSON_REQUEST_LOGS:")
+    lines.append("        print(json.dumps({")
+    lines.append("            'timestamp': time.time(),")
+    lines.append(
+        "            'request_id': response.headers.get('X-Request-ID'),"
+    )
+    lines.append("            'method': request.method,")
+    lines.append("            'path': request.url.path,")
+    lines.append("            'status_code': response.status_code,")
+    lines.append(
+        "            'duration_ms': float("
+        "response.headers.get('X-Process-Time-Ms', '0')),"
+    )
+    lines.append("        }), flush=True)")
+    lines.append("    return response")
+    lines.append("")
     # Simple in‑memory task registry used by background endpoints
     lines.append("TASKS = {}")
     lines.append(
@@ -1470,6 +1580,7 @@ def generate_fastapi_code(
     lines.append("        'allowed_origins': ALLOWED_ORIGINS,")
     lines.append("        'disable_docs': DISABLE_DOCS,")
     lines.append("        'public_url': PUBLIC_URL,")
+    lines.append("        'json_logs_enabled': JSON_REQUEST_LOGS,")
     lines.append("    }")
     lines.append("")
     lines.append("@app.get('/tasks')")
