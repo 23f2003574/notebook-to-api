@@ -1896,6 +1896,235 @@ def test_task_record_omits_webhook_field_when_no_callback_url_given(monkeypatch)
     assert "webhook" not in namespace["TASKS"][task_id]
 
 
+def test_notebook_function_named_redeliver_task_webhook_is_rejected():
+    """redeliver_task_webhook is the endpoint function POST
+    /tasks/{task_id}/redeliver-webhook is defined as, a module-level name
+    like every other endpoint function (get_task, delete_task, ...)
+    already reserved above -- a notebook function of this exact name
+    would silently replace the real endpoint at module-execution time.
+    """
+
+    functions = [
+        {"name": "redeliver_task_webhook", "args": [], "return_type": "dict"}
+    ]
+
+    with pytest.raises(ReservedFunctionNameError, match="redeliver_task_webhook"):
+        generate_fastapi_code(functions)
+
+
+def test_redeliver_webhook_resends_a_completed_tasks_recorded_result(monkeypatch):
+    """POST /tasks/{task_id}/redeliver-webhook must resend the task's own
+    already-recorded outcome to the exact callback_url it was originally
+    submitted with, without re-running the notebook function itself --
+    confirmed by making the notebook function a one-shot: if this
+    endpoint re-executed it, the second call would raise.
+    """
+    import urllib.request
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    calls = {"count": 0}
+
+    def one_shot():
+        calls["count"] += 1
+        if calls["count"] > 1:
+            raise AssertionError("notebook function must not be re-run")
+        return "ok"
+
+    namespace["notebook_module"].process_data = one_shot
+
+    requests_seen = []
+
+    class _FakeResponse:
+        status = 204
+
+        def close(self):
+            pass
+
+    def fake_urlopen(request, timeout=None):
+        requests_seen.append(json.loads(request.data))
+        return _FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    submit_response = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/hook"},
+        headers=headers,
+    )
+    task_id = submit_response.json()["task_id"]
+    assert len(requests_seen) == 1
+
+    redeliver_response = client.post(
+        f"/tasks/{task_id}/redeliver-webhook", headers=headers
+    )
+    assert redeliver_response.status_code == 200
+    body = redeliver_response.json()
+    assert body["task_id"] == task_id
+    assert body["webhook"] == {
+        "delivered": True,
+        "attempts": 1,
+        "status_code": 204,
+        "error": None,
+    }
+    assert body["webhook_redelivery_count"] == 1
+
+    assert len(requests_seen) == 2
+    assert requests_seen[1] == {
+        "task_id": task_id,
+        "status": "completed",
+        "result": "ok",
+    }
+
+    task = namespace["TASKS"][task_id]
+    assert task["webhook_redelivery_count"] == 1
+    assert task["status"] == "completed"
+    assert task["result"] == "ok"
+
+    # A second redelivery keeps incrementing the same counter.
+    second_response = client.post(
+        f"/tasks/{task_id}/redeliver-webhook", headers=headers
+    )
+    assert second_response.json()["webhook_redelivery_count"] == 2
+    assert len(requests_seen) == 3
+
+
+def test_redeliver_webhook_resends_a_failed_tasks_recorded_error(monkeypatch):
+    """The inverse of the completed case -- a failed task's own recorded
+    error, not its (nonexistent) result, must be what gets redelivered.
+    """
+    import urllib.request
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    def always_raises():
+        raise ValueError("boom")
+
+    namespace["notebook_module"].process_data = always_raises
+
+    requests_seen = []
+
+    class _FakeResponse:
+        status = 204
+
+        def close(self):
+            pass
+
+    def fake_urlopen(request, timeout=None):
+        requests_seen.append(json.loads(request.data))
+        return _FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    submit_response = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/hook"},
+        headers=headers,
+    )
+    task_id = submit_response.json()["task_id"]
+
+    redeliver_response = client.post(
+        f"/tasks/{task_id}/redeliver-webhook", headers=headers
+    )
+    assert redeliver_response.status_code == 200
+    assert requests_seen[-1] == {
+        "task_id": task_id,
+        "status": "failed",
+        "error": "boom",
+    }
+
+
+def test_redeliver_webhook_404s_for_an_unknown_task():
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+    code = generate_fastapi_code(functions)
+
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    response = client.post("/tasks/does-not-exist/redeliver-webhook", headers=headers)
+    assert response.status_code == 404
+
+
+def test_redeliver_webhook_409s_while_the_task_is_still_processing(monkeypatch):
+    """There is no recorded result or error to redeliver yet -- the same
+    'still processing' rejection DELETE /tasks/{task_id} already applies.
+    """
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+    code = generate_fastapi_code(functions)
+
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["TASKS"]["still-running"] = {
+        "status": "processing",
+        "created_at": 0,
+        "callback_url": "https://example.test/hook",
+    }
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    response = client.post(
+        "/tasks/still-running/redeliver-webhook", headers=headers
+    )
+    assert response.status_code == 409
+
+
+def test_redeliver_webhook_400s_when_task_had_no_callback_url(monkeypatch):
+    """A task submitted without ?callback_url= never had a webhook to
+    begin with -- nothing to redeliver, and no URL to redeliver it to.
+    """
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    submit_response = client.post("/process_data", json={}, headers=headers)
+    task_id = submit_response.json()["task_id"]
+
+    response = client.post(
+        f"/tasks/{task_id}/redeliver-webhook", headers=headers
+    )
+    assert response.status_code == 400
+    assert "callback_url" in response.json()["detail"]
+
+
 def test_webhook_delivery_retries_a_5xx_http_error_then_succeeds(monkeypatch):
     """A 5xx response from the receiving endpoint is the same class of
     transient failure a connection-level error already retries -- the

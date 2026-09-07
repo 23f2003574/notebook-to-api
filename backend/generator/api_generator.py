@@ -85,6 +85,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "metrics_prometheus", "_task_status_counts",
     "get_task", "list_tasks", "delete_task", "cleanup_tasks",
     "delete_completed_tasks", "delete_failed_tasks", "reset_tasks",
+    "redeliver_task_webhook",
     "notebook_module",
     # Confirmed exploitable: these two private helpers (both defined at
     # module scope, like every other name above) were missing here, so a
@@ -1895,6 +1896,125 @@ def generate_fastapi_code(
     lines.append("    }")
 
     lines.append("")
+    # A task's own automatic webhook delivery (see _deliver_task_webhook
+    # below) already retries WEBHOOK_MAX_RETRIES times with backoff -- but
+    # that's still bounded, and finite, by design (an unbounded retry loop
+    # would hold this app's own limited worker-thread pool hostage to
+    # however long a caller's receiver stays down). Before this endpoint,
+    # a caller whose receiver was unreachable (a deploy, an outage) for
+    # longer than every automatic retry combined had no way to ever get
+    # that webhook short of resubmitting the entire background task from
+    # scratch -- discarding a real, already-computed result or error
+    # (still sitting right there in TASKS[task_id]) purely to get it
+    # delivered a second time. This instead redelivers the task's own
+    # already-recorded outcome, verbatim, to the exact callback_url it was
+    # originally submitted with -- no re-execution of the notebook
+    # function itself, so it works identically whether that function was
+    # idempotent or not.
+    lines.append("@app.post('/tasks/{task_id}/redeliver-webhook')")
+    lines.append(
+        "async def redeliver_task_webhook(task_id: str, "
+        "_: None = Depends(verify_api_key)):"
+    )
+
+    lines.append("    task = TASKS.get(task_id)")
+    lines.append("")
+    lines.append("    if task is None:")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=404,")
+    lines.append("            detail=f'Task {task_id} not found'")
+    lines.append("        )")
+    lines.append("")
+    # A task's own eventual "result"/"error" only exists once it's left
+    # 'processing' -- the same reason DELETE /tasks/{task_id} above
+    # already refuses to act on one that hasn't. There is nothing to
+    # redeliver yet, not merely a delivery that hasn't been attempted.
+    lines.append("    if task.get('status') == 'processing':")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=409,")
+    lines.append("            detail=(")
+    lines.append(
+        "                f'Task {task_id} is still processing -- there is '"
+    )
+    lines.append(
+        "                'no recorded result or error to redeliver yet'"
+    )
+    lines.append("            ),")
+    lines.append("        )")
+    lines.append("")
+    # 'callback_url' is None for a task that was never submitted with one
+    # in the first place (a plain, polling-only caller) -- redelivering a
+    # webhook it never asked for isn't a delivery failure to retry, it's a
+    # different request entirely, so this is rejected the same 400 way
+    # POST /{func_name}'s own callback_url validation already rejects a
+    # malformed one at submission time, rather than silently doing
+    # nothing.
+    lines.append("    callback_url = task.get('callback_url')")
+    lines.append("    if not callback_url:")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=400,")
+    lines.append("            detail=(")
+    lines.append(
+        "                f'Task {task_id} was not submitted with a '"
+    )
+    lines.append(
+        "                'callback_url -- there is no webhook to redeliver'"
+    )
+    lines.append("            ),")
+    lines.append("        )")
+    lines.append("")
+    # Rebuilt from the task's own already-recorded outcome, not replayed
+    # from anywhere else -- the identical {'task_id', 'status', 'result'}/
+    # {'task_id', 'status', 'error'} shape _run_background_task's own two
+    # completion branches already build for the automatic delivery this
+    # mirrors, so a receiver can't tell a redelivered webhook apart from
+    # the original one except by it arriving a second time.
+    lines.append("    if task.get('status') == 'completed':")
+    lines.append("        payload = {")
+    lines.append("            'task_id': task_id,")
+    lines.append("            'status': 'completed',")
+    lines.append("            'result': task.get('result'),")
+    lines.append("        }")
+    lines.append("    else:")
+    lines.append("        payload = {")
+    lines.append("            'task_id': task_id,")
+    lines.append("            'status': task.get('status'),")
+    lines.append("            'error': task.get('error'),")
+    lines.append("        }")
+    lines.append("")
+    # Off this coroutine's own event loop for the identical reason every
+    # other call site of _deliver_task_webhook already is (see its own
+    # docstring below) -- an operator triggering a manual redelivery is no
+    # less able to stall every other concurrent request on a slow/hung
+    # receiver than the automatic path already was.
+    lines.append("    webhook_result = await anyio.to_thread.run_sync(")
+    lines.append("        _deliver_task_webhook, callback_url, payload")
+    lines.append("    )")
+    # Guarded by 'task_id in TASKS' for the identical race
+    # _run_background_task's own post-delivery writes already guard
+    # against: DELETE /tasks/{task_id} refuses a still-processing task,
+    # but this task is already completed/failed by the time we get here,
+    # so a concurrent delete can legitimately remove it while this
+    # redelivery's own (possibly slow, possibly retried) HTTP call is
+    # still in flight.
+    lines.append("    if task_id in TASKS:")
+    lines.append("        TASKS[task_id]['webhook'] = webhook_result")
+    lines.append(
+        "        TASKS[task_id]['webhook_redelivery_count'] = ("
+        "TASKS[task_id].get('webhook_redelivery_count', 0) + 1"
+        ")"
+    )
+    lines.append("")
+    lines.append("    return {")
+    lines.append("        'task_id': task_id,")
+    lines.append("        'webhook': webhook_result,")
+    lines.append(
+        "        'webhook_redelivery_count': "
+        "TASKS.get(task_id, {}).get('webhook_redelivery_count', 0),"
+    )
+    lines.append("    }")
+
+    lines.append("")
     # Delivers a single best-effort (well, WEBHOOK_MAX_RETRIES-effort) POST
     # of `payload` (the finished task's own TASKS record: status/result, or
     # status/error) to `callback_url`, so a caller can opt out of polling
@@ -2517,7 +2637,18 @@ def generate_fastapi_code(
             lines.append("                ),")
             lines.append("            )")
             lines.append("    task_id = uuid.uuid4().hex")
-            lines.append("    TASKS[task_id] = {\"status\": \"processing\", \"created_at\": time.time()}")
+            # 'callback_url' recorded on the task itself (not just passed
+            # through to _run_background_task below and then discarded) so
+            # POST /tasks/{task_id}/redeliver-webhook can later redeliver
+            # to the exact same URL without a caller needing to resupply
+            # it -- before this, the URL only ever existed as a local
+            # variable inside this one request/the fire-and-forget
+            # background task it kicks off, gone the moment both
+            # completed.
+            lines.append(
+                "    TASKS[task_id] = {\"status\": \"processing\", "
+                "\"created_at\": time.time(), \"callback_url\": callback_url}"
+            )
             # Pass positional arguments to the background function
             call_parts = (
                 [f"notebook_module.{func_name}", "task_id"]
