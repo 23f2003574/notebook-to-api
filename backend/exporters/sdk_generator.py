@@ -857,6 +857,28 @@ def generate_python_sdk(
     shadowed by a notebook function). Like get_task/list_tasks above,
     these are hardcoded rather than derived from the OpenAPI paths loop
     below, which only ever emits a method for a POST path.
+
+    Also always includes a module-level ``verify_webhook_signature``
+    function (not a method -- it needs no ``base_url``/``api_key``, only
+    the raw bytes of a *received* webhook request, its
+    ``X-Webhook-Signature`` header, and the shared
+    ``NOTEBOOK_API_WEBHOOK_SECRET``). Commits #1-#3 already gave a
+    ``?callback_url=`` receiver everything the *sending* side needs --
+    retrying delivery, a recorded ``TASKS[task_id]["webhook"]`` outcome,
+    and a curl/Postman demo of the option itself -- and
+    ``_deliver_task_webhook`` (api_generator.py) has signed every
+    delivered body with ``X-Webhook-Signature: sha256=<hmac>`` since
+    Commit #899324e, the same ``X-Hub-Signature-256`` contract GitHub/
+    Stripe webhooks use. But nothing on the *client* side ever helped a
+    receiver actually check that header -- confirming a webhook request
+    genuinely came from this compiled app (and wasn't sent by anyone who
+    merely guessed or leaked the callback URL) meant hand-rolling the
+    identical ``hmac.new(secret, body, "sha256").hexdigest()``
+    computation from scratch, with no reference implementation to copy
+    it from except reading ``_deliver_task_webhook``'s own generated
+    source. ``verify_webhook_signature`` is that reference
+    implementation, packaged the same way ``get_task``/``wait_for_task``
+    already package the polling side of the exact same feature.
     """
     # Load OpenAPI schema
     schema = _load_openapi_schema(openapi_path)
@@ -866,6 +888,7 @@ def generate_python_sdk(
     wait_method_names = _build_wait_method_names(method_names, paths)
     # Prepare client code lines
     lines = []
+    lines.append("import hmac")
     lines.append("import os")
     lines.append("import time")
     lines.append("import requests")
@@ -882,6 +905,85 @@ def generate_python_sdk(
     lines.append(
         "from typing import Any, Dict, List, Literal, Optional, TypedDict, Union"
     )
+    lines.append("")
+    lines.append("")
+    # Module-level, not a NotebookAPIClient method -- a webhook receiver
+    # verifying an inbound request has no client instance at all (no
+    # base_url/api_key/timeout it would ever need), only the raw request
+    # it just received and the shared secret. Mirrors, byte for byte, the
+    # signing half of this exact scheme: _deliver_task_webhook
+    # (api_generator.py) computes `hmac.new(WEBHOOK_SECRET.encode('utf-8'),
+    # body, 'sha256').hexdigest()` over the exact JSON body bytes it POSTs,
+    # and sends it as `X-Webhook-Signature: sha256=<hexdigest>`. Before
+    # this existed, a caller who opted into `?callback_url=` had a signed
+    # request landing on their own server with nothing on this SDK's own
+    # side to check it against -- they either trusted every inbound
+    # request unconditionally (defeating the entire point of signing it)
+    # or reimplemented this exact computation themselves, one HMAC
+    # footgun (comparing with `==` instead of `hmac.compare_digest`,
+    # signing the re-serialized/re-parsed JSON instead of the untouched
+    # raw bytes actually received) away from a broken or bypassable check.
+    lines.append("def verify_webhook_signature(")
+    lines.append("    payload_body: bytes, signature_header: str, secret: str")
+    lines.append(") -> bool:")
+    lines.append('    """Verify a task webhook delivered by a compiled app\'s own')
+    lines.append("    `_deliver_task_webhook` (see api_generator.py).")
+    lines.append("")
+    lines.append(
+        "    `payload_body` must be the exact, untouched raw bytes of the"
+    )
+    lines.append(
+        "    received request body -- re-serializing a parsed JSON object"
+    )
+    lines.append(
+        "    before verifying can reorder keys or change whitespace,"
+    )
+    lines.append(
+        "    producing a body that no longer matches what was actually"
+    )
+    lines.append(
+        "    signed, even though the payload itself is semantically"
+    )
+    lines.append("    unchanged.")
+    lines.append("")
+    lines.append(
+        "    `signature_header` is the received `X-Webhook-Signature`"
+    )
+    lines.append(
+        "    header value (e.g. `\"sha256=abcdef...\"`), and `secret` is"
+    )
+    lines.append(
+        "    this compiled app's own NOTEBOOK_API_WEBHOOK_SECRET."
+    )
+    lines.append("")
+    lines.append(
+        "    Returns False -- never raises -- for a missing, empty, or"
+    )
+    lines.append(
+        "    malformed header, the same \"this request can't be trusted\""
+    )
+    lines.append(
+        "    verdict as a present-but-wrong signature, so a receiver can"
+    )
+    lines.append(
+        '    always branch on the plain boolean result alone."""'
+    )
+    lines.append("    if not signature_header or \"=\" not in signature_header:")
+    lines.append("        return False")
+    lines.append(
+        "    algorithm, _, signature = signature_header.partition(\"=\")"
+    )
+    lines.append("    if algorithm != \"sha256\":")
+    lines.append("        return False")
+    lines.append(
+        "    expected_signature = hmac.new("
+    )
+    lines.append("        secret.encode(\"utf-8\"), payload_body, \"sha256\"")
+    lines.append("    ).hexdigest()")
+    lines.append(
+        "    return hmac.compare_digest(expected_signature, signature)"
+    )
+    lines.append("")
     lines.append("")
     # Every {Pascal}Request/{Pascal}Response/{Pascal}TaskResult TypedDict
     # the per-path loop below builds is collected into typeddict_lines
@@ -1376,6 +1478,19 @@ def generate_typescript_sdk(
     ``NotebookAPIClient`` class with a method for each POST endpoint defined
     in the OpenAPI spec. Each method performs a ``fetch`` call to the
     corresponding endpoint and returns the parsed JSON response.
+
+    Also mirrors generate_python_sdk's new module-level
+    ``verifyWebhookSignature`` -- see its own docstring there for the full
+    gap this closes (a ``?callback_url=`` receiver had no reference
+    implementation anywhere in this SDK for checking the
+    ``X-Webhook-Signature`` header ``_deliver_task_webhook``,
+    api_generator.py, already signs every delivered body with). Uses
+    Node's built-in ``node:crypto`` rather than hand-rolling HMAC-SHA256 --
+    unlike every other exported symbol in this file, a webhook *receiver*
+    is inherently server-side code (nothing running in a browser can bind
+    a listening HTTP endpoint for this app to deliver a webhook to), so
+    the Node-only import doesn't cost this client the browser
+    compatibility its ``fetch``-based methods otherwise keep.
     """
     # Load OpenAPI schema
     schema = _load_openapi_schema(openapi_path)
@@ -1387,6 +1502,54 @@ def generate_typescript_sdk(
     wait_method_names = _build_wait_method_names(method_names, paths)
     # Prepare client code lines
     lines = []
+    lines.append('import { createHmac, timingSafeEqual } from "node:crypto";')
+    lines.append("")
+    # Mirrors generate_python_sdk's own verify_webhook_signature -- see its
+    # docstring above for the full "why". `payloadBody` accepts either the
+    # raw string or Buffer of the received request body (Node's own http
+    # server APIs commonly hand back one or the other depending on how the
+    # body was read); passed straight through to createHmac's own .update,
+    # which accepts both without re-encoding.
+    lines.append("export function verifyWebhookSignature(")
+    lines.append("  payloadBody: string | Buffer,")
+    lines.append("  signatureHeader: string | null | undefined,")
+    lines.append("  secret: string")
+    lines.append("): boolean {")
+    lines.append("  if (!signatureHeader || !signatureHeader.includes(\"=\")) {")
+    lines.append("    return false;")
+    lines.append("  }")
+    lines.append("  const eqIndex = signatureHeader.indexOf(\"=\");")
+    lines.append("  const algorithm = signatureHeader.slice(0, eqIndex);")
+    lines.append("  const signature = signatureHeader.slice(eqIndex + 1);")
+    lines.append('  if (algorithm !== "sha256" || !signature) {')
+    lines.append("    return false;")
+    lines.append("  }")
+    lines.append(
+        '  const expectedSignature = createHmac("sha256", secret)'
+    )
+    lines.append("    .update(payloadBody)")
+    lines.append('    .digest("hex");')
+    # timingSafeEqual throws (rather than returning false) when the two
+    # buffers differ in length -- an attacker-controlled signatureHeader of
+    # the "wrong" length would otherwise crash a receiver's request
+    # handler instead of just failing verification, so the length check
+    # below must happen first.
+    lines.append(
+        "  const expectedBuffer = Buffer.from(expectedSignature, \"utf-8\");"
+    )
+    lines.append(
+        "  const receivedBuffer = Buffer.from(signature, \"utf-8\");"
+    )
+    lines.append(
+        "  if (expectedBuffer.length !== receivedBuffer.length) {"
+    )
+    lines.append("    return false;")
+    lines.append("  }")
+    lines.append(
+        "  return timingSafeEqual(expectedBuffer, receivedBuffer);"
+    )
+    lines.append("}")
+    lines.append("")
     lines.append("export interface NotebookAPIClientOptions {")
     lines.append("  apiKey?: string;")
     lines.append("  timeoutMs?: number;")

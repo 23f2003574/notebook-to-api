@@ -4430,3 +4430,251 @@ def test_generate_typescript_sdk_and_wait_forwards_callback_url_to_the_submissio
         "http://localhost:8000/train_model?callback_url="
         "https%3A%2F%2Fexample.test%2Fhook"
     )
+
+
+# --- verify_webhook_signature / verifyWebhookSignature ---------------------
+#
+# _deliver_task_webhook (api_generator.py) has signed every delivered
+# ?callback_url= body with an `X-Webhook-Signature: sha256=<hmac>` header
+# since Commit #899324e, and Commits #1-#3 (retries, a recorded delivery
+# status, curl/Postman demos) all built on top of that sending side -- but
+# nothing in either generated SDK ever gave a *receiver* of that webhook a
+# way to actually check the header, short of reimplementing the identical
+# HMAC computation by hand. These tests confirm the new module-level
+# verify_webhook_signature/verifyWebhookSignature helper implements that
+# exact scheme correctly, including against a real signature this repo's
+# own generated app would produce.
+
+
+def test_generate_python_sdk_includes_verify_webhook_signature_function(tmp_path):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+    ast.parse(source)
+
+    assert "import hmac" in source
+    assert (
+        "def verify_webhook_signature(\n"
+        "    payload_body: bytes, signature_header: str, secret: str\n"
+        ") -> bool:" in source
+    )
+    # Module-level, not a NotebookAPIClient method -- must appear before
+    # the class itself, not indented as part of its body.
+    assert source.index("def verify_webhook_signature(") < source.index(
+        "class NotebookAPIClient:"
+    )
+
+
+def _load_verify_webhook_signature(output_path, monkeypatch):
+    # The generated client also `import requests` at module level (used by
+    # NotebookAPIClient, untouched by verify_webhook_signature itself) --
+    # stubbed the same way _exec_generated_client above does, so loading
+    # this module doesn't require the real package to be installed here.
+    fake_requests = types.ModuleType("requests")
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(
+        compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"),
+        namespace,
+    )
+    return namespace["verify_webhook_signature"]
+
+
+def test_verify_webhook_signature_accepts_a_correctly_signed_payload(
+    tmp_path, monkeypatch
+):
+
+    import hashlib
+    import hmac
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    verify_webhook_signature = _load_verify_webhook_signature(output_path, monkeypatch)
+
+    body = json.dumps({"task_id": "abc123", "status": "completed"}).encode("utf-8")
+    secret = "s3cr3t"
+    signature_header = "sha256=" + hmac.new(
+        secret.encode("utf-8"), body, hashlib.sha256
+    ).hexdigest()
+
+    assert verify_webhook_signature(body, signature_header, secret) is True
+
+
+def test_verify_webhook_signature_matches_a_real_generated_apps_own_signing(
+    tmp_path, monkeypatch
+):
+    """End-to-end proof that this SDK's own verification isn't just an
+    independent reimplementation that happens to agree with itself --
+    it accepts a signature produced by generate_fastapi_code's own real
+    _deliver_task_webhook, driven through a real compiled app and a real
+    webhook delivery, the same way test_generator.py's own
+    test_webhook_delivery_includes_hmac_signature_when_secret_configured
+    confirms what that function sends.
+    """
+
+    import sys
+    import types
+    import urllib.request
+
+    from backend.generator.api_generator import generate_fastapi_code
+
+    monkeypatch.setenv("NOTEBOOK_API_WEBHOOK_SECRET", "s3cr3t")
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+    code = generate_fastapi_code(functions)
+
+    # Generated code always contains a real `import
+    # generated.runtime.notebook_module as notebook_module` statement (see
+    # api_generator.py) -- a plain namespace dict passed to exec() doesn't
+    # satisfy that, so the module must actually be registered in
+    # sys.modules first, the same way test_generator.py's own
+    # _register_fake_notebook_module does.
+    parent = types.ModuleType("generated")
+    runtime_pkg = types.ModuleType("generated.runtime")
+    notebook_module = types.ModuleType("generated.runtime.notebook_module")
+    monkeypatch.setitem(sys.modules, "generated", parent)
+    monkeypatch.setitem(sys.modules, "generated.runtime", runtime_pkg)
+    monkeypatch.setitem(sys.modules, "generated.runtime.notebook_module", notebook_module)
+
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: {"score": 0.9}
+
+    captured = {}
+
+    class _FakeResponse:
+        status = 200
+
+        def close(self):
+            pass
+
+    def fake_urlopen(request, timeout=None):
+        captured["request"] = request
+        return _FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    response = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/hook"},
+        headers={"X-API-Key": "notebook-to-api-dev-key"},
+    )
+    assert response.status_code == 200
+
+    request = captured["request"]
+    signature_header = request.get_header("X-webhook-signature")
+    assert signature_header is not None
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/process_data": {"post": {"operationId": "process_data"}}},
+    )
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    verify_webhook_signature = _load_verify_webhook_signature(output_path, monkeypatch)
+
+    assert verify_webhook_signature(
+        request.data, signature_header, "s3cr3t"
+    ) is True
+    # A receiver checking against the wrong secret (or a tampered/replayed
+    # body) must be rejected -- otherwise this "verification" would accept
+    # anything.
+    assert verify_webhook_signature(
+        request.data, signature_header, "wrong-secret"
+    ) is False
+    assert verify_webhook_signature(
+        b'{"tampered": true}', signature_header, "s3cr3t"
+    ) is False
+
+
+@pytest.mark.parametrize(
+    "signature_header",
+    [None, "", "no-equals-sign", "sha1=deadbeef", "sha256="],
+)
+def test_verify_webhook_signature_rejects_missing_or_malformed_headers(
+    tmp_path, monkeypatch, signature_header
+):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    verify_webhook_signature = _load_verify_webhook_signature(output_path, monkeypatch)
+
+    assert verify_webhook_signature(b"{}", signature_header, "s3cr3t") is False
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_verify_webhook_signature_round_trips(tmp_path):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    source = client_path.read_text(encoding="utf-8")
+    assert 'import { createHmac, timingSafeEqual } from "node:crypto";' in source
+    assert "export function verifyWebhookSignature(" in source
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        import crypto from "node:crypto";
+        const {{ verifyWebhookSignature }} = await import({json.dumps(str(client_path))});
+
+        const secret = "s3cr3t";
+        const body = Buffer.from(JSON.stringify({{ task_id: "abc", status: "completed" }}));
+        const validSignature = "sha256=" + crypto.createHmac("sha256", secret).update(body).digest("hex");
+
+        console.log(JSON.stringify({{
+          valid: verifyWebhookSignature(body, validSignature, secret),
+          tamperedBody: verifyWebhookSignature(Buffer.from("tampered"), validSignature, secret),
+          wrongSecret: verifyWebhookSignature(body, validSignature, "wrong-secret"),
+          missingHeader: verifyWebhookSignature(body, undefined, secret),
+          malformedHeader: verifyWebhookSignature(body, "not-a-signature", secret),
+        }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output == {
+        "valid": True,
+        "tamperedBody": False,
+        "wrongSecret": False,
+        "missingHeader": False,
+        "malformedHeader": False,
+    }
