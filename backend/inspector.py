@@ -3,6 +3,7 @@ import json
 import os
 from collections import Counter
 from pathlib import Path
+from urllib.parse import quote, urlsplit
 
 from backend.compiler import (
     COMPILE_METADATA_FILENAME,
@@ -1042,7 +1043,7 @@ DEFAULT_DEV_API_KEY = "notebook-to-api-dev-key"
 
 def generate_curl_commands(
     notebook_path, host="localhost", port=8000, api_key=None,
-    only=None, exclude=None,
+    only=None, exclude=None, callback_url=None,
 ):
     """A ready-to-run `curl` command for every function `notebook_path`
     would compile into an endpoint, using each function's own
@@ -1070,6 +1071,33 @@ def generate_curl_commands(
     know the task_id ahead of actually running it, so this can't also
     generate the GET /tasks/{task_id} follow-up command the way it can
     for everything else.
+
+    `callback_url` (optional) is a background endpoint's own ?callback_url=
+    webhook option (see _deliver_task_webhook, generator/api_generator.py)
+    -- before this, generate_curl_commands/generate_postman_collection had
+    no way to demonstrate it at all, even though the generated Python and
+    TypeScript SDK clients' own background-task methods already accept a
+    matching callback_url/callbackUrl keyword argument. A caller previewing
+    a background function's curl command still only ever saw the "poll GET
+    /tasks/{task_id}" comment above, with no hint that a webhook was even
+    an option short of already knowing to read this project's own docs or
+    the generated OpenAPI schema by hand. Given, every background
+    function's own command gets "?callback_url=<callback_url>" appended to
+    its URL (percent-encoded via urllib.parse.quote) and its comment
+    reworded to describe the webhook delivery instead of a bare polling
+    note; a synchronous function's own command is left completely
+    untouched, matching the generated app's own identical restriction --
+    it never even reads this query parameter for one (see
+    generate_fastapi_code's own async-vs-sync endpoint code paths). Omitted
+    (the default), every command is byte-for-byte identical to before this
+    parameter existed. Validated the same way the generated app itself
+    validates a real ?callback_url= at request time (see
+    generate_fastapi_code's own "callback_url must be an http:// or
+    https:// URL" check) -- raises ValueError for anything other than an
+    http:// or https:// URL, before a single command is generated, so a
+    typo'd scheme fails this preview the same clean way it would fail a
+    real compiled app's own request, rather than silently previewing a
+    command whose ?callback_url= a real deployment would reject with 400.
 
     `api_key` defaults to DEFAULT_DEV_API_KEY -- the generated app's own
     default when NOTEBOOK_API_KEY isn't set -- so the emitted commands
@@ -1099,6 +1127,9 @@ def generate_curl_commands(
     if api_key is None:
         api_key = DEFAULT_DEV_API_KEY
 
+    if callback_url is not None and urlsplit(callback_url).scheme not in ("http", "https"):
+        raise ValueError("callback_url must be an http:// or https:// URL")
+
     data = inspect_notebook_data(notebook_path)
 
     functions = _filter_functions_by_name(data["functions"], only, exclude)
@@ -1118,18 +1149,34 @@ def generate_curl_commands(
 
         payload = json.dumps(func.get("example_payload", {}))
 
+        url = f"{base_url}/{name}"
+
         if _is_background_function(name):
-            comment = (
-                f'# {name} (background task -- POST only returns '
-                f'{{"task_id": ...}}; poll GET /tasks/{{task_id}} for the '
-                f"actual result)"
-            )
+
+            if callback_url:
+
+                url += f"?callback_url={quote(callback_url, safe='')}"
+
+                comment = (
+                    f'# {name} (background task -- POST also delivers the '
+                    f'finished result to {callback_url} via a signed '
+                    f'webhook; poll GET /tasks/{{task_id}} too if you need '
+                    "it sooner, or the webhook delivery fails)"
+                )
+
+            else:
+                comment = (
+                    f'# {name} (background task -- POST only returns '
+                    f'{{"task_id": ...}}; poll GET /tasks/{{task_id}} for the '
+                    f"actual result)"
+                )
+
         else:
             comment = f"# {name}"
 
         command = (
             f"{comment}\n"
-            f"curl -X POST {base_url}/{name} \\\n"
+            f"curl -X POST {url} \\\n"
             f'  -H "Content-Type: application/json" \\\n'
             f'  -H "X-API-Key: {api_key}" \\\n'
             f"  -d '{payload}'"
@@ -1142,7 +1189,7 @@ def generate_curl_commands(
 
 def generate_postman_collection(
     notebook_path, host="localhost", port=8000, api_key=None,
-    only=None, exclude=None, collection_name=None,
+    only=None, exclude=None, collection_name=None, callback_url=None,
 ):
     """A Postman Collection v2.1.0 covering every function `notebook_path`
     would compile into an endpoint -- the same "try it before you compile
@@ -1184,6 +1231,30 @@ def generate_postman_collection(
     run. A synchronous function's own request gets neither the script nor
     a companion request, since there's no task_id to capture.
 
+    `callback_url` (optional) mirrors generate_curl_commands' own
+    identical parameter -- see its docstring for the gap this closes (the
+    generated Python/TypeScript SDK clients already accept a matching
+    callback_url/callbackUrl for a background method, but neither this
+    collection nor a plain curl command ever demonstrated the option at
+    all) and the same ValueError validation ("callback_url must be an
+    http:// or https:// URL") applied here identically, before a single
+    item is built. Unlike "host"/"port"/"api_key" above, only added as its
+    own "callback_url" collection variable when actually given -- an
+    unused variable nobody asked for would just be noise in a collection
+    with no background function to use it. Every background function's
+    own submission request gets "?callback_url={{callback_url}}" appended
+    to its URL (as both "raw" and a proper "query" entry, so Postman's own
+    URL editor renders it as a real query parameter rather than an opaque
+    raw-string suffix) and its "description" reworded to mention webhook
+    delivery alongside the existing "{name} - Task Status" companion
+    request -- which is left in place either way, since a caller may still
+    want to poll sooner than the webhook arrives, or the webhook delivery
+    itself may fail. A synchronous function's own request is left
+    completely untouched, the same restriction generate_curl_commands
+    already applies for the identical reason (the generated app itself
+    never reads this parameter for one). Omitted (the default), every
+    item is byte-for-byte identical to before this parameter existed.
+
     Returns a plain dict -- a valid Postman Collection v2.1.0 document
     once json.dump-ed -- rather than writing a file itself, the same
     "return data, let the caller decide where it goes" split
@@ -1193,6 +1264,9 @@ def generate_postman_collection(
     """
     if api_key is None:
         api_key = DEFAULT_DEV_API_KEY
+
+    if callback_url is not None and urlsplit(callback_url).scheme not in ("http", "https"):
+        raise ValueError("callback_url must be an http:// or https:// URL")
 
     data = inspect_notebook_data(notebook_path)
 
@@ -1206,6 +1280,9 @@ def generate_postman_collection(
         {"key": "base_url", "value": base_url},
         {"key": "api_key", "value": api_key},
     ]
+
+    if callback_url:
+        collection_variables.append({"key": "callback_url", "value": callback_url})
 
     items = []
 
@@ -1243,12 +1320,31 @@ def generate_postman_collection(
             task_id_var = f"{name}_task_id"
             collection_variables.append({"key": task_id_var, "value": ""})
 
-            request["description"] = (
-                'This POST only returns {"task_id": ...} immediately -- '
-                f'run the paired "{name} - Task Status" request below '
-                f"(its own {{{{{task_id_var}}}}} is captured automatically "
-                "from this response) to see the actual result."
-            )
+            if callback_url:
+
+                request["url"]["raw"] += "?callback_url={{callback_url}}"
+                request["url"]["query"] = [
+                    {"key": "callback_url", "value": "{{callback_url}}"}
+                ]
+
+                request["description"] = (
+                    'This POST immediately returns {"task_id": ...}, and '
+                    "also delivers the finished result to "
+                    "{{callback_url}} via a signed webhook once the task "
+                    f'completes -- the paired "{name} - Task Status" '
+                    f"request below (its own {{{{{task_id_var}}}}} is "
+                    "captured automatically from this response) still "
+                    "works too, for a caller that wants the result "
+                    "sooner or the webhook delivery fails."
+                )
+
+            else:
+                request["description"] = (
+                    'This POST only returns {"task_id": ...} immediately -- '
+                    f'run the paired "{name} - Task Status" request below '
+                    f"(its own {{{{{task_id_var}}}}} is captured automatically "
+                    "from this response) to see the actual result."
+                )
 
             item["event"] = [{
                 "listen": "test",

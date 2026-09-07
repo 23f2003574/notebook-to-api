@@ -19349,6 +19349,67 @@ def test_curl_preview_rejects_a_non_integer_port():
     assert resp.status_code == 400
 
 
+def test_curl_preview_appends_callback_url_to_a_background_function():
+
+    content = _notebook_bytes(
+        "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "curl_preview_callback.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/curl-preview",
+        json={
+            "notebook_path": "curl_preview_callback.ipynb",
+            "callback_url": "https://example.com/hook",
+        },
+    )
+
+    assert resp.status_code == 200
+    [command] = resp.json()["commands"]
+    assert "callback_url=https%3A%2F%2Fexample.com%2Fhook" in command
+    assert "webhook" in command
+
+
+def test_curl_preview_rejects_a_non_string_callback_url():
+
+    _upload_sample_notebook("curl_preview_bad_callback.ipynb")
+
+    resp = client.post(
+        "/api/curl-preview",
+        json={
+            "notebook_path": "curl_preview_bad_callback.ipynb",
+            "callback_url": 12345,
+        },
+    )
+
+    assert resp.status_code == 400
+
+
+def test_curl_preview_rejects_a_non_http_callback_url():
+
+    _upload_sample_notebook("curl_preview_ftp_callback.ipynb")
+
+    resp = client.post(
+        "/api/curl-preview",
+        json={
+            "notebook_path": "curl_preview_ftp_callback.ipynb",
+            "callback_url": "ftp://example.com",
+        },
+    )
+
+    assert resp.status_code == 400
+
+
 def test_postman_preview_returns_one_item_per_function():
 
     content = _notebook_bytes(
@@ -19446,6 +19507,57 @@ def test_postman_preview_adds_a_task_status_item_for_a_background_function():
     assert [item["name"] for item in items] == [
         "train_model", "train_model - Task Status",
     ]
+
+
+def test_postman_preview_adds_a_callback_url_variable_and_query_param():
+
+    content = _notebook_bytes(
+        "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "postman_preview_callback.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/postman-preview",
+        json={
+            "notebook_path": "postman_preview_callback.ipynb",
+            "callback_url": "https://example.com/hook",
+        },
+    )
+
+    assert resp.status_code == 200
+    collection = resp.json()["collection"]
+    assert {"key": "callback_url", "value": "https://example.com/hook"} in (
+        collection["variable"]
+    )
+    submit_request = collection["item"][0]["request"]
+    assert submit_request["url"]["raw"] == (
+        "{{base_url}}/train_model?callback_url={{callback_url}}"
+    )
+
+
+def test_postman_preview_rejects_a_non_http_callback_url():
+
+    _upload_sample_notebook("postman_preview_ftp_callback.ipynb")
+
+    resp = client.post(
+        "/api/postman-preview",
+        json={
+            "notebook_path": "postman_preview_ftp_callback.ipynb",
+            "callback_url": "ftp://example.com",
+        },
+    )
+
+    assert resp.status_code == 400
 
 
 def test_postman_preview_excludes_a_reserved_name_conflict():

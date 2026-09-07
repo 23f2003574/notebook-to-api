@@ -1860,6 +1860,62 @@ def test_generate_curl_commands_rejects_an_unknown_only_name(tmp_path):
         generate_curl_commands(str(notebook_path), only=["does_not_exist"])
 
 
+def test_generate_curl_commands_appends_callback_url_to_a_background_function(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    [command] = generate_curl_commands(
+        str(notebook_path), callback_url="https://example.com/hook"
+    )
+
+    assert (
+        "curl -X POST http://localhost:8000/train_model"
+        "?callback_url=https%3A%2F%2Fexample.com%2Fhook" in command
+    )
+    assert "webhook" in command
+
+
+def test_generate_curl_commands_ignores_callback_url_for_a_synchronous_function(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    [command] = generate_curl_commands(
+        str(notebook_path), callback_url="https://example.com/hook"
+    )
+
+    assert "curl -X POST http://localhost:8000/add \\" in command
+    assert "callback_url" not in command
+
+
+def test_generate_curl_commands_omits_callback_url_by_default(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    [command] = generate_curl_commands(str(notebook_path))
+
+    assert "callback_url" not in command
+
+
+def test_generate_curl_commands_rejects_a_non_http_callback_url(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    with pytest.raises(ValueError):
+        generate_curl_commands(str(notebook_path), callback_url="ftp://example.com")
+
+
 def test_generate_postman_collection_returns_one_item_per_function(tmp_path):
 
     notebook_path = tmp_path / "nb.ipynb"
@@ -1996,6 +2052,83 @@ def test_generate_postman_collection_omits_task_status_request_for_a_synchronous
 
     assert "event" not in item
     assert "description" not in item["request"]
+
+
+def test_generate_postman_collection_adds_callback_url_query_to_a_background_function(
+    tmp_path
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    collection = generate_postman_collection(
+        str(notebook_path), callback_url="https://example.com/hook"
+    )
+
+    assert {"key": "callback_url", "value": "https://example.com/hook"} in (
+        collection["variable"]
+    )
+
+    [submit_item, _status_item] = collection["item"]
+    request = submit_item["request"]
+
+    assert request["url"]["raw"] == "{{base_url}}/train_model?callback_url={{callback_url}}"
+    assert request["url"]["query"] == [
+        {"key": "callback_url", "value": "{{callback_url}}"}
+    ]
+    assert "webhook" in request["description"]
+
+
+def test_generate_postman_collection_omits_callback_url_variable_by_default(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    collection = generate_postman_collection(str(notebook_path))
+
+    assert all(var["key"] != "callback_url" for var in collection["variable"])
+
+    [submit_item, _status_item] = collection["item"]
+    request = submit_item["request"]
+
+    assert request["url"]["raw"] == "{{base_url}}/train_model"
+    assert "query" not in request["url"]
+
+
+def test_generate_postman_collection_ignores_callback_url_for_a_synchronous_function(
+    tmp_path
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    collection = generate_postman_collection(
+        str(notebook_path), callback_url="https://example.com/hook"
+    )
+
+    [item] = collection["item"]
+
+    assert item["request"]["url"]["raw"] == "{{base_url}}/add"
+    assert "query" not in item["request"]["url"]
+
+
+def test_generate_postman_collection_rejects_a_non_http_callback_url(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    with pytest.raises(ValueError):
+        generate_postman_collection(
+            str(notebook_path), callback_url="ftp://example.com"
+        )
 
 
 def test_generate_postman_collection_excludes_a_reserved_name_conflict(tmp_path):

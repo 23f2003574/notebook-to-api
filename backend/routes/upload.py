@@ -10914,6 +10914,19 @@ def curl_preview_endpoint(data: dict):
     expose as an endpoint -- silently wrong output for anyone previewing
     curl commands ahead of a filtered compile, generate_curl_commands'
     own docstring now explains in full.
+
+    "callback_url" (optional) previews a background function's own
+    ?callback_url= webhook option -- see generate_curl_commands' own
+    docstring for the gap this closes (the generated Python/TypeScript
+    SDK clients already accept a matching callback_url/callbackUrl for a
+    background method; this preview never demonstrated the option at
+    all). Rejected with 400 for a non-string value before generate_curl_
+    commands is ever called, the same "malformed request input is a
+    whole-request 400" reasoning every other client-supplied field on
+    this endpoint already gets; a value that's a string but not an
+    http://or https:// URL still gets 400, via the identical ValueError
+    generate_curl_commands itself raises (caught below the same way an
+    invalid "only"/"exclude" already is).
     """
 
     notebook_path = data.get("notebook_path")
@@ -10928,6 +10941,14 @@ def curl_preview_endpoint(data: dict):
     version_id = data.get("version_id")
     only = data.get("only")
     exclude = data.get("exclude")
+    callback_url = data.get("callback_url")
+
+    if callback_url is not None and not isinstance(callback_url, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="callback_url must be a string"
+        )
 
     for field_name, field_value in (("only", only), ("exclude", exclude)):
 
@@ -10991,7 +11012,7 @@ def curl_preview_endpoint(data: dict):
 
             commands = generate_curl_commands(
                 str(full_path), host=host, port=port, api_key=api_key,
-                only=only, exclude=exclude,
+                only=only, exclude=exclude, callback_url=callback_url,
             )
 
     except ValueError as e:
@@ -11031,6 +11052,13 @@ def postman_preview_endpoint(data: dict):
     object a caller can hand straight to Postman's own "Import" dialog,
     or write to a `.postman_collection.json` file itself -- this endpoint
     writes nothing to disk on either side.
+
+    "callback_url" (optional) is also inherited from POST
+    /api/curl-preview's own identical field -- see its docstring, and
+    generate_postman_collection's own, for what it does here: a
+    background function's own request gains a "?callback_url=" query
+    param (backed by a "callback_url" collection variable) instead of
+    only ever documenting GET /tasks/{task_id} polling.
     """
 
     notebook_path = data.get("notebook_path")
@@ -11045,6 +11073,7 @@ def postman_preview_endpoint(data: dict):
     version_id = data.get("version_id")
     only = data.get("only")
     exclude = data.get("exclude")
+    callback_url = data.get("callback_url")
 
     for field_name, field_value in (("only", only), ("exclude", exclude)):
 
@@ -11062,6 +11091,13 @@ def postman_preview_endpoint(data: dict):
         raise HTTPException(
             status_code=400,
             detail="only and exclude can't both be given -- choose one."
+        )
+
+    if callback_url is not None and not isinstance(callback_url, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="callback_url must be a string"
         )
 
     full_path = _resolve_preview_content_path(notebook_path, version_id)
@@ -11117,6 +11153,7 @@ def postman_preview_endpoint(data: dict):
             collection = generate_postman_collection(
                 str(full_path), host=host, port=port, api_key=api_key,
                 only=only, exclude=exclude, collection_name=collection_name,
+                callback_url=callback_url,
             )
 
     except ValueError as e:

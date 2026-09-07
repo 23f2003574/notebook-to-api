@@ -742,6 +742,42 @@ def _add_version_id_argument(parser, endpoint):
     )
 
 
+def _add_callback_url_argument(parser):
+    """Add --callback-url to `parser` -- shared by `export-curl`,
+    `export-postman`, `remote-curl`, `curl-preview`, and `postman-preview`
+    below, so their help text and dest names can't drift apart from each
+    other, the same way _add_version_id_argument already shares
+    --version-id across several of these same subparsers.
+
+    Previews a background function's own ?callback_url= webhook option
+    (see _deliver_task_webhook, generator/api_generator.py) in the
+    generated curl command/Postman request -- before this, none of these
+    five commands had any way to demonstrate it at all, even though the
+    generated Python/TypeScript SDK clients' own background-task methods
+    already accept a matching callback_url/callbackUrl keyword argument
+    (see generate_python_sdk/generate_typescript_sdk, backend/exporters/
+    sdk_generator.py). generate_curl_commands/generate_postman_collection
+    (backend/inspector.py) reject anything other than an http:// or
+    https:// URL with the identical ValueError the generated app itself
+    raises for a real ?callback_url= at request time -- surfaced here the
+    same way every other CLI_USER_FACING_ERRORS-caught ValueError already
+    is, a clean "Error: ..." on stderr rather than a traceback.
+    """
+    parser.add_argument(
+        "--callback-url",
+        default=None,
+        dest="callback_url",
+        metavar="URL",
+        help=(
+            "Preview a background function's own ?callback_url= webhook "
+            "delivery option instead of only ever documenting GET "
+            "/tasks/{task_id} polling -- must be an http:// or https:// "
+            "URL. Has no effect on a synchronous function's own command, "
+            "matching the generated app's own identical restriction."
+        )
+    )
+
+
 def _parse_comma_separated_names(value):
     """Parse a `--only`/`--exclude` argparse value ("add,subtract", or
     None) into a list of names, or None if nothing was given.
@@ -1408,7 +1444,7 @@ def _dispatch_core_command(args):
         exclude = _parse_comma_separated_names(args.exclude)
         commands = generate_curl_commands(
             args.notebook, host=args.host, port=args.port, api_key=args.api_key,
-            only=only, exclude=exclude,
+            only=only, exclude=exclude, callback_url=args.callback_url,
         )
 
         script_content = (
@@ -1447,6 +1483,7 @@ def _dispatch_core_command(args):
         collection = generate_postman_collection(
             args.notebook, host=args.host, port=args.port, api_key=args.api_key,
             only=only, exclude=exclude, collection_name=args.collection_name,
+            callback_url=args.callback_url,
         )
 
         output = args.output or "postman_collection.json"
@@ -4331,6 +4368,8 @@ def _dispatch_core_command(args):
         }
         if args.version_id:
             curl_preview_body["version_id"] = args.version_id
+        if args.callback_url:
+            curl_preview_body["callback_url"] = args.callback_url
 
         try:
             response = httpx.post(
@@ -4387,6 +4426,8 @@ def _dispatch_core_command(args):
         }
         if args.version_id:
             postman_preview_body["version_id"] = args.version_id
+        if args.callback_url:
+            postman_preview_body["callback_url"] = args.callback_url
 
         try:
             response = httpx.post(
@@ -5765,6 +5806,7 @@ def _dispatch_core_command(args):
             commands = generate_curl_commands(
                 remote_notebook_path, host=args.host, port=args.port,
                 api_key=args.api_key, only=only, exclude=exclude,
+                callback_url=args.callback_url,
             )
 
         finally:
@@ -6587,6 +6629,7 @@ def main():
         help="Path to write the generated shell script to. Default: requests.sh"
     )
     _add_function_selection_arguments(curl_parser)
+    _add_callback_url_argument(curl_parser)
     curl_parser.add_argument(
         "--json",
         action="store_true",
@@ -6645,6 +6688,7 @@ def main():
         help="Path to write the generated collection to. Default: postman_collection.json"
     )
     _add_function_selection_arguments(postman_parser)
+    _add_callback_url_argument(postman_parser)
     postman_parser.add_argument(
         "--json",
         action="store_true",
@@ -9306,6 +9350,7 @@ def main():
         )
     )
     _add_version_id_argument(curl_preview_parser, "POST /api/curl-preview")
+    _add_callback_url_argument(curl_preview_parser)
     curl_preview_parser.add_argument(
         "--json",
         action="store_true",
@@ -9369,6 +9414,7 @@ def main():
     )
     _add_function_selection_arguments(postman_preview_parser)
     _add_version_id_argument(postman_preview_parser, "POST /api/postman-preview")
+    _add_callback_url_argument(postman_preview_parser)
     postman_preview_parser.add_argument(
         "--json",
         action="store_true",
@@ -10706,6 +10752,7 @@ def main():
         )
     )
     _add_function_selection_arguments(remote_curl_parser)
+    _add_callback_url_argument(remote_curl_parser)
     remote_curl_parser.add_argument(
         "--json",
         action="store_true",

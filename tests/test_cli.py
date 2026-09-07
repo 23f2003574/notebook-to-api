@@ -2142,6 +2142,45 @@ def test_export_curl_command_rejects_only_and_exclude_together(tmp_path):
     _assert_clean_cli_error(proc, "only and exclude can't both be given")
 
 
+def test_export_curl_command_appends_callback_url_to_a_background_function(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path, "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    proc = _run_cli(
+        [
+            "export-curl", str(notebook_path),
+            "--callback-url", "https://example.com/hook",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    script = (workdir / "requests.sh").read_text(encoding="utf-8")
+    assert "callback_url=https%3A%2F%2Fexample.com%2Fhook" in script
+
+
+def test_export_curl_command_rejects_a_non_http_callback_url(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path, "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    proc = _run_cli(
+        ["export-curl", str(notebook_path), "--callback-url", "ftp://example.com"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "callback_url must be an http:// or https:// URL")
+
+
 def test_export_postman_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())
@@ -2281,6 +2320,35 @@ def test_export_postman_command_rejects_only_and_exclude_together(tmp_path):
     _assert_clean_cli_error(proc, "only and exclude can't both be given")
 
 
+def test_export_postman_command_adds_a_callback_url_variable_and_query_param(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path, "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    proc = _run_cli(
+        [
+            "export-postman", str(notebook_path),
+            "--callback-url", "https://example.com/hook",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    collection = json.loads(
+        (workdir / "postman_collection.json").read_text(encoding="utf-8")
+    )
+    assert {"key": "callback_url", "value": "https://example.com/hook"} in (
+        collection["variable"]
+    )
+    assert collection["item"][0]["request"]["url"]["raw"] == (
+        "{{base_url}}/train_model?callback_url={{callback_url}}"
+    )
+
+
 def test_remote_curl_command_only_restricts_to_the_named_functions(
     tmp_path, fake_dashboard
 ):
@@ -2311,6 +2379,36 @@ def test_remote_curl_command_only_restricts_to_the_named_functions(
     script = (workdir / "requests.sh").read_text(encoding="utf-8")
     assert "curl -X POST http://localhost:8000/add" in script
     assert "curl -X POST http://localhost:8000/subtract" not in script
+
+
+def test_remote_curl_command_appends_callback_url_to_a_background_function(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def train_model(epochs: int) -> str:\n    return 'done'\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-curl", "nb.ipynb", "--dashboard-url", dashboard_url,
+            "--callback-url", "https://example.com/hook",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    script = (workdir / "requests.sh").read_text(encoding="utf-8")
+    assert "callback_url=https%3A%2F%2Fexample.com%2Fhook" in script
 
 
 def _json_response(status_code, body):
@@ -12069,6 +12167,37 @@ def test_curl_preview_command_passes_the_version_id_flag_through(tmp_path, fake_
     }
 
 
+def test_curl_preview_command_passes_the_callback_url_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebook": "nb.ipynb",
+            "commands": ["curl -X POST http://localhost:8000/train_model"],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "curl-preview", "nb.ipynb", "--dashboard-url", dashboard_url,
+            "--callback-url", "https://example.com/hook",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb",
+        "host": "localhost",
+        "port": 8000,
+        "api_key": "notebook-to-api-dev-key",
+        "callback_url": "https://example.com/hook",
+    }
+
+
 def test_curl_preview_command_reports_no_endpoints(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
@@ -12269,6 +12398,42 @@ def test_postman_preview_command_passes_only_exclude_and_version_id_through(
         "exclude": None,
         "collection_name": None,
         "version_id": "v1.ipynb",
+    }
+
+
+def test_postman_preview_command_passes_the_callback_url_flag_through(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebook": "nb.ipynb",
+            "collection": {"info": {"name": "nb"}, "variable": [], "item": []},
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "postman-preview", "nb.ipynb", "--dashboard-url", dashboard_url,
+            "--callback-url", "https://example.com/hook",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb",
+        "host": "localhost",
+        "port": 8000,
+        "api_key": "notebook-to-api-dev-key",
+        "only": None,
+        "exclude": None,
+        "collection_name": None,
+        "callback_url": "https://example.com/hook",
     }
 
 
