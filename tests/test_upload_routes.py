@@ -24931,6 +24931,26 @@ def test_get_config_reflects_a_configured_dashboard_rate_limit(monkeypatch):
     assert resp.json()["dashboard_rate_limit_per_minute"] == 90
 
 
+def test_get_config_reports_dashboard_json_logs_disabled_by_default(monkeypatch):
+
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_JSON_LOGS", raising=False)
+
+    resp = client.get("/api/config")
+
+    assert resp.status_code == 200
+    assert resp.json()["dashboard_json_logs_enabled"] is False
+
+
+def test_get_config_reflects_a_configured_dashboard_json_logs(monkeypatch):
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_JSON_LOGS", "true")
+
+    resp = client.get("/api/config")
+
+    assert resp.status_code == 200
+    assert resp.json()["dashboard_json_logs_enabled"] is True
+
+
 def test_get_config_reports_the_compiling_python_version():
 
     resp = client.get("/api/config")

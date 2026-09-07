@@ -14578,14 +14578,36 @@ def get_config():
     already exists), or simply confirming what an operator configured
     the limit to, had no way to ask that short of triggering a real 400
     first.
+
+    "dashboard_json_logs_enabled" (added alongside this same docstring's
+    original feature, not a separate change) is
+    dashboard_json_logs_enabled's (backend/dashboard.py) own reading of
+    NOTEBOOK_API_DASHBOARD_JSON_LOGS -- already independently
+    configurable since this dashboard's own structured-JSON-access-log
+    middleware was added, but never itself surfaced through this
+    endpoint: an operator wanting to confirm whether this dashboard is
+    actually emitting a request_id-bearing JSON line per request before
+    pointing a log-aggregation pipeline at its stdout (rather than
+    discovering the log format is still plain-text uvicorn output once
+    nothing shows up), or a caller of GET /api/config wanting the same
+    "is this feature actually on" answer every *generated* app's own
+    GET /config -- with its identically-named "json_logs_enabled" field
+    -- already gives for that app's own NOTEBOOK_API_JSON_LOGS, had no
+    way to ask that short of the same direct environment access this
+    endpoint's own docstring already says a client shouldn't need.
     """
 
-    from backend.dashboard import allowed_origins, dashboard_rate_limit_per_minute
+    from backend.dashboard import (
+        allowed_origins,
+        dashboard_json_logs_enabled,
+        dashboard_rate_limit_per_minute,
+    )
 
     return {
         "status": "success",
         "allowed_origins": allowed_origins(),
         "dashboard_rate_limit_per_minute": dashboard_rate_limit_per_minute() or None,
+        "dashboard_json_logs_enabled": dashboard_json_logs_enabled(),
         "max_upload_bytes": MAX_UPLOAD_BYTES,
         "max_batch_upload_files": MAX_BATCH_UPLOAD_FILES,
         "max_notebooks": MAX_NOTEBOOKS,

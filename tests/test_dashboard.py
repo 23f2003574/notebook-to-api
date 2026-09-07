@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from backend.compiler import NOTEBOOK_TO_API_VERSION
 from backend.dashboard import (
     app,
     dashboard_host,
+    dashboard_json_logs_enabled,
     dashboard_log_level,
     dashboard_port,
     dashboard_rate_limit_per_minute,
@@ -353,6 +355,109 @@ def test_dashboard_echoes_back_a_caller_supplied_x_request_id():
 
     assert resp.status_code == 200
     assert resp.headers["x-request-id"] == "caller-supplied-abc"
+
+
+def test_dashboard_json_logs_disabled_by_default(monkeypatch):
+
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_JSON_LOGS", raising=False)
+
+    assert dashboard_json_logs_enabled() is False
+
+
+def test_dashboard_json_logs_env_var_enables_it(monkeypatch):
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_JSON_LOGS", "true")
+
+    assert dashboard_json_logs_enabled() is True
+
+
+def test_dashboard_json_logs_accepts_common_truthy_spellings(monkeypatch):
+
+    for truthy_value in ("true", "TRUE", "1", "yes", "on"):
+
+        monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_JSON_LOGS", truthy_value)
+
+        assert dashboard_json_logs_enabled() is True, truthy_value
+
+
+def test_dashboard_json_logs_rejects_an_unrecognized_spelling(monkeypatch):
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_JSON_LOGS", "nope")
+
+    assert dashboard_json_logs_enabled() is False
+
+
+def test_dashboard_prints_no_json_log_line_when_disabled(monkeypatch, capsys):
+    """NOTEBOOK_API_DASHBOARD_JSON_LOGS unset must reproduce this
+    dashboard's previous stdout output exactly -- no JSON line printed
+    at all.
+    """
+
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_JSON_LOGS", raising=False)
+
+    capsys.readouterr()  # discard any prior output
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 200
+    assert capsys.readouterr().out == ""
+
+
+def test_dashboard_json_log_line_matches_the_response_headers(monkeypatch, capsys):
+    """The printed JSON line's own "request_id"/"status_code"/
+    "duration_ms" must match the exact X-Request-ID/status/
+    X-Process-Time-Ms this same response actually carries -- reused, not
+    re-derived, from _add_request_id_header/_add_process_time_header's
+    own headers, the identical guarantee generate_fastapi_code's own
+    _log_request_json already gives every compiled app.
+    """
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_JSON_LOGS", "true")
+
+    capsys.readouterr()
+    resp = client.get(
+        "/api/health", headers={"X-Request-ID": "dashboard-log-test-1"}
+    )
+
+    assert resp.status_code == 200
+
+    printed_lines = [
+        line for line in capsys.readouterr().out.splitlines() if line.strip()
+    ]
+    assert len(printed_lines) == 1
+
+    log_entry = json.loads(printed_lines[0])
+    assert log_entry["request_id"] == "dashboard-log-test-1" == resp.headers["X-Request-ID"]
+    assert log_entry["method"] == "GET"
+    assert log_entry["path"] == "/api/health"
+    assert log_entry["status_code"] == 200 == resp.status_code
+    assert log_entry["duration_ms"] == float(resp.headers["X-Process-Time-Ms"])
+    assert isinstance(log_entry["timestamp"], float)
+
+
+def test_dashboard_json_log_line_still_emitted_for_a_429_rate_limited_response(
+    monkeypatch, capsys, _clear_dashboard_rate_limit_windows
+):
+    """Registered outermost -- wrapping _enforce_dashboard_rate_limit,
+    the same reasoning _add_security_headers' own docstring already
+    gives for stamping its own headers on a 429 too -- so a request the
+    rate limiter itself short-circuits still gets logged, not just the
+    ones that reach a real handler.
+    """
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_JSON_LOGS", "true")
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_RATE_LIMIT_PER_MINUTE", "1")
+
+    client.get("/api/health")
+    capsys.readouterr()
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 429
+
+    printed_lines = [
+        line for line in capsys.readouterr().out.splitlines() if line.strip()
+    ]
+    assert len(printed_lines) == 1
+    assert json.loads(printed_lines[0])["status_code"] == 429
 
 
 def test_dashboard_gzip_compresses_a_response_when_the_client_accepts_it():

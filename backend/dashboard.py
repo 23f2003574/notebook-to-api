@@ -3,6 +3,7 @@ Dashboard API Server
 Serves the React dashboard frontend and provides API endpoints for compilation
 """
 
+import json
 import os
 import sys
 import time
@@ -198,6 +199,45 @@ def dashboard_rate_limit_per_minute():
     monkeypatch without reloading this module.
     """
     return int(os.getenv("NOTEBOOK_API_DASHBOARD_RATE_LIMIT_PER_MINUTE", "0"))
+
+
+def dashboard_json_logs_enabled():
+    """Whether this dashboard process prints one structured JSON line per
+    request to stdout, via NOTEBOOK_API_DASHBOARD_JSON_LOGS -- off
+    (the default) reproduces this dashboard's previous stdout output
+    exactly, purely additive alongside uvicorn's own default access log,
+    never a disable or replacement of it.
+
+    Every *generated* app this dashboard produces already gets this for
+    free (NOTEBOOK_API_JSON_LOGS, see _log_request_json in
+    generate_fastapi_code) -- added specifically because the only
+    per-request record such an app ever produced otherwise was uvicorn's
+    own free-text access line, with no request_id of its own and no
+    duration to grep `docker logs` for the exact X-Request-ID a caller
+    already got back in a response header. This dashboard's own
+    management API (POST /api/upload, /api/compile, /api/deploy, ...)
+    already stamps that identical X-Request-ID/X-Process-Time-Ms pair on
+    every response it sends (_add_request_id_header/
+    _add_process_time_header below) for the exact same correlation
+    reason, but had no equivalent way to actually log either one
+    anywhere -- an operator grepping this dashboard's own `docker logs`
+    for one specific X-Request-ID a caller already has had nothing to
+    find, the identical gap NOTEBOOK_API_JSON_LOGS already closed for
+    every *generated* app, just never itself closed for the dashboard
+    process producing those compiles in the first place.
+
+    Read fresh on every request (like dashboard_rate_limit_per_minute()
+    above) rather than cached at import time, so tests can toggle it via
+    monkeypatch without reloading this module. Same truthy-spelling
+    convention JSON_REQUEST_LOGS's own generated os.getenv(...).strip().
+    lower() check already uses ("true"/"1"/"yes"/"on", case-insensitive),
+    so an operator setting this dashboard's own env var doesn't have to
+    remember a different accepted spelling than the one already
+    documented for every compiled app it produces.
+    """
+    return os.getenv(
+        "NOTEBOOK_API_DASHBOARD_JSON_LOGS", "false"
+    ).strip().lower() in ("true", "1", "yes", "on")
 
 
 DASHBOARD_RATE_LIMIT_WINDOW_SECONDS = 60
@@ -467,6 +507,53 @@ async def _add_request_id_header(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.middleware("http")
+async def _log_dashboard_request_json(request: Request, call_next):
+    """When dashboard_json_logs_enabled() is set, print one
+    {"timestamp", "request_id", "method", "path", "status_code",
+    "duration_ms"} JSON line per request to stdout -- see that
+    function's own docstring above for the gap this closes.
+
+    Registered last -- outermost, wrapping every other middleware above
+    (see _add_request_id_header's own docstring for why "registered
+    last" means outermost) -- so this reads back the *final*
+    X-Request-ID/X-Process-Time-Ms headers _add_request_id_header/
+    _add_process_time_header already set on every response, the
+    identical "can never drift from what a caller correlating its own
+    logs against those exact same headers already sees" guarantee
+    _log_request_json already gives every generated app (see
+    api_generator.py), rather than this middleware re-deriving either
+    value itself.
+
+    print(..., flush=True) rather than the stdlib logging module -- this
+    dashboard configures no logging of its own anywhere else (uvicorn
+    configures its own independently), the identical choice
+    _log_request_json already makes and for the same reason: unbuffered
+    stdout is what `docker logs`/a log-aggregation pipeline actually
+    tails in real time.
+
+    Off by default, purely additive alongside uvicorn's own access log --
+    an existing deployment that hasn't opted in via
+    NOTEBOOK_API_DASHBOARD_JSON_LOGS sees byte-for-byte the same stdout
+    output as before this existed.
+    """
+
+    response = await call_next(request)
+
+    if dashboard_json_logs_enabled():
+
+        print(json.dumps({
+            "timestamp": time.time(),
+            "request_id": response.headers.get("X-Request-ID"),
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "duration_ms": float(response.headers.get("X-Process-Time-Ms", "0")),
+        }), flush=True)
+
     return response
 
 
