@@ -354,7 +354,7 @@ _CORE_COMMANDS = frozenset({
     "clear-deploy-history", "compile-history", "clear-compile-history",
     "remote-compile", "remote-inspect", "remote-build",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
-    "status", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
+    "status", "metrics", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
     "remote-curl", "app-preview", "readme-preview", "dockerfile-preview", "docker-compose-preview", "env-example-preview", "env-vars-preview",
     "postman-preview", "k8s-preview", "openapi-preview",
 })
@@ -1037,6 +1037,55 @@ def _dashboard_connection_error(exc, dashboard_url):
         f"Could not reach the dashboard at {dashboard_url}: {exc}. Is it "
         "running? (see `python -m backend.dashboard`)"
     )
+
+
+def _parse_prometheus_text_metrics(text):
+    """Parse GET /api/metrics/prometheus' own Prometheus text exposition
+    format (backend/routes/upload.py's dashboard_metrics_prometheus) into
+    a flat {metric_name: value} dict, for the `metrics` command's own
+    `--json` flag.
+
+    Every real line that endpoint ever emits is either a "# HELP ..."/"#
+    TYPE ..." comment line or a bare "metric_name value" data line (no
+    labels -- none of this dashboard's own metrics carry any) -- so this
+    only ever needs to skip the former and split the latter on its last
+    space, the same shape every metric line dashboard_metrics_prometheus
+    itself builds with an f-string ending in "{value}\\n".
+
+    Each value is parsed as a float (Prometheus' own exposition format
+    has no separate integer type -- every value, including a gauge like
+    "notebook_to_api_dashboard_notebooks_total", is written as plain
+    decimal text) and narrowed back to an int when it has no fractional
+    part, so a caller scripting off e.g. "notebooks_total" gets back the
+    same int GET /api/health's own JSON fields already use rather than a
+    surprising "3.0".  A line that doesn't parse as "name value" (there
+    are none today, but a future metric could in principle add labels)
+    is skipped rather than raising, so one unparseable line can't take
+    down this command's own `--json` output for every other metric on
+    the same scrape.
+    """
+    metrics = {}
+
+    for line in text.splitlines():
+
+        line = line.strip()
+
+        if not line or line.startswith("#"):
+            continue
+
+        name, _, raw_value = line.rpartition(" ")
+
+        if not name:
+            continue
+
+        try:
+            value = float(raw_value)
+        except ValueError:
+            continue
+
+        metrics[name] = int(value) if value.is_integer() else value
+
+    return metrics
 
 
 def _filename_from_content_disposition(response, default):
@@ -6441,6 +6490,32 @@ def _dispatch_core_command(args):
             )
             print(f"\nCompiling Python version: {config.get('compiling_python_version')}")
 
+    elif args.command == "metrics":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/metrics/prometheus", timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        if args.json_output:
+            print(json.dumps(_parse_prometheus_text_metrics(response.text), indent=2))
+        else:
+            print(response.text, end="" if response.text.endswith("\n") else "\n")
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -11467,6 +11542,28 @@ def main():
             "({\"health\": <GET /api/health response>, \"config\": <GET "
             "/api/config response>}) instead of a human-readable "
             "summary, for scripting/automation."
+        )
+    )
+
+    # metrics command
+    metrics_parser = subparsers.add_parser(
+        "metrics",
+        help=(
+            "Show a running dashboard instance's own scrape-shaped "
+            "operational metrics, via its GET /api/metrics/prometheus."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(metrics_parser)
+    metrics_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Parse GET /api/metrics/prometheus' own Prometheus text "
+            "exposition format into a flat {metric_name: value} JSON "
+            "object instead of printing the raw text, for scripting/"
+            "automation that wants one field at a time without its own "
+            "Prometheus text parser."
         )
     )
 

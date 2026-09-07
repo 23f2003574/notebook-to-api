@@ -19440,3 +19440,128 @@ def test_status_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
     )
 
     _assert_clean_cli_error(proc, "Is it running?")
+
+
+def test_metrics_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "metrics" in proc.stdout
+
+
+_SAMPLE_PROMETHEUS_METRICS_TEXT = (
+    "# HELP notebook_to_api_dashboard_notebooks_total Total number "
+    "of notebooks currently uploaded to this dashboard.\n"
+    "# TYPE notebook_to_api_dashboard_notebooks_total gauge\n"
+    "notebook_to_api_dashboard_notebooks_total 3\n"
+    "# HELP notebook_to_api_dashboard_compiled_app_present Whether "
+    "this dashboard currently has a compiled app ready to serve.\n"
+    "# TYPE notebook_to_api_dashboard_compiled_app_present gauge\n"
+    "notebook_to_api_dashboard_compiled_app_present 1\n"
+    "# HELP notebook_to_api_dashboard_compile_history_total Total "
+    "number of compile history entries this dashboard has recorded.\n"
+    "# TYPE notebook_to_api_dashboard_compile_history_total gauge\n"
+    "notebook_to_api_dashboard_compile_history_total 5\n"
+    "# HELP notebook_to_api_dashboard_deploy_history_total Total "
+    "number of deploy history entries this dashboard has recorded.\n"
+    "# TYPE notebook_to_api_dashboard_deploy_history_total gauge\n"
+    "notebook_to_api_dashboard_deploy_history_total 2\n"
+    "# HELP notebook_to_api_dashboard_uptime_seconds Seconds since "
+    "this dashboard process started.\n"
+    "# TYPE notebook_to_api_dashboard_uptime_seconds counter\n"
+    "notebook_to_api_dashboard_uptime_seconds 123.456\n"
+)
+
+
+def test_metrics_command_prints_the_raw_prometheus_text(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _SAMPLE_PROMETHEUS_METRICS_TEXT.encode("utf-8"),
+            content_type="text/plain; version=0.0.4; charset=utf-8",
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["metrics", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout == _SAMPLE_PROMETHEUS_METRICS_TEXT
+    assert handler.requests == ["/api/metrics/prometheus"]
+
+
+def test_metrics_command_json_flag_parses_the_prometheus_text_into_a_flat_dict(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _SAMPLE_PROMETHEUS_METRICS_TEXT.encode("utf-8"),
+            content_type="text/plain; version=0.0.4; charset=utf-8",
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["metrics", "--dashboard-url", dashboard_url, "--json"], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data == {
+        "notebook_to_api_dashboard_notebooks_total": 3,
+        "notebook_to_api_dashboard_compiled_app_present": 1,
+        "notebook_to_api_dashboard_compile_history_total": 5,
+        "notebook_to_api_dashboard_deploy_history_total": 2,
+        "notebook_to_api_dashboard_uptime_seconds": 123.456,
+    }
+    # Every gauge with no fractional part comes back as a real int, not
+    # "3.0" -- the same int type GET /api/health's own JSON fields use.
+    assert isinstance(data["notebook_to_api_dashboard_notebooks_total"], int)
+    assert isinstance(data["notebook_to_api_dashboard_uptime_seconds"], float)
+
+
+def test_metrics_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "metrics",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
+def test_metrics_command_reports_a_dashboard_error_response(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(500, {"detail": "something went wrong"}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["metrics", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "something went wrong")
