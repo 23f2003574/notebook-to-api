@@ -356,7 +356,7 @@ _CORE_COMMANDS = frozenset({
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
     "status", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
     "remote-curl", "app-preview", "readme-preview", "dockerfile-preview", "docker-compose-preview", "env-example-preview", "env-vars-preview",
-    "postman-preview", "k8s-preview",
+    "postman-preview", "k8s-preview", "openapi-preview",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -4352,6 +4352,55 @@ def _dispatch_core_command(args):
                 f"(package '{data.get('package_name')}'):\n"
             )
             print(data.get("readme", ""))
+
+    elif args.command == "openapi-preview":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        only = _parse_comma_separated_names(args.only)
+        exclude = _parse_comma_separated_names(args.exclude)
+
+        openapi_preview_body = {
+            "notebook_path": args.filename,
+            "only": only,
+            "exclude": exclude,
+        }
+        if args.version_id:
+            openapi_preview_body["version_id"] = args.version_id
+
+        try:
+            response = httpx.post(
+                f"{dashboard_url}/api/openapi-preview",
+                json=openapi_preview_body,
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            target = (
+                f"'{args.filename}' version '{args.version_id}'" if args.version_id
+                else f"'{args.filename}'"
+            )
+            print(
+                f"OpenAPI schema preview for {target} on {dashboard_url} "
+                f"(package '{data.get('package_name')}'):\n"
+            )
+            print(json.dumps(data.get("schema", {}), indent=2))
 
     elif args.command == "curl-preview":
         # See `upload` above for why this is imported here rather than at
@@ -9570,6 +9619,40 @@ def main():
             "\"environment_variables\": [{\"name\", \"default\", "
             "\"description\"}, ...]}) instead of a human-readable "
             "preview, for scripting/automation."
+        )
+    )
+
+    # openapi-preview command (preview the computed OpenAPI schema for a
+    # notebook already uploaded to a running dashboard, via its own POST
+    # /api/openapi-preview -- the one preview family member (Commit #4,
+    # 5869449) that never got a CLI mirror when it was added, unlike
+    # every other one of its siblings above; mirrors app-preview/
+    # readme-preview's own CLI wiring exactly, just for the computed
+    # schema dict instead of source text)
+    openapi_preview_parser = subparsers.add_parser(
+        "openapi-preview",
+        help=(
+            "Preview the exact OpenAPI schema a compile of an "
+            "already-uploaded notebook would produce, via its POST "
+            "/api/openapi-preview -- without actually compiling it."
+        )
+    )
+    openapi_preview_parser.add_argument(
+        "filename",
+        help="Filename of the notebook already uploaded to the dashboard, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(openapi_preview_parser)
+    _add_function_selection_arguments(openapi_preview_parser)
+    _add_version_id_argument(openapi_preview_parser, "POST /api/openapi-preview")
+    openapi_preview_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"notebook\", \"version_id\", \"package_name\", "
+            "\"schema\"}) instead of a human-readable preview, for "
+            "scripting/automation."
         )
     )
 
