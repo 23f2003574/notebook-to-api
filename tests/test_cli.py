@@ -20572,6 +20572,179 @@ def _host_and_port(url):
     return parsed.hostname, parsed.port
 
 
+def test_app_status_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "app-status" in proc.stdout
+
+
+def test_app_status_command_prints_health_ready_info_and_config(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"status": "healthy"}),
+        _json_response(200, {"status": "ready", "tasks_registered": 3}),
+        _json_response(200, {
+            "service": "Notebook-to-API Generated Service",
+            "version": "0.1.0",
+            "status": "running",
+            "endpoints": ["/add", "/process_data"],
+            "endpoint_count": 2,
+            "background_endpoint_count": 1,
+            "source_notebook_sha256": "abc123",
+            "authentication": {"enabled": True, "type": "api_key"},
+        }),
+        _json_response(200, {
+            "max_request_body_bytes": 10485760,
+            "task_ttl_seconds": 3600,
+            "max_pending_tasks": 10000,
+            "task_execution_timeout_seconds": None,
+            "webhook_timeout_seconds": 5,
+            "webhook_signing_enabled": True,
+            "webhook_max_retries": 3,
+            "webhook_retry_backoff_seconds": 0.5,
+            "rate_limit_per_minute": 60,
+            "allowed_origins": ["*"],
+            "disable_docs": False,
+            "public_url": None,
+            "json_logs_enabled": False,
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-status", "--host", host, "--port", str(port)], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"Compiled app at http://{host}:{port}: healthy" in proc.stdout
+    assert "ready: ready (3 task(s) registered)" in proc.stdout
+    assert "service: Notebook-to-API Generated Service v0.1.0" in proc.stdout
+    assert "endpoints: 2 (1 background)" in proc.stdout
+    assert "source notebook sha256: abc123" in proc.stdout
+    assert "max request body: 10485760 bytes" in proc.stdout
+    assert "webhook signing: enabled" in proc.stdout
+    assert "rate limit: 60 requests/minute per key" in proc.stdout
+    assert "allowed origins: *" in proc.stdout
+    assert "docs: enabled" in proc.stdout
+    assert handler.requests == ["/health", "/ready", "/info", "/config"]
+
+
+def test_app_status_command_reports_disabled_limits_plainly(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"status": "healthy"}),
+        _json_response(200, {"status": "ready", "tasks_registered": 0}),
+        _json_response(200, {
+            "service": "s", "version": "0.1.0", "endpoint_count": 0,
+            "background_endpoint_count": 0, "source_notebook_sha256": None,
+        }),
+        _json_response(200, {
+            "max_request_body_bytes": 10485760,
+            "task_ttl_seconds": 3600,
+            "max_pending_tasks": 10000,
+            "task_execution_timeout_seconds": None,
+            "webhook_timeout_seconds": 5,
+            "webhook_signing_enabled": False,
+            "webhook_max_retries": 0,
+            "rate_limit_per_minute": None,
+            "allowed_origins": ["*"],
+            "disable_docs": True,
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-status", "--host", host, "--port", str(port)], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "task execution timeout: disabled" in proc.stdout
+    assert "webhook signing: disabled" in proc.stdout
+    assert "rate limit: disabled" in proc.stdout
+    assert "docs: disabled" in proc.stdout
+    # No source_notebook_sha256 -- must not print a bare "None".
+    assert "source notebook sha256" not in proc.stdout
+
+
+def test_app_status_command_json_flag_emits_the_combined_raw_response(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    health = {"status": "healthy"}
+    ready = {"status": "ready", "tasks_registered": 0}
+    info = {"service": "s", "version": "0.1.0"}
+    config = {"max_request_body_bytes": 1}
+    handler.responses = [
+        _json_response(200, health),
+        _json_response(200, ready),
+        _json_response(200, info),
+        _json_response(200, config),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-status", "--host", host, "--port", str(port), "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == {
+        "health": health, "ready": ready, "info": info, "config": config,
+    }
+
+
+def test_app_status_command_reports_a_clean_error_when_the_app_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-status",
+            "--host", "127.0.0.1", "--port", "1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
+def test_app_status_command_reports_an_app_error_response(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(500, {"detail": "something went wrong"}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-status", "--host", host, "--port", str(port)], cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "something went wrong")
+
+
 def test_app_metrics_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

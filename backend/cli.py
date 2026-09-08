@@ -358,7 +358,7 @@ _CORE_COMMANDS = frozenset({
     "status", "metrics", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
     "remote-curl", "app-preview", "readme-preview", "dockerfile-preview", "docker-compose-preview", "env-example-preview", "env-vars-preview",
     "postman-preview", "k8s-preview", "openapi-preview", "verify-webhook",
-    "app-metrics", "app-call", "app-tasks",
+    "app-metrics", "app-call", "app-tasks", "app-status",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -6780,6 +6780,81 @@ def _dispatch_core_command(args):
             print(json.dumps(_parse_prometheus_text_metrics(response.text), indent=2))
         else:
             print(response.text, end="" if response.text.endswith("\n") else "\n")
+    elif args.command == "app-status":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        app_url = f"http://{args.host}:{args.port}"
+
+        def _app_get(path):
+            try:
+                response = httpx.get(f"{app_url}{path}", timeout=args.timeout)
+            except httpx.HTTPError as exc:
+                raise RuntimeError(
+                    f"Could not reach the compiled app at {app_url}: "
+                    f"{exc}. Is it running? (see `serve`, or `docker "
+                    "compose up`)"
+                )
+
+            if response.status_code >= 400:
+                raise RuntimeError(
+                    f"App rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            return response.json()
+
+        health = _app_get("/health")
+        ready = _app_get("/ready")
+        info = _app_get("/info")
+        config = _app_get("/config")
+
+        if args.json_output:
+            print(json.dumps(
+                {"health": health, "ready": ready, "info": info, "config": config},
+                indent=2,
+            ))
+        else:
+
+            print(f"Compiled app at {app_url}: {health.get('status')}")
+            print(
+                f"  ready: {ready.get('status')} "
+                f"({ready.get('tasks_registered')} task(s) registered)"
+            )
+            print(
+                f"  service: {info.get('service')} v{info.get('version')}"
+            )
+            print(
+                f"  endpoints: {info.get('endpoint_count')} "
+                f"({info.get('background_endpoint_count')} background)"
+            )
+            sha256 = info.get("source_notebook_sha256")
+            if sha256:
+                print(f"  source notebook sha256: {sha256}")
+
+            print("\nConfigured limits:")
+            print(f"  max request body: {config.get('max_request_body_bytes')} bytes")
+            print(f"  task TTL: {config.get('task_ttl_seconds')}s")
+            print(f"  max pending tasks: {config.get('max_pending_tasks')}")
+            task_timeout = config.get('task_execution_timeout_seconds')
+            print(f"  task execution timeout: {f'{task_timeout}s' if task_timeout else 'disabled'}")
+            print(f"  webhook timeout: {config.get('webhook_timeout_seconds')}s")
+            print(
+                "  webhook signing: "
+                f"{'enabled' if config.get('webhook_signing_enabled') else 'disabled'}"
+            )
+            print(f"  webhook max retries: {config.get('webhook_max_retries')}")
+            rate_limit = config.get('rate_limit_per_minute')
+            print(
+                "  rate limit: "
+                f"{f'{rate_limit} requests/minute per key' if rate_limit else 'disabled'}"
+            )
+            print(f"  allowed origins: {', '.join(config.get('allowed_origins', []))}")
+            print(
+                "  docs: "
+                f"{'disabled' if config.get('disable_docs') else 'enabled'}"
+            )
     elif args.command == "app-metrics":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -12306,6 +12381,69 @@ def main():
             "object instead of printing the raw text, for scripting/"
             "automation that wants one field at a time without its own "
             "Prometheus text parser."
+        )
+    )
+
+    # app-status command -- the direct-app-talk counterpart to `status`
+    # above, the same way app-metrics below is `metrics`'s: `status`
+    # already answers "is this dashboard healthy, and what's it
+    # configured with" in one call, but nothing gave the identical answer
+    # for the actual product this dashboard exists to produce -- a
+    # deployed compiled app. An operator who just ran `serve`/`docker
+    # compose up`/a real deploy, wanting to confirm it actually started
+    # healthy and see what it's configured with (rate limits, webhook
+    # signing, allowed origins, ...) before scripting calls against it,
+    # had to hit GET /health/GET /ready/GET /info/GET /config by hand,
+    # one curl per endpoint, and piece the picture together themselves.
+    # No --api-key: GET /health/GET /ready/GET /info/GET /config are all
+    # deliberately unauthenticated (see RESERVED_INFRASTRUCTURE_NAMES'
+    # own health_check/readiness_check/service_info/service_config
+    # entries, api_generator.py) so a load balancer/readiness probe can
+    # reach them with no credential of its own -- the identical reasoning
+    # app-metrics' own missing --api-key already documents for
+    # GET /metrics/prometheus.
+    app_status_parser = subparsers.add_parser(
+        "app-status",
+        help=(
+            "Show a compiled app's own health, readiness, and configured "
+            "limits, via its GET /health, GET /ready, GET /info, and GET "
+            "/config. Distinct from `status` above, which shows this "
+            "dashboard's own health/config instead."
+        )
+    )
+    app_status_parser.add_argument(
+        "--host",
+        default="localhost",
+        help=(
+            "Host the compiled app is actually reachable at (default: "
+            "localhost) -- the same convention `app-metrics`/`app-call` "
+            "already use."
+        )
+    )
+    app_status_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port the compiled app is actually reachable at (default: 8000, matching `serve`'s own default)."
+    )
+    app_status_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=10.0,
+        help="Seconds to wait for the app to respond before giving up (default: 10)."
+    )
+    app_status_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit a combined machine-readable JSON result ({\"health\": "
+            "<GET /health response>, \"ready\": <GET /ready response>, "
+            "\"info\": <GET /info response>, \"config\": <GET /config "
+            "response>}) instead of a human-readable summary, for "
+            "scripting/automation -- the same combined shape `status "
+            "--json` already returns for this dashboard's own health/"
+            "config."
         )
     )
 
