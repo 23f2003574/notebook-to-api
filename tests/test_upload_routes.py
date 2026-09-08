@@ -25406,6 +25406,256 @@ def test_set_notebook_version_note_returns_404_for_an_unknown_version_id():
     assert resp.status_code == 404
 
 
+def _upload_and_create_two_versions(filename):
+    """Upload `filename`, then overwrite it twice so it has exactly two
+    snapshotted versions, newest first. Returns (newest_id, oldest_id).
+    """
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(versions) == 2
+    return versions[0]["version_id"], versions[1]["version_id"]
+
+
+def test_set_notebook_version_notes_batch_sets_each_versions_own_note(tmp_path):
+
+    filename = "version_note_batch_basic.ipynb"
+    newest_id, oldest_id = _upload_and_create_two_versions(filename)
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/note-batch",
+        json={
+            "entries": [
+                {"version_id": newest_id, "note": "known-good"},
+                {"version_id": oldest_id, "note": "before the refactor"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["dry_run"] is False
+    assert body["succeeded_count"] == 2
+    assert body["failed_count"] == 0
+    assert body["results"] == [
+        {"version_id": newest_id, "status": "success", "note": "known-good"},
+        {"version_id": oldest_id, "status": "success", "note": "before the refactor"},
+    ]
+
+    assert client.get(
+        f"/api/notebooks/{filename}/versions/{newest_id}/note"
+    ).json()["note"] == "known-good"
+    assert client.get(
+        f"/api/notebooks/{filename}/versions/{oldest_id}/note"
+    ).json()["note"] == "before the refactor"
+
+
+def test_set_notebook_version_notes_batch_one_bad_entry_does_not_abort_the_batch():
+
+    filename = "version_note_batch_partial_failure.ipynb"
+    newest_id, _oldest_id = _upload_and_create_two_versions(filename)
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/note-batch",
+        json={
+            "entries": [
+                {"version_id": newest_id, "note": "known-good"},
+                {"version_id": "does-not-exist.ipynb", "note": "oops"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+    assert body["results"][0] == {
+        "version_id": newest_id, "status": "success", "note": "known-good",
+    }
+    assert body["results"][1]["status"] == "error"
+    assert body["results"][1]["detail"] == "Notebook version not found"
+
+    # The successful entry must still have actually been written, even
+    # though the batch as a whole contained a failing entry.
+    assert client.get(
+        f"/api/notebooks/{filename}/versions/{newest_id}/note"
+    ).json()["note"] == "known-good"
+
+
+def test_set_notebook_version_notes_batch_one_bad_note_does_not_abort_the_batch():
+
+    from backend.routes.upload import _MAX_VERSION_NOTE_LENGTH
+
+    filename = "version_note_batch_bad_note.ipynb"
+    newest_id, oldest_id = _upload_and_create_two_versions(filename)
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/note-batch",
+        json={
+            "entries": [
+                {"version_id": newest_id, "note": "x" * (_MAX_VERSION_NOTE_LENGTH + 1)},
+                {"version_id": oldest_id, "note": "fine"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+    assert body["results"][0]["status"] == "error"
+    assert body["results"][1] == {
+        "version_id": oldest_id, "status": "success", "note": "fine",
+    }
+
+
+def test_set_notebook_version_notes_batch_dry_run_writes_nothing():
+
+    filename = "version_note_batch_dry_run.ipynb"
+    newest_id, oldest_id = _upload_and_create_two_versions(filename)
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/note-batch",
+        json={
+            "entries": [
+                {"version_id": newest_id, "note": "known-good"},
+                {"version_id": oldest_id, "note": "before the refactor"},
+            ],
+            "dry_run": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["succeeded_count"] == 2
+    assert body["results"][0]["note"] == "known-good"
+
+    assert client.get(
+        f"/api/notebooks/{filename}/versions/{newest_id}/note"
+    ).json()["note"] == ""
+    assert client.get(
+        f"/api/notebooks/{filename}/versions/{oldest_id}/note"
+    ).json()["note"] == ""
+
+
+def test_set_notebook_version_notes_batch_empty_note_clears_it():
+
+    filename = "version_note_batch_clear.ipynb"
+    newest_id, _oldest_id = _upload_and_create_two_versions(filename)
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{newest_id}/note",
+        json={"note": "temporary"},
+    )
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/note-batch",
+        json={"entries": [{"version_id": newest_id, "note": ""}]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["results"][0]["note"] == ""
+    assert client.get(
+        f"/api/notebooks/{filename}/versions/{newest_id}/note"
+    ).json()["note"] == ""
+
+
+def test_set_notebook_version_notes_batch_returns_404_for_an_unknown_notebook():
+
+    resp = client.post(
+        "/api/notebooks/version_note_batch_no_notebook.ipynb/versions/note-batch",
+        json={"entries": [{"version_id": "x", "note": "hello"}]},
+    )
+    assert resp.status_code == 404
+
+
+def test_set_notebook_version_notes_batch_rejects_a_missing_entries_field():
+
+    filename = "version_note_batch_missing_entries.ipynb"
+    _upload_and_create_one_version(filename)
+
+    resp = client.post(f"/api/notebooks/{filename}/versions/note-batch", json={})
+    assert resp.status_code == 400
+
+
+def test_set_notebook_version_notes_batch_rejects_an_empty_entries_list():
+
+    filename = "version_note_batch_empty_entries.ipynb"
+    _upload_and_create_one_version(filename)
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/note-batch", json={"entries": []}
+    )
+    assert resp.status_code == 400
+
+
+def test_set_notebook_version_notes_batch_rejects_an_entry_missing_version_id():
+
+    filename = "version_note_batch_missing_version_id.ipynb"
+    _upload_and_create_one_version(filename)
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/note-batch",
+        json={"entries": [{"note": "hello"}]},
+    )
+    assert resp.status_code == 400
+
+
+def test_set_notebook_version_notes_batch_rejects_more_than_the_configured_maximum(
+    monkeypatch,
+):
+
+    import backend.routes.upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 1)
+
+    filename = "version_note_batch_too_many.ipynb"
+    newest_id, oldest_id = _upload_and_create_two_versions(filename)
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/note-batch",
+        json={
+            "entries": [
+                {"version_id": newest_id, "note": "a"},
+                {"version_id": oldest_id, "note": "b"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 400
+
+
 def test_list_notebook_versions_notes_reports_each_versions_own_note():
 
     filename = "version_note_list.ipynb"

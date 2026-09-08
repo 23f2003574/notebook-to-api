@@ -13503,6 +13503,156 @@ def test_versions_list_command_checksums_flag_sends_the_query_param_and_prints_s
     ]
 
 
+def test_versions_list_command_notes_flag_sends_the_query_param_and_prints_the_note(
+    tmp_path, fake_dashboard
+):
+    """GET /api/notebooks/{filename}/versions's own "notes" query param
+    (and matching per-entry "note" field) has existed since version notes
+    themselves did -- `versions note-get`/`versions note-set` already let
+    a caller read/write a single known version_id's own note, but
+    `versions list` (which already shows every version's own version_id/
+    size_bytes/saved_at in one call) had no way to also show each one's
+    note in that same listing, forcing an N+1 `versions note-get` per
+    entry just to see which snapshot was labeled what.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "versions": [
+                {
+                    "version_id": "20260101T000000Z-abcdef.ipynb",
+                    "size_bytes": 512,
+                    "saved_at": "2026-01-01T00:00:00+00:00",
+                    "note": "known-good, keep this one",
+                },
+            ],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "list", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--notes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "note: known-good, keep this one" in proc.stdout
+    assert handler.requests == [
+        "/api/notebooks/nb.ipynb/versions?offset=0&notes=true"
+    ]
+
+
+def test_versions_list_command_notes_flag_shows_a_placeholder_for_an_unset_note(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "versions": [
+                {
+                    "version_id": "20260101T000000Z-abcdef.ipynb",
+                    "size_bytes": 512,
+                    "saved_at": "2026-01-01T00:00:00+00:00",
+                    "note": "",
+                },
+            ],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "list", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--notes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "(no note)" in proc.stdout
+
+
+def test_versions_list_command_omits_note_suffix_by_default(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "versions": [
+                {
+                    "version_id": "20260101T000000Z-abcdef.ipynb",
+                    "size_bytes": 512,
+                    "saved_at": "2026-01-01T00:00:00+00:00",
+                },
+            ],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["versions", "list", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "note" not in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions?offset=0"]
+
+
+def test_versions_list_command_combines_checksums_and_notes(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "versions": [
+                {
+                    "version_id": "20260101T000000Z-abcdef.ipynb",
+                    "size_bytes": 512,
+                    "saved_at": "2026-01-01T00:00:00+00:00",
+                    "sha256": "abc123",
+                    "note": "before the refactor",
+                },
+            ],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "list", "nb.ipynb", "--dashboard-url", dashboard_url,
+            "--checksums", "--notes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "sha256:abc123" in proc.stdout
+    assert "note: before the refactor" in proc.stdout
+    assert handler.requests == [
+        "/api/notebooks/nb.ipynb/versions?offset=0&checksums=true&notes=true"
+    ]
+
+
 def test_versions_list_command_reports_no_saved_versions(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
@@ -14062,6 +14212,245 @@ def test_versions_note_set_command_reports_a_clean_error_for_a_missing_version(
     )
 
     _assert_clean_cli_error(proc, "Notebook version not found")
+
+
+def test_versions_note_batch_command_is_registered():
+
+    proc = _run_cli(["versions", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "note-batch" in proc.stdout
+
+
+def test_versions_note_batch_command_sends_one_entry_per_version(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": False,
+            "filename": "nb.ipynb",
+            "results": [
+                {"version_id": "v1.ipynb", "status": "success", "note": "known-good"},
+                {"version_id": "v2.ipynb", "status": "success", "note": ""},
+            ],
+            "succeeded_count": 2,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "note-batch", "nb.ipynb",
+            "--entry", "v1.ipynb=known-good",
+            "--entry", "v2.ipynb=",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nb.ipynb version 'v1.ipynb' note set to: known-good" in proc.stdout
+    assert "nb.ipynb version 'v2.ipynb' note set to: (cleared)" in proc.stdout
+    assert "2 succeeded, 0 failed" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions/note-batch"]
+    assert json.loads(handler.bodies[0]) == {
+        "entries": [
+            {"version_id": "v1.ipynb", "note": "known-good"},
+            {"version_id": "v2.ipynb", "note": ""},
+        ],
+    }
+
+
+def test_versions_note_batch_command_note_may_contain_an_equals_sign(
+    tmp_path, fake_dashboard
+):
+    """Only the first '=' splits VERSION_ID from NOTE -- a note itself
+    (freeform text) must be able to safely contain further '=' characters
+    without truncating or otherwise mangling it.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": False, "filename": "nb.ipynb",
+            "results": [
+                {"version_id": "v1.ipynb", "status": "success", "note": "x=y=z"},
+            ],
+            "succeeded_count": 1, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "note-batch", "nb.ipynb",
+            "--entry", "v1.ipynb=x=y=z",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "entries": [{"version_id": "v1.ipynb", "note": "x=y=z"}],
+    }
+
+
+def test_versions_note_batch_command_dry_run_sends_dry_run_field(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": True,
+            "filename": "nb.ipynb",
+            "results": [
+                {"version_id": "v1.ipynb", "status": "success", "note": "known-good"},
+            ],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "note-batch", "nb.ipynb",
+            "--entry", "v1.ipynb=known-good",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nb.ipynb version 'v1.ipynb' note would be set to: known-good" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "entries": [{"version_id": "v1.ipynb", "note": "known-good"}],
+        "dry_run": True,
+    }
+
+
+def test_versions_note_batch_command_reports_a_partial_failure(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": False,
+            "filename": "nb.ipynb",
+            "results": [
+                {"version_id": "v1.ipynb", "status": "success", "note": "ok"},
+                {
+                    "version_id": "does-not-exist.ipynb", "status": "error",
+                    "detail": "Notebook version not found",
+                },
+            ],
+            "succeeded_count": 1,
+            "failed_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "note-batch", "nb.ipynb",
+            "--entry", "v1.ipynb=ok",
+            "--entry", "does-not-exist.ipynb=ok",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nb.ipynb version 'v1.ipynb' note set to: ok" in proc.stdout
+    assert (
+        "Failed to set note for version 'does-not-exist.ipynb': "
+        "Notebook version not found" in proc.stdout
+    )
+    assert "1 succeeded, 1 failed" in proc.stdout
+
+
+def test_versions_note_batch_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "dry_run": False,
+        "filename": "nb.ipynb",
+        "results": [{"version_id": "v1.ipynb", "status": "success", "note": "ok"}],
+        "succeeded_count": 1,
+        "failed_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "note-batch", "nb.ipynb", "--entry", "v1.ipynb=ok",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_versions_note_batch_command_reports_a_clean_error_for_a_malformed_entry(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "note-batch", "nb.ipynb",
+            "--entry", "no-equals-sign-here",
+            "--dashboard-url", "http://127.0.0.1:1",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Invalid --entry")
+
+
+def test_versions_note_batch_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "note-batch", "nb.ipynb", "--entry", "v1.ipynb=ok",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
 
 
 def test_versions_inspect_command_is_registered():

@@ -286,8 +286,10 @@ def _validate_batch_entry_count(items, noun="entries"):
     POST /api/notebooks/{filename}/copy-batch, POST
     /api/notebooks/copy-batch, POST /api/notebooks/rename-batch, POST
     /api/notebooks/tags-batch, POST /api/notebooks/description-batch,
-    POST /api/notebooks/{filename}/versions/delete-batch, and POST
-    /api/notebooks/versions/restore-batch) had no equivalent cap at all:
+    POST /api/notebooks/{filename}/versions/delete-batch, POST
+    /api/notebooks/versions/restore-batch, and POST
+    /api/notebooks/{filename}/versions/note-batch) had no equivalent cap
+    at all:
     a single request naming an arbitrarily large "filenames"/"entries"/
     "version_ids" list could hold a per-destination lock (see
     _rename_lock_for/_version_lock_for) or perform a per-entry filesystem
@@ -9307,6 +9309,152 @@ def set_notebook_version_note(filename: str, version_id: str, data: dict):
         "filename": filename,
         "version_id": version_id,
         "note": note,
+    }
+
+
+@router.post("/notebooks/{filename}/versions/note-batch")
+def set_notebook_version_notes_batch(filename: str, data: dict):
+    """Set (or clear) the note attached to a caller-chosen set of one
+    notebook's own snapshotted versions in one call, each version getting
+    its own explicit note.
+
+    PUT /api/notebooks/{filename}/versions/{version_id}/note already sets
+    one version's own note at a time -- but re-annotating several
+    snapshots in one pass (e.g. reviewing a `versions list` and labeling
+    "known-good, keep this one" on three of them, or restoring a
+    previously exported filename/version_id->note mapping) meant one PUT
+    call per version_id, no way to submit the whole mapping in a single
+    request. The identical "several specific ones, each with its own
+    value" middle ground POST /api/notebooks/tags-batch already provides
+    for a notebook's own tags, applied here one level down to a single
+    notebook's own versions instead.
+
+    Takes "entries", a list of {"version_id", "note"} objects rather than
+    a single shared "note" -- the same reasoning POST
+    /api/notebooks/tags-batch's own docstring already gives for its
+    identical "entries" shape: each entry here carries its own
+    independent value a single shared one can't express.
+
+    "entries" itself (a non-empty list, each element an object with a
+    string "version_id") is validated once, up front, as a 400 covering
+    the whole request -- a malformed *shape* is this request's own fault,
+    not any one entry's. Each entry's own "note", though, is validated
+    independently via _validate_and_normalize_version_note (the exact
+    same rules PUT .../note already enforces) as part of that entry's own
+    per-entry result, since a bad "note" value belongs to exactly the one
+    entry that supplied it, not the batch as a whole. Reuses the
+    identical per-entry "one bad entry doesn't abort the batch" contract
+    POST /api/notebooks/tags-batch/POST
+    /api/notebooks/{filename}/versions/delete-batch already established:
+    "results" reports one {"version_id", "status", ...} entry per input
+    entry -- "success" (with that version's resulting note) or "error"
+    (a 404 for an unknown version_id, or the same 400 a bad "note" value
+    alone would raise through PUT .../note directly).
+
+    "dry_run" (optional, default false) reports the exact same per-entry
+    "results" a real batch would -- each entry's own validated,
+    normalized "note" on success, or the identical "error" a real write
+    would raise -- without changing a single version's own note, the same
+    preview POST /api/notebooks/tags-batch's own "dry_run" already
+    provides for a batch that, like this one, silently discards an
+    existing value (each entry's own previous note, unconditionally) if a
+    caller gets an entry wrong.
+
+    Held under the same _version_lock_for PUT .../note itself has no
+    equivalent need for (a single entry's own read-modify-write of the
+    shared per-notebook sidecar file is self-contained) but this batch
+    does: several entries in the same request each read-modify-write that
+    identical sidecar file via _write_version_note, so without a lock
+    held across the whole batch, one entry's write could race another's
+    and silently clobber it -- held for the batch's own full duration,
+    the same "whole batch, not reacquired per entry" scope
+    delete_notebook_versions_batch's own identical lock already uses.
+    """
+
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Notebook file not found"
+        )
+
+    entries = data.get("entries")
+
+    if not isinstance(entries, list) or not entries:
+
+        raise HTTPException(
+            status_code=400,
+            detail="entries must be a non-empty list of objects"
+        )
+
+    _validate_batch_entry_count(entries)
+
+    for entry in entries:
+
+        if not isinstance(entry, dict) or not isinstance(entry.get("version_id"), str):
+
+            raise HTTPException(
+                status_code=400,
+                detail="each entry must be an object with a string 'version_id'"
+            )
+
+    dry_run = bool(data.get("dry_run", False))
+
+    versions_dir = _notebook_versions_dir(file_path.name)
+
+    results = []
+    succeeded_count = 0
+    failed_count = 0
+
+    with _version_lock_for(file_path.name):
+
+        for entry in entries:
+
+            version_id = entry["version_id"]
+
+            try:
+
+                version_path = _resolve_path_within(
+                    str(versions_dir), version_id, "notebook version"
+                )
+
+                if not version_path.is_file():
+
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Notebook version not found"
+                    )
+
+                note = _validate_and_normalize_version_note(entry.get("note"))
+
+                if not dry_run:
+                    _write_version_note(file_path.name, version_id, note)
+
+                results.append({
+                    "version_id": version_id,
+                    "status": "success",
+                    "note": note,
+                })
+                succeeded_count += 1
+
+            except HTTPException as exc:
+
+                results.append({
+                    "version_id": version_id,
+                    "status": "error",
+                    "detail": exc.detail,
+                })
+                failed_count += 1
+
+    return {
+        "status": "success",
+        "dry_run": dry_run,
+        "filename": filename,
+        "results": results,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
     }
 
 

@@ -4876,6 +4876,8 @@ def _dispatch_core_command(args):
                 params["saved_before"] = args.saved_before
             if args.checksums:
                 params["checksums"] = "true"
+            if args.notes:
+                params["notes"] = "true"
 
             try:
                 response = httpx.get(
@@ -4915,10 +4917,19 @@ def _dispatch_core_command(args):
                         checksum_note = (
                             f"  sha256:{version['sha256']}" if args.checksums else ""
                         )
+                        # Matches `versions note-get`'s own "(no note)"
+                        # placeholder for a version that's never had one
+                        # set -- rather than printing a bare, easy-to-miss
+                        # empty string after the version's own summary.
+                        note_suffix = (
+                            f"  note: {version.get('note') or '(no note)'}"
+                            if args.notes else ""
+                        )
                         print(
                             f"{version['version_id']}  "
                             f"({version['size_bytes']} bytes, "
                             f"saved {version['saved_at']}){checksum_note}"
+                            f"{note_suffix}"
                         )
 
                     total_count = data.get("total_count")
@@ -5033,6 +5044,70 @@ def _dispatch_core_command(args):
                 print(
                     f"{args.filename} version '{args.version_id}' note set "
                     f"to: {note if note else '(cleared)'}"
+                )
+
+        elif args.versions_command == "note-batch":
+
+            entries = []
+
+            for raw_entry in args.entry:
+
+                if "=" not in raw_entry:
+                    raise RuntimeError(
+                        f"Invalid --entry '{raw_entry}' -- expected "
+                        "VERSION_ID=NOTE (an empty right-hand side clears "
+                        "that version's note)."
+                    )
+
+                version_id, _, note = raw_entry.partition("=")
+
+                entries.append({"version_id": version_id, "note": note})
+
+            body = {"entries": entries}
+            if args.dry_run:
+                body["dry_run"] = True
+
+            try:
+                response = httpx.post(
+                    f"{dashboard_url}/api/notebooks/{args.filename}/versions/note-batch",
+                    json=body,
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                verb = "would be set to" if data.get("dry_run") else "set to"
+
+                for result in data.get("results", []):
+
+                    if result["status"] == "success":
+                        note = result.get("note", "")
+                        print(
+                            f"{args.filename} version '{result['version_id']}' "
+                            f"note {verb}: {note if note else '(cleared)'}"
+                        )
+                    else:
+                        print(
+                            f"Failed to set note for version "
+                            f"'{result['version_id']}': {result['detail']}"
+                        )
+
+                print(
+                    f"\n{data.get('succeeded_count', 0)} succeeded, "
+                    f"{data.get('failed_count', 0)} failed"
                 )
 
         elif args.versions_command == "inspect":
@@ -9990,6 +10065,20 @@ def main():
         )
     )
     versions_list_parser.add_argument(
+        "--notes",
+        action="store_true",
+        help=(
+            "Also request each version's own note, via GET "
+            "/api/notebooks/{filename}/versions's own \"notes\" query "
+            "param -- the same per-entry note `versions note-get` already "
+            "prints for a single known version_id, just for every version "
+            "in this one already-paginated listing at once, without an "
+            "N+1 `versions note-get` per entry. Adds a matching \"note\" "
+            "column under --format csv; a plain `versions list` (without "
+            "--notes) keeps its previous column set unchanged."
+        )
+    )
+    versions_list_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -10112,6 +10201,62 @@ def main():
             "Emit the dashboard's own JSON response "
             "({\"status\", \"filename\", \"version_id\", \"note\"}) "
             "instead of a human-readable summary, for scripting/automation."
+        )
+    )
+
+    # versions note-batch (set/clear the note attached to several of one
+    # notebook's own snapshotted versions at once, each getting its own
+    # explicit note, via POST /api/notebooks/{filename}/versions/
+    # note-batch -- distinct from `note-set` above, which only ever
+    # replaces one version's own note; mirrors `tags set-batch`'s own
+    # --entry convention one level down, per-version instead of
+    # per-notebook)
+    versions_note_batch_parser = versions_subparsers.add_parser(
+        "note-batch",
+        help=(
+            "Set (or clear) the note attached to several of a notebook's "
+            "snapshotted versions at once, each getting its own explicit "
+            "note, via POST /api/notebooks/{filename}/versions/note-batch."
+        )
+    )
+    versions_note_batch_parser.add_argument(
+        "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    versions_note_batch_parser.add_argument(
+        "--entry",
+        action="append",
+        required=True,
+        metavar="VERSION_ID=NOTE",
+        help=(
+            "One version's own new note, as VERSION_ID=NOTE (an empty "
+            "right-hand side clears that version's note) -- VERSION_ID "
+            "as reported by `versions list`. Only the first '=' splits "
+            "VERSION_ID from NOTE, so NOTE itself may safely contain "
+            "further '=' characters. Repeat --entry once per version."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(versions_note_batch_parser)
+    versions_note_batch_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report the resulting note each entry would get (and which "
+            "would fail, e.g. an unknown version_id), via POST "
+            ".../note-batch's own \"dry_run\" body field, without "
+            "changing a single version's own note."
+        )
+    )
+    versions_note_batch_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"dry_run\", \"filename\", \"results\": [{\"version_id\", "
+            "\"status\", ...}, ...], \"succeeded_count\", "
+            "\"failed_count\"}) instead of a human-readable summary, for "
+            "scripting/automation."
         )
     )
 
