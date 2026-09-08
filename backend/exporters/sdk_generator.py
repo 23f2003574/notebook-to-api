@@ -20,7 +20,7 @@ from pathlib import Path
 # self.wait_for_task(...) internally.
 PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "get_task", "wait_for_task", "list_tasks", "delete_task",
-    "delete_completed_tasks", "delete_failed_tasks",
+    "delete_completed_tasks", "delete_failed_tasks", "redeliver_task_webhook",
     "health", "ready", "info", "config", "metrics", "uptime",
     "auth_status", "auth_info", "auth_validate",
     # Confirmed exploitable: base_url/api_key/timeout are the client's
@@ -45,7 +45,7 @@ PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
 # the same way "wait_for_task" collides with the Python client's.
 TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "getTask", "waitForTask", "listTasks", "deleteTask",
-    "deleteCompletedTasks", "deleteFailedTasks",
+    "deleteCompletedTasks", "deleteFailedTasks", "redeliverTaskWebhook",
     "health", "ready", "info", "config", "metrics", "uptime",
     "authStatus", "authInfo", "authValidate",
     # Same hazard as PYTHON_RESERVED_CLIENT_METHOD_NAMES's base_url/
@@ -1286,6 +1286,42 @@ def generate_python_sdk(
     lines.append("            timeout=self.timeout,")
     lines.append("        ))")
     lines.append("")
+    # Confirmed missing before this: the generated server side has let a
+    # caller manually retrigger a finished task's webhook delivery via
+    # POST /tasks/{task_id}/redeliver-webhook for several commits now (see
+    # redeliver_task_webhook in api_generator.py), and both generated
+    # clients already got a way to *verify* a delivered webhook's
+    # signature (verify_webhook_signature/verifyWebhookSignature) -- but
+    # neither client ever gained a method to actually *trigger* a
+    # redelivery. A caller whose webhook receiver was down long enough to
+    # exhaust every automatic retry, and who wants to recover the missed
+    # delivery without resubmitting the whole background task, had no way
+    # to do that through this client at all -- only by hand-building the
+    # exact same requests.post call delete_task above already demonstrates
+    # this client knows how to make.
+    lines.append("    def redeliver_task_webhook(self, task_id: str) -> dict:")
+    lines.append(
+        '        """Redeliver a completed/failed task\'s already-recorded '
+        "result/error to its own callback_url."
+    )
+    lines.append("")
+    lines.append(
+        "        Raises on a 404 (unknown task_id), 409 (task still "
+        "processing -- nothing"
+    )
+    lines.append(
+        "        recorded to redeliver yet), or 400 (task was never "
+        'submitted with a'
+    )
+    lines.append('        callback_url in the first place)."""')
+    lines.append("        return self._request(lambda: requests.post(")
+    lines.append(
+        '            f"{self.base_url}/tasks/{task_id}/redeliver-webhook",'
+    )
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
+    lines.append("        ))")
+    lines.append("")
     # health/ready/info/config/metrics/uptime/auth_status/auth_info/
     # auth_validate are, like get_task/list_tasks/... above, hardcoded
     # rather than derived from the per-path loop below: every compiled app
@@ -1876,6 +1912,28 @@ def generate_typescript_sdk(
     lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
     lines.append("    }));")
     lines.append("  }")
+    lines.append("")
+    # Mirrors generate_python_sdk's identical redeliver_task_webhook
+    # addition: the generated server side has let a caller manually
+    # retrigger a finished task's webhook delivery via POST
+    # /tasks/{task_id}/redeliver-webhook for several commits now, and this
+    # client already gained a way to *verify* a delivered webhook's
+    # signature (verifyWebhookSignature) -- but never a method to actually
+    # *trigger* a redelivery. Confirmed missing here even though the
+    # server-side route already existed.
+    lines.append("  async redeliverTaskWebhook(taskId: string): Promise<any> {")
+    lines.append('    const path = `/tasks/${taskId}/redeliver-webhook`;')
+    lines.append(
+        "    return this.requestWithRetry(path, () => fetch(`${this.baseUrl}${path}`, {"
+    )
+    lines.append('      method: "POST",')
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }));")
+    lines.append("  }")
+    lines.append("")
     # Mirrors generate_python_sdk's health/ready/info/config/metrics/
     # uptime/auth_status/auth_info/auth_validate above: hardcoded rather
     # than derived from the per-path loop below (which only emits a
