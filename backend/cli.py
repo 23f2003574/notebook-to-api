@@ -1,5 +1,6 @@
 import argparse
 import contextlib
+import hmac
 import io
 import json
 import os
@@ -356,7 +357,7 @@ _CORE_COMMANDS = frozenset({
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
     "status", "metrics", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
     "remote-curl", "app-preview", "readme-preview", "dockerfile-preview", "docker-compose-preview", "env-example-preview", "env-vars-preview",
-    "postman-preview", "k8s-preview", "openapi-preview",
+    "postman-preview", "k8s-preview", "openapi-preview", "verify-webhook",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -1488,6 +1489,44 @@ def _dispatch_core_command(args):
             ))
         else:
             generate_sdk(openapi_path, output)
+    elif args.command == "verify-webhook":
+
+        if args.body_file == "-":
+            body = sys.stdin.buffer.read()
+        else:
+            with open(args.body_file, "rb") as f:
+                body = f.read()
+
+        secret = args.secret or os.getenv("NOTEBOOK_API_WEBHOOK_SECRET")
+
+        if not secret:
+            raise RuntimeError(
+                "No secret given -- pass --secret, or set "
+                "$NOTEBOOK_API_WEBHOOK_SECRET."
+            )
+
+        # Byte for byte the same verification generate_python_sdk's own
+        # module-level verify_webhook_signature already gives an SDK-
+        # based receiver (see its own docstring, exporters/sdk_generator.py)
+        # -- returns False rather than raising for a missing, empty, or
+        # malformed header, the same "this request can't be trusted"
+        # verdict as a present-but-wrong signature.
+        valid = False
+        if args.signature and "=" in args.signature:
+            algorithm, _, signature = args.signature.partition("=")
+            if algorithm == "sha256":
+                expected_signature = hmac.new(
+                    secret.encode("utf-8"), body, "sha256"
+                ).hexdigest()
+                valid = hmac.compare_digest(expected_signature, signature)
+
+        if args.json_output:
+            print(json.dumps({"valid": valid}, indent=2))
+        else:
+            print("Signature valid" if valid else "Signature INVALID")
+
+        if not valid:
+            sys.exit(1)
     elif args.command == "export-curl":
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
@@ -6895,6 +6934,69 @@ def main():
             "only writing the client file, for scripting/automation -- the "
             "same shape POST /api/export-sdk already returns for the same "
             "operation."
+        )
+    )
+
+    # verify-webhook command (locally verify a captured task webhook's own
+    # X-Webhook-Signature against a shared secret -- reimplements, byte
+    # for byte, the exact verification generate_python_sdk's own module-
+    # level verify_webhook_signature already gives an SDK-based receiver,
+    # for a caller with no code of their own to run it from at all: a
+    # shell debugging session, a CI step, a receiver written in a
+    # language this project has no generated SDK for)
+    verify_webhook_parser = subparsers.add_parser(
+        "verify-webhook",
+        help=(
+            "Verify a captured task webhook's own X-Webhook-Signature "
+            "against a shared secret, entirely locally -- no compiled "
+            "app or dashboard involved."
+        )
+    )
+    verify_webhook_parser.add_argument(
+        "--body-file",
+        required=True,
+        dest="body_file",
+        help=(
+            "Path to the exact, untouched raw bytes of the received "
+            "webhook request body -- re-serializing a parsed JSON object "
+            "before verifying can reorder keys or change whitespace, "
+            "producing a body that no longer matches what was actually "
+            "signed, even though the payload itself is semantically "
+            "unchanged. Pass '-' to read the body from stdin instead."
+        )
+    )
+    verify_webhook_parser.add_argument(
+        "--signature",
+        required=True,
+        help=(
+            "The received X-Webhook-Signature header value verbatim "
+            "(e.g. \"sha256=abcdef...\")."
+        )
+    )
+    verify_webhook_parser.add_argument(
+        "--secret",
+        default=None,
+        help=(
+            "The compiled app's own NOTEBOOK_API_WEBHOOK_SECRET. "
+            "Defaults to the identically-named $NOTEBOOK_API_WEBHOOK_SECRET "
+            "environment variable if not given -- passing the real secret "
+            "as a bare command-line argument leaves it readable in shell "
+            "history and process listings, the same reason "
+            "$NOTEBOOK_API_DASHBOARD_URL is already an accepted alternative "
+            "to --dashboard-url elsewhere in this CLI."
+        )
+    )
+    verify_webhook_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit a machine-readable JSON result ({\"valid\"}) instead of "
+            "a human-readable one-line verdict, for scripting/automation. "
+            "Either way, this command's own exit code already reflects "
+            "the verdict (0 valid, 1 invalid) for a plain shell "
+            "`if notebook-to-api verify-webhook ...; then` check with no "
+            "need to parse either output form at all."
         )
     )
 

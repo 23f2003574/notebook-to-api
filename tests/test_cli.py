@@ -1542,6 +1542,326 @@ def test_export_sdk_command_reports_a_clean_error_for_a_corrupt_openapi_file(tmp
     _assert_clean_cli_error(proc, "Expecting value")
 
 
+def _signed_webhook_body(tmp_path, secret, payload=b'{"task_id": "abc123", "status": "completed", "result": 42}'):
+    """Write `payload` to a file under `tmp_path` and return
+    (body_path, signature_header) -- the exact HMAC-SHA256 scheme
+    _deliver_task_webhook (api_generator.py) and verify_webhook_signature
+    (exporters/sdk_generator.py) already share.
+    """
+    import hashlib
+    import hmac as hmac_module
+
+    body_path = tmp_path / "webhook_body.json"
+    body_path.write_bytes(payload)
+
+    signature = hmac_module.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+
+    return body_path, f"sha256={signature}"
+
+
+def test_verify_webhook_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "verify-webhook" in proc.stdout
+
+
+def test_verify_webhook_command_accepts_a_matching_signature(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    body_path, signature = _signed_webhook_body(workdir, "shh-its-a-secret")
+
+    proc = _run_cli(
+        [
+            "verify-webhook", "--body-file", str(body_path),
+            "--signature", signature, "--secret", "shh-its-a-secret",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.strip() == "Signature valid"
+
+
+def test_verify_webhook_command_rejects_a_wrong_secret(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    body_path, signature = _signed_webhook_body(workdir, "the-real-secret")
+
+    proc = _run_cli(
+        [
+            "verify-webhook", "--body-file", str(body_path),
+            "--signature", signature, "--secret", "a-different-secret",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1
+    assert proc.stdout.strip() == "Signature INVALID"
+
+
+def test_verify_webhook_command_rejects_a_tampered_body(tmp_path):
+    """The signature was computed over the original payload -- verifying
+    it against any other bytes (even semantically-equivalent re-serialized
+    JSON) must fail, the exact footgun verify_webhook_signature's own
+    docstring already warns a re-serialized body can trigger.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    body_path, signature = _signed_webhook_body(workdir, "shh-its-a-secret")
+    body_path.write_bytes(b'{"task_id": "abc123", "status": "completed", "result": 999}')
+
+    proc = _run_cli(
+        [
+            "verify-webhook", "--body-file", str(body_path),
+            "--signature", signature, "--secret", "shh-its-a-secret",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1
+    assert proc.stdout.strip() == "Signature INVALID"
+
+
+def test_verify_webhook_command_rejects_a_malformed_signature_header(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    body_path, _signature = _signed_webhook_body(workdir, "shh-its-a-secret")
+
+    proc = _run_cli(
+        [
+            "verify-webhook", "--body-file", str(body_path),
+            "--signature", "not-a-real-header", "--secret", "shh-its-a-secret",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1
+    assert proc.stdout.strip() == "Signature INVALID"
+
+
+def test_verify_webhook_command_rejects_a_non_sha256_algorithm(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    body_path, signature = _signed_webhook_body(workdir, "shh-its-a-secret")
+    md5_style = "md5=" + signature.split("=", 1)[1]
+
+    proc = _run_cli(
+        [
+            "verify-webhook", "--body-file", str(body_path),
+            "--signature", md5_style, "--secret", "shh-its-a-secret",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1
+    assert proc.stdout.strip() == "Signature INVALID"
+
+
+def test_verify_webhook_command_json_flag_emits_a_machine_readable_verdict(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    body_path, signature = _signed_webhook_body(workdir, "shh-its-a-secret")
+
+    proc = _run_cli(
+        [
+            "verify-webhook", "--body-file", str(body_path),
+            "--signature", signature, "--secret", "shh-its-a-secret", "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == {"valid": True}
+
+
+def test_verify_webhook_command_json_flag_reports_invalid_without_raising(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    body_path, signature = _signed_webhook_body(workdir, "the-real-secret")
+
+    proc = _run_cli(
+        [
+            "verify-webhook", "--body-file", str(body_path),
+            "--signature", signature, "--secret", "wrong", "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1
+    assert json.loads(proc.stdout) == {"valid": False}
+
+
+def test_verify_webhook_command_falls_back_to_the_secret_env_var(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    body_path, signature = _signed_webhook_body(workdir, "env-secret")
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+    env["NOTEBOOK_API_WEBHOOK_SECRET"] = "env-secret"
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli", "verify-webhook",
+            "--body-file", str(body_path), "--signature", signature,
+        ],
+        cwd=str(workdir),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.strip() == "Signature valid"
+
+
+def test_verify_webhook_command_an_explicit_secret_flag_takes_priority_over_the_env_var(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    body_path, signature = _signed_webhook_body(workdir, "flag-secret")
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+    env["NOTEBOOK_API_WEBHOOK_SECRET"] = "env-secret-that-would-fail"
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli", "verify-webhook",
+            "--body-file", str(body_path), "--signature", signature,
+            "--secret", "flag-secret",
+        ],
+        cwd=str(workdir),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.strip() == "Signature valid"
+
+
+def test_verify_webhook_command_reads_the_body_from_stdin(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    payload = b'{"task_id": "abc123", "status": "completed", "result": 42}'
+    _body_path, signature = _signed_webhook_body(workdir, "shh-its-a-secret", payload)
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli", "verify-webhook",
+            "--body-file", "-", "--signature", signature,
+            "--secret", "shh-its-a-secret",
+        ],
+        cwd=str(workdir),
+        env=env,
+        input=payload,
+        capture_output=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.decode().strip() == "Signature valid"
+
+
+def test_verify_webhook_command_reports_a_clean_error_for_a_missing_body_file(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "verify-webhook", "--body-file", "missing.json",
+            "--signature", "sha256=abc", "--secret", "x",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_verify_webhook_command_reports_a_clean_error_for_a_missing_secret(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    body_path, signature = _signed_webhook_body(workdir, "shh-its-a-secret")
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+    env.pop("NOTEBOOK_API_WEBHOOK_SECRET", None)
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli", "verify-webhook",
+            "--body-file", str(body_path), "--signature", signature,
+        ],
+        cwd=str(workdir),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    _assert_clean_cli_error(proc, "No secret given")
+
+
+def test_verify_webhook_command_matches_a_real_generated_apps_own_signing(tmp_path):
+    """End-to-end: sign a payload the exact way a real compiled app's own
+    _deliver_task_webhook does (via generate_fastapi_code), then confirm
+    this command verifies it -- not just a hand-rolled hmac.new call
+    mirroring the same algorithm by coincidence.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    from backend.generator.api_generator import generate_fastapi_code
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+    code = generate_fastapi_code(functions)
+
+    namespace = {"__name__": "generated_app_under_test"}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    payload = {"task_id": "abc123", "status": "completed", "result": 42}
+    body = namespace["json"].dumps(payload).encode("utf-8")
+    signature = namespace["hmac"].new(
+        b"real-secret", body, "sha256"
+    ).hexdigest()
+
+    body_path = workdir / "body.json"
+    body_path.write_bytes(body)
+
+    proc = _run_cli(
+        [
+            "verify-webhook", "--body-file", str(body_path),
+            "--signature", f"sha256={signature}", "--secret", "real-secret",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.strip() == "Signature valid"
+
+
 def test_serve_command_reports_a_clean_error_for_a_missing_notebook(tmp_path):
 
     workdir = tmp_path / "workdir"
