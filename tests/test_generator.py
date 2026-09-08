@@ -749,6 +749,10 @@ def test_generated_app_exposes_get_metrics_as_json(monkeypatch):
         "http_requests_by_status_class": {
             "1xx": 0, "2xx": 1, "3xx": 0, "4xx": 0, "5xx": 0,
         },
+        # No callback_url was ever given above -- no webhook delivery or
+        # redelivery has happened, so every outcome stays at 0.
+        "webhook_deliveries_by_outcome": {"delivered": 0, "failed": 0},
+        "webhook_redeliveries_by_outcome": {"delivered": 0, "failed": 0},
     }
 
 
@@ -1973,6 +1977,186 @@ def test_task_record_omits_webhook_field_when_no_callback_url_given(monkeypatch)
     task_id = submit_response.json()["task_id"]
 
     assert "webhook" not in namespace["TASKS"][task_id]
+
+
+def test_metrics_reports_webhook_delivery_outcomes(monkeypatch):
+    """Confirmed missing before this feature: a delivery's own outcome
+    was recorded only on that one task's own TASKS[task_id]['webhook']
+    field -- nothing aggregated it anywhere, so a caller relying on
+    webhooks instead of polling had no way to notice "my delivery
+    failure rate just spiked" short of polling every task individually
+    and counting failures by hand.
+    """
+    import urllib.request
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    class _FakeResponse:
+        status = 204
+
+        def close(self):
+            pass
+
+    calls = {"n": 0}
+
+    def flaky_urlopen(request, timeout=None):
+        calls["n"] += 1
+        # First delivery succeeds, second fails outright -- one of each
+        # outcome, so the assertions below can't pass by accident (e.g.
+        # both landing in the same bucket).
+        if calls["n"] == 1:
+            return _FakeResponse()
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", flaky_urlopen)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    for _ in range(2):
+        client.post(
+            "/process_data",
+            json={},
+            params={"callback_url": "https://example.test/hook"},
+            headers=headers,
+        )
+
+    body = client.get("/metrics").json()
+    assert body["webhook_deliveries_by_outcome"] == {"delivered": 1, "failed": 1}
+    # No manual redelivery ever happened -- must stay untouched.
+    assert body["webhook_redeliveries_by_outcome"] == {"delivered": 0, "failed": 0}
+
+
+def test_metrics_prometheus_reports_webhook_delivery_outcomes(monkeypatch):
+    """Mirrors test_metrics_reports_webhook_delivery_outcomes for the
+    Prometheus text exposition endpoint.
+    """
+    import urllib.request
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    def always_fails(request, timeout=None):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", always_fails)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/hook"},
+        headers=headers,
+    )
+
+    body = client.get("/metrics/prometheus").text
+
+    assert "# HELP notebook_api_webhook_deliveries_total" in body
+    assert "# TYPE notebook_api_webhook_deliveries_total counter" in body
+    assert 'notebook_api_webhook_deliveries_total{outcome="delivered"} 0' in body
+    assert 'notebook_api_webhook_deliveries_total{outcome="failed"} 1' in body
+    assert "# HELP notebook_api_webhook_redeliveries_total" in body
+    assert "# TYPE notebook_api_webhook_redeliveries_total counter" in body
+    assert 'notebook_api_webhook_redeliveries_total{outcome="delivered"} 0' in body
+    assert 'notebook_api_webhook_redeliveries_total{outcome="failed"} 0' in body
+
+
+def test_metrics_reports_manual_webhook_redelivery_outcomes(monkeypatch):
+    """A manual POST /tasks/{task_id}/redeliver-webhook must be counted
+    separately from the automatic delivery it's retrying -- folding both
+    into one counter would make "my receiver is flaky enough that I keep
+    having to redeliver" indistinguishable from "deliveries just keep
+    failing outright", two different signals an operator would want to
+    tell apart.
+    """
+    import urllib.request
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    def always_fails(request, timeout=None):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", always_fails)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    submit_response = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/hook"},
+        headers=headers,
+    )
+    task_id = submit_response.json()["task_id"]
+
+    # The automatic delivery above already failed once -- confirm it
+    # landed in 'failed', not 'redelivery_failed'.
+    body = client.get("/metrics").json()
+    assert body["webhook_deliveries_by_outcome"] == {"delivered": 0, "failed": 1}
+    assert body["webhook_redeliveries_by_outcome"] == {"delivered": 0, "failed": 0}
+
+    class _FakeResponse:
+        status = 204
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda request, timeout=None: _FakeResponse())
+
+    redeliver_response = client.post(
+        f"/tasks/{task_id}/redeliver-webhook", headers=headers
+    )
+    assert redeliver_response.status_code == 200
+
+    body = client.get("/metrics").json()
+    # The original failed automatic delivery must stay exactly as it was.
+    assert body["webhook_deliveries_by_outcome"] == {"delivered": 0, "failed": 1}
+    # The manual redelivery succeeded -- counted in its own bucket.
+    assert body["webhook_redeliveries_by_outcome"] == {"delivered": 1, "failed": 0}
+
+
+def test_notebook_function_named_webhook_metrics_is_rejected():
+    """_WEBHOOK_METRICS is read and written by name from inside
+    _run_background_task's own three webhook-delivery call sites and
+    redeliver_task_webhook's own body, then read again by name from
+    metrics()/metrics_prometheus() -- the identical collision hazard
+    _HTTP_METRICS' own reserved-name test already covers, just for this
+    dict instead.
+    """
+    functions = [
+        {"name": "_WEBHOOK_METRICS", "args": [], "return_type": "dict"}
+    ]
+
+    with pytest.raises(ReservedFunctionNameError, match="_WEBHOOK_METRICS"):
+        generate_fastapi_code(functions)
 
 
 def test_notebook_function_named_redeliver_task_webhook_is_rejected():

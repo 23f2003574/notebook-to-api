@@ -60,6 +60,22 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # every request depends on" exposure _enforce_rate_limit's own entry
     # above already documents for the rate limiter.
     "_HTTP_METRICS",
+    # Read AND written by name from inside _run_background_task's own
+    # three webhook-delivery call sites and redeliver_task_webhook's own
+    # body (both below), then read again by name from inside metrics()/
+    # metrics_prometheus' own bodies -- the identical "module-level dict
+    # maintained by request-handling code, then reported by GET /metrics/
+    # GET /metrics/prometheus" exposure _HTTP_METRICS' own entry above
+    # already carries, just for webhook delivery/redelivery outcomes
+    # instead of plain HTTP request counts. A notebook function named
+    # "_WEBHOOK_METRICS" would rebind this to a function object at
+    # module-execution time; the very next automatic webhook delivery
+    # (completed, failed, or timed-out task alike) or manual redelivery
+    # then raises "'function' object is not subscriptable" the moment it
+    # tries to record its own outcome -- silently breaking webhook
+    # bookkeeping app-wide, not just for one endpoint related to the
+    # colliding name.
+    "_WEBHOOK_METRICS",
     # Assigned this compile's own real content hash once, at module load
     # (see write_generated_api's own caller), then read back verbatim by
     # GET /info below -- a notebook function of this exact name would
@@ -1162,6 +1178,41 @@ def generate_fastapi_code(
     )
     lines.append("    return response")
     lines.append("")
+    # GET /metrics/GET /metrics/prometheus above already report this
+    # app's own background-task counts and, since _HTTP_METRICS was
+    # added, its plain HTTP request throughput -- but neither one has
+    # ever said anything about webhook delivery health. A caller relying
+    # on ?callback_url= specifically to avoid polling get_task/
+    # wait_for_task has no aggregate signal to alert on at all: the only
+    # place a delivery failure is ever recorded is that one task's own
+    # TASKS[task_id]['webhook'] field (see _run_background_task below),
+    # which nothing short of polling every single task individually would
+    # ever surface a pattern in -- "webhook delivery failure rate just
+    # spiked" is exactly the kind of question a real Prometheus/Grafana
+    # alert is built to answer, and until now this app gave it nothing to
+    # scrape for that.
+    #
+    # A plain module-level dict, like _HTTP_METRICS above -- updated
+    # unconditionally (not gated behind an env var) at every point a
+    # webhook outcome is already being recorded onto TASKS anyway, since
+    # incrementing one more int counter alongside a write this app is
+    # already doing is negligible extra cost. "delivered"/"failed" track
+    # the three automatic delivery call sites inside _run_background_task
+    # (task completed, task timed out, task raised); "redelivered"/
+    # "redelivery_failed" track redeliver_task_webhook's own manual
+    # retrigger below -- kept as a separate pair, not folded into the
+    # first two, since a caller reading GET /metrics almost certainly
+    # wants to tell "my receiver has been flaky enough that I've had to
+    # manually redeliver N times" apart from "N automatic deliveries have
+    # failed outright" -- two very different operational signals folded
+    # into one counter would obscure both.
+    lines.append(
+        "_WEBHOOK_METRICS = {"
+        "'delivered': 0, 'failed': 0, "
+        "'redelivered': 0, 'redelivery_failed': 0"
+        "}"
+    )
+    lines.append("")
     # Simple in‑memory task registry used by background endpoints
     lines.append("TASKS = {}")
     lines.append(
@@ -1849,6 +1900,21 @@ def generate_fastapi_code(
         "        'http_request_duration_ms_sum': "
         "_HTTP_METRICS['duration_ms_sum'],"
     )
+    # Purely additive alongside every field above, mirroring the same
+    # "existing consumer keeps working unchanged" guarantee
+    # http_requests_total's own addition already gives -- webhook
+    # delivery/redelivery health (see _WEBHOOK_METRICS' own definition
+    # above for why "delivered"/"failed" and "redelivered"/
+    # "redelivery_failed" are reported as two separate pairs rather than
+    # one shared counter).
+    lines.append("        'webhook_deliveries_by_outcome': {")
+    lines.append("            'delivered': _WEBHOOK_METRICS['delivered'],")
+    lines.append("            'failed': _WEBHOOK_METRICS['failed'],")
+    lines.append("        },")
+    lines.append("        'webhook_redeliveries_by_outcome': {")
+    lines.append("            'delivered': _WEBHOOK_METRICS['redelivered'],")
+    lines.append("            'failed': _WEBHOOK_METRICS['redelivery_failed'],")
+    lines.append("        },")
     lines.append("    }")
 
     # GET /metrics above has served this dashboard-shaped JSON summary
@@ -1966,6 +2032,44 @@ def generate_fastapi_code(
         "        f'notebook_api_http_request_duration_ms_sum "
         "{_HTTP_METRICS[\"duration_ms_sum\"]}\\n'"
     )
+    # An "outcome" label rather than two separately named metrics -- the
+    # same status_class-bucketing choice notebook_api_http_requests_total
+    # already makes above, applied to "delivered"/"failed" here instead.
+    # Always emits both outcomes, even at 0, for the identical
+    # no-gap-at-startup reason every other counter in this function
+    # already does. See _WEBHOOK_METRICS' own definition (above, near
+    # _HTTP_METRICS) for why automatic deliveries and manual redeliveries
+    # are reported as two distinct metrics rather than folded together.
+    lines.append(
+        "        '# HELP notebook_api_webhook_deliveries_total Total "
+        "number of automatic task webhook delivery attempts, by "
+        "outcome.\\n'"
+    )
+    lines.append(
+        "        '# TYPE notebook_api_webhook_deliveries_total "
+        "counter\\n'"
+    )
+    lines.append("        f'notebook_api_webhook_deliveries_total"
+                  "{{outcome=\"delivered\"}} "
+                  "{_WEBHOOK_METRICS[\"delivered\"]}\\n'")
+    lines.append("        f'notebook_api_webhook_deliveries_total"
+                  "{{outcome=\"failed\"}} "
+                  "{_WEBHOOK_METRICS[\"failed\"]}\\n'")
+    lines.append(
+        "        '# HELP notebook_api_webhook_redeliveries_total Total "
+        "number of manual POST /tasks/{task_id}/redeliver-webhook "
+        "attempts, by outcome.\\n'"
+    )
+    lines.append(
+        "        '# TYPE notebook_api_webhook_redeliveries_total "
+        "counter\\n'"
+    )
+    lines.append("        f'notebook_api_webhook_redeliveries_total"
+                  "{{outcome=\"delivered\"}} "
+                  "{_WEBHOOK_METRICS[\"redelivered\"]}\\n'")
+    lines.append("        f'notebook_api_webhook_redeliveries_total"
+                  "{{outcome=\"failed\"}} "
+                  "{_WEBHOOK_METRICS[\"redelivery_failed\"]}\\n'")
     lines.append("    )")
     # The Prometheus text exposition format's own registered media type --
     # not "text/plain" alone, which a real Prometheus scraper (and
@@ -2139,6 +2243,18 @@ def generate_fastapi_code(
     lines.append("    webhook_result = await anyio.to_thread.run_sync(")
     lines.append("        _deliver_task_webhook, callback_url, payload")
     lines.append("    )")
+    # Tracked separately from _WEBHOOK_METRICS' own 'delivered'/'failed'
+    # pair (the three automatic call sites inside _run_background_task
+    # above) -- a manual redelivery is a distinct operational signal
+    # ("my receiver has been flaky enough that I've had to redeliver N
+    # times") from "N automatic deliveries have failed outright", so
+    # folding the two together would obscure both. See _WEBHOOK_METRICS'
+    # own definition above for the full rationale.
+    lines.append(
+        "    _WEBHOOK_METRICS["
+        "'redelivered' if webhook_result['delivered'] else 'redelivery_failed'"
+        "] += 1"
+    )
     # Guarded by 'task_id in TASKS' for the identical race
     # _run_background_task's own post-delivery writes already guard
     # against: DELETE /tasks/{task_id} refuses a still-processing task,
@@ -2416,6 +2532,11 @@ def generate_fastapi_code(
         "{\"task_id\": task_id, \"status\": \"completed\", \"result\": result}"
     )
     lines.append("            )")
+    lines.append(
+        "            _WEBHOOK_METRICS["
+        "'delivered' if webhook_result['delivered'] else 'failed'"
+        "] += 1"
+    )
     lines.append("            if task_id in TASKS:")
     lines.append("                TASKS[task_id][\"webhook\"] = webhook_result")
     # A separate except clause from the generic Exception one below,
@@ -2440,6 +2561,11 @@ def generate_fastapi_code(
         "{\"task_id\": task_id, \"status\": \"failed\", \"error\": timeout_error}"
     )
     lines.append("            )")
+    lines.append(
+        "            _WEBHOOK_METRICS["
+        "'delivered' if webhook_result['delivered'] else 'failed'"
+        "] += 1"
+    )
     lines.append("            if task_id in TASKS:")
     lines.append("                TASKS[task_id][\"webhook\"] = webhook_result")
     lines.append("    except Exception as e:")
@@ -2453,6 +2579,11 @@ def generate_fastapi_code(
         "{\"task_id\": task_id, \"status\": \"failed\", \"error\": str(e)}"
     )
     lines.append("            )")
+    lines.append(
+        "            _WEBHOOK_METRICS["
+        "'delivered' if webhook_result['delivered'] else 'failed'"
+        "] += 1"
+    )
     lines.append("            if task_id in TASKS:")
     lines.append("                TASKS[task_id][\"webhook\"] = webhook_result")
     lines.append("")
