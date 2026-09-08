@@ -12939,6 +12939,44 @@ def test_k8s_preview_command_prints_the_manifest(tmp_path, fake_dashboard):
     assert handler.requests == ["/api/k8s-preview"]
 
 
+def test_k8s_preview_command_forwards_the_image_flag(tmp_path, fake_dashboard):
+    """--image lets a caller check the manifest's own "image:" reference
+    under the exact tag they intend to `deploy --tag`/`remote-deploy
+    --tag`, before ever running that deploy for real.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "package_name": "generated",
+            "image": "registry.example.com/myapp:v3",
+            "kubernetes_manifest": (
+                "apiVersion: apps/v1\nkind: Deployment\n"
+                "          image: registry.example.com/myapp:v3\n"
+            ),
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "k8s-preview", "--dashboard-url", dashboard_url,
+            "--image", "registry.example.com/myapp:v3",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "image: registry.example.com/myapp:v3" in proc.stdout
+    assert "image 'registry.example.com/myapp:v3'" in proc.stdout
+    assert handler.requests == [
+        "/api/k8s-preview?image=registry.example.com%2Fmyapp%3Av3"
+    ]
+
+
 def test_k8s_preview_command_json_flag_emits_the_dashboards_own_response(
     tmp_path, fake_dashboard
 ):

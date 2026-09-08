@@ -20357,6 +20357,34 @@ def test_k8s_preview_does_not_touch_generated_dir(monkeypatch, tmp_path):
     assert not generated_dir.exists()
 
 
+def test_k8s_preview_respects_a_custom_image():
+    """Lets a caller check the manifest's own "image:" reference under
+    the exact tag they intend to `docker build -t`/`docker push` via
+    POST /api/deploy's own "tag", before ever running that deploy for
+    real -- the same "preview before committing to the real thing"
+    relationship every other preview endpoint here already has.
+    """
+
+    resp = client.get(
+        "/api/k8s-preview",
+        params={"image": "registry.example.com/myapp:v3"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["image"] == "registry.example.com/myapp:v3"
+    assert "image: registry.example.com/myapp:v3\n" in body["kubernetes_manifest"]
+
+
+def test_k8s_preview_reports_the_default_image_when_none_given():
+
+    resp = client.get("/api/k8s-preview")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["image"] == f"{body['package_name']}:latest"
+
+
 def test_env_example_preview_requires_no_notebook_and_needs_no_body():
 
     resp = client.get("/api/env-example-preview")
@@ -21109,6 +21137,81 @@ def test_deploy_endpoint_respects_custom_tag(tmp_path, monkeypatch):
     calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
     build_call = calls[0].splitlines()
     assert build_call[:-1] == ["build", "-t", "myregistry.example.com/myapp:v2", "."]
+
+
+def test_deploy_endpoint_updates_kubernetes_manifest_image_to_the_built_tag(
+    tmp_path, monkeypatch
+):
+    """GET /api/k8s-preview's own docstring already promises its
+    "kubernetes_manifest" can never drift from what an actual compile
+    writes to GENERATED_DIR/kubernetes.yaml -- but a real compile always
+    bakes in the hardcoded "{package_name}:latest" default, regardless of
+    what tag a later deploy actually builds under. Before this, that
+    written copy silently kept saying ":latest" forever, even after a
+    real deploy built (and possibly pushed) a completely different tag --
+    `kubectl apply -f` against it would then pull an unrelated image, or
+    fail outright against a registry never pushed to.
+    """
+
+    _compile_a_notebook("deploy_k8s_manifest_test.ipynb")
+
+    kubernetes_yaml_path = Path(GENERATED_DIR) / "kubernetes.yaml"
+    assert "image: generated:latest" in kubernetes_yaml_path.read_text(
+        encoding="utf-8"
+    )
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post(
+        "/api/deploy", json={"tag": "myregistry.example.com/myapp:v2"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["kubernetes_manifest_image"] == "myregistry.example.com/myapp:v2"
+
+    updated_manifest = kubernetes_yaml_path.read_text(encoding="utf-8")
+    assert "image: myregistry.example.com/myapp:v2\n" in updated_manifest
+    assert "image: generated:latest" not in updated_manifest
+
+    # GET /api/generated/kubernetes.yaml (the actual served artifact, not
+    # just the raw file on disk) must reflect the same rewrite -- a
+    # caller downloading it through the dashboard, rather than reading
+    # GENERATED_DIR directly, must see the update too.
+    served_resp = client.get("/api/generated/kubernetes.yaml")
+    assert served_resp.status_code == 200
+    assert (
+        "image: myregistry.example.com/myapp:v2\n"
+        in served_resp.json()["content"]
+    )
+
+
+def test_deploy_endpoint_dry_run_does_not_touch_kubernetes_manifest(
+    tmp_path, monkeypatch
+):
+
+    _compile_a_notebook("deploy_k8s_manifest_dry_run_test.ipynb")
+
+    kubernetes_yaml_path = Path(GENERATED_DIR) / "kubernetes.yaml"
+    original_manifest = kubernetes_yaml_path.read_text(encoding="utf-8")
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    resp = client.post(
+        "/api/deploy",
+        json={"tag": "myregistry.example.com/myapp:v2", "dry_run": True},
+    )
+
+    assert resp.status_code == 200
+    assert "kubernetes_manifest_image" not in resp.json()
+    assert not log_path.exists()
+    assert kubernetes_yaml_path.read_text(encoding="utf-8") == original_manifest
 
 
 def test_deploy_endpoint_respects_custom_platform(tmp_path, monkeypatch):

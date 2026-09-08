@@ -992,6 +992,48 @@ def test_kubernetes_manifest_content_with_no_env_vars_still_maps_port():
     assert content_none == content
 
 
+def test_kubernetes_manifest_content_defaults_image_to_package_name_latest():
+
+    content = kubernetes_manifest_content("myapp", [])
+
+    assert "image: myapp:latest\n" in content
+
+    content_explicit_none = kubernetes_manifest_content("myapp", [], image=None)
+
+    assert content_explicit_none == content
+
+
+def test_kubernetes_manifest_content_respects_a_custom_image():
+    """A real cluster can only ever pull an already-pushed image by its
+    exact tag -- it can't `docker build` on an operator's behalf the way
+    `docker compose up` effectively can. Before "image" existed, this
+    manifest's own "image:" was always the hardcoded
+    "{package_name}:latest", silently wrong the moment a caller actually
+    deployed under any other tag.
+    """
+
+    content = kubernetes_manifest_content(
+        "myapp", [], image="registry.example.com/myapp:v3"
+    )
+
+    assert "image: registry.example.com/myapp:v3\n" in content
+    assert "image: myapp:latest" not in content
+
+
+def test_generate_kubernetes_manifest_writes_the_given_image(tmp_path):
+
+    output_path = tmp_path / "kubernetes.yaml"
+
+    generate_kubernetes_manifest(
+        str(output_path), "myapp", [], image="registry.example.com/myapp:v3"
+    )
+
+    assert (
+        "image: registry.example.com/myapp:v3\n"
+        in output_path.read_text(encoding="utf-8")
+    )
+
+
 def test_compiler_pipeline_generates_a_kubernetes_manifest_file(tmp_path):
     """Confirmed missing before this feature: a compiled app already got a
     Dockerfile, a docker-compose.yml for a single-host `docker compose up`,

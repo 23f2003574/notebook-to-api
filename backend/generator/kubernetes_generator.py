@@ -1,4 +1,4 @@
-def kubernetes_manifest_content(package_name="generated", env_vars=None):
+def kubernetes_manifest_content(package_name="generated", env_vars=None, image=None):
     """The exact kubernetes.yaml text generate_kubernetes_manifest (below)
     writes to disk, as a pure string -- no filesystem access at all. See
     dockerfile_content's own docstring (backend/generator/docker_generator.py)
@@ -60,8 +60,24 @@ def kubernetes_manifest_content(package_name="generated", env_vars=None):
     beyond that (an Ingress, a HorizontalPodAutoscaler, resource
     requests/limits) is a real deployment's own decision this tool has no
     way to make on an operator's behalf.
+
+    `image` (optional) is the container's own "image:" reference --
+    defaults to "{package_name}:latest" exactly as before this parameter
+    existed, but a real cluster can't `docker build` on an operator's
+    behalf the way a local `docker compose up` effectively can: it can
+    only ever pull an already-pushed image by its exact tag. Before this,
+    the hardcoded "{package_name}:latest" default was the *only* value
+    this manifest could ever contain, silently wrong the moment a caller
+    actually deployed under any other tag (POST /api/deploy's own "tag",
+    or the CLI's `deploy --tag`) -- `kubectl apply -f` against this
+    manifest would then either pull an unrelated ":latest" image nothing
+    just built, or fail outright against a registry that was never
+    pushed to at all. Passing the real tag here is what actually closes
+    that gap; see POST /api/deploy, which now does exactly that for the
+    copy it writes to GENERATED_DIR after every successful build.
     """
     env_vars = env_vars or []
+    image = image or f"{package_name}:latest"
 
     env_entries = [{"name": "PORT", "default": "8000"}] + list(env_vars)
 
@@ -90,7 +106,7 @@ spec:
     spec:
       containers:
         - name: {package_name}
-          image: {package_name}:latest
+          image: {image}
           ports:
             - containerPort: 8000
           env:
@@ -126,15 +142,17 @@ def generate_kubernetes_manifest(
     output_path="generated/kubernetes.yaml",
     package_name="generated",
     env_vars=None,
+    image=None,
 ):
     """Write a kubernetes.yaml for the compiled app at `output_path`,
     alongside the Dockerfile/.dockerignore/docker-compose.yml/.env.example/
     README.md generate_dockerfile/generate_dockerignore/
     generate_docker_compose/generate_env_example/generate_readme already
     write there on every compile -- see kubernetes_manifest_content's own
-    docstring above for why this exists and what it contains.
+    docstring above for why this exists and what it contains, and for
+    "image" (optional, defaulting identically) in particular.
     """
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write(kubernetes_manifest_content(package_name, env_vars))
+        f.write(kubernetes_manifest_content(package_name, env_vars, image))
 
     print(f"kubernetes.yaml generated at: {output_path}")

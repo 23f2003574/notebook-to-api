@@ -1645,6 +1645,24 @@ def _dispatch_core_command(args):
                     pushed = args.push
                 else:
                     _run_deploy_docker_command(build_args, output_dir, capture_output=True)
+                    # See the non-JSON branch below (and POST /api/deploy,
+                    # routes/upload.py) for why this regenerates
+                    # --output/kubernetes.yaml with the tag actually just
+                    # built, rather than leaving it at the default
+                    # "{package_name}:latest" a plain `compile` bakes in.
+                    from backend.compiler import package_name_for_output_dir
+                    from backend.generator.api_generator import (
+                        GENERATED_APP_ENV_VARS,
+                    )
+                    from backend.generator.kubernetes_generator import (
+                        generate_kubernetes_manifest,
+                    )
+                    generate_kubernetes_manifest(
+                        str(output_dir / "kubernetes.yaml"),
+                        package_name_for_output_dir(str(output_dir)),
+                        GENERATED_APP_ENV_VARS,
+                        image=tag,
+                    )
                     if args.smoke_test:
                         smoke_test_result = _run_local_deploy_smoke_test(tag, output_dir)
                     pushed = False
@@ -1657,6 +1675,8 @@ def _dispatch_core_command(args):
             result = {"status": "success", "tag": tag, "pushed": pushed}
             if args.dry_run:
                 result["dry_run"] = True
+            else:
+                result["kubernetes_manifest_image"] = tag
             if smoke_test_result is not None:
                 result["smoke_test"] = smoke_test_result
             print(json.dumps(result, indent=2))
@@ -1682,6 +1702,27 @@ def _dispatch_core_command(args):
                 print(f"Building Docker image '{tag}' from {output_dir} …")
                 _run_deploy_docker_command(build_args, output_dir)
                 print(f"Docker image '{tag}' built successfully.")
+
+                # kubernetes.yaml (written above by compile_notebook, with
+                # the default "{package_name}:latest" image) would
+                # otherwise silently disagree with the tag actually just
+                # built the moment --tag overrides that default -- the
+                # same drift POST /api/deploy's own regeneration
+                # (routes/upload.py) closes for the dashboard-driven path.
+                from backend.compiler import package_name_for_output_dir
+                from backend.generator.api_generator import (
+                    GENERATED_APP_ENV_VARS,
+                )
+                from backend.generator.kubernetes_generator import (
+                    generate_kubernetes_manifest,
+                )
+                generate_kubernetes_manifest(
+                    str(output_dir / "kubernetes.yaml"),
+                    package_name_for_output_dir(str(output_dir)),
+                    GENERATED_APP_ENV_VARS,
+                    image=tag,
+                )
+                print(f"kubernetes.yaml updated to reference '{tag}'.")
 
                 smoke_test_result = None
                 if args.smoke_test:
@@ -4652,9 +4693,14 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        params = {}
+        if args.image:
+            params["image"] = args.image
+
         try:
             response = httpx.get(
                 f"{dashboard_url}/api/k8s-preview",
+                params=params,
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -4674,7 +4720,8 @@ def _dispatch_core_command(args):
         else:
             print(
                 f"kubernetes.yaml preview for {dashboard_url} "
-                f"(package '{data.get('package_name')}'):\n"
+                f"(package '{data.get('package_name')}', "
+                f"image '{data.get('image')}'):\n"
             )
             print(data.get("kubernetes_manifest", ""))
     elif args.command == "env-example-preview":
@@ -9692,13 +9739,27 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(k8s_preview_parser)
     k8s_preview_parser.add_argument(
+        "--image",
+        default=None,
+        help=(
+            "Container image reference for the previewed manifest's own "
+            "\"image:\" field (default: the dashboard's own "
+            "\"<package_name>:latest\"), via GET /api/k8s-preview's own "
+            "\"image\" query param -- pass the same tag intended for "
+            "`deploy --tag`/`remote-deploy --tag` to check what "
+            "`kubectl apply -f` would actually reference before running "
+            "that deploy for real."
+        )
+    )
+    k8s_preview_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
-            "\"package_name\", \"kubernetes_manifest\"}) instead of a "
-            "human-readable preview, for scripting/automation."
+            "\"package_name\", \"image\", \"kubernetes_manifest\"}) "
+            "instead of a human-readable preview, for scripting/"
+            "automation."
         )
     )
 

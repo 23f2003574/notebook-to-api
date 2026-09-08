@@ -387,6 +387,70 @@ def test_deploy_respects_custom_tag(tmp_path):
     assert log_lines[:-1] == ["build", "-t", "myapp:v2", "."]
 
 
+def test_deploy_updates_kubernetes_manifest_image_to_the_built_tag(tmp_path):
+    """A plain `compile` (which `deploy` always runs first) always bakes
+    the hardcoded "{package_name}:latest" default into --output/
+    kubernetes.yaml, regardless of what tag this deploy actually builds
+    under -- the same drift POST /api/deploy's own regeneration
+    (routes/upload.py) closes for the dashboard-driven path. Before this,
+    that file silently kept saying ":latest" even after building under a
+    real, different --tag.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+
+    proc = _run_cli(
+        [
+            "deploy", str(notebook_path), "--output", "generated",
+            "--tag", "myregistry.example.com/myapp:v2",
+        ],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "kubernetes.yaml updated to reference 'myregistry.example.com/myapp:v2'" in proc.stdout
+
+    manifest = (workdir / "generated" / "kubernetes.yaml").read_text(encoding="utf-8")
+    assert "image: myregistry.example.com/myapp:v2\n" in manifest
+    assert "image: generated:latest" not in manifest
+
+
+def test_deploy_dry_run_does_not_touch_kubernetes_manifest(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+
+    proc = _run_cli(
+        [
+            "deploy", str(notebook_path), "--output", "generated",
+            "--tag", "myregistry.example.com/myapp:v2", "--dry-run",
+        ],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not log_path.exists()
+
+    manifest = (workdir / "generated" / "kubernetes.yaml").read_text(encoding="utf-8")
+    assert "image: generated:latest" in manifest
+    assert "myregistry.example.com" not in manifest
+
+
 def test_deploy_respects_custom_platform(tmp_path):
     """`docker build`'s own default target platform is the local Docker
     daemon's host architecture -- not necessarily the deploy target's
@@ -836,6 +900,7 @@ def test_deploy_json_flag_emits_machine_readable_output(tmp_path):
         "status": "success",
         "tag": "built_api:latest",
         "pushed": False,
+        "kubernetes_manifest_image": "built_api:latest",
     }
 
 
@@ -881,6 +946,7 @@ def test_deploy_json_flag_stdout_is_still_valid_json_against_a_verbose_docker(tm
         "status": "success",
         "tag": "built_api:latest",
         "pushed": False,
+        "kubernetes_manifest_image": "built_api:latest",
     }
     assert "Step 1/5" not in proc.stdout
     assert "Successfully built" not in proc.stdout
@@ -940,6 +1006,7 @@ def test_deploy_json_flag_reports_pushed_true_after_a_successful_push(tmp_path):
         "status": "success",
         "tag": "registry.example.com/myapp:v1",
         "pushed": True,
+        "kubernetes_manifest_image": "registry.example.com/myapp:v1",
     }
 
     calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]

@@ -67,6 +67,7 @@ from backend.generator.docker_generator import (
     readme_content,
 )
 from backend.generator.kubernetes_generator import (
+    generate_kubernetes_manifest,
     kubernetes_manifest_content,
 )
 from backend.inspector import (
@@ -11701,7 +11702,7 @@ def env_example_preview_endpoint():
 
 
 @router.get("/k8s-preview")
-def k8s_preview_endpoint():
+def k8s_preview_endpoint(image: str = None):
     """The exact kubernetes.yaml text POST /api/compile now also writes
     into GENERATED_DIR on every compile (alongside the Dockerfile/
     .dockerignore/docker-compose.yml/.env.example) -- without actually
@@ -11723,6 +11724,16 @@ def k8s_preview_endpoint():
     the same "can't drift from the real thing" guarantee GET
     /api/docker-compose-preview/GET /api/env-vars-preview already provide
     for their own artifacts.
+
+    "image" (optional) previews the manifest's own "image:" reference
+    under a tag other than the "{package_name}:latest" default -- the
+    exact tag a caller intends to `docker build -t`/`docker push` via
+    POST /api/deploy's own "tag", so the manifest they'll actually
+    `kubectl apply -f` can be checked *before* ever running that deploy,
+    the same "preview before committing to a real compile" relationship
+    every other preview endpoint here already has with its own real
+    counterpart. Omitted (the default), byte-for-byte identical to
+    before this parameter existed.
     """
 
     package_name = package_name_for_output_dir(GENERATED_DIR)
@@ -11730,8 +11741,9 @@ def k8s_preview_endpoint():
     return {
         "status": "success",
         "package_name": package_name,
+        "image": image or f"{package_name}:latest",
         "kubernetes_manifest": kubernetes_manifest_content(
-            package_name, GENERATED_APP_ENV_VARS
+            package_name, GENERATED_APP_ENV_VARS, image
         ),
     }
 
@@ -13076,6 +13088,16 @@ def deploy_generated_app(data: dict = None):
     not gating" relationship POST /api/compile's own "smoke_test"
     already has with a successful compile. Skipped entirely under
     "dry_run": true, since there is no built image yet to run.
+
+    On every successful build (dry_run excepted -- nothing was actually
+    built to reference), GENERATED_DIR/kubernetes.yaml is also
+    regenerated with this exact "tag" as its own "image:" reference,
+    reported back as "kubernetes_manifest_image" -- see
+    generate_kubernetes_manifest's "image" parameter for the drift this
+    closes: without it, that file's "image:" stayed the hardcoded
+    "{package_name}:latest" a real compile always bakes in, silently
+    disagreeing with whatever this deploy actually just built the moment
+    a custom "tag" was given.
     """
 
     generated_path = Path(GENERATED_DIR)
@@ -13194,12 +13216,41 @@ def deploy_generated_app(data: dict = None):
                 detail=f"Docker build failed: {build_result.stderr}"
             )
 
+        # GET /api/k8s-preview's own docstring already promises its
+        # "kubernetes_manifest" can never drift from what an actual
+        # compile writes to GENERATED_DIR/kubernetes.yaml -- but until
+        # now that written copy's own "image:" was always the hardcoded
+        # "{package_name}:latest" a real compile bakes in, never the tag
+        # a deploy actually just built it under. A caller who deployed
+        # under any other tag (a custom "tag" above, the overwhelmingly
+        # common case for anything beyond a purely local test) got a
+        # kubernetes.yaml sitting right there in GENERATED_DIR --
+        # downloadable via GET /api/download, GET /api/generated/
+        # kubernetes.yaml, or this same GET /api/k8s-preview -- that
+        # `kubectl apply -f` would happily accept and then either pull an
+        # unrelated ":latest" image nothing here just built, or fail
+        # outright against a registry never pushed to. Regenerated here,
+        # still under COMPILE_LOCK (the identical protection the build
+        # itself already holds against a concurrent /api/compile
+        # rewriting GENERATED_DIR mid-write), so the file this dashboard
+        # actually serves back never disagrees with the image this exact
+        # deploy just built -- independent of whether "push" below even
+        # succeeds, since the local image itself already exists under
+        # this tag regardless.
+        generate_kubernetes_manifest(
+            str(generated_path / "kubernetes.yaml"),
+            package_name_for_output_dir(GENERATED_DIR),
+            GENERATED_APP_ENV_VARS,
+            image=tag,
+        )
+
         compiled_path, compiled_sha256, _, _ = _currently_compiled_notebook_metadata()
 
     response = {
         "status": "success",
         "tag": tag,
         "pushed": False,
+        "kubernetes_manifest_image": tag,
     }
 
     if smoke_test:
