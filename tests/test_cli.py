@@ -20541,3 +20541,154 @@ def test_metrics_command_reports_a_dashboard_error_response(tmp_path, fake_dashb
     )
 
     _assert_clean_cli_error(proc, "something went wrong")
+
+
+_SAMPLE_APP_PROMETHEUS_METRICS_TEXT = (
+    "# HELP notebook_api_tasks_total Total number of background tasks "
+    "currently tracked, across every status.\n"
+    "# TYPE notebook_api_tasks_total gauge\n"
+    "notebook_api_tasks_total 2\n"
+    "# HELP notebook_api_http_requests_total Total number of HTTP "
+    "requests this app has handled, by response status class.\n"
+    "# TYPE notebook_api_http_requests_total counter\n"
+    'notebook_api_http_requests_total{status_class="2xx"} 5\n'
+    'notebook_api_http_requests_total{status_class="4xx"} 1\n'
+    "# HELP notebook_api_uptime_seconds Seconds since this process "
+    "started.\n"
+    "# TYPE notebook_api_uptime_seconds counter\n"
+    "notebook_api_uptime_seconds 42.5\n"
+)
+
+
+def _host_and_port(url):
+    parsed = urllib.parse.urlsplit(url)
+    return parsed.hostname, parsed.port
+
+
+def test_app_metrics_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "app-metrics" in proc.stdout
+
+
+def test_app_metrics_command_prints_the_raw_prometheus_text(tmp_path, fake_dashboard):
+    """Mirrors test_metrics_command_prints_the_raw_prometheus_text, but
+    against a compiled app's own GET /metrics/prometheus (host/port) --
+    not this dashboard's own GET /api/metrics/prometheus (--dashboard-url).
+    """
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _raw_response(
+            200,
+            _SAMPLE_APP_PROMETHEUS_METRICS_TEXT.encode("utf-8"),
+            content_type="text/plain; version=0.0.4; charset=utf-8",
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-metrics", "--host", host, "--port", str(port)], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout == _SAMPLE_APP_PROMETHEUS_METRICS_TEXT
+    assert handler.requests == ["/metrics/prometheus"]
+
+
+def test_app_metrics_command_json_flag_parses_the_prometheus_text_into_a_flat_dict(
+    tmp_path, fake_dashboard
+):
+    """A labeled line (a real generated app's own metrics carry labels,
+    unlike this dashboard's own) keeps its "{...}" suffix as part of the
+    flat dict's own key verbatim -- _parse_prometheus_text_metrics has no
+    special label-aware handling, the same "metric_name value" parsing
+    `metrics --json` already applies.
+    """
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _raw_response(
+            200,
+            _SAMPLE_APP_PROMETHEUS_METRICS_TEXT.encode("utf-8"),
+            content_type="text/plain; version=0.0.4; charset=utf-8",
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-metrics", "--host", host, "--port", str(port), "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data == {
+        "notebook_api_tasks_total": 2,
+        'notebook_api_http_requests_total{status_class="2xx"}': 5,
+        'notebook_api_http_requests_total{status_class="4xx"}': 1,
+        "notebook_api_uptime_seconds": 42.5,
+    }
+
+
+def test_app_metrics_command_defaults_to_localhost_port_8000(tmp_path):
+    """Matches `serve`'s own default port -- an operator who just ran a
+    plain `serve nb.ipynb` (no --port) can run a plain `app-metrics` (no
+    --host/--port either) straight after and reach it.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-metrics", "--timeout", "1"], cwd=workdir,
+    )
+
+    # Nothing is actually listening on localhost:8000 during this test --
+    # only confirming the connection was attempted against the documented
+    # default, not that it succeeds.
+    assert "localhost:8000" in proc.stderr
+
+
+def test_app_metrics_command_reports_a_clean_error_when_the_app_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-metrics",
+            "--host", "127.0.0.1", "--port", "1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
+def test_app_metrics_command_reports_an_app_error_response(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(500, {"detail": "something went wrong"}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-metrics", "--host", host, "--port", str(port)], cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "something went wrong")

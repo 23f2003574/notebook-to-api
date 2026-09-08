@@ -358,6 +358,7 @@ _CORE_COMMANDS = frozenset({
     "status", "metrics", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
     "remote-curl", "app-preview", "readme-preview", "dockerfile-preview", "docker-compose-preview", "env-example-preview", "env-vars-preview",
     "postman-preview", "k8s-preview", "openapi-preview", "verify-webhook",
+    "app-metrics",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -6733,6 +6734,34 @@ def _dispatch_core_command(args):
             print(json.dumps(_parse_prometheus_text_metrics(response.text), indent=2))
         else:
             print(response.text, end="" if response.text.endswith("\n") else "\n")
+    elif args.command == "app-metrics":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        app_url = f"http://{args.host}:{args.port}"
+
+        try:
+            response = httpx.get(
+                f"{app_url}/metrics/prometheus", timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"Could not reach the compiled app at {app_url}: {exc}. Is "
+                "it running? (see `serve`, or `docker compose up`)"
+            )
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"App rejected the request ({response.status_code}): "
+                f"{response.text}"
+            )
+
+        if args.json_output:
+            print(json.dumps(_parse_prometheus_text_metrics(response.text), indent=2))
+        else:
+            print(response.text, end="" if response.text.endswith("\n") else "\n")
 
 
 def main():
@@ -11999,6 +12028,64 @@ def main():
             "object instead of printing the raw text, for scripting/"
             "automation that wants one field at a time without its own "
             "Prometheus text parser."
+        )
+    )
+
+    # app-metrics command (the FIRST command anywhere in this CLI to
+    # actually call a *deployed* compiled app's own runtime directly --
+    # every other command here either talks to this dashboard (`metrics`
+    # above, and every `remote-*` command) or only *generates* example
+    # requests for a deployed app -- curl-preview/postman-preview/
+    # remote-curl -- without ever sending one itself. `serve`/`watch`
+    # start a compiled app locally and `deploy`/`remote-deploy` build and
+    # push a real image, but nothing in this CLI could then actually ask
+    # that running app anything at all -- an operator wanting to confirm
+    # it's actually serving real traffic, or grab one metric for a shell
+    # script, had to reach for a raw `curl` against a path this CLI
+    # otherwise treats every other endpoint as its own business to front)
+    app_metrics_parser = subparsers.add_parser(
+        "app-metrics",
+        help=(
+            "Show a compiled app's own scrape-shaped operational metrics "
+            "-- task/HTTP/webhook throughput -- via its GET "
+            "/metrics/prometheus. Distinct from `metrics` above, which "
+            "shows this dashboard's own metrics instead."
+        )
+    )
+    app_metrics_parser.add_argument(
+        "--host",
+        default="localhost",
+        help=(
+            "Host the compiled app is actually reachable at (default: "
+            "localhost) -- where `serve`/`docker compose up`/a real "
+            "deploy is actually listening, not the dashboard that built "
+            "it."
+        )
+    )
+    app_metrics_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port the compiled app is actually reachable at (default: 8000, matching `serve`'s own default)."
+    )
+    app_metrics_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=10.0,
+        help="Seconds to wait for the app to respond before giving up (default: 10)."
+    )
+    app_metrics_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Parse GET /metrics/prometheus' own Prometheus text exposition "
+            "format into a flat {metric_name: value} JSON object instead "
+            "of printing the raw text, the same parsing `metrics --json` "
+            "already applies to this dashboard's own scrape -- a labeled "
+            "line (e.g. a webhook outcome broken out by status) keeps its "
+            "own \"{...}\" label suffix as part of the key verbatim, "
+            "rather than being split apart into its own nested structure."
         )
     )
 
