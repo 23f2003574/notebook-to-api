@@ -21577,3 +21577,252 @@ def test_app_tasks_get_command_reports_a_404_cleanly(tmp_path, fake_dashboard):
     )
 
     _assert_clean_cli_error(proc, "Task abc123 not found")
+
+
+def test_app_tasks_redeliver_failed_subcommand_is_registered():
+
+    proc = _run_cli(["app-tasks", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "redeliver-failed" in proc.stdout
+
+
+def test_app_tasks_redeliver_failed_command_redelivers_every_matching_task(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {
+            "matching_tasks": 2,
+            "tasks": {
+                "t1": {"status": "completed"},
+                "t2": {"status": "completed"},
+            },
+        }),
+        _json_response(200, {
+            "task_id": "t1",
+            "webhook": {"delivered": True, "attempts": 1},
+            "webhook_redelivery_count": 1,
+        }),
+        _json_response(200, {
+            "task_id": "t2",
+            "webhook": {"delivered": False, "attempts": 1, "error": "boom"},
+            "webhook_redelivery_count": 1,
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-tasks", "redeliver-failed", "--host", host, "--port", str(port)],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Redelivered: t1" in proc.stdout
+    assert "Still failed: t2 -- boom" in proc.stdout
+    assert "1 succeeded, 1 still failed" in proc.stdout
+    assert handler.requests == [
+        "/tasks?webhook_delivery_failed=true&limit=1000&offset=0",
+        "/tasks/t1/redeliver-webhook",
+        "/tasks/t2/redeliver-webhook",
+    ]
+
+
+def test_app_tasks_redeliver_failed_command_reports_no_matching_tasks(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"matching_tasks": 0, "tasks": {}}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-tasks", "redeliver-failed", "--host", host, "--port", str(port)],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No tasks currently have a failed webhook delivery." in proc.stdout
+    assert handler.requests == [
+        "/tasks?webhook_delivery_failed=true&limit=1000&offset=0"
+    ]
+
+
+def test_app_tasks_redeliver_failed_command_dry_run_lists_without_redelivering(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {
+            "matching_tasks": 2,
+            "tasks": {
+                "t1": {"status": "completed"},
+                "t2": {"status": "completed"},
+            },
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "redeliver-failed", "--host", host, "--port", str(port),
+            "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would redeliver: t1" in proc.stdout
+    assert "Would redeliver: t2" in proc.stdout
+    assert "succeeded" not in proc.stdout
+    # Only the listing request -- no actual redelivery attempts made.
+    assert handler.requests == [
+        "/tasks?webhook_delivery_failed=true&limit=1000&offset=0"
+    ]
+
+
+def test_app_tasks_redeliver_failed_command_paginates_more_than_one_page(
+    tmp_path, fake_dashboard
+):
+    """GET /tasks caps a single response at limit=1000 -- a deployment
+    with more matching tasks than that must still get every one of them
+    redelivered, via a second (offset-advanced) page, not silently just
+    the first.
+    """
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {
+            "matching_tasks": 3,
+            "tasks": {"t1": {"status": "completed"}, "t2": {"status": "completed"}},
+        }),
+        _json_response(200, {
+            "matching_tasks": 3,
+            "tasks": {"t3": {"status": "completed"}},
+        }),
+        _json_response(200, {"task_id": "t1", "webhook": {"delivered": True}}),
+        _json_response(200, {"task_id": "t2", "webhook": {"delivered": True}}),
+        _json_response(200, {"task_id": "t3", "webhook": {"delivered": True}}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-tasks", "redeliver-failed", "--host", host, "--port", str(port)],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "3 succeeded, 0 still failed" in proc.stdout
+    assert handler.requests == [
+        "/tasks?webhook_delivery_failed=true&limit=1000&offset=0",
+        "/tasks?webhook_delivery_failed=true&limit=1000&offset=2",
+        "/tasks/t1/redeliver-webhook",
+        "/tasks/t2/redeliver-webhook",
+        "/tasks/t3/redeliver-webhook",
+    ]
+
+
+def test_app_tasks_redeliver_failed_command_one_bad_task_does_not_abort_the_run(
+    tmp_path, fake_dashboard
+):
+    """A task deleted between the listing and its own redelivery attempt
+    (a real race, not hypothetical -- the identical window every
+    *-batch endpoint's own per-entry try/except already guards against)
+    must not stop the remaining tasks from still being redelivered.
+    """
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {
+            "matching_tasks": 2,
+            "tasks": {"t1": {"status": "completed"}, "t2": {"status": "completed"}},
+        }),
+        _json_response(404, {"detail": "Task t1 not found"}),
+        _json_response(200, {"task_id": "t2", "webhook": {"delivered": True}}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-tasks", "redeliver-failed", "--host", host, "--port", str(port)],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Still failed: t1 -- " in proc.stdout
+    assert "Task t1 not found" in proc.stdout
+    assert "Redelivered: t2" in proc.stdout
+    assert "1 succeeded, 1 still failed" in proc.stdout
+
+
+def test_app_tasks_redeliver_failed_command_json_flag_emits_a_structured_result(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {
+            "matching_tasks": 1,
+            "tasks": {"t1": {"status": "completed"}},
+        }),
+        _json_response(200, {
+            "task_id": "t1",
+            "webhook": {"delivered": True, "attempts": 1},
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "redeliver-failed", "--host", host, "--port", str(port),
+            "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == {
+        "dry_run": False,
+        "results": [{"task_id": "t1", "status": "delivered"}],
+        "succeeded_count": 1,
+        "failed_count": 0,
+    }
+
+
+def test_app_tasks_redeliver_failed_command_reports_a_clean_error_when_the_app_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "redeliver-failed",
+            "--host", "127.0.0.1", "--port", "1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")

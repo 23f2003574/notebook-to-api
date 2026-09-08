@@ -7116,6 +7116,106 @@ def _dispatch_core_command(args):
                     f"(attempt {data.get('webhook_redelivery_count')})."
                 )
 
+        elif args.app_tasks_command == "redeliver-failed":
+
+            # Paginated (GET /tasks caps a single response at limit=1000)
+            # so a deployment with more than one page of currently-failed
+            # tasks still gets every one of them redelivered, not silently
+            # just the first 1000.
+            task_ids = []
+            offset = 0
+
+            while True:
+
+                page = _app_request(
+                    "GET", "/tasks",
+                    params={
+                        "webhook_delivery_failed": "true",
+                        "limit": 1000,
+                        "offset": offset,
+                    },
+                )
+                page_task_ids = list(page.get("tasks", {}).keys())
+
+                if not page_task_ids:
+                    break
+
+                task_ids.extend(page_task_ids)
+                offset += len(page_task_ids)
+
+                if offset >= page.get("matching_tasks", offset):
+                    break
+
+            results = []
+            succeeded_count = 0
+            failed_count = 0
+
+            for task_id in task_ids:
+
+                if args.dry_run:
+                    results.append({"task_id": task_id, "status": "would_redeliver"})
+                    continue
+
+                # One bad task_id (e.g. deleted between the listing above
+                # and this redelivery -- a real race, not hypothetical,
+                # the identical window every *-batch endpoint's own
+                # per-entry try/except already guards against) must not
+                # abort the whole run: every other matching task still
+                # gets its own redelivery attempt.
+                try:
+                    data = _app_request(
+                        "POST", f"/tasks/{task_id}/redeliver-webhook"
+                    )
+                except RuntimeError as exc:
+                    results.append({
+                        "task_id": task_id, "status": "error",
+                        "detail": str(exc),
+                    })
+                    failed_count += 1
+                    continue
+
+                webhook = data.get("webhook", {})
+
+                if webhook.get("delivered"):
+                    results.append({"task_id": task_id, "status": "delivered"})
+                    succeeded_count += 1
+                else:
+                    results.append({
+                        "task_id": task_id, "status": "failed",
+                        "detail": webhook.get("error"),
+                    })
+                    failed_count += 1
+
+            if args.dry_run:
+                succeeded_count = len(results)
+                failed_count = 0
+
+            if args.json_output:
+                print(json.dumps({
+                    "dry_run": args.dry_run,
+                    "results": results,
+                    "succeeded_count": succeeded_count,
+                    "failed_count": failed_count,
+                }, indent=2))
+            elif not results:
+                print("No tasks currently have a failed webhook delivery.")
+            else:
+
+                for result in results:
+
+                    if args.dry_run:
+                        print(f"Would redeliver: {result['task_id']}")
+                    elif result["status"] == "delivered":
+                        print(f"Redelivered: {result['task_id']}")
+                    else:
+                        print(
+                            f"Still failed: {result['task_id']} -- "
+                            f"{result.get('detail')}"
+                        )
+
+                if not args.dry_run:
+                    print(f"\n{succeeded_count} succeeded, {failed_count} still failed")
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -12745,6 +12845,55 @@ def main():
         action="store_true",
         dest="json_output",
         help="Emit the app's own raw JSON response instead of a human-readable summary, for scripting/automation."
+    )
+
+    # app-tasks redeliver-failed -- the bulk counterpart to
+    # redeliver-webhook above, closing the loop this session's own
+    # commits have been building one link at a time: GET /metrics
+    # aggregates how many webhook deliveries have failed (added earlier
+    # this session), GET /tasks?webhook_delivery_failed=true finds which
+    # tasks those are (also added earlier this session, specifically so a
+    # caller could find what redeliver-webhook needs), and app-tasks
+    # redeliver-webhook itself retriggers exactly one. Nothing yet did
+    # all three in one call -- an operator who ran `app-tasks list
+    # --webhook-delivery-failed true` and got back a dozen task_ids still
+    # had to run `app-tasks redeliver-webhook <id>` once per id by hand,
+    # or script that loop themselves, even though this CLI already knows
+    # how to do both halves.
+    app_tasks_redeliver_failed_parser = app_tasks_subparsers.add_parser(
+        "redeliver-failed",
+        help=(
+            "Redeliver every task's own currently-failed webhook in one "
+            "call -- GET /tasks?webhook_delivery_failed=true followed by "
+            "one POST /tasks/{task_id}/redeliver-webhook per match."
+        )
+    )
+    app_tasks_redeliver_failed_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "List which tasks currently have a failed webhook delivery "
+            "-- exactly what a real run would redeliver -- without "
+            "actually redelivering any of them."
+        )
+    )
+    _add_app_host_port_arguments(app_tasks_redeliver_failed_parser)
+    app_tasks_redeliver_failed_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit a machine-readable result ({\"dry_run\", \"results\": "
+            "[{\"task_id\", \"status\", ...}, ...], \"succeeded_count\", "
+            "\"failed_count\"}) instead of a human-readable summary, for "
+            "scripting/automation -- the same {\"results\", "
+            "\"succeeded_count\", \"failed_count\"} shape every batch "
+            "endpoint this dashboard's own API already returns (e.g. "
+            "POST /api/notebooks/tags-batch), applied here client-side "
+            "since the app itself has no equivalent bulk endpoint of its "
+            "own."
+        )
     )
 
     # governance command group
