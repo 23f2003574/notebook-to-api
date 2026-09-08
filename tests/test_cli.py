@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import threading
+import types
 import urllib.parse
 import zipfile
 from pathlib import Path
@@ -1823,7 +1824,38 @@ def test_verify_webhook_command_reports_a_clean_error_for_a_missing_secret(tmp_p
     _assert_clean_cli_error(proc, "No secret given")
 
 
-def test_verify_webhook_command_matches_a_real_generated_apps_own_signing(tmp_path):
+def _register_fake_notebook_module(monkeypatch, package_name="generated"):
+    """Generated code always contains a real
+    `import <package_name>.runtime.notebook_module as notebook_module`
+    statement (see api_generator.py). A plain `namespace = {"notebook_module":
+    ...}` dict passed to exec() does NOT satisfy that -- `import X as Y`
+    always performs a real import of X via sys.modules/sys.path and
+    ignores whatever's already bound to the name Y, so exec()ing generated
+    code without actually registering these modules only "works" by
+    accident if a real `<package_name>/runtime/notebook_module.py`
+    happens to already exist somewhere importable (e.g. a stray leftover
+    `generated/` directory from a previous local run) -- which silently
+    passes locally but fails with ModuleNotFoundError in a clean checkout.
+    Mirrors tests/test_generator.py's own identically-named helper --
+    confirmed missing here (see 9693070's own test using a bare
+    `namespace = {"__name__": ...}` with no registration at all, passing
+    locally only because an earlier test in the same pytest process had
+    already cached a real "generated" module in sys.modules).
+    """
+    parent = types.ModuleType(package_name)
+    runtime_pkg = types.ModuleType(f"{package_name}.runtime")
+    notebook_module = types.ModuleType(f"{package_name}.runtime.notebook_module")
+
+    monkeypatch.setitem(sys.modules, package_name, parent)
+    monkeypatch.setitem(sys.modules, f"{package_name}.runtime", runtime_pkg)
+    monkeypatch.setitem(
+        sys.modules, f"{package_name}.runtime.notebook_module", notebook_module
+    )
+
+
+def test_verify_webhook_command_matches_a_real_generated_apps_own_signing(
+    tmp_path, monkeypatch
+):
     """End-to-end: sign a payload the exact way a real compiled app's own
     _deliver_task_webhook does (via generate_fastapi_code), then confirm
     this command verifies it -- not just a hand-rolled hmac.new call
@@ -1838,6 +1870,7 @@ def test_verify_webhook_command_matches_a_real_generated_apps_own_signing(tmp_pa
     functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
     code = generate_fastapi_code(functions)
 
+    _register_fake_notebook_module(monkeypatch)
     namespace = {"__name__": "generated_app_under_test"}
     exec(compile(code, "<generated>", "exec"), namespace)
 
