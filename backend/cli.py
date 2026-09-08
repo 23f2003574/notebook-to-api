@@ -358,7 +358,7 @@ _CORE_COMMANDS = frozenset({
     "status", "metrics", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
     "remote-curl", "app-preview", "readme-preview", "dockerfile-preview", "docker-compose-preview", "env-example-preview", "env-vars-preview",
     "postman-preview", "k8s-preview", "openapi-preview", "verify-webhook",
-    "app-metrics", "app-call",
+    "app-metrics", "app-call", "app-tasks",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -1173,6 +1173,52 @@ def _add_dashboard_url_and_timeout_arguments(parser, default_timeout=30.0):
         help=(
             "Seconds to wait for the dashboard to respond before giving "
             f"up (default: {default_timeout:g})."
+        )
+    )
+
+
+def _add_app_host_port_arguments(parser, default_timeout=10.0):
+    """Add --host/--port/--api-key/--timeout to `parser` -- shared by
+    every subcommand that talks to a *deployed* compiled app directly
+    (app-metrics, app-call, app-tasks' own subcommands below), the same
+    "one shared helper, no drift" reasoning
+    _add_dashboard_url_and_timeout_arguments already gives for its own
+    identical role fronting this dashboard instead.
+    """
+    parser.add_argument(
+        "--host",
+        default="localhost",
+        help=(
+            "Host the compiled app is actually reachable at (default: "
+            "localhost) -- where `serve`/`docker compose up`/a real "
+            "deploy is actually listening, not the dashboard that built "
+            "it."
+        )
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port the compiled app is actually reachable at (default: 8000, matching `serve`'s own default)."
+    )
+    parser.add_argument(
+        "--api-key",
+        default=DEFAULT_DEV_API_KEY,
+        dest="api_key",
+        help=(
+            "Value sent as the X-API-Key header (default: the generated "
+            "app's own default dev key, used when NOTEBOOK_API_KEY isn't "
+            "set on the server), the same default `app-call`/`remote-curl "
+            "--api-key` already use."
+        )
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=default_timeout,
+        help=(
+            "Seconds to wait for the app to respond before giving up "
+            f"(default: {default_timeout:g})."
         )
     )
 
@@ -6884,6 +6930,116 @@ def _dispatch_core_command(args):
                 print(f"Task {result.get('status')}: {result.get('error')}")
         else:
             print(f"Result: {result.get('result')!r}")
+    elif args.command == "app-tasks":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        app_url = f"http://{args.host}:{args.port}"
+        headers = {"X-API-Key": args.api_key}
+
+        def _app_request(method, path, **kwargs):
+            try:
+                response = httpx.request(
+                    method, f"{app_url}{path}", headers=headers,
+                    timeout=args.timeout, **kwargs,
+                )
+            except httpx.HTTPError as exc:
+                raise RuntimeError(
+                    f"Could not reach the compiled app at {app_url}: "
+                    f"{exc}. Is it running? (see `serve`, or `docker "
+                    "compose up`)"
+                )
+
+            if response.status_code >= 400:
+                raise RuntimeError(
+                    f"App rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            return response.json()
+
+        if args.app_tasks_command == "list":
+
+            params = {}
+            if args.status:
+                params["status"] = args.status
+            if args.webhook_delivery_failed is not None:
+                params["webhook_delivery_failed"] = args.webhook_delivery_failed
+            if args.limit is not None:
+                params["limit"] = args.limit
+            if args.offset is not None:
+                params["offset"] = args.offset
+
+            data = _app_request("GET", "/tasks", params=params)
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                tasks = data.get("tasks", {})
+
+                if not tasks:
+                    print("No matching tasks.")
+                else:
+                    for task_id, task in tasks.items():
+                        webhook_note = ""
+                        webhook = task.get("webhook")
+                        if webhook is not None:
+                            webhook_note = (
+                                "  webhook: delivered" if webhook.get("delivered")
+                                else "  webhook: FAILED"
+                            )
+                        print(f"{task_id}  ({task.get('status')}){webhook_note}")
+
+                print(
+                    f"\n{data.get('matching_tasks', 0)} matching task(s) "
+                    f"({data.get('webhook_delivery_failed_tasks', 0)} with "
+                    "a failed webhook delivery)"
+                )
+
+        elif args.app_tasks_command == "get":
+
+            data = _app_request("GET", f"/tasks/{args.task_id}")
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                print(f"{args.task_id}: {data.get('status')}")
+                if "result" in data:
+                    print(f"  result: {data['result']!r}")
+                if "error" in data:
+                    print(f"  error: {data['error']}")
+                webhook = data.get("webhook")
+                if webhook is not None:
+                    print(
+                        "  webhook: "
+                        f"{'delivered' if webhook.get('delivered') else 'FAILED'}"
+                        f" ({webhook.get('attempts')} attempt(s))"
+                    )
+
+        elif args.app_tasks_command == "delete":
+
+            data = _app_request("DELETE", f"/tasks/{args.task_id}")
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                print(f"Deleted task {args.task_id} (was {data.get('status')}).")
+
+        elif args.app_tasks_command == "redeliver-webhook":
+
+            data = _app_request("POST", f"/tasks/{args.task_id}/redeliver-webhook")
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                webhook = data.get("webhook", {})
+                verb = "delivered" if webhook.get("delivered") else "FAILED"
+                print(
+                    f"Redelivery {verb} for task {args.task_id} "
+                    f"(attempt {data.get('webhook_redelivery_count')})."
+                )
 
 
 def main():
@@ -12329,6 +12485,128 @@ def main():
             "return value for a synchronous one) instead of a "
             "human-readable summary, for scripting/automation."
         )
+    )
+
+    # app-tasks command group -- manage a deployed compiled app's own
+    # already-submitted background tasks directly (list/get/delete/
+    # redeliver-webhook), completing the "talk to a deployed app
+    # directly" trio this session's own app-metrics (read aggregate
+    # metrics) and app-call (submit a new call) already started: neither
+    # one gives any way to inspect or act on a task *after* app-call
+    # already submitted it (or a real caller did, entirely outside this
+    # CLI) short of `app-call ... --wait`, which only ever follows the
+    # one task it just created. A generated SDK client's own
+    # list_tasks/get_task/delete_task/redeliver_task_webhook methods
+    # already give this to a caller with code of their own to run them
+    # from -- this closes the identical gap `verify-webhook`/`app-call`
+    # already closed elsewhere for an operator with only a terminal.
+    app_tasks_parser = subparsers.add_parser(
+        "app-tasks",
+        help=(
+            "List, inspect, delete, or redeliver the webhook of a "
+            "deployed compiled app's own already-submitted background "
+            "tasks directly."
+        )
+    )
+    app_tasks_subparsers = app_tasks_parser.add_subparsers(
+        dest="app_tasks_command", required=True
+    )
+
+    app_tasks_list_parser = app_tasks_subparsers.add_parser(
+        "list",
+        help="List a deployed app's own background tasks via its GET /tasks."
+    )
+    app_tasks_list_parser.add_argument(
+        "--status",
+        default=None,
+        choices=["processing", "completed", "failed"],
+        help="Only show tasks with this exact status, via GET /tasks' own ?status= query param."
+    )
+    app_tasks_list_parser.add_argument(
+        "--webhook-delivery-failed",
+        default=None,
+        dest="webhook_delivery_failed",
+        choices=["true", "false"],
+        help=(
+            "Only show tasks whose most recent webhook delivery attempt "
+            "did (\"true\") or didn't (\"false\") succeed, via GET "
+            "/tasks' own ?webhook_delivery_failed= query param -- a task "
+            "never submitted with a callback_url matches neither. "
+            "Composes with --status exactly like the app's own filter "
+            "does."
+        )
+    )
+    app_tasks_list_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Cap how many tasks are returned, via GET /tasks' own ?limit= query param (app default: 100, max 1000)."
+    )
+    app_tasks_list_parser.add_argument(
+        "--offset",
+        type=int,
+        default=None,
+        help="Skip this many matching tasks before --limit is applied, via GET /tasks' own ?offset= query param."
+    )
+    _add_app_host_port_arguments(app_tasks_list_parser)
+    app_tasks_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit the app's own raw JSON response instead of a human-readable listing, for scripting/automation."
+    )
+
+    app_tasks_get_parser = app_tasks_subparsers.add_parser(
+        "get",
+        help="Show one background task's own full record via GET /tasks/{task_id}."
+    )
+    app_tasks_get_parser.add_argument(
+        "task_id", help="Task id to look up, as reported by `app-tasks list` or `app-call`."
+    )
+    _add_app_host_port_arguments(app_tasks_get_parser)
+    app_tasks_get_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit the app's own raw JSON response instead of a human-readable summary, for scripting/automation."
+    )
+
+    app_tasks_delete_parser = app_tasks_subparsers.add_parser(
+        "delete",
+        help="Delete one background task via DELETE /tasks/{task_id}."
+    )
+    app_tasks_delete_parser.add_argument(
+        "task_id", help="Task id to delete, as reported by `app-tasks list` or `app-call`."
+    )
+    _add_app_host_port_arguments(app_tasks_delete_parser)
+    app_tasks_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit the app's own raw JSON response instead of a human-readable summary, for scripting/automation."
+    )
+
+    app_tasks_redeliver_webhook_parser = app_tasks_subparsers.add_parser(
+        "redeliver-webhook",
+        help=(
+            "Manually retrigger delivery of one task's own already-"
+            "recorded result/error via POST "
+            "/tasks/{task_id}/redeliver-webhook."
+        )
+    )
+    app_tasks_redeliver_webhook_parser.add_argument(
+        "task_id",
+        help=(
+            "Task id whose webhook to redeliver, as reported by "
+            "`app-tasks list --webhook-delivery-failed true`."
+        )
+    )
+    _add_app_host_port_arguments(app_tasks_redeliver_webhook_parser)
+    app_tasks_redeliver_webhook_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit the app's own raw JSON response instead of a human-readable summary, for scripting/automation."
     )
 
     # governance command group

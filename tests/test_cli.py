@@ -21058,3 +21058,349 @@ def test_app_call_command_reports_a_clean_error_for_a_missing_notebook(tmp_path)
     )
 
     _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_app_tasks_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "app-tasks" in proc.stdout
+
+
+def test_app_tasks_subcommands_are_registered():
+
+    proc = _run_cli(["app-tasks", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "list" in proc.stdout
+    assert "get" in proc.stdout
+    assert "delete" in proc.stdout
+    assert "redeliver-webhook" in proc.stdout
+
+
+def test_app_tasks_list_command_sends_the_query_params_and_prints_tasks(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {
+            "active_tasks": 2,
+            "processing_tasks": 0,
+            "completed_tasks": 1,
+            "failed_tasks": 1,
+            "webhook_delivery_failed_tasks": 1,
+            "matching_tasks": 2,
+            "limit": 100,
+            "offset": 0,
+            "tasks": {
+                "t1": {
+                    "status": "completed",
+                    "webhook": {"delivered": True, "attempts": 1},
+                },
+                "t2": {
+                    "status": "failed",
+                    "webhook": {"delivered": False, "attempts": 3},
+                },
+            },
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "list", "--host", host, "--port", str(port),
+            "--status", "completed", "--webhook-delivery-failed", "false",
+            "--limit", "5", "--offset", "10",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "t1  (completed)  webhook: delivered" in proc.stdout
+    assert "t2  (failed)  webhook: FAILED" in proc.stdout
+    assert "2 matching task(s) (1 with a failed webhook delivery)" in proc.stdout
+    assert handler.requests == [
+        "/tasks?status=completed&webhook_delivery_failed=false&limit=5&offset=10"
+    ]
+
+
+def test_app_tasks_list_command_reports_no_matching_tasks(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {
+            "active_tasks": 0, "processing_tasks": 0, "completed_tasks": 0,
+            "failed_tasks": 0, "webhook_delivery_failed_tasks": 0,
+            "matching_tasks": 0, "limit": 100, "offset": 0, "tasks": {},
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-tasks", "list", "--host", host, "--port", str(port)],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No matching tasks." in proc.stdout
+
+
+def test_app_tasks_list_command_omits_query_params_by_default(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {
+            "active_tasks": 0, "matching_tasks": 0, "limit": 100,
+            "offset": 0, "webhook_delivery_failed_tasks": 0, "tasks": {},
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-tasks", "list", "--host", host, "--port", str(port)],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/tasks"]
+
+
+def test_app_tasks_list_command_json_flag_emits_the_apps_own_raw_response(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    body = {
+        "active_tasks": 1, "matching_tasks": 1, "limit": 100, "offset": 0,
+        "webhook_delivery_failed_tasks": 0,
+        "tasks": {"t1": {"status": "completed"}},
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-tasks", "list", "--host", host, "--port", str(port), "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_app_tasks_get_command_prints_the_task_record(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {
+            "status": "completed",
+            "result": 42,
+            "webhook": {"delivered": False, "attempts": 3},
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-tasks", "get", "abc123", "--host", host, "--port", str(port)],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "abc123: completed" in proc.stdout
+    assert "result: 42" in proc.stdout
+    assert "webhook: FAILED (3 attempt(s))" in proc.stdout
+    assert handler.requests == ["/tasks/abc123"]
+
+
+def test_app_tasks_get_command_prints_an_error_field(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"status": "failed", "error": "boom"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-tasks", "get", "abc123", "--host", host, "--port", str(port)],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "error: boom" in proc.stdout
+
+
+def test_app_tasks_get_command_json_flag_emits_the_apps_own_raw_response(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    body = {"status": "completed", "result": 42}
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "get", "abc123",
+            "--host", host, "--port", str(port), "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_app_tasks_delete_command_confirms_deletion(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {
+            "message": "Task deleted", "task_id": "abc123", "status": "completed",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-tasks", "delete", "abc123", "--host", host, "--port", str(port)],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Deleted task abc123 (was completed)." in proc.stdout
+    assert handler.requests == ["/tasks/abc123"]
+
+
+def test_app_tasks_redeliver_webhook_command_reports_success(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {
+            "task_id": "abc123",
+            "webhook": {"delivered": True, "attempts": 1},
+            "webhook_redelivery_count": 2,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "redeliver-webhook", "abc123",
+            "--host", host, "--port", str(port),
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Redelivery delivered for task abc123 (attempt 2)." in proc.stdout
+    assert handler.requests == ["/tasks/abc123/redeliver-webhook"]
+
+
+def test_app_tasks_redeliver_webhook_command_reports_failure(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {
+            "task_id": "abc123",
+            "webhook": {"delivered": False, "attempts": 1},
+            "webhook_redelivery_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "redeliver-webhook", "abc123",
+            "--host", host, "--port", str(port),
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Redelivery FAILED for task abc123 (attempt 1)." in proc.stdout
+
+
+def test_app_tasks_command_sends_the_api_key_header(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, {"status": "completed"})]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "get", "abc123", "--host", host, "--port", str(port),
+            "--api-key", "my-secret-key",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.request_headers[0].get("X-API-Key") == "my-secret-key"
+
+
+def test_app_tasks_command_reports_a_clean_error_when_the_app_is_unreachable(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "list",
+            "--host", "127.0.0.1", "--port", "1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
+def test_app_tasks_get_command_reports_a_404_cleanly(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(404, {"detail": "Task abc123 not found"}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-tasks", "get", "abc123", "--host", host, "--port", str(port)],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Task abc123 not found")
