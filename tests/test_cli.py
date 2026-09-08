@@ -2776,6 +2776,7 @@ class _FakeDashboardHandler(http.server.BaseHTTPRequestHandler):
     requests = []
     bodies = []
     response_headers = []
+    request_headers = []
 
     def _handle(self):
 
@@ -2786,6 +2787,11 @@ class _FakeDashboardHandler(http.server.BaseHTTPRequestHandler):
             type(self).bodies.append(b"")
 
         type(self).requests.append(self.path)
+        # Recorded alongside requests/bodies above, for a test asserting a
+        # command sent a specific request *header* (e.g. `app-call`'s own
+        # X-API-Key) -- previously unobservable through this fixture at
+        # all, since only the path/body of each request was ever kept.
+        type(self).request_headers.append(dict(self.headers))
 
         status_code, payload, content_type = type(self).responses.pop(0)
 
@@ -2827,6 +2833,7 @@ def fake_dashboard():
     _FakeDashboardHandler.requests = []
     _FakeDashboardHandler.bodies = []
     _FakeDashboardHandler.response_headers = []
+    _FakeDashboardHandler.request_headers = []
 
     server = http.server.HTTPServer(("127.0.0.1", 0), _FakeDashboardHandler)
     port = server.server_address[1]
@@ -20692,3 +20699,362 @@ def test_app_metrics_command_reports_an_app_error_response(tmp_path, fake_dashbo
     )
 
     _assert_clean_cli_error(proc, "something went wrong")
+
+
+def test_app_call_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "app-call" in proc.stdout
+
+
+def test_app_call_command_calls_a_synchronous_function_with_its_example_payload(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, {"result": 0})]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "app-call", str(notebook_path), "add",
+            "--host", host, "--port", str(port),
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Result: 0" in proc.stdout
+    assert handler.requests == ["/add"]
+    assert json.loads(handler.bodies[0]) == {"a": 0, "b": 0}
+
+
+def test_app_call_command_respects_an_explicit_data_flag(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, {"result": 12})]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "app-call", str(notebook_path), "add",
+            "--host", host, "--port", str(port),
+            "--data", '{"a": 5, "b": 7}',
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Result: 12" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {"a": 5, "b": 7}
+
+
+def test_app_call_command_sends_the_api_key_header(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, {"result": 3})]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "app-call", str(notebook_path), "add",
+            "--host", host, "--port", str(port), "--api-key", "my-secret-key",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.request_headers[0].get("X-API-Key") == "my-secret-key"
+
+
+def test_app_call_command_json_flag_emits_the_apps_own_raw_response(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, {"result": 3})]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "app-call", str(notebook_path), "add",
+            "--host", host, "--port", str(port), "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == {"result": 3}
+
+
+def test_app_call_command_reports_a_task_id_for_a_background_function_without_wait(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"task_id": "abc123", "status": "processing"}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def process_data(x: int) -> int:\n    return x * 2\n",
+    )
+
+    proc = _run_cli(
+        [
+            "app-call", str(notebook_path), "process_data",
+            "--host", host, "--port", str(port), "--data", '{"x": 10}',
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Task submitted: abc123" in proc.stdout
+    assert "--wait" in proc.stdout
+    assert handler.requests == ["/process_data"]
+
+
+def test_app_call_command_polls_until_done_under_wait(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"task_id": "abc123", "status": "processing"}),
+        _json_response(200, {"status": "processing"}),
+        _json_response(200, {"status": "completed", "result": 42}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def process_data(x: int) -> int:\n    return x * 2\n",
+    )
+
+    proc = _run_cli(
+        [
+            "app-call", str(notebook_path), "process_data",
+            "--host", host, "--port", str(port), "--data", '{"x": 21}',
+            "--wait", "--poll-interval", "0.01",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Task completed: 42" in proc.stdout
+    assert handler.requests == [
+        "/process_data", "/tasks/abc123", "/tasks/abc123",
+    ]
+
+
+def test_app_call_command_reports_a_task_failure_under_wait(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"task_id": "abc123", "status": "processing"}),
+        _json_response(200, {"status": "failed", "error": "boom"}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def process_data(x: int) -> int:\n    return x * 2\n",
+    )
+
+    proc = _run_cli(
+        [
+            "app-call", str(notebook_path), "process_data",
+            "--host", host, "--port", str(port), "--data", '{"x": 21}',
+            "--wait",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Task failed: boom" in proc.stdout
+
+
+def test_app_call_command_wait_times_out_while_still_processing(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"task_id": "abc123", "status": "processing"}),
+    ] + [_json_response(200, {"status": "processing"})] * 50
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def process_data(x: int) -> int:\n    return x * 2\n",
+    )
+
+    proc = _run_cli(
+        [
+            "app-call", str(notebook_path), "process_data",
+            "--host", host, "--port", str(port), "--data", '{"x": 21}',
+            "--wait", "--wait-timeout", "0.2", "--poll-interval", "0.05",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "did not complete within")
+
+
+def test_app_call_command_ignores_wait_for_a_synchronous_function(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, {"result": 3})]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "app-call", str(notebook_path), "add",
+            "--host", host, "--port", str(port), "--wait",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Result: 3" in proc.stdout
+    # Only the one call -- no polling of a nonexistent task_id.
+    assert handler.requests == ["/add"]
+
+
+def test_app_call_command_rejects_an_unknown_function(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["app-call", str(notebook_path), "does_not_exist"], cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "is not a function")
+
+
+def test_app_call_command_rejects_a_reserved_name_conflict(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def health_check() -> dict:\n    return {}\n",
+    )
+
+    proc = _run_cli(
+        ["app-call", str(notebook_path), "health_check"], cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "collides with a name")
+
+
+def test_app_call_command_rejects_invalid_json_in_data(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "app-call", str(notebook_path), "add",
+            "--data", "not-json", "--host", "127.0.0.1", "--port", "1",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "--data is not valid JSON")
+
+
+def test_app_call_command_reports_a_clean_error_when_the_app_is_unreachable(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "app-call", str(notebook_path), "add",
+            "--host", "127.0.0.1", "--port", "1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
+def test_app_call_command_reports_an_app_error_response(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(401, {"detail": "Invalid or missing API key"}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["app-call", str(notebook_path), "add", "--host", host, "--port", str(port)],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Invalid or missing API key")
+
+
+def test_app_call_command_reports_a_clean_error_for_a_missing_notebook(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-call", "missing.ipynb", "add"], cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")

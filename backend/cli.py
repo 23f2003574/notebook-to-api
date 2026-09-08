@@ -358,7 +358,7 @@ _CORE_COMMANDS = frozenset({
     "status", "metrics", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
     "remote-curl", "app-preview", "readme-preview", "dockerfile-preview", "docker-compose-preview", "env-example-preview", "env-vars-preview",
     "postman-preview", "k8s-preview", "openapi-preview", "verify-webhook",
-    "app-metrics",
+    "app-metrics", "app-call",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -6762,6 +6762,128 @@ def _dispatch_core_command(args):
             print(json.dumps(_parse_prometheus_text_metrics(response.text), indent=2))
         else:
             print(response.text, end="" if response.text.endswith("\n") else "\n")
+    elif args.command == "app-call":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        # Read locally, purely to learn args.function's own
+        # example_payload/background-ness -- the notebook itself is never
+        # uploaded or compiled by this command, the same "read-only local
+        # preview source" role it already plays for curl-preview/
+        # export-curl's own identical example_payload default.
+        data = inspect_notebook_data(notebook_path=args.notebook)
+
+        functions_by_name = {func["name"]: func for func in data["functions"]}
+
+        if args.function not in functions_by_name:
+            raise RuntimeError(
+                f"'{args.function}' is not a function {args.notebook} "
+                "would compile -- available: "
+                f"{', '.join(sorted(functions_by_name)) or '(none)'}"
+            )
+
+        if args.function in data["reserved_name_conflicts"]:
+            raise RuntimeError(
+                f"'{args.function}' collides with a name this app's own "
+                "infrastructure already reserves -- it would never "
+                "actually compile into a real endpoint. See `inspect "
+                f"{args.notebook}` for details."
+            )
+
+        endpoint = next(
+            (
+                ep for ep in data["endpoints"]
+                if ep["path"] == f"/{args.function}"
+            ),
+            None,
+        )
+        is_background = bool(endpoint and endpoint["is_async"])
+
+        if args.data is not None:
+            try:
+                payload = json.loads(args.data)
+            except ValueError as exc:
+                raise RuntimeError(f"--data is not valid JSON: {exc}")
+        else:
+            payload = functions_by_name[args.function].get("example_payload", {})
+
+        app_url = f"http://{args.host}:{args.port}"
+        headers = {"X-API-Key": args.api_key}
+
+        try:
+            response = httpx.post(
+                f"{app_url}/{args.function}", json=payload, headers=headers,
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"Could not reach the compiled app at {app_url}: {exc}. Is "
+                "it running? (see `serve`, or `docker compose up`)"
+            )
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"App rejected the call ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        result = response.json()
+
+        if is_background and args.wait:
+
+            task_id = result.get("task_id")
+            deadline = time.time() + args.wait_timeout
+
+            while True:
+
+                try:
+                    task_response = httpx.get(
+                        f"{app_url}/tasks/{task_id}", headers=headers,
+                        timeout=args.timeout,
+                    )
+                except httpx.HTTPError as exc:
+                    raise RuntimeError(
+                        f"Could not reach the compiled app at {app_url}: "
+                        f"{exc}."
+                    )
+
+                if task_response.status_code >= 400:
+                    raise RuntimeError(
+                        f"App rejected the request "
+                        f"({task_response.status_code}): "
+                        f"{_extract_dashboard_error_detail(task_response)}"
+                    )
+
+                result = task_response.json()
+
+                if result.get("status") != "processing":
+                    break
+
+                if time.time() >= deadline:
+                    raise RuntimeError(
+                        f"Task {task_id} did not complete within "
+                        f"{args.wait_timeout}s"
+                    )
+
+                time.sleep(args.poll_interval)
+
+        if args.json_output:
+            print(json.dumps(result, indent=2))
+        elif is_background and not args.wait:
+            print(f"Task submitted: {result.get('task_id')}")
+            print(
+                "(pass --wait to poll for the real result, or check "
+                f"GET /tasks/{result.get('task_id')} yourself)"
+            )
+        elif is_background:
+            if result.get("status") == "completed":
+                print(f"Task completed: {result.get('result')!r}")
+            else:
+                print(f"Task {result.get('status')}: {result.get('error')}")
+        else:
+            print(f"Result: {result.get('result')!r}")
 
 
 def main():
@@ -12086,6 +12208,126 @@ def main():
             "line (e.g. a webhook outcome broken out by status) keeps its "
             "own \"{...}\" label suffix as part of the key verbatim, "
             "rather than being split apart into its own nested structure."
+        )
+    )
+
+    # app-call command -- the second command (after app-metrics above) to
+    # actually call a *deployed* compiled app's own runtime directly, this
+    # one to actually invoke one of its endpoints, not just read its
+    # metrics. curl-preview/postman-preview/export-curl/export-postman/
+    # remote-curl already build a ready-to-run curl command or Postman
+    # request for exactly this -- correct JSON body shape (from the
+    # notebook's own example_payload), the required X-API-Key header, the
+    # right host/port -- but none of them, nor anything else in this CLI,
+    # ever actually *sends* one. An operator who just ran `serve`/`docker
+    # compose up` and wants to try a function once, or a CI smoke test
+    # wanting to call one real endpoint and check its result, had to copy
+    # a generated curl command out and run it by hand (or write their own
+    # httpx call) even though this CLI already knows everything needed to
+    # build that exact request itself.
+    app_call_parser = subparsers.add_parser(
+        "app-call",
+        help=(
+            "Call one of a notebook's own compiled endpoints on a "
+            "deployed app directly (POST /<function>), rather than only "
+            "previewing what that call would look like."
+        )
+    )
+    app_call_parser.add_argument(
+        "notebook",
+        help=(
+            "Path to the notebook `function` was compiled from -- read "
+            "locally, the same as `curl-preview`/`export-curl`, purely to "
+            "learn `function`'s own example_payload (when --data isn't "
+            "given) and whether it's a background function; never "
+            "uploaded or compiled itself."
+        )
+    )
+    app_call_parser.add_argument(
+        "function",
+        help="Name of the notebook function to call, as reported by `inspect`."
+    )
+    app_call_parser.add_argument(
+        "--data",
+        default=None,
+        help=(
+            "JSON object to send as the request body. Defaults to "
+            "`function`'s own \"example_payload\" (the same default "
+            "curl-preview/export-curl already use for their own generated "
+            "commands) when omitted."
+        )
+    )
+    app_call_parser.add_argument(
+        "--host",
+        default="localhost",
+        help=(
+            "Host the compiled app is actually reachable at (default: "
+            "localhost) -- the same convention `app-metrics`/`remote-curl` "
+            "already use."
+        )
+    )
+    app_call_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port the compiled app is actually reachable at (default: 8000, matching `serve`'s own default)."
+    )
+    app_call_parser.add_argument(
+        "--api-key",
+        default=DEFAULT_DEV_API_KEY,
+        dest="api_key",
+        help=(
+            "Value sent as the X-API-Key header (default: the generated "
+            "app's own default dev key, used when NOTEBOOK_API_KEY isn't "
+            "set on the server), the same default `remote-curl --api-key` "
+            "already uses."
+        )
+    )
+    app_call_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=10.0,
+        help="Seconds to wait for the initial response before giving up (default: 10)."
+    )
+    app_call_parser.add_argument(
+        "--wait",
+        action="store_true",
+        help=(
+            "For a background function (its own POST only ever returns "
+            "{\"task_id\": ...} immediately): poll GET /tasks/{task_id} "
+            "until it leaves \"processing\" and print the real result/"
+            "error instead, the same "
+            "poll-until-done behavior a generated SDK client's own "
+            "*_and_wait companion already gives -- just from the CLI, "
+            "with no client of its own required. Ignored for a "
+            "synchronous function, which already returns its real result "
+            "immediately."
+        )
+    )
+    app_call_parser.add_argument(
+        "--wait-timeout",
+        type=float,
+        default=60.0,
+        dest="wait_timeout",
+        help="Seconds to keep polling under --wait before giving up (default: 60)."
+    )
+    app_call_parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=1.0,
+        dest="poll_interval",
+        help="Seconds to wait between polls under --wait (default: 1)."
+    )
+    app_call_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the app's own raw JSON response ({\"task_id\", "
+            "\"status\"} for a background function's initial response, "
+            "the task record itself under --wait, or the function's own "
+            "return value for a synchronous one) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 
