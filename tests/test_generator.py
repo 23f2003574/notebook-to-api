@@ -2135,10 +2135,11 @@ def test_redeliver_webhook_resends_a_failed_tasks_recorded_error(monkeypatch):
     }
 
 
-def test_redeliver_webhook_404s_for_an_unknown_task():
+def test_redeliver_webhook_404s_for_an_unknown_task(monkeypatch):
     functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
     code = generate_fastapi_code(functions)
 
+    _register_fake_notebook_module(monkeypatch)
     namespace = {}
     exec(compile(code, "<generated>", "exec"), namespace)
 
@@ -2158,6 +2159,7 @@ def test_redeliver_webhook_409s_while_the_task_is_still_processing(monkeypatch):
     functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
     code = generate_fastapi_code(functions)
 
+    _register_fake_notebook_module(monkeypatch)
     namespace = {}
     exec(compile(code, "<generated>", "exec"), namespace)
     namespace["TASKS"]["still-running"] = {

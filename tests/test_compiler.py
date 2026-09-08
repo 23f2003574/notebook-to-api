@@ -6537,7 +6537,12 @@ def test_compiler_pipeline_background_task_does_not_block_the_event_loop(tmp_pat
             assert time.time() < deadline, "task never left processing"
             time.sleep(0.05)
 
-        assert task == {"status": "completed", "result": 5, "created_at": task["created_at"]}
+        assert task == {
+            "status": "completed",
+            "result": 5,
+            "created_at": task["created_at"],
+            "callback_url": None,
+        }
 
     finally:
         server.terminate()
