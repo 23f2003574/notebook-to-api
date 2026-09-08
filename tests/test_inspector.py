@@ -1876,6 +1876,7 @@ def test_generate_curl_commands_appends_callback_url_to_a_background_function(tm
         "?callback_url=https%3A%2F%2Fexample.com%2Fhook" in command
     )
     assert "webhook" in command
+    assert "redeliver-webhook" in command
 
 
 def test_generate_curl_commands_ignores_callback_url_for_a_synchronous_function(tmp_path):
@@ -2071,7 +2072,7 @@ def test_generate_postman_collection_adds_callback_url_query_to_a_background_fun
         collection["variable"]
     )
 
-    [submit_item, _status_item] = collection["item"]
+    [submit_item, _status_item, _redeliver_item] = collection["item"]
     request = submit_item["request"]
 
     assert request["url"]["raw"] == "{{base_url}}/train_model?callback_url={{callback_url}}"
@@ -2079,6 +2080,84 @@ def test_generate_postman_collection_adds_callback_url_query_to_a_background_fun
         {"key": "callback_url", "value": "{{callback_url}}"}
     ]
     assert "webhook" in request["description"]
+
+
+def test_generate_postman_collection_adds_a_redeliver_webhook_request_when_callback_url_given(
+    tmp_path
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    collection = generate_postman_collection(
+        str(notebook_path), callback_url="https://example.com/hook"
+    )
+
+    names = [item["name"] for item in collection["item"]]
+    assert names == [
+        "train_model",
+        "train_model - Task Status",
+        "train_model - Redeliver Webhook",
+    ]
+
+    redeliver_item = collection["item"][2]
+    request = redeliver_item["request"]
+
+    assert request["method"] == "POST"
+    assert request["header"] == [{"key": "X-API-Key", "value": "{{api_key}}"}]
+    assert request["url"]["raw"] == (
+        "{{base_url}}/tasks/{{train_model_task_id}}/redeliver-webhook"
+    )
+    assert request["url"]["path"] == [
+        "tasks", "{{train_model_task_id}}", "redeliver-webhook",
+    ]
+    assert "train_model_task_id" in request["description"]
+
+    # Reuses the exact same collection variable the submission request's
+    # own test script already captures -- no separate variable of its own.
+    variables = {v["key"]: v["value"] for v in collection["variable"]}
+    assert variables["train_model_task_id"] == ""
+    assert "train_model_task_id_redeliver" not in variables
+
+
+def test_generate_postman_collection_omits_redeliver_webhook_request_by_default(
+    tmp_path
+):
+    """No callback_url means no webhook was ever requested -- redelivering
+    one would only offer a request the real server rejects with 400 (see
+    redeliver_task_webhook's own "was not submitted with a callback_url"
+    check), so it must not appear here at all.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    collection = generate_postman_collection(str(notebook_path))
+
+    names = [item["name"] for item in collection["item"]]
+    assert names == ["train_model", "train_model - Task Status"]
+    assert not any("Redeliver" in name for name in names)
+
+
+def test_generate_postman_collection_omits_redeliver_webhook_request_for_a_synchronous_function(
+    tmp_path
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    collection = generate_postman_collection(
+        str(notebook_path), callback_url="https://example.com/hook"
+    )
+
+    names = [item["name"] for item in collection["item"]]
+    assert names == ["add"]
 
 
 def test_generate_postman_collection_omits_callback_url_variable_by_default(tmp_path):

@@ -1084,9 +1084,13 @@ def generate_curl_commands(
     the generated OpenAPI schema by hand. Given, every background
     function's own command gets "?callback_url=<callback_url>" appended to
     its URL (percent-encoded via urllib.parse.quote) and its comment
-    reworded to describe the webhook delivery instead of a bare polling
-    note; a synchronous function's own command is left completely
-    untouched, matching the generated app's own identical restriction --
+    reworded to describe the webhook delivery -- also now mentioning POST
+    /tasks/{task_id}/redeliver-webhook as the manual recourse if delivery
+    fails, mirroring the real endpoint added since this docstring was
+    first written (redeliver_task_webhook, generator/api_generator.py) --
+    instead of a bare polling note; a synchronous function's own command
+    is left completely untouched, matching the generated app's own
+    identical restriction --
     it never even reads this query parameter for one (see
     generate_fastapi_code's own async-vs-sync endpoint code paths). Omitted
     (the default), every command is byte-for-byte identical to before this
@@ -1161,7 +1165,8 @@ def generate_curl_commands(
                     f'# {name} (background task -- POST also delivers the '
                     f'finished result to {callback_url} via a signed '
                     f'webhook; poll GET /tasks/{{task_id}} too if you need '
-                    "it sooner, or the webhook delivery fails)"
+                    "it sooner, or POST /tasks/{task_id}/redeliver-webhook "
+                    "to manually retry delivery if it fails)"
                 )
 
             else:
@@ -1254,6 +1259,24 @@ def generate_postman_collection(
     already applies for the identical reason (the generated app itself
     never reads this parameter for one). Omitted (the default), every
     item is byte-for-byte identical to before this parameter existed.
+
+    When `callback_url` is given, a background function also gets a third
+    companion request, "{name} - Redeliver Webhook", a ready-to-send POST
+    to {{base_url}}/tasks/{{"{name}_task_id"}}/redeliver-webhook -- the
+    real server-side recourse (redeliver_task_webhook, generator/
+    api_generator.py) for when the automatic delivery this collection just
+    demonstrated never arrives (a receiver that was down, a signature
+    mismatch, ...). Reuses the exact same "{name}_task_id" variable the
+    submission request's own test script already captures, so it's usable
+    the moment that request has run once, with no separate capture step of
+    its own. Unlike "{name} - Task Status" (always added for a background
+    function, callback_url or not -- polling is useful regardless of
+    whether a webhook was ever requested), this request is only added
+    alongside callback_url itself: redelivering a webhook that was never
+    requested in the first place isn't a real scenario -- the generated
+    server's own endpoint rejects it with 400 (see redeliver_task_webhook's
+    "was not submitted with a callback_url" check) -- so a collection with
+    no callback_url would only be offering a request guaranteed to fail.
 
     Returns a plain dict -- a valid Postman Collection v2.1.0 document
     once json.dump-ed -- rather than writing a file itself, the same
@@ -1377,6 +1400,36 @@ def generate_postman_collection(
                     },
                 },
             })
+
+            if callback_url:
+                items.append({
+                    "name": f"{name} - Redeliver Webhook",
+                    "request": {
+                        "method": "POST",
+                        "header": [{"key": "X-API-Key", "value": "{{api_key}}"}],
+                        "url": {
+                            "raw": (
+                                "{{base_url}}/tasks/{{" + task_id_var
+                                + "}}/redeliver-webhook"
+                            ),
+                            "host": ["{{base_url}}"],
+                            "path": [
+                                "tasks", "{{" + task_id_var + "}}",
+                                "redeliver-webhook",
+                            ],
+                        },
+                        "description": (
+                            f'Manually retrigger delivery of "{name}"\'s '
+                            "own already-recorded result/error to "
+                            "{{callback_url}} -- use this if the automatic "
+                            "webhook delivery above never arrived. "
+                            f"Requires {{{{{task_id_var}}}}} to already be "
+                            f'captured by running "{name}" above at least '
+                            "once, and the task to have already left "
+                            f'"processing" (see "{name} - Task Status").'
+                        ),
+                    },
+                })
 
         else:
             items.append(item)
