@@ -1177,6 +1177,7 @@ def test_generate_python_sdk_includes_task_management_helpers(tmp_path):
         "def list_tasks(\n"
         "        self, status: str = None, limit: int = None, "
         "offset: int = None,\n"
+        "        webhook_delivery_failed: bool = None,\n"
         "    ) -> dict:"
     ) in source
     assert "def delete_task(self, task_id: str) -> dict:" in source
@@ -1274,6 +1275,57 @@ def test_generate_python_sdk_list_tasks_forwards_status_limit_offset(tmp_path, m
         {"status": "failed"},
         {"limit": 10, "offset": 20},
         {"status": "completed", "limit": 5, "offset": 0},
+    ]
+
+
+def test_generate_python_sdk_list_tasks_forwards_webhook_delivery_failed(
+    tmp_path, monkeypatch
+):
+    """Mirrors test_generate_python_sdk_list_tasks_forwards_status_limit_offset
+    for the newly added webhook_delivery_failed filter -- before this, a
+    caller who'd already learned from metrics() that some automatic
+    webhook deliveries had failed had no way to find out *which* tasks
+    those were through this client at all.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"tasks": {}}
+
+    def fake_get(url, headers=None, timeout=None, params=None):
+        calls.append(params)
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+
+    client.list_tasks(webhook_delivery_failed=True)
+    client.list_tasks(status="failed", webhook_delivery_failed=False, limit=5)
+    client.list_tasks()
+
+    assert calls == [
+        {"webhook_delivery_failed": True},
+        {"status": "failed", "webhook_delivery_failed": False, "limit": 5},
+        {},
     ]
 
 
@@ -2653,7 +2705,8 @@ def test_generate_typescript_sdk_includes_task_management_helpers(tmp_path):
 
     assert (
         "async listTasks(options: { status?: string; limit?: number; "
-        "offset?: number } = {}): Promise<any> {"
+        "offset?: number; webhookDeliveryFailed?: boolean } = {}): "
+        "Promise<any> {"
     ) in source
     assert "async deleteTask(taskId: string): Promise<any> {" in source
     assert "async deleteCompletedTasks(): Promise<any> {" in source
@@ -2719,6 +2772,64 @@ def test_generate_typescript_sdk_list_tasks_forwards_status_limit_offset(tmp_pat
         "http://localhost:8000/tasks?limit=10&offset=20",
         "http://localhost:8000/tasks?status=completed&limit=5&offset=0",
     ]
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_list_tasks_forwards_webhook_delivery_failed(
+    tmp_path,
+):
+    """Mirrors
+    test_generate_python_sdk_list_tasks_forwards_webhook_delivery_failed
+    for the TypeScript client.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const calls = [];
+        globalThis.fetch = async (url, opts) => {{
+          calls.push(url);
+          return {{ ok: true, json: async () => ({{}}) }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        await client.listTasks({{ webhookDeliveryFailed: true }});
+        await client.listTasks({{ status: "failed", webhookDeliveryFailed: false, limit: 5 }});
+
+        console.log(JSON.stringify({{ calls }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["calls"] == [
+        "http://localhost:8000/tasks?webhook_delivery_failed=true",
+        "http://localhost:8000/tasks?status=failed&limit=5&webhook_delivery_failed=false",
+    ]
+
+
 def test_generate_typescript_sdk_task_management_methods_send_correct_requests(tmp_path):
 
     schema_path = _write_schema(

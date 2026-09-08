@@ -1714,6 +1714,7 @@ def generate_fastapi_code(
     lines.append("@app.get('/tasks')")
     lines.append("def list_tasks(")
     lines.append("    status: Optional[str] = None,")
+    lines.append("    webhook_delivery_failed: Optional[bool] = None,")
     lines.append("    limit: int = Query(default=100, ge=1, le=1000),")
     lines.append("    offset: int = Query(default=0, ge=0),")
     lines.append("    _: None = Depends(verify_api_key),")
@@ -1748,10 +1749,43 @@ def generate_fastapi_code(
     lines.append("        if task.get('status') == 'processing'")
     lines.append("    )")
 
+    # Unconditional -- like completed_tasks/failed_tasks/processing_tasks
+    # above -- so a caller can see "how many tasks currently have a failed
+    # webhook" without first knowing to pass webhook_delivery_failed=true
+    # just to get a count. Distinct from _WEBHOOK_METRICS' own aggregate
+    # delivered/failed counters (GET /metrics): those tally every delivery
+    # *attempt* ever made, including ones long since redelivered
+    # successfully and no longer reflect any task's own *current* state;
+    # this instead reflects exactly how many tasks, right now, still have
+    # an undelivered webhook worth investigating or redelivering.
+    lines.append("    webhook_delivery_failed_tasks = sum(")
+    lines.append("        1")
+    lines.append("        for task in TASKS.values()")
+    lines.append("        if task.get('webhook', {}).get('delivered') is False")
+    lines.append("    )")
+
+    # Before this, a caller who'd just learned from GET /metrics that N
+    # automatic webhook deliveries have failed (see _WEBHOOK_METRICS) had
+    # no way to find out *which* tasks those were short of fetching every
+    # task via GET /tasks and inspecting each one's own 'webhook' field by
+    # hand -- there was no way to ask this endpoint for just the ones
+    # still needing a POST /tasks/{task_id}/redeliver-webhook. True
+    # narrows to a task whose most recent delivery attempt (automatic or a
+    # prior manual redelivery alike) did not succeed; False narrows to one
+    # that did. A task with no 'webhook' field at all (no callback_url was
+    # ever given) matches neither -- webhook_delivery_failed is a question
+    # about delivery outcome, not something either value can meaningfully
+    # answer for a task that never attempted one. Composes with status
+    # exactly like every other filter here already does.
     lines.append("    matching_items = [")
     lines.append("        (task_id, task)")
     lines.append("        for task_id, task in TASKS.items()")
-    lines.append("        if status is None or task.get('status') == status")
+    lines.append("        if (status is None or task.get('status') == status)")
+    lines.append("        and (")
+    lines.append("            webhook_delivery_failed is None")
+    lines.append("            or task.get('webhook', {}).get('delivered')")
+    lines.append("            == (not webhook_delivery_failed)")
+    lines.append("        )")
     lines.append("    ]")
     lines.append(
         "    matching_items.sort("
@@ -1764,6 +1798,9 @@ def generate_fastapi_code(
     lines.append("        'processing_tasks': processing_tasks,")
     lines.append("        'completed_tasks': completed_tasks,")
     lines.append("        'failed_tasks': failed_tasks,")
+    lines.append(
+        "        'webhook_delivery_failed_tasks': webhook_delivery_failed_tasks,"
+    )
     lines.append("        'matching_tasks': len(matching_items),")
     lines.append("        'limit': limit,")
     lines.append("        'offset': offset,")

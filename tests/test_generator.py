@@ -2976,6 +2976,83 @@ def test_list_tasks_supports_status_filter_and_pagination(monkeypatch):
     assert invalid_limit.status_code == 422
 
 
+def test_list_tasks_filters_by_webhook_delivery_failed(monkeypatch):
+    """Confirmed missing before this feature: a caller who'd learned from
+    GET /metrics that some automatic webhook deliveries had failed had no
+    way to find out *which* tasks those were through GET /tasks itself --
+    only status filtered the listing, nothing about a task's own
+    "webhook" outcome. Before this, that meant fetching every task
+    unfiltered and inspecting each one's own "webhook" field by hand just
+    to find the ones worth a POST /tasks/{task_id}/redeliver-webhook.
+    """
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "webhook_delivery_failed: Optional[bool] = None," in code
+    assert "'webhook_delivery_failed_tasks': webhook_delivery_failed_tasks," in code
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    namespace["TASKS"]["t-failed-webhook"] = {
+        "status": "completed", "created_at": 1.0,
+        "webhook": {"delivered": False},
+    }
+    namespace["TASKS"]["t-delivered-webhook"] = {
+        "status": "completed", "created_at": 2.0,
+        "webhook": {"delivered": True},
+    }
+    namespace["TASKS"]["t-no-webhook"] = {
+        "status": "completed", "created_at": 3.0,
+    }
+    namespace["TASKS"]["t-failed-status-and-webhook"] = {
+        "status": "failed", "created_at": 4.0,
+        "webhook": {"delivered": False},
+    }
+
+    unfiltered = client.get("/tasks", headers=headers)
+    assert unfiltered.json()["webhook_delivery_failed_tasks"] == 2
+
+    failed_only = client.get(
+        "/tasks", params={"webhook_delivery_failed": "true"}, headers=headers
+    )
+    assert failed_only.status_code == 200
+    assert set(failed_only.json()["tasks"].keys()) == {
+        "t-failed-webhook", "t-failed-status-and-webhook",
+    }
+    assert failed_only.json()["matching_tasks"] == 2
+
+    delivered_only = client.get(
+        "/tasks", params={"webhook_delivery_failed": "false"}, headers=headers
+    )
+    assert delivered_only.status_code == 200
+    assert list(delivered_only.json()["tasks"].keys()) == ["t-delivered-webhook"]
+
+    # A task with no "webhook" field at all (no callback_url was ever
+    # given) must match neither -- it has no delivery outcome to filter
+    # by, in either direction.
+    assert "t-no-webhook" not in failed_only.json()["tasks"]
+    assert "t-no-webhook" not in delivered_only.json()["tasks"]
+
+    # Composes with "status" exactly like every other filter here already
+    # does.
+    combined = client.get(
+        "/tasks",
+        params={"status": "failed", "webhook_delivery_failed": "true"},
+        headers=headers,
+    )
+    assert combined.status_code == 200
+    assert list(combined.json()["tasks"].keys()) == ["t-failed-status-and-webhook"]
+
+
 def test_evict_expired_tasks_never_evicts_a_processing_task(monkeypatch):
     """Confirmed exploitable before this fix: _evict_expired_tasks swept
     out any task past TASK_TTL_SECONDS purely by created_at age, with no

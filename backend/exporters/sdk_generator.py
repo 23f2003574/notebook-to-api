@@ -1229,10 +1229,22 @@ def generate_python_sdk(
     # method sent no query string at all no matter how it was called.
     # Each omitted (the default) preserves list_tasks()'s previous
     # behavior exactly: every task, unfiltered, first page.
+    #
+    # webhook_delivery_failed mirrors the server's own identically-named
+    # query param, added alongside redeliver_task_webhook's own client
+    # method above -- before this, a caller who'd already learned from
+    # metrics() that some automatic webhook deliveries had failed had no
+    # way to find out *which* tasks those were through this client at
+    # all, short of calling list_tasks() unfiltered and inspecting every
+    # task's own "webhook" field by hand. Composes with status/limit/
+    # offset exactly like the server's own filter does.
     lines.append("    def list_tasks(")
     lines.append(
         "        self, status: str = None, limit: int = None, "
         "offset: int = None,"
+    )
+    lines.append(
+        "        webhook_delivery_failed: bool = None,"
     )
     lines.append("    ) -> dict:")
     lines.append(
@@ -1240,8 +1252,8 @@ def generate_python_sdk(
     )
     lines.append("")
     lines.append(
-        "        status/limit/offset mirror the generated server's own "
-        "GET /tasks"
+        "        status/limit/offset/webhook_delivery_failed mirror the "
+        "generated server's own GET /tasks"
     )
     lines.append(
         '        query params -- each omitted (the default) returns '
@@ -1255,6 +1267,10 @@ def generate_python_sdk(
     lines.append('            params["limit"] = limit')
     lines.append("        if offset is not None:")
     lines.append('            params["offset"] = offset')
+    lines.append("        if webhook_delivery_failed is not None:")
+    lines.append(
+        '            params["webhook_delivery_failed"] = webhook_delivery_failed'
+    )
     lines.append("        return self._request(lambda: requests.get(")
     lines.append('            f"{self.base_url}/tasks",')
     lines.append('            headers={"X-API-Key": self.api_key},')
@@ -1845,9 +1861,19 @@ def generate_typescript_sdk(
     # called, so filtering/paginating GET /tasks meant bypassing the
     # generated client entirely. Every option left undefined (the
     # default) preserves listTasks()'s previous behavior exactly.
+    # webhookDeliveryFailed mirrors the server's own identically-named
+    # (snake_case on the wire) webhook_delivery_failed query param, added
+    # alongside redeliverTaskWebhook's own client method above -- before
+    # this, a caller who'd already learned from metrics() that some
+    # automatic webhook deliveries had failed had no way to find out
+    # *which* tasks those were through this client at all, short of
+    # calling listTasks() unfiltered and inspecting every task's own
+    # "webhook" field by hand. Mirrors generate_python_sdk's identical
+    # list_tasks(webhook_delivery_failed=...) addition.
     lines.append(
         "  async listTasks(options: { status?: string; limit?: number; "
-        "offset?: number } = {}): Promise<any> {"
+        "offset?: number; webhookDeliveryFailed?: boolean } = {}): "
+        "Promise<any> {"
     )
     lines.append("    const params = new URLSearchParams();")
     lines.append(
@@ -1861,6 +1887,11 @@ def generate_typescript_sdk(
     lines.append(
         '    if (options.offset !== undefined) params.set("offset", '
         "String(options.offset));"
+    )
+    lines.append(
+        "    if (options.webhookDeliveryFailed !== undefined) "
+        'params.set("webhook_delivery_failed", '
+        "String(options.webhookDeliveryFailed));"
     )
     lines.append("    const query = params.toString();")
     lines.append('    const path = `/tasks${query ? `?${query}` : ""}`;')
