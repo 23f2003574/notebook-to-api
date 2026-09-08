@@ -5547,8 +5547,44 @@ def test_readme_content_marks_a_background_function_as_such():
 
     assert (
         "`POST /train_model` -- enqueues a background task; poll "
-        "`GET /tasks/{task_id}` for the result"
+        "`GET /tasks/{task_id}` for the result, or pass `?callback_url=` "
+        "to have it POSTed there instead once the task finishes"
     ) in content
+
+
+def test_readme_content_background_function_mentions_webhook_signing_and_redelivery():
+    """Confirmed missing before this fix: a compiled app has supported
+    ?callback_url= webhook delivery (with HMAC signing and manual
+    redelivery via POST /tasks/{task_id}/redeliver-webhook) for many
+    commits, but the one file this tool ships specifically to explain a
+    compiled app's own endpoints to a human never mentioned either
+    capability at all -- an operator reading only this file had no way to
+    learn either exists short of reading api_generator.py's own source.
+    """
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(
+        functions=[{"name": "train_model", "args": [], "return_type": "dict"}],
+    )
+
+    assert "NOTEBOOK_API_WEBHOOK_SECRET" in content
+    assert "/tasks/{task_id}/redeliver-webhook" in content
+
+
+def test_readme_content_lists_the_redeliver_webhook_route_as_requiring_an_api_key():
+    """The explicit `/tasks/...` route list under "So do these built-in
+    ones" must name every real /tasks/... route this app actually has --
+    redeliver_task_webhook (api_generator.py) included, added several
+    commits after this list was first written and never picked up here,
+    the identical "claims a status a real request wouldn't get" class of
+    documentation bug this function's own docstring already names for the
+    original health/ready/... list.
+    """
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content()
+
+    assert "`/tasks/{task_id}/redeliver-webhook`" in content
 
 
 def test_readme_content_does_not_mark_a_synchronous_function_as_background():

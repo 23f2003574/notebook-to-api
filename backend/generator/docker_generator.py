@@ -390,6 +390,21 @@ def readme_content(package_name="generated", functions=None, env_vars=None):
     below instead, so this file can never again claim a status a real
     request to that route wouldn't actually get.
 
+    A second, identical-class documentation bug, also confirmed against
+    the real generated code rather than assumed: the explicit `/tasks/...`
+    route list above never named `/tasks/{{task_id}}/redeliver-webhook`
+    (added several commits after this file was first written -- see
+    redeliver_task_webhook, api_generator.py) at all, and every
+    background function's own bullet below only ever mentioned polling
+    `GET /tasks/{{task_id}}`, never that `?callback_url=` webhook delivery
+    (with HMAC signing via `NOTEBOOK_API_WEBHOOK_SECRET`, and manual
+    redelivery via that same route) was ever an option -- an operator who
+    reads only this file, the one artifact this tool ships specifically
+    to explain what a compiled app actually does, had no way to learn
+    either capability exists short of reading api_generator.py's own
+    source, the identical "had no way to know" failure this docstring's
+    own first documentation-bug fix already names.
+
     `functions` is the same list generate_fastapi_code (api_generator.py)
     itself compiles into endpoints -- each already carrying "name" and,
     for a background one, matching LONG_RUNNING_KEYWORDS. Reusing that
@@ -418,7 +433,11 @@ def readme_content(package_name="generated", functions=None, env_vars=None):
 
         suffix = (
             " -- enqueues a background task; poll `GET /tasks/{task_id}` "
-            "for the result"
+            "for the result, or pass `?callback_url=` to have it POSTed "
+            "there instead once the task finishes (signed if "
+            "`NOTEBOOK_API_WEBHOOK_SECRET` is set -- see Configuration "
+            "below); if that delivery fails, `POST "
+            "/tasks/{task_id}/redeliver-webhook` retries it manually"
             if is_background else ""
         )
 
@@ -449,8 +468,8 @@ Every endpoint below requires an `X-API-Key` header. See Authentication \
 below.
 
 So do these built-in ones: `/auth/validate`, `/tasks`, and every other \
-`/tasks/...` route (`/tasks/{{task_id}}`, `/tasks/completed`, \
-`/tasks/failed`, `/tasks/cleanup`, `/tasks/reset`).
+`/tasks/...` route (`/tasks/{{task_id}}`, `/tasks/{{task_id}}/redeliver-webhook`, \
+`/tasks/completed`, `/tasks/failed`, `/tasks/cleanup`, `/tasks/reset`).
 
 These built-in ones deliberately do **not** -- so a load balancer, a \
 Kubernetes liveness/readiness probe, or a Prometheus scraper can reach \
