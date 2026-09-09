@@ -292,10 +292,23 @@ def _run_doctor(args, cwd, path_dirs=()):
     of this test process' real environment) can't deterministically
     control either way: the machine running these tests may or may not
     have a real `docker` on its own PATH.
+
+    The PATH's own "nothing extra" baseline is a freshly-created, always-
+    empty directory under `cwd` -- not the real /usr/bin:/bin a previous
+    version of this helper used, which assumed those never contain a
+    real `docker`. Confirmed wrong, not just imprecise: a GitHub Actions
+    runner's own /usr/bin already has a real `docker` (preinstalled, with
+    its daemon already running) on it, which silently broke every "docker
+    is absent" test here in CI while still passing locally on a machine
+    with no system-wide Docker install.
     """
     env = dict(os.environ)
     env["PYTHONPATH"] = str(PROJECT_ROOT)
-    env["PATH"] = os.pathsep.join([*(str(d) for d in path_dirs), "/usr/bin", "/bin"])
+    empty_path_dir = Path(cwd) / ".empty-path"
+    empty_path_dir.mkdir(exist_ok=True)
+    env["PATH"] = os.pathsep.join(
+        [*(str(d) for d in path_dirs), str(empty_path_dir)]
+    )
     return subprocess.run(
         [sys.executable, "-m", "backend.cli", "doctor", *args],
         cwd=str(cwd),
@@ -331,9 +344,10 @@ def test_doctor_command_warns_when_docker_is_not_on_path(tmp_path):
     workdir = tmp_path / "workdir"
     workdir.mkdir()
 
-    # PATH deliberately excludes any directory a real `docker` might live
-    # in (see _run_doctor's own docstring) -- /usr/bin and /bin only,
-    # neither of which this test ever populates with a fake `docker`.
+    # No path_dirs given -- _run_doctor's own PATH is an empty directory
+    # with nothing in it (see its own docstring), guaranteed to have no
+    # real `docker` regardless of what's installed on the machine
+    # actually running this test.
     proc = _run_doctor([], cwd=workdir)
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
