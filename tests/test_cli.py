@@ -1,6 +1,7 @@
 import http.server
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -113,6 +114,153 @@ def test_version_flag_works_with_no_subcommand_given(tmp_path):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "required" not in proc.stderr.lower()
+
+
+def test_completion_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "completion" in proc.stdout
+
+
+def test_completion_command_rejects_an_unknown_shell(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["completion", "powershell"], cwd=workdir)
+
+    assert proc.returncode != 0
+    assert "invalid choice" in proc.stderr
+
+
+def test_completion_bash_output_covers_every_top_level_command_and_nested_group(
+    tmp_path,
+):
+    """A hand-maintained completion list would drift the moment a new
+    subcommand is added -- confirmed this one doesn't: it must reflect
+    both a plain top-level command and a deeply-nested one (app-tasks'
+    own subcommands, added across this session's own Commits #1-2)
+    without either being named here by hand.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["completion", "bash"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "complete -F _notebook_to_api_complete notebook-to-api" in proc.stdout
+    assert '"") opts="' in proc.stdout
+    assert "app-tasks" in proc.stdout
+    assert (
+        '"app-tasks") opts="--help -h cleanup delete get list '
+        'purge-completed purge-failed redeliver-failed redeliver-webhook '
+        'reset retry" ;;'
+        in proc.stdout
+    )
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="requires a real bash to execute the generated completion script",
+)
+def test_completion_bash_script_actually_completes_a_nested_subcommand(tmp_path):
+    """Load the generated script into a real bash process and simulate a
+    real completion request (COMP_WORDS/COMP_CWORD, the same two
+    variables bash itself sets while a user is actually pressing <TAB>)
+    rather than only checking the source text contains the right
+    substrings.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["completion", "bash"], cwd=workdir)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    script_path = workdir / "completion.bash"
+    script_path.write_text(proc.stdout, encoding="utf-8")
+
+    bash_proc = subprocess.run(
+        [
+            "bash", "-c",
+            f"""
+            source {script_path}
+            COMP_WORDS=(notebook-to-api app-tasks pu)
+            COMP_CWORD=2
+            _notebook_to_api_complete
+            echo "${{COMPREPLY[@]}}"
+            """,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert bash_proc.returncode == 0, bash_proc.stdout + bash_proc.stderr
+    assert bash_proc.stdout.split() == ["purge-completed", "purge-failed"]
+
+
+@pytest.mark.skipif(
+    shutil.which("zsh") is None,
+    reason="requires a real zsh to syntax-check the generated completion script",
+)
+def test_completion_zsh_output_is_syntactically_valid(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["completion", "zsh"], cwd=workdir)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.startswith("#compdef notebook-to-api")
+    assert "app-tasks" in proc.stdout
+
+    script_path = workdir / "_notebook_to_api"
+    script_path.write_text(proc.stdout, encoding="utf-8")
+
+    zsh_proc = subprocess.run(
+        ["zsh", "-n", str(script_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert zsh_proc.returncode == 0, zsh_proc.stdout + zsh_proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("fish") is None,
+    reason="requires a real fish to execute the generated completion script",
+)
+def test_completion_fish_script_actually_completes_a_nested_subcommand(tmp_path):
+    """Mirrors test_completion_bash_script_actually_completes_a_nested_subcommand
+    for fish -- `complete -C"<partial cmdline>"` is fish's own built-in
+    way to ask "what would <TAB> offer here" non-interactively.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["completion", "fish"], cwd=workdir)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    script_path = workdir / "completion.fish"
+    script_path.write_text(proc.stdout, encoding="utf-8")
+
+    fish_proc = subprocess.run(
+        [
+            "fish", "--no-config", "-c",
+            f'source {script_path}; complete -C"notebook-to-api app-tasks pu"',
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert fish_proc.returncode == 0, fish_proc.stdout + fish_proc.stderr
+    assert sorted(fish_proc.stdout.split()) == ["purge-completed", "purge-failed"]
 
 
 def test_compile_command_writes_the_generated_app(tmp_path):
