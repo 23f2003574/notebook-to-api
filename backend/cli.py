@@ -7228,6 +7228,94 @@ def _dispatch_core_command(args):
                 if not args.dry_run:
                     print(f"\n{succeeded_count} succeeded, {failed_count} still failed")
 
+        elif args.app_tasks_command == "purge-completed":
+
+            # DELETE /tasks/completed has no confirmation step of its own
+            # and is irreversible -- the same reasoning
+            # clear-deploy-history/prune-versions/tags-delete already
+            # prompt for.
+            if not args.yes:
+                answer = input(
+                    f"Permanently delete every completed task on {app_url}? [y/N] "
+                )
+                if answer.strip().lower() not in ("y", "yes"):
+                    print("Aborted.")
+                    return
+
+            data = _app_request("DELETE", "/tasks/completed")
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                print(
+                    f"Deleted {data.get('deleted', 0)} completed task(s) "
+                    f"({data.get('remaining_tasks', 0)} remaining)."
+                )
+
+        elif args.app_tasks_command == "purge-failed":
+
+            if not args.yes:
+                answer = input(
+                    f"Permanently delete every failed task on {app_url}? [y/N] "
+                )
+                if answer.strip().lower() not in ("y", "yes"):
+                    print("Aborted.")
+                    return
+
+            data = _app_request("DELETE", "/tasks/failed")
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                print(
+                    f"Deleted {data.get('deleted', 0)} failed task(s) "
+                    f"({data.get('remaining_tasks', 0)} remaining)."
+                )
+
+        elif args.app_tasks_command == "cleanup":
+
+            if not args.yes:
+                answer = input(
+                    "Permanently delete every completed and failed task "
+                    f"on {app_url}? [y/N] "
+                )
+                if answer.strip().lower() not in ("y", "yes"):
+                    print("Aborted.")
+                    return
+
+            data = _app_request("POST", "/tasks/cleanup")
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                print(
+                    f"Deleted {data.get('completed_deleted', 0)} completed "
+                    f"and {data.get('failed_deleted', 0)} failed task(s) "
+                    f"({data.get('remaining_tasks', 0)} remaining)."
+                )
+
+        elif args.app_tasks_command == "reset":
+
+            # Unlike purge-completed/purge-failed/cleanup above, POST
+            # /tasks/reset drops every task regardless of status --
+            # including one still processing -- so this warns about that
+            # explicitly in the prompt itself, not just in --help.
+            if not args.yes:
+                answer = input(
+                    f"Permanently delete EVERY task on {app_url}, "
+                    "including any still processing? [y/N] "
+                )
+                if answer.strip().lower() not in ("y", "yes"):
+                    print("Aborted.")
+                    return
+
+            data = _app_request("POST", "/tasks/reset")
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                print(f"Deleted {data.get('deleted_tasks', 0)} task(s).")
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -12753,9 +12841,9 @@ def main():
     app_tasks_parser = subparsers.add_parser(
         "app-tasks",
         help=(
-            "List, inspect, delete, retry, or redeliver the webhook of a "
-            "deployed compiled app's own already-submitted background "
-            "tasks directly."
+            "List, inspect, delete, retry, redeliver the webhook of, or "
+            "bulk clean up a deployed compiled app's own already-"
+            "submitted background tasks directly."
         )
     )
     app_tasks_subparsers = app_tasks_parser.add_subparsers(
@@ -12935,6 +13023,118 @@ def main():
             "since the app itself has no equivalent bulk endpoint of its "
             "own."
         )
+    )
+
+    # app-tasks purge-completed/purge-failed/cleanup/reset -- CLI wrappers
+    # for four already-existing server endpoints (DELETE /tasks/completed,
+    # DELETE /tasks/failed, POST /tasks/cleanup, POST /tasks/reset) that,
+    # unlike every other /tasks* endpoint this CLI already talks to
+    # directly (list/get/delete/redeliver-webhook/redeliver-failed/retry),
+    # had no CLI counterpart at all -- an operator who wanted to bulk-clear
+    # a deployment's own finished tasks (routine maintenance for a
+    # long-running app, the exact TASKS-growing-without-bound scenario
+    # _evict_expired_tasks itself exists to bound) had to reach for curl.
+    # All four are irreversible deletes with no confirmation step of their
+    # own server-side, so each prompts for one here -- the identical
+    # pattern clear-deploy-history/prune-versions/tags-delete already use
+    # for the same reason.
+    app_tasks_purge_completed_parser = app_tasks_subparsers.add_parser(
+        "purge-completed",
+        help="Delete every completed task via DELETE /tasks/completed."
+    )
+    app_tasks_purge_completed_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Confirm the deletion without an interactive prompt. Without "
+            "this, `app-tasks purge-completed` asks for a y/N confirmation "
+            "on the terminal first -- DELETE /tasks/completed itself has "
+            "no confirmation step of its own, and is irreversible."
+        )
+    )
+    _add_app_host_port_arguments(app_tasks_purge_completed_parser)
+    app_tasks_purge_completed_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit the app's own raw JSON response instead of a human-readable summary, for scripting/automation."
+    )
+
+    app_tasks_purge_failed_parser = app_tasks_subparsers.add_parser(
+        "purge-failed",
+        help="Delete every failed task via DELETE /tasks/failed."
+    )
+    app_tasks_purge_failed_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Confirm the deletion without an interactive prompt. Without "
+            "this, `app-tasks purge-failed` asks for a y/N confirmation "
+            "on the terminal first -- DELETE /tasks/failed itself has no "
+            "confirmation step of its own, and is irreversible."
+        )
+    )
+    _add_app_host_port_arguments(app_tasks_purge_failed_parser)
+    app_tasks_purge_failed_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit the app's own raw JSON response instead of a human-readable summary, for scripting/automation."
+    )
+
+    app_tasks_cleanup_parser = app_tasks_subparsers.add_parser(
+        "cleanup",
+        help=(
+            "Delete every completed AND failed task in one call via POST "
+            "/tasks/cleanup -- equivalent to purge-completed followed by "
+            "purge-failed, in a single request."
+        )
+    )
+    app_tasks_cleanup_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Confirm the deletion without an interactive prompt. Without "
+            "this, `app-tasks cleanup` asks for a y/N confirmation on the "
+            "terminal first -- POST /tasks/cleanup itself has no "
+            "confirmation step of its own, and is irreversible."
+        )
+    )
+    _add_app_host_port_arguments(app_tasks_cleanup_parser)
+    app_tasks_cleanup_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit the app's own raw JSON response instead of a human-readable summary, for scripting/automation."
+    )
+
+    app_tasks_reset_parser = app_tasks_subparsers.add_parser(
+        "reset",
+        help=(
+            "Delete EVERY task this app is tracking, regardless of status "
+            "-- including one still processing -- via POST /tasks/reset."
+        )
+    )
+    app_tasks_reset_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Confirm the deletion without an interactive prompt. Without "
+            "this, `app-tasks reset` asks for a y/N confirmation on the "
+            "terminal first -- POST /tasks/reset itself has no "
+            "confirmation step of its own, and is irreversible. Unlike "
+            "purge-completed/purge-failed/cleanup above, this also drops "
+            "any task still processing; its eventual result or error, "
+            "once that background work finishes, is discarded rather "
+            "than recorded anywhere."
+        )
+    )
+    _add_app_host_port_arguments(app_tasks_reset_parser)
+    app_tasks_reset_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit the app's own raw JSON response instead of a human-readable summary, for scripting/automation."
     )
 
     # governance command group

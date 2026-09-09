@@ -21950,3 +21950,246 @@ def test_app_tasks_redeliver_failed_command_reports_a_clean_error_when_the_app_i
     )
 
     _assert_clean_cli_error(proc, "Is it running?")
+
+
+def test_app_tasks_purge_completed_subcommand_is_registered():
+
+    proc = _run_cli(["app-tasks", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "purge-completed" in proc.stdout
+
+
+def test_app_tasks_purge_completed_command_deletes_with_yes_flag(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"deleted": 3, "remaining_tasks": 1})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "purge-completed", "--yes",
+            "--host", host, "--port", str(port),
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Deleted 3 completed task(s) (1 remaining)." in proc.stdout
+    assert handler.requests == ["/tasks/completed"]
+
+
+def test_app_tasks_purge_completed_command_aborts_without_yes_when_declined(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = []
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli",
+            "app-tasks", "purge-completed", "--host", host, "--port", str(port),
+        ],
+        cwd=str(workdir),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        input="n\n",
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Aborted." in proc.stdout
+    assert handler.requests == []
+
+
+def test_app_tasks_purge_failed_command_deletes_with_yes_flag(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"deleted": 2, "remaining_tasks": 5})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "purge-failed", "--yes",
+            "--host", host, "--port", str(port),
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Deleted 2 failed task(s) (5 remaining)." in proc.stdout
+    assert handler.requests == ["/tasks/failed"]
+
+
+def test_app_tasks_cleanup_subcommand_is_registered():
+
+    proc = _run_cli(["app-tasks", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "cleanup" in proc.stdout
+
+
+def test_app_tasks_cleanup_command_deletes_with_yes_flag(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(
+            200,
+            {"completed_deleted": 4, "failed_deleted": 2, "remaining_tasks": 1},
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "cleanup", "--yes",
+            "--host", host, "--port", str(port),
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (
+        "Deleted 4 completed and 2 failed task(s) (1 remaining)."
+        in proc.stdout
+    )
+    assert handler.requests == ["/tasks/cleanup"]
+
+
+def test_app_tasks_cleanup_command_json_flag_emits_the_apps_raw_response(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    body = {"completed_deleted": 0, "failed_deleted": 0, "remaining_tasks": 0}
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "cleanup", "--yes", "--json",
+            "--host", host, "--port", str(port),
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_app_tasks_reset_subcommand_is_registered():
+
+    proc = _run_cli(["app-tasks", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "reset" in proc.stdout
+
+
+def test_app_tasks_reset_command_deletes_with_yes_flag(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, {"deleted_tasks": 7})]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "reset", "--yes",
+            "--host", host, "--port", str(port),
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Deleted 7 task(s)." in proc.stdout
+    assert handler.requests == ["/tasks/reset"]
+
+
+def test_app_tasks_reset_command_aborts_without_yes_when_declined(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = []
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli",
+            "app-tasks", "reset", "--host", host, "--port", str(port),
+        ],
+        cwd=str(workdir),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        input="n\n",
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Aborted." in proc.stdout
+    assert handler.requests == []
+
+
+def test_app_tasks_reset_command_prompt_warns_about_processing_tasks(
+    tmp_path, fake_dashboard
+):
+    """Unlike purge-completed/purge-failed/cleanup, reset also drops a
+    task still processing -- the confirmation prompt itself must say so,
+    not just --help, since that's the one moment an operator about to
+    type "y" actually reads.
+    """
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = []
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli",
+            "app-tasks", "reset", "--host", host, "--port", str(port),
+        ],
+        cwd=str(workdir),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        input="n\n",
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "still processing" in proc.stdout
