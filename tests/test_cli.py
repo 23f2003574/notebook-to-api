@@ -2,6 +2,7 @@ import http.server
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import threading
@@ -261,6 +262,165 @@ def test_completion_fish_script_actually_completes_a_nested_subcommand(tmp_path)
 
     assert fish_proc.returncode == 0, fish_proc.stdout + fish_proc.stderr
     assert sorted(fish_proc.stdout.split()) == ["purge-completed", "purge-failed"]
+
+
+def _install_fake_docker_for_doctor(bin_dir, info_exit_code=0):
+    """A fake `docker` executable for `doctor`'s own docker_cli/
+    docker_daemon checks -- mirrors _install_fake_docker in
+    test_cli_deploy.py (a real Docker daemon isn't needed to test this),
+    but only ever needs to handle `docker info`, not a real `build`/
+    `push`.
+    """
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    docker_stub = bin_dir / "docker"
+    docker_stub.write_text(
+        "#!/bin/sh\n"
+        f"exit {info_exit_code}\n",
+        encoding="utf-8",
+    )
+    docker_stub.chmod(
+        docker_stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH
+    )
+
+
+def _run_doctor(args, cwd, path_dirs=()):
+    """Like _run_cli, but with control over PATH -- `doctor`'s own
+    docker_cli check depends on shutil.which("docker") actually finding
+    (or not finding) a real executable, which _run_cli's own env (a copy
+    of this test process' real environment) can't deterministically
+    control either way: the machine running these tests may or may not
+    have a real `docker` on its own PATH.
+    """
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+    env["PATH"] = os.pathsep.join([*(str(d) for d in path_dirs), "/usr/bin", "/bin"])
+    return subprocess.run(
+        [sys.executable, "-m", "backend.cli", "doctor", *args],
+        cwd=str(cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+def test_doctor_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "doctor" in proc.stdout
+
+
+def test_doctor_command_reports_the_python_version(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_doctor([], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    expected = f"Python {sys.version_info.major}.{sys.version_info.minor}"
+    assert expected in proc.stdout
+
+
+def test_doctor_command_warns_when_docker_is_not_on_path(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    # PATH deliberately excludes any directory a real `docker` might live
+    # in (see _run_doctor's own docstring) -- /usr/bin and /bin only,
+    # neither of which this test ever populates with a fake `docker`.
+    proc = _run_doctor([], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Docker CLI not found on PATH" in proc.stdout
+
+
+def test_doctor_command_reports_docker_ok_when_daemon_is_reachable(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    bin_dir = tmp_path / "fakebin"
+    _install_fake_docker_for_doctor(bin_dir, info_exit_code=0)
+
+    proc = _run_doctor([], cwd=workdir, path_dirs=[bin_dir])
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Docker CLI found at" in proc.stdout
+    assert "Docker daemon is reachable." in proc.stdout
+
+
+def test_doctor_command_warns_when_docker_daemon_is_not_reachable(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    bin_dir = tmp_path / "fakebin"
+    _install_fake_docker_for_doctor(bin_dir, info_exit_code=1)
+
+    proc = _run_doctor([], cwd=workdir, path_dirs=[bin_dir])
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Docker CLI found at" in proc.stdout
+    assert "Docker daemon isn't reachable" in proc.stdout
+
+
+def test_doctor_command_fails_when_the_output_directory_is_not_writable(tmp_path):
+
+    readonly_dir = tmp_path / "readonly"
+    readonly_dir.mkdir()
+    readonly_dir.chmod(0o555)
+
+    try:
+
+        proc = _run_doctor(
+            ["--output", str(readonly_dir / "generated")], cwd=tmp_path,
+        )
+
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert f"{readonly_dir} is not writable" in proc.stdout
+        assert "Some checks failed" in proc.stdout
+
+    finally:
+        readonly_dir.chmod(0o755)
+
+
+def test_doctor_command_json_flag_emits_structured_checks(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_doctor(["--json"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    body = json.loads(proc.stdout)
+    assert body["ok"] is True
+    names = [check["name"] for check in body["checks"]]
+    assert names == ["python_version", "docker_cli", "output_directory_writable"]
+    assert all(
+        set(check.keys()) == {"name", "status", "detail"} for check in body["checks"]
+    )
+
+
+def test_doctor_command_json_includes_docker_daemon_check_when_docker_is_present(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    bin_dir = tmp_path / "fakebin"
+    _install_fake_docker_for_doctor(bin_dir, info_exit_code=0)
+
+    proc = _run_doctor(["--json"], cwd=workdir, path_dirs=[bin_dir])
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    body = json.loads(proc.stdout)
+    names = [check["name"] for check in body["checks"]]
+    assert names == [
+        "python_version", "docker_cli", "docker_daemon",
+        "output_directory_writable",
+    ]
 
 
 def test_compile_command_writes_the_generated_app(tmp_path):

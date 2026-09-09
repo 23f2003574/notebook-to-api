@@ -4,6 +4,7 @@ import hmac
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -21,6 +22,7 @@ from nbformat import ValidationError as NotebookValidationError
 from backend.compiler import (
     NOTEBOOK_TO_API_VERSION,
     compile_notebook,
+    compiling_python_version,
     _filter_functions_by_name,
 )
 # Import inspector for analysis
@@ -346,6 +348,7 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 # sys.exit(exit_code)). Kept as a set so main() can route only these
 # commands through _dispatch_core_command's shared error handling.
 _CORE_COMMANDS = frozenset({
+    "doctor",
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
     "export-curl", "export-postman", "serve", "watch", "deploy", "diff", "upload", "import-notebooks", "import-url",
     "list", "info", "info-batch",
@@ -1420,7 +1423,139 @@ def _dispatch_core_command(args):
     caught in a single place (see CLI_USER_FACING_ERRORS in main()) instead
     of needing its own try/except at each of the six call sites.
     """
-    if args.command == "compile":
+    if args.command == "doctor":
+
+        checks = []
+
+        checks.append({
+            "name": "python_version",
+            "status": "info",
+            "detail": f"Python {compiling_python_version()}",
+        })
+
+        docker_path = shutil.which("docker")
+
+        if docker_path is None:
+
+            checks.append({
+                "name": "docker_cli",
+                "status": "warn",
+                "detail": (
+                    "Docker CLI not found on PATH -- `deploy` (which "
+                    "shells out to a local `docker build`/`docker push`) "
+                    "will not work until Docker is installed. Every "
+                    "other command here works fine without it."
+                ),
+            })
+
+        else:
+
+            checks.append({
+                "name": "docker_cli",
+                "status": "ok",
+                "detail": f"Docker CLI found at {docker_path}",
+            })
+
+            # `docker info` (rather than a lighter `docker --version`,
+            # which only confirms the CLI itself is installed, not that
+            # it can actually talk to anything) is what `deploy`'s own
+            # `docker build` would need to succeed -- a CLI present but
+            # unable to reach its daemon (not started, permission denied
+            # on its socket, ...) is exactly as unusable for `deploy` as
+            # the CLI being missing outright, just discovered later and
+            # less clearly (a raw `docker build` error) without this.
+            try:
+
+                subprocess.run(
+                    ["docker", "info"],
+                    capture_output=True, timeout=10, check=True,
+                )
+
+            except subprocess.CalledProcessError:
+
+                checks.append({
+                    "name": "docker_daemon",
+                    "status": "warn",
+                    "detail": (
+                        "Docker CLI found, but the Docker daemon isn't "
+                        "reachable (`docker info` failed) -- `deploy` "
+                        "will fail until it's running."
+                    ),
+                })
+
+            except subprocess.TimeoutExpired:
+
+                checks.append({
+                    "name": "docker_daemon",
+                    "status": "warn",
+                    "detail": (
+                        "`docker info` timed out -- the Docker daemon "
+                        "may not be running."
+                    ),
+                })
+
+            else:
+
+                checks.append({
+                    "name": "docker_daemon",
+                    "status": "ok",
+                    "detail": "Docker daemon is reachable.",
+                })
+
+        # The nearest already-existing ancestor of --output (--output
+        # itself, if it's already there) is what actually needs to be
+        # writable: `compile`/`serve`/`deploy` all create --output via
+        # Path.mkdir(parents=True, exist_ok=True) on demand, so a
+        # not-yet-existing --output is only ever a real problem if
+        # nothing above it in the path can be written to either.
+        output_dir = Path(args.output).resolve()
+        existing_ancestor = next(
+            (
+                candidate for candidate in [output_dir, *output_dir.parents]
+                if candidate.exists()
+            ),
+            Path("/"),
+        )
+
+        if os.access(existing_ancestor, os.W_OK):
+
+            checks.append({
+                "name": "output_directory_writable",
+                "status": "ok",
+                "detail": f"{existing_ancestor} is writable.",
+            })
+
+        else:
+
+            checks.append({
+                "name": "output_directory_writable",
+                "status": "fail",
+                "detail": (
+                    f"{existing_ancestor} is not writable -- "
+                    "`compile`/`serve`/`deploy` will fail to write there."
+                ),
+            })
+
+        has_failure = any(check["status"] == "fail" for check in checks)
+
+        if args.json_output:
+            print(json.dumps({"checks": checks, "ok": not has_failure}, indent=2))
+        else:
+
+            status_symbols = {"ok": "✓", "warn": "⚠", "fail": "✗", "info": "•"}
+
+            for check in checks:
+                print(f"{status_symbols[check['status']]} {check['detail']}")
+
+            print(
+                "\nAll checks passed." if not has_failure
+                else "\nSome checks failed -- see above."
+            )
+
+        if has_failure:
+            sys.exit(1)
+
+    elif args.command == "compile":
         from backend.compiler import package_name_for_output_dir
 
         output_dir = Path(args.output)
@@ -7587,6 +7722,51 @@ def main():
         )
     )
     _add_function_selection_arguments(compile_parser)
+
+    # doctor command -- a local, read-only pre-flight check of this
+    # machine's own environment, distinct from `governance doctor` below
+    # (which audits this dashboard's own recorded governance history, not
+    # the machine `notebook-to-api` itself is running on). Before this,
+    # every one of the things it checks was only ever discovered
+    # reactively, mid-command: `deploy`'s own docker build already
+    # converts a missing Docker CLI into a clean RuntimeError (see
+    # _run_deploy_docker_command), but only once an operator had already
+    # gotten as far as compiling a real notebook and starting a build --
+    # there was no single command to sanity-check a fresh machine's setup
+    # (or diagnose "why does deploy keep failing") up front, without
+    # needing a real notebook on hand at all.
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help=(
+            "Check this machine's own local environment (Python version, "
+            "Docker availability, output directory permissions) -- not "
+            "this dashboard's own `governance doctor`."
+        )
+    )
+    doctor_parser.add_argument(
+        "--output",
+        default="generated",
+        help=(
+            "Directory `compile`/`serve`/`deploy` would write into by "
+            "default -- checked for write permission the same way "
+            "`compile --output` itself would need. Only the directory "
+            "itself (or its nearest already-existing ancestor, if it "
+            "doesn't exist yet) is checked; nothing is actually created "
+            "or written."
+        )
+    )
+    doctor_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit machine-readable JSON ({\"checks\": [{\"name\", "
+            "\"status\", \"detail\"}, ...], \"ok\"}) instead of a "
+            "human-readable summary, for scripting/automation (e.g. a CI "
+            "step gating on Docker actually being available before "
+            "attempting `deploy`)."
+        )
+    )
 
     # inspect command (show analysis report)
     inspect_parser = subparsers.add_parser("inspect", help="Inspect a notebook and display analysis report.")
