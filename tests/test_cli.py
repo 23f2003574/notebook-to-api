@@ -4505,6 +4505,116 @@ def test_dashboard_url_explicit_flag_overrides_environment_variable(
     assert handler.requests == ["/api/notebooks?sort=name&order=asc&offset=0"]
 
 
+def test_app_api_key_defaults_from_environment_variable_for_app_call(
+    tmp_path, fake_dashboard, monkeypatch
+):
+    """Every subcommand that talks to a deployed compiled app directly
+    (app-call, every app-tasks subcommand) now defaults its own
+    --api-key to $NOTEBOOK_API_KEY when set -- the exact same variable a
+    real deployment's own app already reads to decide which key(s) it
+    accepts -- mirroring test_dashboard_url_defaults_from_environment_variable's
+    identical convention for --dashboard-url/$NOTEBOOK_API_DASHBOARD_URL.
+    """
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, {"result": 3})]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "my-real-secret")
+
+    proc = _run_cli(
+        ["app-call", str(notebook_path), "add", "--host", host, "--port", str(port)],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.request_headers[0].get("X-API-Key") == "my-real-secret"
+
+
+def test_app_api_key_explicit_flag_overrides_environment_variable(
+    tmp_path, fake_dashboard, monkeypatch
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, {"result": 3})]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "wrong-key-from-env")
+
+    proc = _run_cli(
+        [
+            "app-call", str(notebook_path), "add",
+            "--host", host, "--port", str(port),
+            "--api-key", "explicit-key",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.request_headers[0].get("X-API-Key") == "explicit-key"
+
+
+def test_app_api_key_defaults_from_environment_variable_for_app_tasks(
+    tmp_path, fake_dashboard, monkeypatch
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {
+            "active_tasks": 0, "processing_tasks": 0, "completed_tasks": 0,
+            "failed_tasks": 0, "webhook_delivery_failed_tasks": 0,
+            "matching_tasks": 0, "limit": None, "offset": 0, "tasks": {},
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "my-real-secret")
+
+    proc = _run_cli(
+        ["app-tasks", "list", "--host", host, "--port", str(port)], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.request_headers[0].get("X-API-Key") == "my-real-secret"
+
+
+def test_app_api_key_defaults_to_the_dev_key_without_the_environment_variable(
+    tmp_path, fake_dashboard, monkeypatch
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, {"result": 3})]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    monkeypatch.delenv("NOTEBOOK_API_KEY", raising=False)
+
+    proc = _run_cli(
+        ["app-call", str(notebook_path), "add", "--host", host, "--port", str(port)],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.request_headers[0].get("X-API-Key") == "notebook-to-api-dev-key"
+
+
 def test_list_command_shows_the_compiled_version_id_when_present(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

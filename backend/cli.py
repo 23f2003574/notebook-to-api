@@ -1153,6 +1153,38 @@ def _default_dashboard_url():
     return os.getenv("NOTEBOOK_API_DASHBOARD_URL", "http://localhost:8001")
 
 
+def _default_app_api_key():
+    """The CLI's own default --api-key, for every subcommand that talks
+    to a *deployed* compiled app directly (app-call, every app-tasks
+    subcommand) and doesn't get an explicit one.
+
+    Reads NOTEBOOK_API_KEY if set -- the exact same environment variable
+    a real deployment's own running app already reads to decide which
+    key(s) it accepts (see verify_api_key, api_generator.py) -- falling
+    back to DEFAULT_DEV_API_KEY exactly as every one of these subcommands
+    already did before this existed, the same "already independently
+    configurable via its own NOTEBOOK_API_* environment variable, this
+    CLI's own default just never picked it up" gap
+    _default_dashboard_url's own docstring already closed once for
+    --dashboard-url/$NOTEBOOK_API_DASHBOARD_URL.
+
+    Before this, an operator who'd set NOTEBOOK_API_KEY to a real,
+    non-default value to configure the app itself (via `serve`, `docker
+    compose up`, or a real deploy) still had to pass a matching, easy-to-
+    typo --api-key on every single app-call/app-tasks invocation against
+    it -- there was no way for this CLI to infer it from the exact same
+    environment variable that already determines what the app expects,
+    even though every one of these commands' own --api-key help text
+    already told an operator to "pass the same value configured via
+    NOTEBOOK_API_KEY" by hand.
+
+    An explicit --api-key on any one call still always wins over this,
+    the identical "default= is only ever consulted when the flag itself
+    is omitted" guarantee _default_dashboard_url already gives.
+    """
+    return os.getenv("NOTEBOOK_API_KEY", DEFAULT_DEV_API_KEY)
+
+
 def _add_dashboard_url_and_timeout_arguments(parser, default_timeout=30.0):
     """Add --dashboard-url and --timeout to `parser` -- shared by every
     dashboard-facing subparser below (upload, list, download), so their
@@ -1207,13 +1239,13 @@ def _add_app_host_port_arguments(parser, default_timeout=10.0):
     )
     parser.add_argument(
         "--api-key",
-        default=DEFAULT_DEV_API_KEY,
+        default=_default_app_api_key(),
         dest="api_key",
         help=(
-            "Value sent as the X-API-Key header (default: the generated "
-            "app's own default dev key, used when NOTEBOOK_API_KEY isn't "
-            "set on the server), the same default `app-call`/`remote-curl "
-            "--api-key` already use."
+            "Value sent as the X-API-Key header (default: $NOTEBOOK_API_KEY "
+            "if set -- the same variable a real deployment's own app "
+            "already reads to decide which key(s) it accepts -- else the "
+            "generated app's own default dev key)."
         )
     )
     parser.add_argument(
@@ -13299,13 +13331,14 @@ def main():
     )
     app_call_parser.add_argument(
         "--api-key",
-        default=DEFAULT_DEV_API_KEY,
+        default=_default_app_api_key(),
         dest="api_key",
         help=(
-            "Value sent as the X-API-Key header (default: the generated "
-            "app's own default dev key, used when NOTEBOOK_API_KEY isn't "
-            "set on the server), the same default `remote-curl --api-key` "
-            "already uses."
+            "Value sent as the X-API-Key header (default: $NOTEBOOK_API_KEY "
+            "if set -- the same variable a real deployment's own app "
+            "already reads to decide which key(s) it accepts -- else the "
+            "generated app's own default dev key), the same default every "
+            "app-tasks subcommand already uses."
         )
     )
     app_call_parser.add_argument(
