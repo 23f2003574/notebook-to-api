@@ -741,6 +741,162 @@ def test_get_config_reflects_a_configured_max_notebooks(monkeypatch):
     assert resp.json()["max_notebooks"] == 5
 
 
+def test_upload_rejects_a_new_notebook_once_max_total_storage_bytes_is_reached(
+    monkeypatch,
+):
+
+    from backend.routes import upload as upload_module
+
+    # No room left at all -- the cap set to exactly the catalog's own
+    # current total means any nonzero-size upload must be rejected.
+    current_total = upload_module._current_total_storage_bytes()
+    monkeypatch.setattr(upload_module, "MAX_TOTAL_STORAGE_BYTES", current_total)
+
+    resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "max_total_storage_new.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+
+    assert resp.status_code == 413
+    assert "maximum total storage" in resp.json()["detail"].lower()
+    assert not (Path(UPLOAD_DIR) / "max_total_storage_new.ipynb").exists()
+
+
+def test_upload_can_still_be_blocked_by_max_total_storage_bytes_on_overwrite(
+    monkeypatch,
+):
+    """Unlike MAX_NOTEBOOKS (see
+    test_upload_overwrite_is_never_blocked_by_max_notebooks above), an
+    overwrite is NOT exempt from this cap: it still grows total disk
+    usage by snapshotting the content it's about to replace into that
+    notebook's own version history.
+    """
+
+    from backend.routes import upload as upload_module
+
+    filename = "max_total_storage_overwrite_target.ipynb"
+
+    setup_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    assert setup_resp.status_code == 200
+
+    current_total = upload_module._current_total_storage_bytes()
+    monkeypatch.setattr(upload_module, "MAX_TOTAL_STORAGE_BYTES", current_total)
+
+    overwrite_resp = client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    assert overwrite_resp.status_code == 413
+    assert "maximum total storage" in overwrite_resp.json()["detail"].lower()
+
+
+def test_upload_dry_run_reports_the_max_total_storage_bytes_rejection_without_writing(
+    monkeypatch,
+):
+
+    from backend.routes import upload as upload_module
+
+    current_total = upload_module._current_total_storage_bytes()
+    monkeypatch.setattr(upload_module, "MAX_TOTAL_STORAGE_BYTES", current_total)
+
+    resp = client.post(
+        "/api/upload",
+        params={"dry_run": "true"},
+        files={
+            "file": (
+                "max_total_storage_dry_run.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+
+    assert resp.status_code == 413
+    assert not (Path(UPLOAD_DIR) / "max_total_storage_dry_run.ipynb").exists()
+
+
+def test_upload_batch_reports_errors_for_files_beyond_max_total_storage_bytes(
+    monkeypatch,
+):
+
+    from backend.routes import upload as upload_module
+
+    current_total = upload_module._current_total_storage_bytes()
+    monkeypatch.setattr(upload_module, "MAX_TOTAL_STORAGE_BYTES", current_total)
+
+    resp = client.post(
+        "/api/upload/batch",
+        files=[
+            (
+                "files",
+                (
+                    "max_total_storage_batch_a.ipynb",
+                    io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                    "application/json",
+                ),
+            ),
+        ],
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["failed_count"] == 1
+
+    statuses = {r["filename"]: r["status"] for r in body["results"]}
+    assert statuses["max_total_storage_batch_a.ipynb"] == "error"
+    assert not (Path(UPLOAD_DIR) / "max_total_storage_batch_a.ipynb").exists()
+
+
+def test_upload_max_total_storage_bytes_disabled_by_default_allows_unbounded_uploads():
+
+    from backend.routes.upload import MAX_TOTAL_STORAGE_BYTES
+
+    assert MAX_TOTAL_STORAGE_BYTES == 0
+
+
+def test_get_config_reports_the_max_total_storage_bytes_default_of_zero():
+
+    from backend.routes.upload import MAX_TOTAL_STORAGE_BYTES
+
+    resp = client.get("/api/config")
+
+    assert resp.status_code == 200
+    assert resp.json()["max_total_storage_bytes"] == MAX_TOTAL_STORAGE_BYTES
+
+
+def test_get_config_reflects_a_configured_max_total_storage_bytes(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_TOTAL_STORAGE_BYTES", 12345)
+
+    resp = client.get("/api/config")
+
+    assert resp.json()["max_total_storage_bytes"] == 12345
+
+
 def test_upload_reports_overwritten_false_for_a_brand_new_notebook():
 
     content = _notebook_bytes(
@@ -6453,6 +6609,80 @@ def test_notebook_storage_notebooks_remaining_ignores_the_tag_filter(monkeypatch
     assert body["notebooks_remaining"] == 3  # catalog-wide, not tag-scoped
 
 
+def test_notebook_storage_reports_max_total_storage_bytes_disabled_by_default():
+
+    resp = client.get("/api/notebooks/storage")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["max_total_storage_bytes"] == 0
+    assert body["storage_bytes_remaining"] is None
+
+
+def test_notebook_storage_reports_storage_bytes_remaining_with_a_configured_cap(
+    monkeypatch,
+):
+
+    from backend.routes import upload as upload_module
+
+    client.delete("/api/notebooks?confirm=true")
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "storage_bytes_cap_a.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+
+    current_total = upload_module._current_total_storage_bytes()
+    monkeypatch.setattr(
+        upload_module, "MAX_TOTAL_STORAGE_BYTES", current_total + 500
+    )
+
+    resp = client.get("/api/notebooks/storage")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["max_total_storage_bytes"] == current_total + 500
+    assert body["storage_bytes_remaining"] == 500
+
+
+def test_notebook_storage_storage_bytes_remaining_can_go_negative(monkeypatch):
+    """Mirrors test_notebook_storage_notebooks_remaining_can_go_negative
+    above for MAX_TOTAL_STORAGE_BYTES: honest, not clamped to 0.
+    """
+
+    from backend.routes import upload as upload_module
+
+    client.delete("/api/notebooks?confirm=true")
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "storage_bytes_over_cap.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+
+    current_total = upload_module._current_total_storage_bytes()
+    assert current_total > 0
+    monkeypatch.setattr(
+        upload_module, "MAX_TOTAL_STORAGE_BYTES", current_total - 1
+    )
+
+    resp = client.get("/api/notebooks/storage")
+
+    body = resp.json()
+    assert body["storage_bytes_remaining"] == -1
+
+
 def test_notebook_storage_csv_format_returns_a_csv_response():
 
     client.delete("/api/notebooks?confirm=true")
@@ -6736,6 +6966,8 @@ def test_notebook_storage_reports_zeros_for_an_empty_catalog():
         "total_bytes": 0,
         "max_notebooks": 0,
         "notebooks_remaining": None,
+        "max_total_storage_bytes": 0,
+        "storage_bytes_remaining": None,
     }
 
 

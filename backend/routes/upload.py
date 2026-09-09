@@ -648,6 +648,29 @@ MAX_NOTEBOOK_VERSIONS = int(
 # shipped.
 MAX_NOTEBOOKS = int(os.getenv("NOTEBOOK_API_MAX_NOTEBOOKS", "0"))
 
+# Same NOTEBOOK_API_* env-var convention (including the "0 means off"
+# default) as MAX_NOTEBOOKS immediately above -- but distinct from it:
+# MAX_NOTEBOOKS bounds how many *distinct* notebooks the catalog can hold,
+# exempting every overwrite (see its own docstring, and the
+# not file_path.exists() check in _save_uploaded_notebook below) no matter
+# how large the file being written actually is, since an overwrite never
+# changes the notebook *count*. That leaves total disk usage itself
+# completely uncapped even with MAX_NOTEBOOKS configured: a catalog
+# permanently stuck at exactly MAX_NOTEBOOKS notebooks can still grow
+# without bound through repeated large overwrites, each one snapshotting
+# the previous content into that notebook's own version history (up to
+# MAX_NOTEBOOK_VERSIONS-many snapshots) before the new content lands --
+# and GET /api/notebooks/storage (notebook_storage_usage, below) already
+# had a name for exactly this combined total ("total_bytes"/
+# "total_notebook_bytes" + "total_version_bytes"), but nothing before this
+# ever compared it against anything. MAX_UPLOAD_BYTES bounds a *single*
+# file's own size; this is the whole-catalog analogue of that, the same
+# "per-item cap" vs. "whole-catalog cap" split MAX_NOTEBOOK_VERSIONS and
+# MAX_NOTEBOOKS already have between them.
+MAX_TOTAL_STORAGE_BYTES = int(
+    os.getenv("NOTEBOOK_API_MAX_TOTAL_STORAGE_BYTES", "0")
+)
+
 
 def _current_notebook_count():
     """How many ".ipynb" files currently sit directly in UPLOAD_DIR --
@@ -663,6 +686,47 @@ def _current_notebook_count():
         1 for entry in upload_root.iterdir()
         if entry.is_file() and entry.suffix == ".ipynb"
     )
+
+
+def _current_total_storage_bytes():
+    """Total bytes UPLOAD_DIR is using right now: every ".ipynb" file's
+    own current content plus its full version history combined (see
+    _notebook_versions_dir below), summed across the whole catalog --
+    never narrowed to one notebook or one tag, the same catalog-wide
+    scope _current_notebook_count() above already gives MAX_NOTEBOOKS'
+    own check, for the identical reason: comparing anything narrower
+    against a whole-catalog cap would understate how close the *whole*
+    catalog actually is to it.
+
+    Mirrors the exact per-notebook "notebook_bytes + version_bytes"
+    combination notebook_storage_usage (GET /api/notebooks/storage,
+    below) already computes and calls "total_bytes" -- summed here
+    instead of kept per-notebook, since MAX_TOTAL_STORAGE_BYTES' own
+    check only ever needs the one grand total, not a breakdown.
+    """
+    upload_root = Path(UPLOAD_DIR)
+
+    if not upload_root.is_dir():
+        return 0
+
+    total_bytes = 0
+
+    for entry in upload_root.iterdir():
+
+        if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        total_bytes += entry.stat().st_size
+
+        versions_dir = _notebook_versions_dir(entry.name)
+
+        if versions_dir.is_dir():
+            total_bytes += sum(
+                f.stat().st_size for f in versions_dir.iterdir()
+                if f.is_file()
+            )
+
+    return total_bytes
 
 
 def _notebook_versions_dir(notebook_filename: str) -> Path:
@@ -1357,6 +1421,40 @@ async def _save_uploaded_notebook(
                 detail=(
                     f"Notebook exceeds the maximum upload size of "
                     f"{MAX_UPLOAD_BYTES} bytes"
+                )
+            )
+
+        # Checked against the *current* on-disk total plus this upload's
+        # own size, deliberately before an overwrite's existing content
+        # is removed (os.replace, and the version snapshot it triggers,
+        # both still lie ahead below) -- momentarily double-counts an
+        # overwritten file's own current bytes against the cap, the same
+        # kind of honest, slightly-conservative-rather-than-exact
+        # enforcement MAX_NOTEBOOKS' own docstring above already accepts
+        # for the identical reason (no single global lock spans the
+        # whole catalog, so exact bookkeeping isn't achievable here
+        # anyway). Applies to every caller of this shared function alike
+        # (upload, upload/batch, import, import-url, versions/import) --
+        # unlike MAX_NOTEBOOKS, this is NOT exempted for an overwrite of
+        # an already-existing filename: an overwrite can still grow total
+        # disk usage by snapshotting the content it's about to replace
+        # into that notebook's own version history just below, so it's
+        # just as capable of pushing the catalog over a byte budget as a
+        # brand-new filename is.
+        if (
+            MAX_TOTAL_STORAGE_BYTES
+            and _current_total_storage_bytes() + size > MAX_TOTAL_STORAGE_BYTES
+        ):
+
+            os.remove(temp_path)
+
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    "This upload would exceed the maximum total storage "
+                    f"of {MAX_TOTAL_STORAGE_BYTES} bytes "
+                    "(NOTEBOOK_API_MAX_TOTAL_STORAGE_BYTES) -- delete or "
+                    "prune some existing notebooks/versions first."
                 )
             )
 
@@ -5984,6 +6082,15 @@ def notebook_storage_usage(
     negative if the cap was lowered after the catalog already exceeded
     it, an honest signal of that state rather than a misleadingly
     clamped 0.
+
+    "max_total_storage_bytes" and "storage_bytes_remaining" mirror
+    "max_notebooks"/"notebooks_remaining" immediately above, for
+    MAX_TOTAL_STORAGE_BYTES (the whole-catalog byte budget
+    _save_uploaded_notebook enforces) instead of MAX_NOTEBOOKS -- same
+    catalog-wide (never "tag"-scoped) computation via
+    _current_total_storage_bytes(), same "null" when the cap is disabled,
+    same "can go negative" honesty if the cap was lowered after the
+    catalog already exceeded it.
     """
 
     if format not in ("json", "csv"):
@@ -6086,6 +6193,19 @@ def notebook_storage_usage(
         MAX_NOTEBOOKS - _current_notebook_count() if MAX_NOTEBOOKS else None
     )
 
+    # Catalog-wide (via _current_total_storage_bytes(), never narrowed to
+    # "tag") the identical way notebooks_remaining above is deliberately
+    # computed from _current_notebook_count() rather than this response's
+    # own (possibly "tag"-scoped) notebook_count/total_bytes -- so
+    # "storage_bytes_remaining" always answers "how much room is actually
+    # left against MAX_TOTAL_STORAGE_BYTES", the exact check POST
+    # /api/upload's own MAX_TOTAL_STORAGE_BYTES enforcement makes, not a
+    # narrower figure a "tag" filter would understate.
+    storage_bytes_remaining = (
+        MAX_TOTAL_STORAGE_BYTES - _current_total_storage_bytes()
+        if MAX_TOTAL_STORAGE_BYTES else None
+    )
+
     return {
         "status": "success",
         "notebooks": paginated_notebooks,
@@ -6098,6 +6218,8 @@ def notebook_storage_usage(
         "total_bytes": total_notebook_bytes + total_version_bytes,
         "max_notebooks": MAX_NOTEBOOKS,
         "notebooks_remaining": notebooks_remaining,
+        "max_total_storage_bytes": MAX_TOTAL_STORAGE_BYTES,
+        "storage_bytes_remaining": storage_bytes_remaining,
     }
 
 
@@ -15096,6 +15218,21 @@ def get_config():
     configured" apart from "some real, nonzero cap" without reading this
     field back.
 
+    "max_total_storage_bytes" (added alongside this same docstring's
+    original feature, not a separate change) is MAX_TOTAL_STORAGE_BYTES --
+    the whole-catalog byte budget _save_uploaded_notebook enforces
+    (shared by POST /api/upload/every other notebook-creating endpoint
+    built on it, the identical set "max_notebooks" above already lists),
+    distinct from "max_notebooks" itself: that one caps how many
+    *distinct* notebooks the catalog can hold, exempting every overwrite,
+    while this caps their combined disk footprint (current content plus
+    version history) regardless of how many distinct notebooks that's
+    spread across. 0 means the cap is disabled, the same convention
+    "max_notebooks" above already follows. GET /api/notebooks/storage's
+    own "storage_bytes_remaining" pairs this with actual current usage
+    the same way that endpoint's "notebooks_remaining" already pairs
+    "max_notebooks" with _current_notebook_count().
+
     "dashboard_rate_limit_per_minute" (added alongside this same
     docstring's original feature, not a separate change) is
     dashboard_rate_limit_per_minute's (backend/dashboard.py) own reading
@@ -15177,6 +15314,7 @@ def get_config():
         "max_upload_bytes": MAX_UPLOAD_BYTES,
         "max_batch_upload_files": MAX_BATCH_UPLOAD_FILES,
         "max_notebooks": MAX_NOTEBOOKS,
+        "max_total_storage_bytes": MAX_TOTAL_STORAGE_BYTES,
         "max_notebook_versions": MAX_NOTEBOOK_VERSIONS,
         "max_tag_length": _MAX_TAG_LENGTH,
         "max_tags_per_notebook": _MAX_TAGS_PER_NOTEBOOK,
