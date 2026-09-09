@@ -21606,6 +21606,92 @@ def test_app_call_command_ignores_wait_for_a_synchronous_function(
     assert handler.requests == ["/add"]
 
 
+def test_app_call_command_appends_callback_url_for_a_background_function(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"task_id": "abc123", "status": "processing"}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def process_data(x: int) -> int:\n    return x * 2\n",
+    )
+
+    proc = _run_cli(
+        [
+            "app-call", str(notebook_path), "process_data",
+            "--host", host, "--port", str(port), "--data", '{"x": 10}',
+            "--callback-url", "https://example.com/hook",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/process_data?callback_url=https%3A%2F%2Fexample.com%2Fhook"
+    ]
+
+
+def test_app_call_command_warns_and_ignores_callback_url_for_a_synchronous_function(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, {"result": 3})]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        [
+            "app-call", str(notebook_path), "add",
+            "--host", host, "--port", str(port),
+            "--callback-url", "https://example.com/hook",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Result: 3" in proc.stdout
+    assert "Warning" in proc.stderr
+    assert "synchronous function" in proc.stderr
+    # The app itself never reads ?callback_url= for a sync endpoint --
+    # confirmed not sent at all, not merely ignored server-side.
+    assert handler.requests == ["/add"]
+
+
+def test_app_call_command_rejects_a_non_http_callback_url(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def process_data(x: int) -> int:\n    return x * 2\n",
+    )
+
+    proc = _run_cli(
+        [
+            "app-call", str(notebook_path), "process_data",
+            "--callback-url", "ftp://example.com",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode != 0
+    assert "http:// or https://" in (proc.stdout + proc.stderr)
+
+
 def test_app_call_command_rejects_an_unknown_function(tmp_path):
 
     workdir = tmp_path / "workdir"

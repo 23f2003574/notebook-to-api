@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # ValidationError is the exception nbformat raises for a syntactically valid
 # JSON file that is nonetheless missing required notebook keys (e.g. no
@@ -7233,6 +7234,20 @@ def _dispatch_core_command(args):
         # module scope.
         import httpx
 
+        # Validated before any other work here -- the identical
+        # "callback_url must be an http:// or https:// URL" check
+        # generate_curl_commands/generate_postman_collection
+        # (backend/inspector.py) already apply before generating a single
+        # preview command, applied here before this command reads the
+        # notebook or reaches the app at all, so a typo'd scheme fails
+        # fast and clean rather than as a 400 from the app itself deep
+        # into this call.
+        if (
+            args.callback_url is not None
+            and urlsplit(args.callback_url).scheme not in ("http", "https")
+        ):
+            raise ValueError("--callback-url must be an http:// or https:// URL")
+
         # Read locally, purely to learn args.function's own
         # example_payload/background-ness -- the notebook itself is never
         # uploaded or compiled by this command, the same "read-only local
@@ -7277,10 +7292,33 @@ def _dispatch_core_command(args):
         app_url = f"http://{args.host}:{args.port}"
         headers = {"X-API-Key": args.api_key}
 
+        call_params = {}
+
+        if args.callback_url is not None:
+            if is_background:
+                call_params["callback_url"] = args.callback_url
+            else:
+                # The generated app never even reads ?callback_url= for a
+                # synchronous endpoint (see generate_fastapi_code's own
+                # async-vs-sync code paths, api_generator.py) -- the
+                # identical restriction generate_curl_commands/
+                # generate_postman_collection already apply by simply
+                # never attaching it to a synchronous function's own
+                # command. A warning (not a hard error) here, since
+                # --data/--wait alike are otherwise still perfectly valid
+                # against a synchronous function -- only this one flag is
+                # a no-op for it.
+                print(
+                    f"Warning: --callback-url given but '{args.function}' "
+                    "is a synchronous function -- the app never reads "
+                    "this parameter for one, so it will be ignored.",
+                    file=sys.stderr,
+                )
+
         try:
             response = httpx.post(
                 f"{app_url}/{args.function}", json=payload, headers=headers,
-                timeout=args.timeout,
+                params=call_params, timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
             raise RuntimeError(
@@ -13173,6 +13211,24 @@ def main():
         type=float,
         default=10.0,
         help="Seconds to wait for the initial response before giving up (default: 10)."
+    )
+    app_call_parser.add_argument(
+        "--callback-url",
+        dest="callback_url",
+        default=None,
+        help=(
+            "For a background function only: have the app also deliver "
+            "the finished task's own result/error to this URL via a "
+            "signed webhook once it completes (the same ?callback_url= "
+            "a real caller could already pass -- curl-preview/"
+            "export-curl/postman-preview already demonstrate it, but "
+            "nothing let this CLI actually trigger a real delivery "
+            "against a real deployed app). Must be an http:// or "
+            "https:// URL, the same restriction the app itself enforces "
+            "at request time. Ignored (with a warning) for a "
+            "synchronous function, which never reads this parameter at "
+            "all."
+        )
     )
     app_call_parser.add_argument(
         "--wait",
