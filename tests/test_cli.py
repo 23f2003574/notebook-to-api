@@ -2,10 +2,12 @@ import http.server
 import json
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import threading
+import time
 import types
 import urllib.parse
 import zipfile
@@ -21182,6 +21184,78 @@ def test_app_status_command_json_flag_emits_the_combined_raw_response(
     }
 
 
+def test_app_status_command_watch_flag_is_registered():
+
+    proc = _run_cli(["app-status", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "--watch" in proc.stdout
+    assert "--interval" in proc.stdout
+
+
+def test_app_status_command_watch_polls_repeatedly_and_stops_cleanly_on_interrupt(
+    tmp_path, fake_dashboard
+):
+    """--watch's own fetch-and-report logic must actually run more than
+    once (confirming the polling loop itself works, not just that the
+    flag parses), and Ctrl+C (simulated here via a real SIGINT, the same
+    signal a user's own Ctrl+C sends) must stop it cleanly -- exit 0 and
+    a real "Stopped watching." message, not a raw KeyboardInterrupt
+    traceback escaping this command the way an unhandled one would.
+    """
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+
+    one_iteration = [
+        _json_response(200, {"status": "healthy"}),
+        _json_response(200, {"status": "ready", "tasks_registered": 0}),
+        _json_response(200, {
+            "service": "s", "version": "0.1.0", "endpoint_count": 0,
+            "background_endpoint_count": 0,
+        }),
+        _json_response(200, {
+            "max_request_body_bytes": 1, "task_ttl_seconds": 1,
+            "max_pending_tasks": 1, "task_execution_timeout_seconds": None,
+            "webhook_timeout_seconds": 1, "webhook_signing_enabled": False,
+            "webhook_max_retries": 0, "rate_limit_per_minute": 0,
+            "allowed_origins": [], "disable_docs": False,
+        }),
+    ]
+    # Comfortably more iterations' worth than this test could ever poll
+    # through before being interrupted -- the fake server running out of
+    # queued responses must never be what actually stops this loop.
+    handler.responses = one_iteration * 50
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+
+    proc = subprocess.Popen(
+        [
+            sys.executable, "-m", "backend.cli",
+            "app-status", "--host", host, "--port", str(port),
+            "--watch", "--interval", "0.05",
+        ],
+        cwd=str(workdir),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    time.sleep(2.5)
+    proc.send_signal(signal.SIGINT)
+
+    stdout, stderr = proc.communicate(timeout=10)
+
+    assert proc.returncode == 0, stdout + stderr
+    assert stdout.count("Compiled app at") >= 2
+    assert "Stopped watching." in stdout
+
+
 def test_app_status_command_reports_a_clean_error_when_the_app_is_unreachable(
     tmp_path,
 ):
@@ -21290,6 +21364,63 @@ def test_app_metrics_command_json_flag_parses_the_prometheus_text_into_a_flat_di
         'notebook_api_http_requests_total{status_class="4xx"}': 1,
         "notebook_api_uptime_seconds": 42.5,
     }
+
+
+def test_app_metrics_command_watch_flag_is_registered():
+
+    proc = _run_cli(["app-metrics", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "--watch" in proc.stdout
+    assert "--interval" in proc.stdout
+
+
+def test_app_metrics_command_watch_polls_repeatedly_and_stops_cleanly_on_interrupt(
+    tmp_path, fake_dashboard
+):
+    """Mirrors
+    test_app_status_command_watch_polls_repeatedly_and_stops_cleanly_on_interrupt
+    for app-metrics' own --watch.
+    """
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _raw_response(
+            200,
+            _SAMPLE_APP_PROMETHEUS_METRICS_TEXT.encode("utf-8"),
+            content_type="text/plain; version=0.0.4; charset=utf-8",
+        )
+        for _ in range(50)
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+
+    proc = subprocess.Popen(
+        [
+            sys.executable, "-m", "backend.cli",
+            "app-metrics", "--host", host, "--port", str(port),
+            "--watch", "--interval", "0.05",
+        ],
+        cwd=str(workdir),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    time.sleep(2.5)
+    proc.send_signal(signal.SIGINT)
+
+    stdout, stderr = proc.communicate(timeout=10)
+
+    assert proc.returncode == 0, stdout + stderr
+    assert stdout.count("---") >= 4  # two "--- <timestamp> ---" separators
+    assert "Stopped watching." in stdout
 
 
 def test_app_metrics_command_defaults_to_localhost_port_8000(tmp_path):

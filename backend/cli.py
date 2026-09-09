@@ -7151,17 +7151,41 @@ def _dispatch_core_command(args):
 
             return response.json()
 
-        health = _app_get("/health")
-        ready = _app_get("/ready")
-        info = _app_get("/info")
-        config = _app_get("/config")
+        # Wrapped in its own function -- rather than inlined once, as it
+        # was before --watch existed -- purely so --watch (below) can
+        # call the exact same fetch-and-report logic on every poll
+        # without duplicating it: a second, hand-copied print block here
+        # could silently drift from this one over time the same way this
+        # project's own generators (README/curl/Postman) already
+        # confirmed happens to a duplicated "what does this app actually
+        # do" description if it's ever allowed to.
+        def _fetch_and_report_status():
 
-        if args.json_output:
-            print(json.dumps(
-                {"health": health, "ready": ready, "info": info, "config": config},
-                indent=2,
-            ))
-        else:
+            health = _app_get("/health")
+            ready = _app_get("/ready")
+            info = _app_get("/info")
+            config = _app_get("/config")
+
+            if args.json_output:
+                result = {
+                    "health": health, "ready": ready,
+                    "info": info, "config": config,
+                }
+                if args.watch:
+                    # One compact object per line (NDJSON), not
+                    # indent=2's multi-line pretty-print -- a --watch
+                    # consumer needs to tell where one poll's own JSON
+                    # ends and the next begins by line alone, the same
+                    # reason app-tasks list --json's own single-object
+                    # response is never split across lines either.
+                    result["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                    print(json.dumps(result))
+                else:
+                    print(json.dumps(result, indent=2))
+                return
+
+            if args.watch:
+                print(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S')} ---")
 
             print(f"Compiled app at {app_url}: {health.get('status')}")
             print(
@@ -7201,6 +7225,16 @@ def _dispatch_core_command(args):
                 "  docs: "
                 f"{'disabled' if config.get('disable_docs') else 'enabled'}"
             )
+
+        if not args.watch:
+            _fetch_and_report_status()
+        else:
+            try:
+                while True:
+                    _fetch_and_report_status()
+                    time.sleep(args.interval)
+            except KeyboardInterrupt:
+                print("\nStopped watching.")
     elif args.command == "app-metrics":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -7208,27 +7242,54 @@ def _dispatch_core_command(args):
 
         app_url = f"http://{args.host}:{args.port}"
 
-        try:
-            response = httpx.get(
-                f"{app_url}/metrics/prometheus", timeout=args.timeout,
-            )
-        except httpx.HTTPError as exc:
-            raise RuntimeError(
-                f"Could not reach the compiled app at {app_url}: {exc}. Is "
-                "it running? (see `serve`, or `docker compose up`)"
-            )
+        # See app-status' own identical _fetch_and_report_status just
+        # above for why this is a function rather than inlined once --
+        # --watch below needs to call the exact same fetch-and-report
+        # logic on every poll without a second, hand-copied, driftable
+        # print block.
+        def _fetch_and_report_metrics():
 
-        if response.status_code >= 400:
+            try:
+                response = httpx.get(
+                    f"{app_url}/metrics/prometheus", timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise RuntimeError(
+                    f"Could not reach the compiled app at {app_url}: "
+                    f"{exc}. Is it running? (see `serve`, or `docker "
+                    "compose up`)"
+                )
 
-            raise RuntimeError(
-                f"App rejected the request ({response.status_code}): "
-                f"{response.text}"
-            )
+            if response.status_code >= 400:
 
-        if args.json_output:
-            print(json.dumps(_parse_prometheus_text_metrics(response.text), indent=2))
+                raise RuntimeError(
+                    f"App rejected the request ({response.status_code}): "
+                    f"{response.text}"
+                )
+
+            if args.json_output:
+                result = _parse_prometheus_text_metrics(response.text)
+                if args.watch:
+                    # See app-status --watch --json's own identical
+                    # one-object-per-line reasoning above.
+                    result["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                    print(json.dumps(result))
+                else:
+                    print(json.dumps(result, indent=2))
+            else:
+                if args.watch:
+                    print(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S')} ---")
+                print(response.text, end="" if response.text.endswith("\n") else "\n")
+
+        if not args.watch:
+            _fetch_and_report_metrics()
         else:
-            print(response.text, end="" if response.text.endswith("\n") else "\n")
+            try:
+                while True:
+                    _fetch_and_report_metrics()
+                    time.sleep(args.interval)
+            except KeyboardInterrupt:
+                print("\nStopped watching.")
     elif args.command == "app-call":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -13062,6 +13123,24 @@ def main():
         help="Seconds to wait for the app to respond before giving up (default: 10)."
     )
     app_status_parser.add_argument(
+        "--watch",
+        action="store_true",
+        help=(
+            "Keep polling every --interval seconds (Ctrl+C to stop) "
+            "instead of fetching once and exiting -- useful for watching "
+            "a rollout, or a flapping health check, without wrapping "
+            "this command in a separate `watch` utility of its own "
+            "(unavailable on Windows, and not something this CLI could "
+            "otherwise rely on being installed)."
+        )
+    )
+    app_status_parser.add_argument(
+        "--interval",
+        type=float,
+        default=2.0,
+        help="Seconds to wait between polls under --watch (default: 2)."
+    )
+    app_status_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -13072,7 +13151,10 @@ def main():
             "response>}) instead of a human-readable summary, for "
             "scripting/automation -- the same combined shape `status "
             "--json` already returns for this dashboard's own health/"
-            "config."
+            "config. Under --watch, one such object (plus a "
+            "\"timestamp\") is printed per poll, one per line, so a "
+            "consumer can stream-parse each snapshot as it arrives "
+            "rather than waiting for this command to exit."
         )
     )
 
@@ -13120,6 +13202,23 @@ def main():
         help="Seconds to wait for the app to respond before giving up (default: 10)."
     )
     app_metrics_parser.add_argument(
+        "--watch",
+        action="store_true",
+        help=(
+            "Keep polling every --interval seconds (Ctrl+C to stop) "
+            "instead of scraping once and exiting -- the same "
+            "`app-status --watch` mirrors for this command's own "
+            "GET /metrics/prometheus, for watching throughput change "
+            "live rather than one static snapshot."
+        )
+    )
+    app_metrics_parser.add_argument(
+        "--interval",
+        type=float,
+        default=2.0,
+        help="Seconds to wait between polls under --watch (default: 2)."
+    )
+    app_metrics_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -13130,7 +13229,10 @@ def main():
             "already applies to this dashboard's own scrape -- a labeled "
             "line (e.g. a webhook outcome broken out by status) keeps its "
             "own \"{...}\" label suffix as part of the key verbatim, "
-            "rather than being split apart into its own nested structure."
+            "rather than being split apart into its own nested structure. "
+            "Under --watch, one such object (plus a \"timestamp\") is "
+            "printed per poll, one per line -- the same NDJSON-style "
+            "streaming `app-status --json --watch` already gives."
         )
     )
 
