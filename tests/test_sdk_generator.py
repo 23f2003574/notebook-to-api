@@ -291,14 +291,15 @@ def test_generate_python_sdk_constructor_accepts_a_configurable_timeout(tmp_path
 
     assert "timeout: float = 30.0" in source
     assert "self.timeout = timeout" in source
-    # Every requests.* call this client makes must actually use it: the 7
+    # Every requests.* call this client makes must actually use it: the 10
     # hardcoded task methods (get_task, list_tasks, delete_task,
     # delete_completed_tasks, delete_failed_tasks, redeliver_task_webhook,
-    # plus the single "/train_model" path this test's own schema declares
-    # -- wait_for_task makes no request of its own, it only calls
-    # self.get_task), plus the 9 hardcoded health/ready/info/config/
-    # metrics/uptime/auth_status/auth_info/auth_validate methods.
-    assert source.count("timeout=self.timeout") == 16
+    # retry_task, cleanup_tasks, reset_tasks, plus the single
+    # "/train_model" path this test's own schema declares -- wait_for_task
+    # makes no request of its own, it only calls self.get_task), plus the
+    # 9 hardcoded health/ready/info/config/metrics/uptime/auth_status/
+    # auth_info/auth_validate methods.
+    assert source.count("timeout=self.timeout") == 19
 
 
 def test_generate_python_sdk_uses_the_configured_timeout_for_a_request(
@@ -361,15 +362,15 @@ def test_generate_typescript_sdk_constructor_accepts_a_configurable_timeout(
 
     assert "timeoutMs?: number;" in source
     assert "this.timeoutMs = options.timeoutMs ?? 30000;" in source
-    # Every fetch() call this client makes must actually use it: the 7
+    # Every fetch() call this client makes must actually use it: the 10
     # hardcoded task methods (getTask, listTasks, deleteTask,
-    # deleteCompletedTasks, deleteFailedTasks, redeliverTaskWebhook, plus
-    # the single shared private `request()` helper every POST-path method
-    # -- "/train_model" in this test's own schema -- funnels through,
-    # regardless of how many such paths exist), plus the 9 hardcoded
-    # health/ready/info/config/metrics/uptime/authStatus/authInfo/
-    # authValidate methods.
-    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 16
+    # deleteCompletedTasks, deleteFailedTasks, redeliverTaskWebhook,
+    # retryTask, cleanupTasks, resetTasks, plus the single shared private
+    # `request()` helper every POST-path method -- "/train_model" in this
+    # test's own schema -- funnels through, regardless of how many such
+    # paths exist), plus the 9 hardcoded health/ready/info/config/
+    # metrics/uptime/authStatus/authInfo/authValidate methods.
+    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 19
 
 
 def test_generate_python_sdk_method_name_handles_multi_segment_paths(tmp_path):
@@ -1469,6 +1470,170 @@ def test_generate_python_sdk_redeliver_task_webhook_sends_correct_request(
             "headers": {"X-API-Key": "notebook-to-api-dev-key"},
         }
     ]
+
+
+def test_generate_python_sdk_retry_task_sends_correct_request(tmp_path, monkeypatch):
+    """POST /tasks/{task_id}/retry already exists server-side (retry_task
+    in api_generator.py) and actually re-executes a failed task's own
+    underlying function, unlike redeliver_task_webhook above -- but
+    nothing let a caller trigger that through the generated client
+    itself.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "task_id": "def456", "status": "processing",
+                "retried_from": "abc123",
+            }
+
+    def fake_post(url, headers=None, timeout=None):
+        calls.append({"url": url, "headers": headers})
+        return FakeResponse()
+
+    namespace = _exec_python_client_with_fake_requests(
+        output_path, monkeypatch, post=fake_post
+    )
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    result = client.retry_task("abc123")
+
+    assert result == {
+        "task_id": "def456", "status": "processing", "retried_from": "abc123",
+    }
+    assert calls == [
+        {
+            "url": "http://localhost:8000/tasks/abc123/retry",
+            "headers": {"X-API-Key": "notebook-to-api-dev-key"},
+        }
+    ]
+
+
+def test_generate_python_sdk_cleanup_tasks_sends_correct_request(tmp_path, monkeypatch):
+    """POST /tasks/cleanup already exists server-side (cleanup_tasks in
+    api_generator.py) but had no client method of its own, the same gap
+    delete_completed_tasks/delete_failed_tasks above already closed for
+    the two single-status deletes it combines.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"completed_deleted": 4, "failed_deleted": 2, "remaining_tasks": 1}
+
+    def fake_post(url, headers=None, timeout=None):
+        calls.append({"url": url, "headers": headers})
+        return FakeResponse()
+
+    namespace = _exec_python_client_with_fake_requests(
+        output_path, monkeypatch, post=fake_post
+    )
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    result = client.cleanup_tasks()
+
+    assert result == {
+        "completed_deleted": 4, "failed_deleted": 2, "remaining_tasks": 1,
+    }
+    assert calls == [
+        {
+            "url": "http://localhost:8000/tasks/cleanup",
+            "headers": {"X-API-Key": "notebook-to-api-dev-key"},
+        }
+    ]
+
+
+def test_generate_python_sdk_reset_tasks_sends_correct_request(tmp_path, monkeypatch):
+    """POST /tasks/reset already exists server-side (reset_tasks in
+    api_generator.py) but had no client method of its own.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"deleted_tasks": 7}
+
+    def fake_post(url, headers=None, timeout=None):
+        calls.append({"url": url, "headers": headers})
+        return FakeResponse()
+
+    namespace = _exec_python_client_with_fake_requests(
+        output_path, monkeypatch, post=fake_post
+    )
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    result = client.reset_tasks()
+
+    assert result == {"deleted_tasks": 7}
+    assert calls == [
+        {
+            "url": "http://localhost:8000/tasks/reset",
+            "headers": {"X-API-Key": "notebook-to-api-dev-key"},
+        }
+    ]
+
+
+def test_generate_python_sdk_retry_task_name_takes_priority_over_a_colliding_path(
+    tmp_path,
+):
+    """Same collision hazard as redeliver_task_webhook's own test above,
+    for the newly hardcoded retry_task method.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/retry_task": {"post": {"operationId": "retry_task"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    ast.parse(source)
+    assert "def retry_task(self, task_id: str) -> dict:" in source
+    assert (
+        "def retry_task_2(self, payload: "
+        "RetryTask2Request) -> RetryTask2Response:"
+        in source
+    )
 
 
 def test_generate_python_sdk_includes_infrastructure_helpers(tmp_path):
@@ -2950,6 +3115,127 @@ def test_generate_typescript_sdk_redeliver_task_webhook_sends_correct_request(
         "webhook": {"delivered": True, "attempts": 1, "status_code": 200},
         "webhook_redelivery_count": 1,
     }
+
+
+def test_generate_typescript_sdk_retry_task_sends_correct_request(tmp_path):
+    """Mirrors test_generate_python_sdk_retry_task_sends_correct_request
+    for the TypeScript client.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const calls = [];
+        globalThis.fetch = async (url, opts) => {{
+          calls.push({{ url, method: (opts && opts.method) || "GET" }});
+          return {{
+            ok: true,
+            json: async () => ({{
+              task_id: "def456",
+              status: "processing",
+              retried_from: "abc123",
+            }}),
+          }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        const result = await client.retryTask("abc123");
+
+        console.log(JSON.stringify({{ calls, result }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["calls"] == [
+        {"url": "http://localhost:8000/tasks/abc123/retry", "method": "POST"}
+    ]
+    assert output["result"] == {
+        "task_id": "def456", "status": "processing", "retried_from": "abc123",
+    }
+
+
+def test_generate_typescript_sdk_cleanup_and_reset_tasks_send_correct_requests(
+    tmp_path,
+):
+    """Mirrors test_generate_python_sdk_cleanup_tasks_sends_correct_request
+    and test_generate_python_sdk_reset_tasks_sends_correct_request for the
+    TypeScript client, in one run.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const calls = [];
+        globalThis.fetch = async (url, opts) => {{
+          calls.push({{ url, method: (opts && opts.method) || "GET" }});
+          if (url.endsWith("/tasks/cleanup")) {{
+            return {{
+              ok: true,
+              json: async () => ({{
+                completed_deleted: 4, failed_deleted: 2, remaining_tasks: 1,
+              }}),
+            }};
+          }}
+          return {{ ok: true, json: async () => ({{ deleted_tasks: 7 }}) }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        const cleanupResult = await client.cleanupTasks();
+        const resetResult = await client.resetTasks();
+
+        console.log(JSON.stringify({{ calls, cleanupResult, resetResult }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["calls"] == [
+        {"url": "http://localhost:8000/tasks/cleanup", "method": "POST"},
+        {"url": "http://localhost:8000/tasks/reset", "method": "POST"},
+    ]
+    assert output["cleanupResult"] == {
+        "completed_deleted": 4, "failed_deleted": 2, "remaining_tasks": 1,
+    }
+    assert output["resetResult"] == {"deleted_tasks": 7}
 
 
 def test_generate_typescript_sdk_includes_infrastructure_helpers(tmp_path):

@@ -21,6 +21,7 @@ from pathlib import Path
 PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "get_task", "wait_for_task", "list_tasks", "delete_task",
     "delete_completed_tasks", "delete_failed_tasks", "redeliver_task_webhook",
+    "retry_task", "cleanup_tasks", "reset_tasks",
     "health", "ready", "info", "config", "metrics", "uptime",
     "auth_status", "auth_info", "auth_validate",
     # Confirmed exploitable: base_url/api_key/timeout are the client's
@@ -46,6 +47,7 @@ PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
 TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "getTask", "waitForTask", "listTasks", "deleteTask",
     "deleteCompletedTasks", "deleteFailedTasks", "redeliverTaskWebhook",
+    "retryTask", "cleanupTasks", "resetTasks",
     "health", "ready", "info", "config", "metrics", "uptime",
     "authStatus", "authInfo", "authValidate",
     # Same hazard as PYTHON_RESERVED_CLIENT_METHOD_NAMES's base_url/
@@ -1338,6 +1340,92 @@ def generate_python_sdk(
     lines.append("            timeout=self.timeout,")
     lines.append("        ))")
     lines.append("")
+    # Confirmed missing before this the identical way redeliver_task_webhook
+    # above once was: the generated server side has let a caller actually
+    # re-execute a failed task's own underlying function (not merely
+    # resend its already-recorded outcome, which redeliver_task_webhook
+    # above already covers) via POST /tasks/{task_id}/retry for several
+    # commits now (see retry_task in api_generator.py), but neither
+    # generated client ever gained a method to call it -- a caller with
+    # code of their own had no way to retry a failed task without
+    # hand-building the exact same requests.post call
+    # redeliver_task_webhook above already demonstrates this client knows
+    # how to make.
+    lines.append("    def retry_task(self, task_id: str) -> dict:")
+    lines.append(
+        '        """Re-run a failed task\'s own underlying function with '
+        "its original"
+    )
+    lines.append("        inputs, under a brand-new task_id.")
+    lines.append("")
+    lines.append(
+        "        Raises on a 404 (unknown task_id) or 409 (task is not "
+        "'failed' --"
+    )
+    lines.append(
+        "        still processing, already completed, or has no "
+        "recorded inputs"
+    )
+    lines.append("        to retry it with).")
+    lines.append("")
+    lines.append(
+        '        Returns {"task_id": <new task_id>, "status": '
+        '"processing",'
+    )
+    lines.append('        "retried_from": task_id}. Poll get_task/wait_for_task on')
+    lines.append("        the *new* task_id for the retried outcome -- the original,")
+    lines.append('        failed task is left untouched."""')
+    lines.append("        return self._request(lambda: requests.post(")
+    lines.append(
+        '            f"{self.base_url}/tasks/{task_id}/retry",'
+    )
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
+    lines.append("        ))")
+    lines.append("")
+    # cleanup_tasks/reset_tasks mirror delete_completed_tasks/
+    # delete_failed_tasks above -- POST /tasks/cleanup and POST
+    # /tasks/reset (api_generator.py) already existed server-side with no
+    # client method of their own, the same "server-side capability
+    # exists, this generator was never updated to match" gap every other
+    # comment in this function already documents an instance of.
+    # cleanup_tasks is the single-request equivalent of calling
+    # delete_completed_tasks() then delete_failed_tasks() separately;
+    # reset_tasks is more drastic still -- it drops every task regardless
+    # of status, including one still processing.
+    lines.append("    def cleanup_tasks(self) -> dict:")
+    lines.append(
+        '        """Delete every task with status \'completed\' or '
+        "'failed' in a"
+    )
+    lines.append(
+        "        single request -- equivalent to calling "
+        "delete_completed_tasks()"
+    )
+    lines.append('        followed by delete_failed_tasks()."""')
+    lines.append("        return self._request(lambda: requests.post(")
+    lines.append('            f"{self.base_url}/tasks/cleanup",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
+    lines.append("        ))")
+    lines.append("")
+    lines.append("    def reset_tasks(self) -> dict:")
+    lines.append(
+        '        """Delete EVERY task this app is tracking, regardless '
+        "of status --"
+    )
+    lines.append(
+        "        including one still processing. Its eventual result "
+        "or error,"
+    )
+    lines.append("        once that background work finishes, is discarded rather")
+    lines.append('        than recorded anywhere."""')
+    lines.append("        return self._request(lambda: requests.post(")
+    lines.append('            f"{self.base_url}/tasks/reset",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
+    lines.append("        ))")
+    lines.append("")
     # health/ready/info/config/metrics/uptime/auth_status/auth_info/
     # auth_validate are, like get_task/list_tasks/... above, hardcoded
     # rather than derived from the per-path loop below: every compiled app
@@ -1956,6 +2044,58 @@ def generate_typescript_sdk(
     lines.append('    const path = `/tasks/${taskId}/redeliver-webhook`;')
     lines.append(
         "    return this.requestWithRetry(path, () => fetch(`${this.baseUrl}${path}`, {"
+    )
+    lines.append('      method: "POST",')
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }));")
+    lines.append("  }")
+    lines.append("")
+    # Mirrors generate_python_sdk's identical retry_task addition: the
+    # generated server side has let a caller actually re-execute a failed
+    # task's own underlying function (not merely resend its already-
+    # recorded outcome, which redeliverTaskWebhook above already covers)
+    # via POST /tasks/{task_id}/retry for several commits now, but neither
+    # generated client ever gained a method to call it.
+    lines.append("  async retryTask(taskId: string): Promise<any> {")
+    lines.append('    const path = `/tasks/${taskId}/retry`;')
+    lines.append(
+        "    return this.requestWithRetry(path, () => fetch(`${this.baseUrl}${path}`, {"
+    )
+    lines.append('      method: "POST",')
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }));")
+    lines.append("  }")
+    lines.append("")
+    # cleanupTasks/resetTasks mirror deleteCompletedTasks/
+    # deleteFailedTasks above -- POST /tasks/cleanup and POST /tasks/reset
+    # (api_generator.py) already existed server-side with no client
+    # method of their own. cleanupTasks is the single-request equivalent
+    # of calling deleteCompletedTasks() then deleteFailedTasks()
+    # separately; resetTasks is more drastic still -- it drops every task
+    # regardless of status, including one still processing.
+    lines.append("  async cleanupTasks(): Promise<any> {")
+    lines.append(
+        '    return this.requestWithRetry("/tasks/cleanup", () => '
+        "fetch(`${this.baseUrl}/tasks/cleanup`, {"
+    )
+    lines.append('      method: "POST",')
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }));")
+    lines.append("  }")
+    lines.append("")
+    lines.append("  async resetTasks(): Promise<any> {")
+    lines.append(
+        '    return this.requestWithRetry("/tasks/reset", () => '
+        "fetch(`${this.baseUrl}/tasks/reset`, {"
     )
     lines.append('      method: "POST",')
     lines.append("      headers: {")
