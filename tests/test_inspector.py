@@ -1917,6 +1917,43 @@ def test_generate_curl_commands_rejects_a_non_http_callback_url(tmp_path):
         generate_curl_commands(str(notebook_path), callback_url="ftp://example.com")
 
 
+def test_generate_curl_commands_mentions_retry_for_a_background_function(tmp_path):
+    """Unlike redeliver-webhook (only mentioned when callback_url is
+    given -- see test_generate_curl_commands_appends_callback_url_to_a_
+    background_function above), POST /tasks/{task_id}/retry actually
+    re-runs the underlying function, so it's just as relevant to a task
+    that was never submitted with a callback_url at all -- must be
+    mentioned either way.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    [no_callback_command] = generate_curl_commands(str(notebook_path))
+    assert "/tasks/{task_id}/retry" in no_callback_command
+    assert "redeliver-webhook" not in no_callback_command
+
+    [with_callback_command] = generate_curl_commands(
+        str(notebook_path), callback_url="https://example.com/hook"
+    )
+    assert "/tasks/{task_id}/retry" in with_callback_command
+    assert "redeliver-webhook" in with_callback_command
+
+
+def test_generate_curl_commands_omits_retry_for_a_synchronous_function(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    [command] = generate_curl_commands(str(notebook_path))
+
+    assert "retry" not in command
+
+
 def test_generate_postman_collection_returns_one_item_per_function(tmp_path):
 
     notebook_path = tmp_path / "nb.ipynb"
@@ -2020,9 +2057,11 @@ def test_generate_postman_collection_adds_a_task_status_request_for_a_background
     collection = generate_postman_collection(str(notebook_path))
 
     names = [item["name"] for item in collection["item"]]
-    assert names == ["train_model", "train_model - Task Status"]
+    assert names == [
+        "train_model", "train_model - Task Status", "train_model - Retry",
+    ]
 
-    submission_item, status_item = collection["item"]
+    submission_item, status_item, _retry_item = collection["item"]
 
     assert "task_id" in submission_item["request"]["description"]
     assert submission_item["event"][0]["listen"] == "test"
@@ -2072,7 +2111,7 @@ def test_generate_postman_collection_adds_callback_url_query_to_a_background_fun
         collection["variable"]
     )
 
-    [submit_item, _status_item, _redeliver_item] = collection["item"]
+    [submit_item, _status_item, _retry_item, _redeliver_item] = collection["item"]
     request = submit_item["request"]
 
     assert request["url"]["raw"] == "{{base_url}}/train_model?callback_url={{callback_url}}"
@@ -2099,10 +2138,11 @@ def test_generate_postman_collection_adds_a_redeliver_webhook_request_when_callb
     assert names == [
         "train_model",
         "train_model - Task Status",
+        "train_model - Retry",
         "train_model - Redeliver Webhook",
     ]
 
-    redeliver_item = collection["item"][2]
+    redeliver_item = collection["item"][3]
     request = redeliver_item["request"]
 
     assert request["method"] == "POST"
@@ -2139,7 +2179,9 @@ def test_generate_postman_collection_omits_redeliver_webhook_request_by_default(
     collection = generate_postman_collection(str(notebook_path))
 
     names = [item["name"] for item in collection["item"]]
-    assert names == ["train_model", "train_model - Task Status"]
+    assert names == [
+        "train_model", "train_model - Task Status", "train_model - Retry",
+    ]
     assert not any("Redeliver" in name for name in names)
 
 
@@ -2160,6 +2202,61 @@ def test_generate_postman_collection_omits_redeliver_webhook_request_for_a_synch
     assert names == ["add"]
 
 
+def test_generate_postman_collection_adds_a_retry_request_regardless_of_callback_url(
+    tmp_path
+):
+    """Unlike "{name} - Redeliver Webhook" (only added alongside
+    callback_url -- see
+    test_generate_postman_collection_omits_redeliver_webhook_request_by_default
+    above), "{name} - Retry" has no such precondition: POST
+    /tasks/{task_id}/retry actually re-runs the underlying function, so
+    it's just as meaningful for a task that was never submitted with a
+    callback_url at all.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+
+    collection = generate_postman_collection(str(notebook_path))
+
+    names = [item["name"] for item in collection["item"]]
+    assert names == [
+        "train_model", "train_model - Task Status", "train_model - Retry",
+    ]
+
+    retry_item = collection["item"][2]
+    request = retry_item["request"]
+
+    assert request["method"] == "POST"
+    assert request["header"] == [{"key": "X-API-Key", "value": "{{api_key}}"}]
+    assert request["url"]["raw"] == "{{base_url}}/tasks/{{train_model_task_id}}/retry"
+    assert request["url"]["path"] == ["tasks", "{{train_model_task_id}}", "retry"]
+    assert "train_model_task_id" in request["description"]
+
+    # Reuses the exact same collection variable the submission request's
+    # own test script already captures -- no separate variable of its own.
+    variables = {v["key"]: v["value"] for v in collection["variable"]}
+    assert variables["train_model_task_id"] == ""
+    assert "train_model_task_id_retry" not in variables
+
+
+def test_generate_postman_collection_omits_retry_request_for_a_synchronous_function(
+    tmp_path
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    collection = generate_postman_collection(str(notebook_path))
+
+    names = [item["name"] for item in collection["item"]]
+    assert names == ["add"]
+
+
 def test_generate_postman_collection_omits_callback_url_variable_by_default(tmp_path):
 
     notebook_path = tmp_path / "nb.ipynb"
@@ -2171,7 +2268,7 @@ def test_generate_postman_collection_omits_callback_url_variable_by_default(tmp_
 
     assert all(var["key"] != "callback_url" for var in collection["variable"])
 
-    [submit_item, _status_item] = collection["item"]
+    [submit_item, _status_item, _retry_item] = collection["item"]
     request = submit_item["request"]
 
     assert request["url"]["raw"] == "{{base_url}}/train_model"

@@ -1088,7 +1088,12 @@ def generate_curl_commands(
     /tasks/{task_id}/redeliver-webhook as the manual recourse if delivery
     fails, mirroring the real endpoint added since this docstring was
     first written (redeliver_task_webhook, generator/api_generator.py) --
-    instead of a bare polling note; a synchronous function's own command
+    instead of a bare polling note. Every background function's own
+    comment (with or without callback_url) also now mentions POST
+    /tasks/{task_id}/retry -- the manual recourse if the task itself
+    failed, as opposed to redeliver-webhook's own recourse for a webhook
+    that failed to arrive (retry_task, generator/api_generator.py, added
+    since this docstring was first written). A synchronous function's own command
     is left completely untouched, matching the generated app's own
     identical restriction --
     it never even reads this query parameter for one (see
@@ -1166,14 +1171,17 @@ def generate_curl_commands(
                     f'finished result to {callback_url} via a signed '
                     f'webhook; poll GET /tasks/{{task_id}} too if you need '
                     "it sooner, or POST /tasks/{task_id}/redeliver-webhook "
-                    "to manually retry delivery if it fails)"
+                    "to manually retry delivery if it fails -- or POST "
+                    "/tasks/{task_id}/retry to actually re-run it if the "
+                    "task itself failed)"
                 )
 
             else:
                 comment = (
                     f'# {name} (background task -- POST only returns '
                     f'{{"task_id": ...}}; poll GET /tasks/{{task_id}} for the '
-                    f"actual result)"
+                    "actual result, or POST /tasks/{task_id}/retry to "
+                    "re-run it if it failed)"
                 )
 
         else:
@@ -1277,6 +1285,18 @@ def generate_postman_collection(
     server's own endpoint rejects it with 400 (see redeliver_task_webhook's
     "was not submitted with a callback_url" check) -- so a collection with
     no callback_url would only be offering a request guaranteed to fail.
+
+    Every background function also gets a "{name} - Retry" companion
+    request, always -- unlike "{name} - Redeliver Webhook" above, this has
+    no callback_url precondition, since POST /tasks/{{task_id}}/retry
+    (retry_task, generator/api_generator.py) actually re-executes the
+    underlying function itself rather than resending an already-recorded
+    outcome, and that's just as meaningful for a task that was never
+    submitted with a callback_url at all. Placed right after "{name} -
+    Task Status" (before "{name} - Redeliver Webhook", when present) --
+    checking whether a task failed is the natural step before deciding to
+    retry it. Reuses the same "{name}_task_id" variable every other
+    companion request here already does, with no capture step of its own.
 
     Returns a plain dict -- a valid Postman Collection v2.1.0 document
     once json.dump-ed -- rather than writing a file itself, the same
@@ -1398,6 +1418,31 @@ def generate_postman_collection(
                         "host": ["{{base_url}}"],
                         "path": ["tasks", "{{" + task_id_var + "}}"],
                     },
+                },
+            })
+            items.append({
+                "name": f"{name} - Retry",
+                "request": {
+                    "method": "POST",
+                    "header": [{"key": "X-API-Key", "value": "{{api_key}}"}],
+                    "url": {
+                        "raw": (
+                            "{{base_url}}/tasks/{{" + task_id_var + "}}/retry"
+                        ),
+                        "host": ["{{base_url}}"],
+                        "path": ["tasks", "{{" + task_id_var + "}}", "retry"],
+                    },
+                    "description": (
+                        f'Re-runs "{name}"\'s own underlying function with '
+                        "its original inputs, under a brand-new task_id -- "
+                        f'use this if "{name} - Task Status" above shows '
+                        '"failed". Requires '
+                        f"{{{{{task_id_var}}}}} to already be captured by "
+                        f'running "{name}" above at least once. Unlike '
+                        f'"{name} - Task Status", not tied to '
+                        "callback_url -- a task can be retried whether or "
+                        "not it was ever submitted with one."
+                    ),
                 },
             })
 

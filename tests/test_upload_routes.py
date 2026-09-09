@@ -20019,7 +20019,7 @@ def test_postman_preview_adds_a_task_status_item_for_a_background_function():
     assert resp.status_code == 200
     items = resp.json()["collection"]["item"]
     assert [item["name"] for item in items] == [
-        "train_model", "train_model - Task Status",
+        "train_model", "train_model - Task Status", "train_model - Retry",
     ]
 
 
