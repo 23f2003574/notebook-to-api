@@ -405,6 +405,18 @@ def readme_content(package_name="generated", functions=None, env_vars=None):
     source, the identical "had no way to know" failure this docstring's
     own first documentation-bug fix already names.
 
+    A third, identical-class documentation bug: the explicit `/tasks/...`
+    route list above still never named `/tasks/{{task_id}}/retry` (added
+    several commits after the second documentation-bug fix above -- see
+    retry_task, api_generator.py), and every background function's own
+    bullet below still only ever mentioned `redeliver-webhook` as the
+    manual recourse, never that `retry` -- which actually re-executes the
+    underlying function with its original inputs, rather than merely
+    resending an already-recorded outcome -- exists at all. The same
+    operator this docstring's own first fix already worried about had no
+    way to learn this capability exists either, short of reading
+    api_generator.py's own source directly.
+
     `functions` is the same list generate_fastapi_code (api_generator.py)
     itself compiles into endpoints -- each already carrying "name" and,
     for a background one, matching LONG_RUNNING_KEYWORDS. Reusing that
@@ -437,7 +449,9 @@ def readme_content(package_name="generated", functions=None, env_vars=None):
             "there instead once the task finishes (signed if "
             "`NOTEBOOK_API_WEBHOOK_SECRET` is set -- see Configuration "
             "below); if that delivery fails, `POST "
-            "/tasks/{task_id}/redeliver-webhook` retries it manually"
+            "/tasks/{task_id}/redeliver-webhook` retries it manually; if "
+            "the task itself failed, `POST /tasks/{task_id}/retry` "
+            "re-runs it with its original inputs"
             if is_background else ""
         )
 
@@ -469,7 +483,8 @@ below.
 
 So do these built-in ones: `/auth/validate`, `/tasks`, and every other \
 `/tasks/...` route (`/tasks/{{task_id}}`, `/tasks/{{task_id}}/redeliver-webhook`, \
-`/tasks/completed`, `/tasks/failed`, `/tasks/cleanup`, `/tasks/reset`).
+`/tasks/{{task_id}}/retry`, `/tasks/completed`, `/tasks/failed`, \
+`/tasks/cleanup`, `/tasks/reset`).
 
 These built-in ones deliberately do **not** -- so a load balancer, a \
 Kubernetes liveness/readiness probe, or a Prometheus scraper can reach \

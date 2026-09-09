@@ -5779,6 +5779,37 @@ def test_readme_content_lists_the_redeliver_webhook_route_as_requiring_an_api_ke
     assert "`/tasks/{task_id}/redeliver-webhook`" in content
 
 
+def test_readme_content_background_function_mentions_retry():
+    """Confirmed missing before this fix, the identical "server-side
+    capability exists, this generator was never updated to match" class
+    of documentation bug this function's own docstring already names
+    twice: a compiled app has supported POST /tasks/{task_id}/retry
+    (actually re-running the underlying function, not just resending an
+    already-recorded outcome) for several commits, but the background
+    function bullet here still only ever mentioned redeliver-webhook.
+    """
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(
+        functions=[{"name": "train_model", "args": [], "return_type": "dict"}],
+    )
+
+    assert "/tasks/{task_id}/retry" in content
+
+
+def test_readme_content_lists_the_retry_route_as_requiring_an_api_key():
+    """Mirrors
+    test_readme_content_lists_the_redeliver_webhook_route_as_requiring_an_api_key
+    for retry_task (api_generator.py) -- the explicit `/tasks/...` route
+    list under "So do these built-in ones" must name it too.
+    """
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content()
+
+    assert "`/tasks/{task_id}/retry`" in content
+
+
 def test_readme_content_does_not_mark_a_synchronous_function_as_background():
     from backend.generator.docker_generator import readme_content
 
