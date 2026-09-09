@@ -1132,14 +1132,21 @@ def test_background_endpoint_rejects_new_tasks_past_max_pending_tasks():
 
 def test_non_background_endpoint_has_no_max_pending_tasks_check():
     """A synchronous endpoint never touches TASKS at all -- the check
-    only belongs in a background endpoint's own body.
+    only belongs in a background endpoint's own body (or the always-
+    present /tasks/{task_id}/retry, which -- like a background
+    submission -- also admits a brand-new task into TASKS and so needs
+    the identical guard; scoped out below since it isn't specific to
+    this notebook's own "add" endpoint).
     """
 
     functions = [{"name": "add", "args": [], "return_type": "int"}]
 
     code = generate_fastapi_code(functions)
 
-    assert "if len(TASKS) >= MAX_PENDING_TASKS:" not in code
+    add_endpoint_start = code.index("def add(")
+    add_endpoint_body = code[add_endpoint_start:]
+
+    assert "if len(TASKS) >= MAX_PENDING_TASKS:" not in add_endpoint_body
     # The constant itself is still always defined at module level.
     assert "MAX_PENDING_TASKS = int(os.getenv(" in code
 
@@ -2388,6 +2395,191 @@ def test_redeliver_webhook_400s_when_task_had_no_callback_url(monkeypatch):
     )
     assert response.status_code == 400
     assert "callback_url" in response.json()["detail"]
+
+
+def test_notebook_function_named_retry_task_is_rejected():
+    """retry_task is the endpoint function POST /tasks/{task_id}/retry is
+    defined as -- reserved the same way redeliver_task_webhook already is.
+    """
+
+    functions = [
+        {"name": "retry_task", "args": [], "return_type": "dict"}
+    ]
+
+    with pytest.raises(ReservedFunctionNameError, match="retry_task"):
+        generate_fastapi_code(functions)
+
+
+def test_retry_resubmits_a_failed_task_with_its_original_inputs(monkeypatch):
+    """POST /tasks/{task_id}/retry must re-run the notebook function --
+    unlike redeliver-webhook, which deliberately never does -- using the
+    exact positional and keyword-only arguments it was originally
+    submitted with, under a brand-new task_id. The original, still-failed
+    task must be left untouched.
+    """
+
+    functions = [
+        {
+            "name": "process_data",
+            "args": [
+                {"name": "x", "type": "int", "kind": "positional"},
+                {
+                    "name": "epochs", "type": "int", "default": 10,
+                    "has_default": True, "kind": "keyword_only",
+                },
+            ],
+            "return_type": "dict",
+        }
+    ]
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    calls = []
+
+    def flaky(x, *, epochs=10):
+        calls.append((x, epochs))
+        if len(calls) == 1:
+            raise ValueError("boom")
+        return x * epochs
+
+    namespace["notebook_module"].process_data = flaky
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    submit_response = client.post(
+        "/process_data", json={"x": 3, "epochs": 4}, headers=headers
+    )
+    task_id = submit_response.json()["task_id"]
+    assert namespace["TASKS"][task_id]["status"] == "failed"
+    assert calls == [(3, 4)]
+
+    retry_response = client.post(f"/tasks/{task_id}/retry", headers=headers)
+    assert retry_response.status_code == 200
+    body = retry_response.json()
+    new_task_id = body["task_id"]
+    assert new_task_id != task_id
+    assert body["status"] == "processing"
+    assert body["retried_from"] == task_id
+
+    assert calls == [(3, 4), (3, 4)]
+    new_task = namespace["TASKS"][new_task_id]
+    assert new_task["status"] == "completed"
+    assert new_task["result"] == 12
+    assert new_task["retried_from"] == task_id
+
+    # The original failed task is untouched by the retry.
+    assert namespace["TASKS"][task_id]["status"] == "failed"
+    assert namespace["TASKS"][task_id]["error"] == "boom"
+
+
+def test_retry_404s_for_an_unknown_task(monkeypatch):
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    response = client.post("/tasks/does-not-exist/retry", headers=headers)
+    assert response.status_code == 404
+
+
+def test_retry_409s_for_a_task_that_is_still_processing_or_already_completed(monkeypatch):
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["TASKS"]["still-running"] = {
+        "status": "processing", "created_at": 0, "callback_url": None,
+    }
+    namespace["TASKS"]["already-done"] = {
+        "status": "completed", "created_at": 0, "callback_url": None,
+        "result": "ok",
+        "_replay": {"func_name": "process_data", "args": (), "kwargs": {}},
+    }
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    response = client.post("/tasks/still-running/retry", headers=headers)
+    assert response.status_code == 409
+
+    response = client.post("/tasks/already-done/retry", headers=headers)
+    assert response.status_code == 409
+
+
+def test_retry_409s_when_task_has_no_recorded_replay_inputs(monkeypatch):
+    """A failed task created before this endpoint existed (or manually
+    injected, as here) has no '_replay' -- there is nothing to retry it
+    with, distinct from the 404/'still processing' cases above.
+    """
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["TASKS"]["legacy-failure"] = {
+        "status": "failed", "created_at": 0, "callback_url": None,
+        "error": "boom",
+    }
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    response = client.post("/tasks/legacy-failure/retry", headers=headers)
+    assert response.status_code == 409
+    assert "no recorded inputs" in response.json()["detail"]
+
+
+def test_get_task_and_list_tasks_never_expose_the_internal_replay_field(monkeypatch):
+    """'_replay' (see the retry tests above) is internal bookkeeping for
+    POST /tasks/{task_id}/retry -- it must never leak out through either
+    of this app's own two task-reading endpoints.
+    """
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    def always_raises():
+        raise ValueError("boom")
+
+    namespace["notebook_module"].process_data = always_raises
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    submit_response = client.post("/process_data", json={}, headers=headers)
+    task_id = submit_response.json()["task_id"]
+    assert "_replay" in namespace["TASKS"][task_id]
+
+    get_response = client.get(f"/tasks/{task_id}", headers=headers)
+    assert "_replay" not in get_response.json()
+
+    list_response = client.get("/tasks", headers=headers)
+    assert "_replay" not in list_response.json()["tasks"][task_id]
 
 
 def test_webhook_delivery_retries_a_5xx_http_error_then_succeeds(monkeypatch):

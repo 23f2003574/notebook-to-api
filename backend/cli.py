@@ -7102,6 +7102,18 @@ def _dispatch_core_command(args):
             else:
                 print(f"Deleted task {args.task_id} (was {data.get('status')}).")
 
+        elif args.app_tasks_command == "retry":
+
+            data = _app_request("POST", f"/tasks/{args.task_id}/retry")
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                print(
+                    f"Retrying task {args.task_id} as new task "
+                    f"{data.get('task_id')} ({data.get('status')})."
+                )
+
         elif args.app_tasks_command == "redeliver-webhook":
 
             data = _app_request("POST", f"/tasks/{args.task_id}/redeliver-webhook")
@@ -12741,7 +12753,7 @@ def main():
     app_tasks_parser = subparsers.add_parser(
         "app-tasks",
         help=(
-            "List, inspect, delete, or redeliver the webhook of a "
+            "List, inspect, delete, retry, or redeliver the webhook of a "
             "deployed compiled app's own already-submitted background "
             "tasks directly."
         )
@@ -12818,6 +12830,35 @@ def main():
     )
     _add_app_host_port_arguments(app_tasks_delete_parser)
     app_tasks_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit the app's own raw JSON response instead of a human-readable summary, for scripting/automation."
+    )
+
+    # app-tasks retry -- unlike redeliver-webhook below (which only ever
+    # resends a finished task's own already-recorded outcome, verbatim,
+    # never re-running the notebook function itself), this actually
+    # re-executes a *failed* task's underlying function with its original
+    # inputs via the app's own POST /tasks/{task_id}/retry, producing a
+    # brand-new task_id rather than mutating the one it retried.
+    app_tasks_retry_parser = app_tasks_subparsers.add_parser(
+        "retry",
+        help=(
+            "Re-run one failed background task's own underlying function "
+            "with its original inputs via POST /tasks/{task_id}/retry, "
+            "under a brand-new task_id."
+        )
+    )
+    app_tasks_retry_parser.add_argument(
+        "task_id",
+        help=(
+            "Failed task id to retry, as reported by `app-tasks list "
+            "--status failed`."
+        )
+    )
+    _add_app_host_port_arguments(app_tasks_retry_parser)
+    app_tasks_retry_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",

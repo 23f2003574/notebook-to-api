@@ -21556,6 +21556,97 @@ def test_app_tasks_redeliver_webhook_command_reports_failure(tmp_path, fake_dash
     assert "Redelivery FAILED for task abc123 (attempt 1)." in proc.stdout
 
 
+def test_app_tasks_retry_subcommand_is_registered():
+
+    proc = _run_cli(["app-tasks", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "retry" in proc.stdout
+
+
+def test_app_tasks_retry_command_reports_the_new_task_id(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {
+            "task_id": "def456",
+            "status": "processing",
+            "retried_from": "abc123",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "retry", "abc123",
+            "--host", host, "--port", str(port),
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (
+        "Retrying task abc123 as new task def456 (processing)."
+        in proc.stdout
+    )
+    assert handler.requests == ["/tasks/abc123/retry"]
+
+
+def test_app_tasks_retry_command_json_flag_emits_the_apps_raw_response(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    body = {"task_id": "def456", "status": "processing", "retried_from": "abc123"}
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "retry", "abc123",
+            "--host", host, "--port", str(port), "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_app_tasks_retry_command_reports_a_clean_error_when_the_task_cannot_be_retried(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(
+            409,
+            {"detail": "Task abc123 has status 'completed' -- only a failed task can be retried"},
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "retry", "abc123",
+            "--host", host, "--port", str(port),
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode != 0
+    assert "only a failed task can be retried" in (proc.stdout + proc.stderr)
+
+
 def test_app_tasks_command_sends_the_api_key_header(tmp_path, fake_dashboard):
 
     app_url, handler = fake_dashboard

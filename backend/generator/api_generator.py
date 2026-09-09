@@ -118,7 +118,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "metrics_prometheus", "_task_status_counts",
     "get_task", "list_tasks", "delete_task", "cleanup_tasks",
     "delete_completed_tasks", "delete_failed_tasks", "reset_tasks",
-    "redeliver_task_webhook",
+    "redeliver_task_webhook", "retry_task",
     "notebook_module",
     # Confirmed exploitable: these two private helpers (both defined at
     # module scope, like every other name above) were missing here, so a
@@ -1804,7 +1804,22 @@ def generate_fastapi_code(
     lines.append("        'matching_tasks': len(matching_items),")
     lines.append("        'limit': limit,")
     lines.append("        'offset': offset,")
-    lines.append("        'tasks': dict(page_items)")
+    # '_replay' (a failed background task's own recorded function
+    # name/args/kwargs, written below so POST /tasks/{task_id}/retry can
+    # later re-execute it) is internal bookkeeping, not part of this
+    # endpoint's own public task shape -- it can hold an arbitrary
+    # notebook-supplied value (whatever a request model field's real type
+    # is, not necessarily JSON-safe on its own), and was never meant to be
+    # inspected by a caller polling GET /tasks the way 'status'/'result'/
+    # 'webhook' already are. Stripped the same way from GET
+    # /tasks/{task_id} below, so a task's shape is identical whether seen
+    # through this endpoint or that one.
+    lines.append("        'tasks': {")
+    lines.append("            task_id: {")
+    lines.append("                k: v for k, v in task.items() if k != '_replay'")
+    lines.append("            }")
+    lines.append("            for task_id, task in page_items")
+    lines.append("        }")
     lines.append("    }")
     lines.append("")
     lines.append("@app.get('/tasks/{task_id}')")
@@ -1817,7 +1832,12 @@ def generate_fastapi_code(
     lines.append("            detail=f'Task {task_id} not found'")
     lines.append("        )")
     lines.append("")
-    lines.append("    return task")
+    # See the identical '_replay' filtering comment on GET /tasks' own
+    # 'tasks' field above -- this is that same internal field, stripped
+    # here too so a caller sees the same task shape either way.
+    lines.append(
+        "    return {k: v for k, v in task.items() if k != '_replay'}"
+    )
     lines.append("")
     lines.append("@app.delete('/tasks/completed')")
     lines.append("def delete_completed_tasks(_: None = Depends(verify_api_key)):")
@@ -2314,6 +2334,132 @@ def generate_fastapi_code(
         "        'webhook_redelivery_count': "
         "TASKS.get(task_id, {}).get('webhook_redelivery_count', 0),"
     )
+    lines.append("    }")
+
+    lines.append("")
+    # redeliver_task_webhook above resends a finished task's own
+    # already-recorded result/error, verbatim -- deliberately never
+    # re-running the notebook function itself (see its own comment
+    # above). That leaves a real gap for a task that actually *failed*:
+    # there was no way, short of re-submitting POST /{func_name} from
+    # scratch with the exact original body, to make this app try the
+    # underlying computation again -- and a caller doing that by hand had
+    # to have kept the original request body around themselves, since
+    # nothing here ever gave it back to them. This instead re-executes the
+    # notebook function using '_replay' (recorded at submission time, see
+    # its own comment above), under a brand-new task_id -- the failed
+    # task itself is left exactly as it was, so its own error stays
+    # available for inspection, and a caller can tell a retry's own result
+    # apart from the original failure it retried.
+    lines.append("@app.post('/tasks/{task_id}/retry')")
+    lines.append(
+        "async def retry_task(task_id: str, background_tasks: "
+        "BackgroundTasks, _: None = Depends(verify_api_key)):"
+    )
+
+    lines.append("    task = TASKS.get(task_id)")
+    lines.append("")
+    lines.append("    if task is None:")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=404,")
+    lines.append("            detail=f'Task {task_id} not found'")
+    lines.append("        )")
+    lines.append("")
+    # Only a *failed* task may be retried -- a still-'processing' task has
+    # nothing to retry yet (mirroring DELETE/redeliver-webhook's own
+    # "still processing" 409 above), and a 'completed' one already
+    # succeeded, so retrying it would silently re-run a notebook function
+    # that already did its job once, which is very likely not idempotent
+    # (the exact class of function LONG_RUNNING_KEYWORDS routes here in
+    # the first place: train/process/generate/embed/scrape).
+    lines.append("    if task.get('status') != 'failed':")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=409,")
+    lines.append("            detail=(")
+    lines.append(
+        "                f\"Task {task_id} has status "
+        "{task.get('status')!r} -- only a failed task can be retried\""
+    )
+    lines.append("            ),")
+    lines.append("        )")
+    lines.append("")
+    # A task submitted before this endpoint existed (or one that is
+    # itself the *result* of an earlier retry -- see 'retried_from' below,
+    # never itself given its own '_replay') has no recorded inputs to
+    # replay. Distinct from the 404/409 cases above: the task is real and
+    # really did fail, there is simply nothing here to re-execute it with.
+    lines.append("    replay = task.get('_replay')")
+    lines.append("    if replay is None:")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=409,")
+    lines.append("            detail=(")
+    lines.append(
+        "                f'Task {task_id} has no recorded inputs to '"
+    )
+    lines.append(
+        "                'retry -- it may predate this endpoint'"
+    )
+    lines.append("            ),")
+    lines.append("        )")
+    lines.append("")
+    # A retry is a brand-new submission in every way that matters -- same
+    # MAX_PENDING_TASKS admission check POST /{func_name} itself already
+    # enforces (a retry storm must not be able to bypass it), same lazy
+    # eviction sweep first.
+    lines.append("    _evict_expired_tasks()")
+    lines.append("    if len(TASKS) >= MAX_PENDING_TASKS:")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=503,")
+    lines.append("            detail=(")
+    lines.append(
+        "                f'Too many pending background tasks (limit '"
+    )
+    lines.append(
+        "                f'{MAX_PENDING_TASKS}); try again once some have '"
+    )
+    lines.append("                'finished.'")
+    lines.append("            ),")
+    lines.append("        )")
+    lines.append("")
+    # Looked up by name on notebook_module again, rather than trusting
+    # anything cached from the original submission -- the same
+    # "resolve fresh, don't assume it's unchanged" reasoning
+    # notebook_module's own docstring already carries elsewhere in this
+    # file.
+    lines.append("    func = getattr(notebook_module, replay['func_name'], None)")
+    lines.append("    if func is None:")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=500,")
+    lines.append("            detail=(")
+    lines.append(
+        "                f\"Task {task_id}'s own function "
+        "{replay['func_name']!r} no longer exists in this deployment\""
+    )
+    lines.append("            ),")
+    lines.append("        )")
+    lines.append("")
+    lines.append("    new_task_id = uuid.uuid4().hex")
+    lines.append("    callback_url = task.get('callback_url')")
+    lines.append("    TASKS[new_task_id] = {")
+    lines.append("        'status': 'processing',")
+    lines.append("        'created_at': time.time(),")
+    lines.append("        'callback_url': callback_url,")
+    # 'retried_from' is left in the caller-facing shape on purpose (unlike
+    # '_replay') -- it is exactly the kind of lineage a caller polling
+    # GET /tasks/{new_task_id} benefits from seeing: which original,
+    # now-failed task this one is a re-run of.
+    lines.append("        'retried_from': task_id,")
+    lines.append("        '_replay': replay,")
+    lines.append("    }")
+    lines.append(
+        "    background_tasks.add_task(_run_background_task, func, "
+        "new_task_id, *replay['args'], callback_url=callback_url, "
+        "**replay['kwargs'])"
+    )
+    lines.append("    return {")
+    lines.append("        'task_id': new_task_id,")
+    lines.append("        'status': 'processing',")
+    lines.append("        'retried_from': task_id,")
     lines.append("    }")
 
     lines.append("")
@@ -2965,6 +3111,35 @@ def generate_fastapi_code(
             lines.append(
                 "    TASKS[task_id] = {\"status\": \"processing\", "
                 "\"created_at\": time.time(), \"callback_url\": callback_url}"
+            )
+            # '_replay' records exactly what would be needed to run this
+            # exact call a second time: the notebook function's own name
+            # (looked up on notebook_module again at retry time, rather
+            # than closing over the function object itself, so a retry
+            # still resolves to whatever notebook_module.{func_name}
+            # currently is) plus its positional/keyword arguments, taken
+            # from this same `req` this endpoint was already given -- the
+            # identical values _call_arg_expr already renders into the
+            # call below, just captured instead of only ever being used
+            # once. Before this, POST /tasks/{task_id}/retry had no source
+            # of truth for a failed task's own original inputs to
+            # re-execute against; nothing else in TASKS records them.
+            # Filtered back out of every caller-facing response (see GET
+            # /tasks and GET /tasks/{task_id} above) -- this exists purely
+            # for retry_task below to consume.
+            replay_pos_args = "".join(
+                f"req.{arg['name']}, "
+                for arg in args
+                if arg.get("kind") != "keyword_only"
+            )
+            replay_kwargs = "".join(
+                f"{arg['name']!r}: req.{arg['name']}, "
+                for arg in args
+                if arg.get("kind") == "keyword_only"
+            )
+            lines.append(
+                f"    TASKS[task_id]['_replay'] = {{'func_name': {func_name!r}, "
+                f"'args': ({replay_pos_args}), 'kwargs': {{{replay_kwargs}}}}}"
             )
             # Pass positional arguments to the background function
             call_parts = (
