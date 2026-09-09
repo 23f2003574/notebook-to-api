@@ -2874,6 +2874,21 @@ def _dispatch_core_command(args):
                     f"{data.get('notebooks_remaining')} remaining"
                 )
 
+            # Mirrors the "Catalog cap" line above for
+            # max_total_storage_bytes/storage_bytes_remaining -- the whole-
+            # catalog byte budget (distinct from max_notebooks' own notebook
+            # *count* cap), previously reported by GET /api/notebooks/storage
+            # itself but silently dropped on the way to this command's own
+            # human-readable output (still visible via `storage --json`
+            # ever since it was added).
+            max_total_storage_bytes = data.get("max_total_storage_bytes")
+
+            if max_total_storage_bytes:
+                print(
+                    f"Storage cap: {max_total_storage_bytes} bytes, "
+                    f"{data.get('storage_bytes_remaining')} remaining"
+                )
+
     elif args.command == "download":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -6924,6 +6939,11 @@ def _dispatch_core_command(args):
             print(f"  max batch upload files: {config.get('max_batch_upload_files')}")
             max_notebooks = config.get('max_notebooks')
             print(f"  max notebooks: {max_notebooks if max_notebooks else 'unlimited'}")
+            max_total_storage_bytes = config.get('max_total_storage_bytes')
+            print(
+                "  max total storage: "
+                f"{f'{max_total_storage_bytes} bytes' if max_total_storage_bytes else 'unlimited'}"
+            )
             print(f"  max notebook versions kept: {config.get('max_notebook_versions')}")
             print(f"  max tag length: {config.get('max_tag_length')}")
             print(f"  max tags per notebook: {config.get('max_tags_per_notebook')}")
@@ -8925,7 +8945,8 @@ def main():
             "\"notebook_count\", \"limit\", \"offset\", "
             "\"total_notebook_bytes\", \"total_version_bytes\", "
             "\"total_version_count\", \"total_bytes\", \"max_notebooks\", "
-            "\"notebooks_remaining\"}) instead of a human-readable "
+            "\"notebooks_remaining\", \"max_total_storage_bytes\", "
+            "\"storage_bytes_remaining\"}) instead of a human-readable "
             "summary, for scripting/automation."
         )
     )
