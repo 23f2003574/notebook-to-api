@@ -7522,11 +7522,29 @@ def _dispatch_core_command(args):
             if args.offset is not None:
                 params["offset"] = args.offset
 
-            data = _app_request("GET", "/tasks", params=params)
+            # Wrapped in its own function -- the same "so --watch can
+            # call the exact same fetch-and-report logic on every poll
+            # without a second, hand-copied, driftable print block"
+            # reasoning app-status/app-metrics' own identical functions
+            # already establish (see _fetch_and_report_status above).
+            def _fetch_and_report_tasks():
 
-            if args.json_output:
-                print(json.dumps(data, indent=2))
-            else:
+                data = _app_request("GET", "/tasks", params=params)
+
+                if args.json_output:
+                    if args.watch:
+                        # One compact object per line (NDJSON) -- see
+                        # app-status --watch --json's own identical
+                        # reasoning above.
+                        result = dict(data)
+                        result["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                        print(json.dumps(result))
+                    else:
+                        print(json.dumps(data, indent=2))
+                    return
+
+                if args.watch:
+                    print(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S')} ---")
 
                 tasks = data.get("tasks", {})
 
@@ -7548,6 +7566,16 @@ def _dispatch_core_command(args):
                     f"({data.get('webhook_delivery_failed_tasks', 0)} with "
                     "a failed webhook delivery)"
                 )
+
+            if not args.watch:
+                _fetch_and_report_tasks()
+            else:
+                try:
+                    while True:
+                        _fetch_and_report_tasks()
+                        time.sleep(args.interval)
+                except KeyboardInterrupt:
+                    print("\nStopped watching.")
 
         elif args.app_tasks_command == "get":
 
@@ -13469,11 +13497,43 @@ def main():
         help="Skip this many matching tasks before --limit is applied, via GET /tasks' own ?offset= query param."
     )
     _add_app_host_port_arguments(app_tasks_list_parser)
+    # --watch/--interval mirror app-status/app-metrics' own identical
+    # flags -- the one other read-only, repeatedly-useful-to-poll
+    # surface this CLI already talks to a deployed app through, and the
+    # one this session's own --watch feature never reached: an operator
+    # who just kicked off `app-tasks redeliver-failed` or a batch of
+    # `app-call`s, and wants to watch "processing_tasks" actually drain
+    # to 0 (or a `--status processing` listing shrink to nothing), had
+    # to run this command over and over by hand, or wrap it in a
+    # separate `watch` utility of its own (unavailable on Windows).
+    app_tasks_list_parser.add_argument(
+        "--watch",
+        action="store_true",
+        help=(
+            "Keep polling every --interval seconds (Ctrl+C to stop) "
+            "instead of listing once and exiting -- composes with every "
+            "filter above exactly like a single listing already does "
+            "(e.g. `--status processing --watch` to watch a batch of "
+            "tasks drain)."
+        )
+    )
+    app_tasks_list_parser.add_argument(
+        "--interval",
+        type=float,
+        default=2.0,
+        help="Seconds to wait between polls under --watch (default: 2)."
+    )
     app_tasks_list_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
-        help="Emit the app's own raw JSON response instead of a human-readable listing, for scripting/automation."
+        help=(
+            "Emit the app's own raw JSON response instead of a "
+            "human-readable listing, for scripting/automation. Under "
+            "--watch, one such object (plus a \"timestamp\") is printed "
+            "per poll, one per line -- the same NDJSON-style streaming "
+            "`app-status --json --watch` already gives."
+        )
     )
 
     app_tasks_get_parser = app_tasks_subparsers.add_parser(

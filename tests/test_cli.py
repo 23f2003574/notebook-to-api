@@ -22102,6 +22102,70 @@ def test_app_tasks_list_command_sends_the_query_params_and_prints_tasks(
     ]
 
 
+def test_app_tasks_list_command_watch_flag_is_registered():
+
+    proc = _run_cli(["app-tasks", "list", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "--watch" in proc.stdout
+    assert "--interval" in proc.stdout
+
+
+def test_app_tasks_list_command_watch_polls_repeatedly_and_stops_cleanly_on_interrupt(
+    tmp_path, fake_dashboard
+):
+    """Mirrors
+    test_app_status_command_watch_polls_repeatedly_and_stops_cleanly_on_interrupt
+    for app-tasks list's own --watch -- must actually poll more than
+    once, composing with --status exactly like a single listing already
+    does, and stop cleanly (exit 0, a real "Stopped watching." message)
+    on a real SIGINT, the same signal a user's own Ctrl+C sends.
+    """
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    one_response = _json_response(200, {
+        "active_tasks": 1, "processing_tasks": 1, "completed_tasks": 0,
+        "failed_tasks": 0, "webhook_delivery_failed_tasks": 0,
+        "matching_tasks": 1, "limit": None, "offset": 0,
+        "tasks": {"t1": {"status": "processing"}},
+    })
+    # Comfortably more polls' worth than this test could ever get through
+    # before being interrupted -- the fake server running out of queued
+    # responses must never be what actually stops this loop.
+    handler.responses = [one_response] * 50
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+
+    proc = subprocess.Popen(
+        [
+            sys.executable, "-m", "backend.cli",
+            "app-tasks", "list", "--status", "processing",
+            "--host", host, "--port", str(port),
+            "--watch", "--interval", "0.05",
+        ],
+        cwd=str(workdir),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    time.sleep(2.5)
+    proc.send_signal(signal.SIGINT)
+
+    stdout, stderr = proc.communicate(timeout=10)
+
+    assert proc.returncode == 0, stdout + stderr
+    assert stdout.count("t1  (processing)") >= 2
+    assert handler.requests[0] == "/tasks?status=processing"
+    assert "Stopped watching." in stdout
+
+
 def test_app_tasks_list_command_reports_no_matching_tasks(tmp_path, fake_dashboard):
 
     app_url, handler = fake_dashboard
