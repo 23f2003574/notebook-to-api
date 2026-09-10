@@ -297,9 +297,9 @@ def test_generate_python_sdk_constructor_accepts_a_configurable_timeout(tmp_path
     # retry_task, cleanup_tasks, reset_tasks, plus the single
     # "/train_model" path this test's own schema declares -- wait_for_task
     # makes no request of its own, it only calls self.get_task), plus the
-    # 9 hardcoded health/ready/info/config/metrics/uptime/auth_status/
-    # auth_info/auth_validate methods.
-    assert source.count("timeout=self.timeout") == 19
+    # 10 hardcoded health/ready/info/config/metrics/metrics_prometheus/
+    # uptime/auth_status/auth_info/auth_validate methods.
+    assert source.count("timeout=self.timeout") == 20
 
 
 def test_generate_python_sdk_uses_the_configured_timeout_for_a_request(
@@ -368,9 +368,10 @@ def test_generate_typescript_sdk_constructor_accepts_a_configurable_timeout(
     # retryTask, cleanupTasks, resetTasks, plus the single shared private
     # `request()` helper every POST-path method -- "/train_model" in this
     # test's own schema -- funnels through, regardless of how many such
-    # paths exist), plus the 9 hardcoded health/ready/info/config/
-    # metrics/uptime/authStatus/authInfo/authValidate methods.
-    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 19
+    # paths exist), plus the 10 hardcoded health/ready/info/config/
+    # metrics/metricsPrometheus/uptime/authStatus/authInfo/authValidate
+    # methods.
+    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 20
 
 
 def test_generate_python_sdk_method_name_handles_multi_segment_paths(tmp_path):
@@ -635,6 +636,81 @@ def test_generate_python_sdk_client_sends_correct_request(tmp_path, monkeypatch)
     assert calls[0]["url"] == "http://localhost:8000/train_model"
     assert calls[0]["json"] == {"a": 1}
     assert calls[0]["headers"] == {"X-API-Key": "notebook-to-api-dev-key"}
+
+
+def test_generate_python_sdk_metrics_prometheus_returns_raw_text_not_json(
+    tmp_path, monkeypatch
+):
+    """GET /metrics/prometheus returns Prometheus text exposition format,
+    not JSON like every other infra method (health/ready/info/config/
+    metrics/uptime/auth_status/auth_info/auth_validate) -- confirmed
+    missing before this fix: metrics_prometheus had no client method of
+    its own here at all, even though the server-side route already
+    existed. A FakeResponse whose .json() raises (the same way a real
+    `requests.Response.json()` would on a non-JSON body) confirms this
+    method genuinely reads .text, not .json().
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+    assert "def metrics_prometheus(self) -> str:" in source
+
+    calls = []
+
+    class FakeResponse:
+        text = "# HELP notebook_api_tasks_total Total tasks\nnotebook_api_tasks_total 3\n"
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            raise ValueError("not JSON")
+
+    def fake_get(url, headers=None, timeout=None):
+        calls.append(url)
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(source, str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    result = client.metrics_prometheus()
+
+    assert result == "# HELP notebook_api_tasks_total Total tasks\nnotebook_api_tasks_total 3\n"
+    assert calls == ["http://localhost:8000/metrics/prometheus"]
+
+
+def test_generate_python_sdk_metrics_prometheus_is_a_reserved_client_method_name(
+    tmp_path,
+):
+    """A notebook function named "metrics_prometheus" must not be allowed
+    to silently shadow the real client method above (the same
+    RESERVED_CLIENT_METHOD_NAMES hazard every other hardcoded method here
+    already guards against)."""
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/metrics_prometheus": {"post": {"operationId": "metrics_prometheus"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert "def metrics_prometheus_2(" in source
+    assert source.count("def metrics_prometheus(") == 1
 
 
 def test_generate_python_sdk_includes_task_polling_helpers(tmp_path):
@@ -2445,6 +2521,97 @@ def test_generate_typescript_sdk_client_sends_correct_request(tmp_path):
     assert call["method"] == "POST"
     assert call["apiKey"] == "notebook-to-api-dev-key"
     assert json.loads(call["body"]) == {"a": 1}
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_metrics_prometheus_returns_raw_text_not_json(
+    tmp_path,
+):
+    """GET /metrics/prometheus returns Prometheus text exposition format,
+    not JSON like every other infra method -- confirmed missing before
+    this fix: metricsPrometheus had no client method of its own here at
+    all. A fetch mock whose json() rejects (the same way a real fetch
+    Response.json() would reject on a non-JSON body) confirms this
+    method genuinely reads response.text(), not response.json().
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    source = client_path.read_text(encoding="utf-8")
+    assert "async metricsPrometheus(): Promise<string> {" in source
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        globalThis.__calls = [];
+        globalThis.fetch = async (url, opts) => {{
+          globalThis.__calls.push(url);
+          return {{
+            ok: true,
+            json: async () => {{ throw new Error("not JSON"); }},
+            text: async () => "# HELP notebook_api_tasks_total Total tasks\\nnotebook_api_tasks_total 3\\n",
+          }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+        const result = await client.metricsPrometheus();
+
+        console.log(JSON.stringify({{ result, calls: globalThis.__calls }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["result"] == (
+        "# HELP notebook_api_tasks_total Total tasks\nnotebook_api_tasks_total 3\n"
+    )
+    assert output["calls"] == ["http://localhost:8000/metrics/prometheus"]
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_metrics_prometheus_is_a_reserved_client_method_name(
+    tmp_path,
+):
+    """A notebook function named "metricsPrometheus" must not be allowed
+    to silently produce a duplicate-identifier TypeScript compile error
+    against the real client method above (the same
+    TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES hazard every other hardcoded
+    method here already guards against)."""
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/metricsPrometheus": {"post": {"operationId": "metricsPrometheus"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    source = client_path.read_text(encoding="utf-8")
+
+    assert "async metricsPrometheus_2(" in source
+    assert source.count("async metricsPrometheus(") == 1
 
 
 @pytest.mark.skipif(

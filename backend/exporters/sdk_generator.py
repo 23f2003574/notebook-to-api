@@ -22,8 +22,8 @@ PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "get_task", "wait_for_task", "list_tasks", "delete_task",
     "delete_completed_tasks", "delete_failed_tasks", "redeliver_task_webhook",
     "retry_task", "cleanup_tasks", "reset_tasks",
-    "health", "ready", "info", "config", "metrics", "uptime",
-    "auth_status", "auth_info", "auth_validate",
+    "health", "ready", "info", "config", "metrics", "metrics_prometheus",
+    "uptime", "auth_status", "auth_info", "auth_validate",
     # Confirmed exploitable: base_url/api_key/timeout are the client's
     # own __init__-set *instance attributes* (self.base_url, self.api_key,
     # self.timeout -- every other method here reads them for exactly
@@ -48,8 +48,8 @@ TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "getTask", "waitForTask", "listTasks", "deleteTask",
     "deleteCompletedTasks", "deleteFailedTasks", "redeliverTaskWebhook",
     "retryTask", "cleanupTasks", "resetTasks",
-    "health", "ready", "info", "config", "metrics", "uptime",
-    "authStatus", "authInfo", "authValidate",
+    "health", "ready", "info", "config", "metrics", "metricsPrometheus",
+    "uptime", "authStatus", "authInfo", "authValidate",
     # Same hazard as PYTHON_RESERVED_CLIENT_METHOD_NAMES's base_url/
     # api_key/timeout above: baseUrl/apiKey/timeoutMs are this client's
     # own private instance fields (this.baseUrl, this.apiKey,
@@ -1061,7 +1061,7 @@ def generate_python_sdk(
     lines.append("                    pass")
     lines.append("        return self.backoff_factor * (2 ** attempt)")
     lines.append("")
-    lines.append("    def _request(self, request_fn):")
+    lines.append("    def _request(self, request_fn, parse_json: bool = True):")
     lines.append(
         '        """Run `request_fn` (a zero-argument callable making one '
         'HTTP call --'
@@ -1087,7 +1087,15 @@ def generate_python_sdk(
         'immediately,'
     )
     lines.append(
-        '        exactly as before this existed."""'
+        "        exactly as before this existed. `parse_json=False` "
+        "(metrics_prometheus"
+    )
+    lines.append(
+        "        below -- Prometheus text exposition format, not JSON) "
+        'returns'
+    )
+    lines.append(
+        '        response.text instead of response.json()."""'
     )
     lines.append("        attempt = 0")
     lines.append("        while True:")
@@ -1109,7 +1117,7 @@ def generate_python_sdk(
     lines.append("                time.sleep(self._retry_delay(response, attempt))")
     lines.append("                attempt += 1")
     lines.append("                continue")
-    lines.append("            return response.json()")
+    lines.append("            return response.json() if parse_json else response.text")
     lines.append("")
     lines.append("    def get_task(self, task_id: str) -> dict:")
     lines.append('        """Fetch the current status/result of a background task."""')
@@ -1465,6 +1473,37 @@ def generate_python_sdk(
         lines.append("            timeout=self.timeout,")
         lines.append("        ))")
         lines.append("")
+    # metrics_prometheus is the one infra method left out of the loop
+    # above: GET /metrics/prometheus (api_generator.py's metrics_prometheus)
+    # returns Prometheus text exposition format, not JSON like every
+    # other infra route -- plugging it into that homogeneous loop as-is
+    # would generate a method that raises a JSON decode error on every
+    # real response. Confirmed missing before this: every other infra
+    # route above already got a client method specifically so a caller
+    # integrating via this generated client never has to hand-roll a raw
+    # HTTP call, but a caller building a monitoring/collector integration
+    # around this client had no way to reach this one -- the exact same
+    # "server-side route exists, client-side method was never added to
+    # match" drift class the loop above already closed for config/metrics/
+    # uptime/auth_*.
+    lines.append("    def metrics_prometheus(self) -> str:")
+    lines.append(
+        '        """GET /metrics/prometheus. Unlike every other infra '
+        "method"
+    )
+    lines.append(
+        "        above, this returns raw Prometheus text exposition "
+        'format --'
+    )
+    lines.append(
+        '        the exact text a scraper expects -- not a parsed dict."""'
+    )
+    lines.append("        return self._request(lambda: requests.get(")
+    lines.append('            f"{self.base_url}/metrics/prometheus",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
+    lines.append("        ), parse_json=False)")
+    lines.append("")
     for path, method_name in method_names.items():
         is_background = _is_background_path(paths[path])
         description = _operation_description(paths[path])
@@ -1757,7 +1796,8 @@ def generate_typescript_sdk(
     lines.append("")
     lines.append(
         "  private async requestWithRetry(path: string, "
-        "fn: () => Promise<Response>): Promise<any> {"
+        "fn: () => Promise<Response>, parseJson: boolean = true): "
+        "Promise<any> {"
     )
     lines.append("    let attempt = 0;")
     lines.append("    while (true) {")
@@ -1808,7 +1848,7 @@ def generate_typescript_sdk(
     lines.append("        error.status = response.status;")
     lines.append("        throw error;")
     lines.append("      }")
-    lines.append("      return response.json();")
+    lines.append("      return parseJson ? response.json() : response.text();")
     lines.append("    }")
     lines.append("  }")
     lines.append("")
@@ -2136,6 +2176,28 @@ def generate_typescript_sdk(
         lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
         lines.append("    }));")
         lines.append("  }")
+    # metricsPrometheus is the one infra method left out of the loop
+    # above: GET /metrics/prometheus returns Prometheus text exposition
+    # format, not JSON like every other infra route -- plugging it into
+    # that homogeneous loop as-is would generate a method that throws a
+    # JSON parse error on every real response. Mirrors
+    # generate_python_sdk's identical metrics_prometheus fix, including
+    # the same reasoning: every other infra route above already got a
+    # client method specifically so a caller never has to hand-roll a raw
+    # fetch, but this one route had no client method of its own here
+    # either, until now.
+    lines.append("")
+    lines.append("  async metricsPrometheus(): Promise<string> {")
+    lines.append(
+        '    return this.requestWithRetry("/metrics/prometheus", () => '
+        "fetch(`${this.baseUrl}/metrics/prometheus`, {"
+    )
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }), false);")
+    lines.append("  }")
     # Collected separately from `lines` (the class body being built
     # above) and appended after the class closes, below -- TypeScript
     # type declarations are hoisted within a module, so declaration
