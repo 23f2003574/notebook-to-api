@@ -11967,6 +11967,79 @@ def test_remote_inspect_command_prints_the_full_report(tmp_path, fake_dashboard)
     assert json.loads(handler.bodies[0]) == {"notebook_path": "nb.ipynb"}
 
 
+def test_remote_inspect_command_version_id_uses_the_version_inspect_endpoint(
+    tmp_path, fake_dashboard
+):
+    """POST /api/inspect itself has no "version_id" support at all
+    (unlike POST /api/compile/POST /api/validate) -- --version-id must
+    instead reach the dedicated GET .../versions/{version_id}/inspect,
+    with the id in the URL path, not sent as a POST body at all.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "version_id": "v1.ipynb",
+            "functions": [{"name": "add"}],
+            "dependencies": [],
+            "generated_files": [],
+            "reserved_name_conflicts": [],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "skipped_functions": [],
+            "private_functions": [],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-inspect", "nb.ipynb", "--version-id", "v1.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Inspecting 'nb.ipynb' version 'v1.ipynb'" in proc.stdout
+    assert "POST /add" in proc.stdout
+    assert handler.requests == [
+        "/api/notebooks/nb.ipynb/versions/v1.ipynb/inspect"
+    ]
+    # A GET request has no body at all.
+    assert handler.bodies[0] == b""
+
+
+def test_remote_inspect_command_version_id_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "filename": "nb.ipynb", "version_id": "v1.ipynb",
+        "functions": [], "dependencies": [], "generated_files": [],
+        "reserved_name_conflicts": [], "endpoints": [], "skipped_functions": [],
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-inspect", "nb.ipynb", "--version-id", "v1.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
 def test_remote_inspect_command_reports_reserved_name_conflicts_skipped_and_private_functions(
     tmp_path, fake_dashboard
 ):

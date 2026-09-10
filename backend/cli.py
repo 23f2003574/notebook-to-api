@@ -4585,11 +4585,18 @@ def _dispatch_core_command(args):
         dashboard_url = args.dashboard_url.rstrip("/")
 
         try:
-            response = httpx.post(
-                f"{dashboard_url}/api/inspect",
-                json={"notebook_path": args.filename},
-                timeout=args.timeout,
-            )
+            if args.version_id:
+                response = httpx.get(
+                    f"{dashboard_url}/api/notebooks/{args.filename}"
+                    f"/versions/{args.version_id}/inspect",
+                    timeout=args.timeout,
+                )
+            else:
+                response = httpx.post(
+                    f"{dashboard_url}/api/inspect",
+                    json={"notebook_path": args.filename},
+                    timeout=args.timeout,
+                )
         except httpx.HTTPError as exc:
             raise _dashboard_connection_error(exc, dashboard_url)
 
@@ -4605,7 +4612,11 @@ def _dispatch_core_command(args):
         if args.json_output:
             print(json.dumps(data, indent=2))
         else:
-            print(f"Inspecting '{args.filename}' on {dashboard_url}")
+            target = (
+                f"'{args.filename}' version '{args.version_id}'" if args.version_id
+                else f"'{args.filename}'"
+            )
+            print(f"Inspecting {target} on {dashboard_url}")
 
             reserved_name_conflicts = data.get("reserved_name_conflicts", [])
 
@@ -10857,6 +10868,30 @@ def main():
         "filename",
         help="Filename of the notebook already uploaded to the dashboard, as reported by `list`."
     )
+    # Not _add_version_id_argument (its own help text assumes a POST
+    # body field, the way remote-compile/remote-validate's own
+    # "version_id" actually is) -- POST /api/inspect itself has no
+    # "version_id" support at all (unlike /api/compile, /api/validate):
+    # resolve_upload_path (which it uses to resolve "notebook_path")
+    # deliberately rejects any value with a directory component, and a
+    # version snapshot lives under UPLOAD_DIR/.versions/<filename>/, not
+    # directly inside UPLOAD_DIR as a flat filename (see
+    # inspect_notebook_version's own docstring, routes/upload.py). A
+    # dedicated GET .../versions/{version_id}/inspect exists specifically
+    # for this instead, with the id in the URL path, not a body field --
+    # confirmed missing here even though remote-compile/remote-validate
+    # already reach the identical capability for their own endpoints.
+    remote_inspect_parser.add_argument(
+        "--version-id",
+        default=None,
+        dest="version_id",
+        help=(
+            "Inspect one of this notebook's own previously snapshotted "
+            "versions (as reported by `versions list`) instead of its "
+            "current content, via GET .../notebooks/{filename}/versions/"
+            "{version_id}/inspect instead of POST /api/inspect."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(remote_inspect_parser)
     remote_inspect_parser.add_argument(
         "--json",
@@ -10868,7 +10903,10 @@ def main():
             "\"reserved_name_conflicts\", \"endpoints\", "
             "\"skipped_functions\", \"private_functions\", "
             "\"excluded_imports\", \"duplicate_functions\"}) instead of "
-            "the human-readable report, for scripting/automation."
+            "the human-readable report, for scripting/automation. Under "
+            "--version-id, the response also carries \"filename\"/"
+            "\"version_id\" fields naming which snapshot was actually "
+            "inspected."
         )
     )
 
