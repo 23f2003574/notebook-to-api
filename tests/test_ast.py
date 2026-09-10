@@ -861,6 +861,79 @@ def test_generate_example_payload_uses_the_literals_first_value():
     assert payload == {"model": "xgboost"}
 
 
+def test_generate_example_payload_uses_a_real_value_for_date_datetime_time_uuid_decimal():
+    """Confirmed exploitable before this fix: every one of these fell
+    through to the plain `type_defaults.get(arg_type, None)` fallback --
+    None -- even though each is an entirely ordinary parameter type for a
+    real API. POSTing the resulting `{"event_date": None}` example
+    against a real compiled `def f(event_date: date)` endpoint got a real
+    422 back ("Input should be a valid date"), the exact opposite of what
+    generate_curl_commands/generate_postman_collection's own
+    "ready-to-paste (or execute)" example payloads -- and a default
+    `app-call` -- exist to provide.
+    """
+
+    payload = generate_example_payload([
+        {"name": "event_date", "type": "date"},
+        {"name": "ts", "type": "datetime"},
+        {"name": "t", "type": "time"},
+        {"name": "user_id", "type": "UUID"},
+        {"name": "amount", "type": "Decimal"},
+    ])
+
+    assert payload == {
+        "event_date": "2024-01-01",
+        "ts": "2024-01-01T00:00:00",
+        "t": "12:00:00",
+        "user_id": "00000000-0000-0000-0000-000000000000",
+        "amount": 0,
+    }
+
+
+def test_generate_example_payload_still_prefers_an_explicit_default_for_these_types():
+
+    payload = generate_example_payload(
+        [{"name": "event_date", "type": "date", "default": "2030-06-15"}]
+    )
+
+    assert payload == {"event_date": "2030-06-15"}
+
+
+def test_generate_example_response_uses_a_real_value_for_date_datetime_time_uuid_decimal():
+
+    assert generate_example_response("date") == {"result": "2024-01-01"}
+    assert generate_example_response("datetime") == {
+        "result": "2024-01-01T00:00:00"
+    }
+    assert generate_example_response("time") == {"result": "12:00:00"}
+    assert generate_example_response("UUID") == {
+        "result": "00000000-0000-0000-0000-000000000000"
+    }
+    assert generate_example_response("Decimal") == {"result": 0}
+
+
+def test_generate_example_payload_and_response_share_one_type_defaults_source():
+    """generate_example_payload/generate_example_response previously each
+    hand-maintained their own independent copy of the identical
+    type_defaults dict -- exactly the "two things that must never drift
+    apart but have no mechanism stopping them" shape this project's own
+    history keeps finding bugs in elsewhere. Confirmed they can no longer
+    drift: every type either function recognizes produces the same
+    example value from both.
+    """
+
+    for type_name in (
+        "int", "float", "str", "bool", "list", "dict", "tuple", "set",
+        "date", "datetime", "time", "UUID", "Decimal",
+    ):
+        payload_value = generate_example_payload(
+            [{"name": "x", "type": type_name}]
+        )["x"]
+        response_value = generate_example_response(type_name)["result"]
+
+        assert payload_value == response_value, type_name
+
+
 def test_extract_imports_maps_import_names_to_their_real_pypi_package_names():
     """None of the entries in extract_imports_from_code's pypi_mapping
     had any test coverage before this -- verified here for every mapped

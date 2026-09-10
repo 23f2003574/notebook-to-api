@@ -523,6 +523,51 @@ def normalize_type_annotation(arg_type):
     return arg_type
 
 
+# Shared by generate_example_payload/generate_example_response below --
+# previously two independently hand-maintained copies of the identical
+# dict, the exact "two things that must never drift apart but have no
+# mechanism stopping them" shape this project's own commit history keeps
+# finding and fixing elsewhere (e.g. GENERATED_APP_ENV_VARS,
+# api_generator.py). One of the two copies getting a type the other
+# didn't would have silently reintroduced the gap this dict's own
+# "date"/"datetime"/"time"/"UUID"/"Decimal" entries below exist to close,
+# just for whichever one of generate_example_payload/
+# generate_example_response happened to be the one left behind.
+#
+# "date"/"datetime"/"time"/"UUID"/"Decimal" (added here) previously fell
+# through every branch above to the plain `type_defaults.get(arg_type,
+# None)` fallback -- None -- even though every one of these is an
+# entirely ordinary parameter/return type for a real API (a schedule
+# date, an event timestamp, a record id, a price). Confirmed exploitable
+# against a real compiled app, not just generated source text: POSTing
+# the example_payload {"event_date": None} generate_curl_commands/
+# generate_postman_collection (backend/inspector.py, whose own
+# docstrings call the commands they generate "ready-to-paste (or
+# execute)") and a default `app-call` (backend/cli.py, which POSTs
+# example_payload whenever --data isn't given) would all actually send
+# for a `def f(event_date: date)` parameter got a real 422 back --
+# {"type": "date_type", "msg": "Input should be a valid date", "input":
+# null} -- from the compiled app's own real Pydantic validation. Every
+# value below is a real, Pydantic-v2-valid literal for its own type,
+# confirmed to round-trip through a real compiled endpoint successfully
+# rather than merely "look plausible."
+_EXAMPLE_TYPE_DEFAULTS = {
+    "int": 0,
+    "float": 0.0,
+    "str": "",
+    "bool": False,
+    "list": [],
+    "dict": {},
+    "tuple": [],
+    "set": [],
+    "date": "2024-01-01",
+    "datetime": "2024-01-01T00:00:00",
+    "time": "12:00:00",
+    "UUID": "00000000-0000-0000-0000-000000000000",
+    "Decimal": 0,
+}
+
+
 def generate_example_response(return_type):
     if not return_type:
         return {
@@ -559,17 +604,6 @@ def generate_example_response(return_type):
             "result": first_value
         }
 
-    type_defaults = {
-        "int": 0,
-        "float": 0.0,
-        "str": "",
-        "bool": False,
-        "list": [],
-        "dict": {},
-        "tuple": [],
-        "set": []
-    }
-
     if return_type in (
         "pd.DataFrame",
         "DataFrame",
@@ -583,7 +617,7 @@ def generate_example_response(return_type):
         }
 
     return {
-        "result": type_defaults.get(
+        "result": _EXAMPLE_TYPE_DEFAULTS.get(
             return_type,
             None
         )
@@ -592,17 +626,6 @@ def generate_example_response(return_type):
 
 def generate_example_payload(args):
     payload = {}
-
-    type_defaults = {
-        "int": 0,
-        "float": 0.0,
-        "str": "",
-        "bool": False,
-        "list": [],
-        "dict": {},
-        "tuple": [],
-        "set": []
-    }
 
     for arg in args:
         arg_name = arg.get("name")
@@ -655,7 +678,7 @@ def generate_example_payload(args):
         if arg.get("default") is not None:
             payload[arg_name] = arg["default"]
         else:
-            payload[arg_name] = type_defaults.get(
+            payload[arg_name] = _EXAMPLE_TYPE_DEFAULTS.get(
                 arg_type,
                 None
             )

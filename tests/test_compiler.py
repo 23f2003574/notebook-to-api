@@ -314,6 +314,83 @@ def test_compiler_pipeline_example_payload_is_a_list_for_an_optional_list_parame
     assert "'example': {'scores': None}" not in app_source
 
 
+def test_compiler_pipeline_example_payload_actually_validates_for_date_and_uuid_params(
+    tmp_path,
+):
+    """Confirmed exploitable before this fix: generate_example_payload
+    (backend/parser/ast_parser.py) had no entry for "date"/"UUID" (or
+    "datetime"/"time"/"Decimal") in its own type_defaults map, so a
+    `def f(event_date: date)` parameter baked a `None` example into the
+    generated app's own OpenAPI schema -- exactly what generate_curl_
+    commands/generate_postman_collection's own "ready-to-paste (or
+    execute)" commands, and a default `app-call`, would actually POST.
+    Verified end to end, not just that the example value looks right:
+    POSTing that exact example_payload against a real compiled endpoint
+    must succeed (200), not fail Pydantic's own real validation (422).
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "from datetime import date\n"
+            "from uuid import UUID\n\n"
+            "def schedule_event(event_date: date, owner: UUID) -> str:\n"
+            "    return f'{owner}:{event_date}'\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+from backend.inspector import inspect_notebook_data
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+data = inspect_notebook_data({str(notebook_path)!r})
+[func] = data["functions"]
+example_payload = func["example_payload"]
+assert example_payload == {{
+    "event_date": "2024-01-01",
+    "owner": "00000000-0000-0000-0000-000000000000",
+}}, example_payload
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+response = client.post(
+    "/schedule_event", json=example_payload,
+    headers={{"X-API-Key": "notebook-to-api-dev-key"}},
+)
+assert response.status_code == 200, response.text
+
+print("EXAMPLE_PAYLOAD_DATE_UUID_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "EXAMPLE_PAYLOAD_DATE_UUID_E2E_OK" in proc.stdout
+
+
 def test_compiling_python_version_matches_the_running_interpreter():
 
     version = compiling_python_version()
