@@ -5427,6 +5427,26 @@ def test_search_functions_command_sends_tag_query_param(fake_dashboard):
     assert handler.requests == ["/api/functions?search=train&offset=0&tag=prod"]
 
 
+def test_search_functions_command_sends_sha256_query_param(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "search": "train", "matches": [], "notebook_count": 0}
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        [
+            "search-functions", "train", "--sha256", "a" * 64,
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        f"/api/functions?search=train&offset=0&sha256={'a' * 64}"
+    ]
+
+
 def test_search_functions_command_sends_regex_query_param(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
@@ -5659,6 +5679,26 @@ def test_search_content_command_sends_tag_query_param(fake_dashboard):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert handler.requests == ["/api/notebooks/search-content?search=read_csv&offset=0&tag=prod"]
+
+
+def test_search_content_command_sends_sha256_query_param(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "search": "read_csv", "matches": [], "notebook_count": 0}
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        [
+            "search-content", "read_csv", "--sha256", "b" * 64,
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        f"/api/notebooks/search-content?search=read_csv&offset=0&sha256={'b' * 64}"
+    ]
 
 
 def test_search_content_command_sends_regex_query_param(fake_dashboard):

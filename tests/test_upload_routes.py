@@ -5841,6 +5841,105 @@ def test_search_notebook_content_filters_by_tag():
     assert body["matches"][0]["filename"] == "search_content_tag_a.ipynb"
 
 
+def test_search_notebook_content_filters_by_sha256():
+    """A notebook renamed/re-uploaded under a different filename keeps
+    the same content hash -- "tag" alone can't scope a scan to "this
+    exact content" the way "sha256" (mirroring GET /api/notebooks' own)
+    now can.
+    """
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes(
+        "def load_a() -> str:\n    return pd.read_csv('a.csv')\n"
+    )
+    content_b = _notebook_bytes(
+        "def load_b() -> str:\n    return pd.read_csv('b.csv')\n"
+    )
+
+    for filename, content in (
+        ("search_content_sha_a.ipynb", content_a),
+        ("search_content_sha_b.ipynb", content_b),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    target_sha256 = hashlib.sha256(content_a).hexdigest()
+
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={"search": "read_csv", "sha256": target_sha256},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["notebook_count"] == 1
+    assert body["matches"][0]["filename"] == "search_content_sha_a.ipynb"
+
+
+def test_search_notebook_content_sha256_composes_with_tag():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "def load_shared() -> str:\n    return pd.read_csv('shared.csv')\n"
+    )
+
+    for filename in (
+        "search_content_sha_tag_a.ipynb", "search_content_sha_tag_b.ipynb",
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    client.put(
+        "/api/notebooks/search_content_sha_tag_a.ipynb/tags", json={"tags": ["prod"]}
+    )
+
+    target_sha256 = hashlib.sha256(content).hexdigest()
+
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={"search": "read_csv", "sha256": target_sha256, "tag": "prod"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["notebook_count"] == 1
+    assert body["matches"][0]["filename"] == "search_content_sha_tag_a.ipynb"
+
+
+def test_search_notebook_content_unknown_sha256_yields_no_matches():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "search_content_sha_none.ipynb",
+                io.BytesIO(
+                    _notebook_bytes(
+                        "def load() -> str:\n    return pd.read_csv('x.csv')\n"
+                    )
+                ),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={"search": "read_csv", "sha256": "no-such-hash"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["matches"] == []
+
+
 def test_search_notebook_content_is_case_insensitive():
 
     client.delete("/api/notebooks?confirm=true")
@@ -11150,6 +11249,97 @@ def test_search_functions_filters_by_tag():
     body = resp.json()
     assert body["notebook_count"] == 1
     assert body["matches"][0]["filename"] == "search_functions_tag_a.ipynb"
+
+
+def test_search_functions_filters_by_sha256():
+    """A notebook renamed/re-uploaded under a different filename keeps
+    the same content hash -- "tag" alone can't scope a scan to "this
+    exact content" the way "sha256" (mirroring GET /api/notebooks' own)
+    now can.
+    """
+
+    content_a = _notebook_bytes(
+        "def train_model_a() -> str:\n    return 'a'\n"
+    )
+    content_b = _notebook_bytes(
+        "def train_model_b() -> str:\n    return 'b'\n"
+    )
+
+    for filename, content in (
+        ("search_functions_sha_a.ipynb", content_a),
+        ("search_functions_sha_b.ipynb", content_b),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    target_sha256 = hashlib.sha256(content_a).hexdigest()
+
+    resp = client.get(
+        "/api/functions",
+        params={"search": "train_model", "sha256": target_sha256},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["notebook_count"] == 1
+    assert body["matches"][0]["filename"] == "search_functions_sha_a.ipynb"
+
+
+def test_search_functions_sha256_matches_every_notebook_with_that_content():
+
+    content = _notebook_bytes(
+        "def train_model_shared() -> str:\n    return 'x'\n"
+    )
+
+    for filename in (
+        "search_functions_sha_dup_a.ipynb", "search_functions_sha_dup_b.ipynb",
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    resp = client.get(
+        "/api/functions",
+        params={
+            "search": "train_model_shared",
+            "sha256": hashlib.sha256(content).hexdigest(),
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert sorted(m["filename"] for m in body["matches"]) == [
+        "search_functions_sha_dup_a.ipynb", "search_functions_sha_dup_b.ipynb",
+    ]
+
+
+def test_search_functions_unknown_sha256_yields_no_matches():
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "search_functions_sha_none.ipynb",
+                io.BytesIO(
+                    _notebook_bytes(
+                        "def train_model_none() -> str:\n    return 'x'\n"
+                    )
+                ),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.get(
+        "/api/functions",
+        params={"search": "train_model_none", "sha256": "no-such-hash"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["matches"] == []
 
 
 def test_search_functions_is_case_insensitive():

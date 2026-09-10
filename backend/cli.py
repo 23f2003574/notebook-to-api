@@ -2755,6 +2755,8 @@ def _dispatch_core_command(args):
         params = {"search": args.search, "offset": args.offset}
         if args.tag:
             params["tag"] = args.tag
+        if args.sha256:
+            params["sha256"] = args.sha256
         if args.regex:
             params["regex"] = True
         if args.limit is not None:
@@ -2814,6 +2816,8 @@ def _dispatch_core_command(args):
         params = {"search": args.search, "offset": args.offset}
         if args.tag:
             params["tag"] = args.tag
+        if args.sha256:
+            params["sha256"] = args.sha256
         if args.regex:
             params["regex"] = True
         if args.limit is not None:
@@ -9118,6 +9122,19 @@ def main():
         )
     )
     search_functions_parser.add_argument(
+        "--sha256",
+        default=None,
+        help=(
+            "Only scan the notebook(s) whose exact content hashes to "
+            "this, mirroring GET /api/functions' own ?sha256= -- as "
+            "reported by `find-duplicates`, for scanning just one "
+            "duplicate-content group's own copies (which may carry "
+            "different --tag values, or none at all) rather than every "
+            "notebook on the dashboard. Composes with --tag as an AND, "
+            "exactly like GET /api/functions itself."
+        )
+    )
+    search_functions_parser.add_argument(
         "--regex",
         action="store_true",
         help=(
@@ -9189,6 +9206,18 @@ def main():
         help=(
             "Only scan notebooks carrying this exact tag, mirroring GET "
             "/api/notebooks/search-content's own ?tag=."
+        )
+    )
+    search_content_parser.add_argument(
+        "--sha256",
+        default=None,
+        help=(
+            "Only scan the notebook(s) whose exact content hashes to "
+            "this, mirroring GET /api/notebooks/search-content's own "
+            "?sha256= -- as reported by `find-duplicates`, for scanning "
+            "just one duplicate-content group's own copies rather than "
+            "every notebook on the dashboard. Composes with --tag as an "
+            "AND, exactly like the endpoint itself."
         )
     )
     search_content_parser.add_argument(

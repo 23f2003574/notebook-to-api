@@ -4197,7 +4197,7 @@ def _compile_search_regex(pattern_text, field_name="search"):
 
 @router.get("/functions")
 def search_functions(
-    search: str = None, tag: str = None, regex: bool = False,
+    search: str = None, tag: str = None, sha256: str = None, regex: bool = False,
     limit: int = None, offset: int = 0, format: str = "json",
 ):
     """Find which uploaded notebooks define a function whose name
@@ -4244,6 +4244,19 @@ def search_functions(
     above, whether or not it happens to carry "tag" -- reading its tags
     sidecar first only to then discard it as unparseable would be wasted
     work either way.
+
+    "sha256" (optional) scopes the scan the identical way "tag" does, but
+    to only the notebook(s) whose exact content hashes to it -- the same
+    exact-content filter GET /api/notebooks?sha256= already offers,
+    closing the gap GET /api/notebooks/duplicates' own docstring already
+    names for filename-based tooling in general: a notebook can be
+    renamed or re-uploaded under a different filename while keeping the
+    same bytes, so a caller who just found a duplicate-content group via
+    that endpoint had no way to search *only* those copies for a
+    function name -- "tag" doesn't help either, since duplicates
+    commonly carry different tags (or none at all). Composes with "tag"
+    as an AND, the same composition GET /api/notebooks already gives the
+    same two filters together.
 
     "limit"/"offset" page the returned "matches" (one entry per matching
     notebook, each with every one of its own matching functions) the
@@ -4338,6 +4351,9 @@ def search_functions(
             continue
 
         if tag and tag not in _read_notebook_tags(entry.name):
+            continue
+
+        if sha256 and hash_notebook_file(entry) != sha256:
             continue
 
         try:
@@ -5578,7 +5594,7 @@ def resolve_duplicate_notebooks(data: dict = None):
 
 @router.get("/notebooks/search-content")
 def search_notebook_content(
-    search: str = None, tag: str = None, regex: bool = False,
+    search: str = None, tag: str = None, sha256: str = None, regex: bool = False,
     limit: int = None, offset: int = 0, format: str = "json",
 ):
     """Find every uploaded notebook with a code cell whose raw source
@@ -5618,6 +5634,14 @@ def search_notebook_content(
     wanting "which of my *production* notebooks still call this
     deprecated function" previously had to scan every uploaded notebook's
     own code and filter the response down client-side afterward.
+
+    "sha256" (optional) scopes the scan the identical way GET
+    /api/functions' own "sha256" does, and composes with "tag" as an AND
+    the same way -- a caller who just found a duplicate-content group via
+    GET /api/notebooks/duplicates had no way to search *only* those exact
+    copies for a code substring (e.g. a deprecated call site) before this,
+    since "tag" alone can't scope to "this exact content" the way
+    filename-based tooling never could either.
 
     "limit"/"offset" page the returned "matches" (one entry per matching
     notebook, each with every one of its own matching cells) the
@@ -5712,6 +5736,9 @@ def search_notebook_content(
             continue
 
         if tag and tag not in _read_notebook_tags(entry.name):
+            continue
+
+        if sha256 and hash_notebook_file(entry) != sha256:
             continue
 
         try:
