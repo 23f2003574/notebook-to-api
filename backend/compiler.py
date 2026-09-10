@@ -700,6 +700,76 @@ def _drop_private_functions(functions, code_cells, only=None, exclude=None):
     )
 
 
+# Recognizes a "# notebook-to-api: background" or "# notebook-to-api:
+# sync" comment directive immediately above a function definition (blank
+# lines in between are tolerated, same as PRIVATE_FUNCTION_DIRECTIVE_
+# PATTERN above) -- see _extract_background_overrides below for what it's
+# for. Positional, for the identical reason PRIVATE_FUNCTION_DIRECTIVE_
+# PATTERN is: which function it applies to is the entire point.
+BACKGROUND_OVERRIDE_DIRECTIVE_PATTERN = re.compile(
+    r"^[ \t]*#\s*notebook-to-api:\s*(?P<mode>background|sync)\s*$"
+    r"(?:\n[ \t]*\n)*"
+    r"\n[ \t]*(?:async\s+)?def\s+(?P<name>[A-Za-z_]\w*)\s*\(",
+    re.MULTILINE,
+)
+
+
+def _extract_background_overrides(code_cells):
+    """{function_name: True/False}, one entry per function `code_cells`
+    marks "# notebook-to-api: background" (True) or "# notebook-to-api:
+    sync" (False) immediately above its own `def`/`async def` line (see
+    BACKGROUND_OVERRIDE_DIRECTIVE_PATTERN above), across all cells.
+
+    generate_fastapi_code's own LONG_RUNNING_KEYWORDS (generator/
+    api_generator.py) is the ONLY thing that has ever decided whether a
+    notebook function compiles into a background/task_id endpoint or a
+    synchronous one -- a plain substring match against the function's own
+    name, with no way for a notebook author to correct it. Confirmed
+    exploitable both directions: "regenerate_token" (fast) contains
+    "generate" and wrongly becomes background; "run_batch_inference"
+    (genuinely slow) matches none of LONG_RUNNING_KEYWORDS and wrongly
+    stays synchronous, tying up a worker thread for its entire duration
+    (see _run_background_task's own docstring, api_generator.py, on why
+    that starves even unrelated synchronous endpoints like GET /health).
+    This directive gives an author the same "an explicit directive beats
+    an inferred guess" escape hatch REQUIREMENT_DIRECTIVE_PATTERN/
+    EXCLUDE_DIRECTIVE_PATTERN/PRIVATE_FUNCTION_DIRECTIVE_PATTERN above
+    already give for other compile-time inferences that can be wrong.
+
+    Returns a plain dict (not two separate sets) since a caller -- see
+    resolve_is_background, generator/api_generator.py -- needs to
+    distinguish "no directive, fall back to the heuristic" from "directive
+    says False", which a single membership-tested set (the shape
+    _extract_private_function_names/_extract_excluded_imports above
+    return) can't represent for the "sync" half on its own.
+
+    Raises ValueError -- the same "two contradictory directives naming
+    the same thing" treatment REQUIREMENT_DIRECTIVE_PATTERN's own
+    conflicting-spec handling above already gives -- if a function is
+    marked both "background" and "sync" (in the same cell or across
+    different cells).
+    """
+    overrides = {}
+
+    for cell in code_cells:
+
+        for match in BACKGROUND_OVERRIDE_DIRECTIVE_PATTERN.finditer(cell):
+
+            name = match.group("name")
+            is_background = match.group("mode") == "background"
+
+            if name in overrides and overrides[name] != is_background:
+                raise ValueError(
+                    "Conflicting '# notebook-to-api: background'/'# "
+                    f"notebook-to-api: sync' directives for function "
+                    f"'{name}'. Remove or reconcile one of them."
+                )
+
+            overrides[name] = is_background
+
+    return overrides
+
+
 def extract_third_party_imports(code_cells):
     """The raw, STANDARD_LIBS-filtered import names `code_cells` (already
     filtered to parseable cells, as compile_notebook_to_api's own
@@ -1305,6 +1375,12 @@ def compile_notebook_to_api(
         # function's own control flow reaches it.
         apt_packages = _extract_explicit_apt_packages(code_cells)
 
+        # Computed here for the same reason: available before
+        # generate_fastapi_code/generate_readme are called further down,
+        # regardless of which branch of this function's own control flow
+        # reaches either.
+        background_overrides = _extract_background_overrides(code_cells)
+
         functions = []
 
         for cell in code_cells:
@@ -1362,6 +1438,7 @@ def compile_notebook_to_api(
             functions, package_name,
             source_notebook_sha256=hash_notebook_file(notebook_path),
             notebook_to_api_version=NOTEBOOK_TO_API_VERSION,
+            background_overrides=background_overrides,
         )
 
         # generate_fastapi_code succeeding means this compile is now
@@ -1462,7 +1539,8 @@ def compile_notebook_to_api(
             )
 
             generate_readme(
-                readme_path, package_name, functions, GENERATED_APP_ENV_VARS
+                readme_path, package_name, functions, GENERATED_APP_ENV_VARS,
+                background_overrides=background_overrides,
             )
 
             write_compile_metadata(

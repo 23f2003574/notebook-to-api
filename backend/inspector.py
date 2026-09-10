@@ -7,6 +7,7 @@ from urllib.parse import quote, urlsplit
 
 from backend.compiler import (
     COMPILE_METADATA_FILENAME,
+    _extract_background_overrides,
     _extract_excluded_imports,
     _extract_private_function_names,
     _filter_functions_by_name,
@@ -27,7 +28,7 @@ from backend.parser.ast_parser import (
 )
 
 from backend.generator.api_generator import (
-    LONG_RUNNING_KEYWORDS,
+    resolve_is_background,
     RESERVED_INFRASTRUCTURE_NAMES,
 )
 
@@ -165,20 +166,23 @@ def _third_party_dependencies(all_imports):
     })
 
 
-def _is_background_function(name):
+def _is_background_function(name, background_overrides=None):
     """Whether generate_fastapi_code (generator/api_generator.py) will
     compile `name` into a background/task_id-based endpoint rather than a
-    synchronous one, per LONG_RUNNING_KEYWORDS.
+    synchronous one -- delegates to resolve_is_background (same module)
+    so this can never disagree with what generate_fastapi_code itself
+    actually decides, `background_overrides` included (see
+    resolve_is_background's own docstring for what that is).
 
     Shared by every surface that classifies a function this way --
-    inspect_notebook, _endpoint_metadata below, and print_compile_summary
-    -- so they can't drift from each other or from POST /api/compile's own
-    identical check in routes/upload.py.
+    inspect_notebook and _endpoint_metadata below -- so they can't drift
+    from each other or from POST /api/compile's own identical check in
+    routes/upload.py.
     """
-    return any(kw in name.lower() for kw in LONG_RUNNING_KEYWORDS)
+    return resolve_is_background(name, background_overrides)
 
 
-def _endpoint_metadata(functions):
+def _endpoint_metadata(functions, background_overrides=None):
     """The {"path", "method", "is_async"} shape POST /api/compile's
     "endpoints" field already returns (see routes/upload.py), computed
     here from a notebook that hasn't been compiled yet.
@@ -191,12 +195,20 @@ def _endpoint_metadata(functions):
     reserved_name_conflicts above, added for the same reason), so it had
     the same gap for this classification that reserved_name_conflicts
     closed for name collisions.
+
+    `background_overrides` (optional) is _extract_background_overrides's
+    own result (backend/compiler.py) -- passed through to
+    _is_background_function so a "# notebook-to-api: background"/"#
+    notebook-to-api: sync" directive is reflected here identically to how
+    a real compile (generate_fastapi_code) would actually honor it.
     """
     return [
         {
             "path": f"/{func['name']}",
             "method": "POST",
-            "is_async": _is_background_function(func["name"]),
+            "is_async": _is_background_function(
+                func["name"], background_overrides
+            ),
         }
         for func in functions
     ]
@@ -347,6 +359,14 @@ def inspect_notebook(notebook_path, output_dir="generated"):
             if func["name"] not in private_function_names
         ]
 
+    # Same "# notebook-to-api: background"/"# notebook-to-api: sync"
+    # directive compile_notebook_to_api already honors -- without this,
+    # "[background]" below would reflect only the unoverridden
+    # LONG_RUNNING_KEYWORDS guess, not what a real compile would actually
+    # produce for a function whose classification a notebook explicitly
+    # corrected.
+    background_overrides = _extract_background_overrides(code_cells)
+
     # Same "# notebook-to-api: exclude <import-name>" directive
     # extract_third_party_imports (backend/compiler.py) already applies
     # before write_requirements pins anything -- without this, an import
@@ -418,7 +438,9 @@ def inspect_notebook(notebook_path, output_dir="generated"):
         )
 
         route_suffix = (
-            "  [background]" if _is_background_function(func["name"]) else ""
+            "  [background]"
+            if _is_background_function(func["name"], background_overrides)
+            else ""
         )
 
         print(
@@ -528,12 +550,21 @@ def inspect_notebook_data(
     excluded_imports = _extract_excluded_imports(code_cells)
     all_imports -= excluded_imports
 
+    # Same "# notebook-to-api: background"/"# notebook-to-api: sync"
+    # directive compile_notebook_to_api (backend/compiler.py) already
+    # honors -- without this, "endpoints" below would report the
+    # unoverridden LONG_RUNNING_KEYWORDS guess even for a function a
+    # notebook explicitly corrected, the exact "preview claims something
+    # a real compile wouldn't actually do" bug this dict's whole "so they
+    # can't drift" reasoning above already exists to prevent.
+    background_overrides = _extract_background_overrides(code_cells)
+
     return {
         "functions": all_functions,
         "dependencies": _third_party_dependencies(all_imports),
         "generated_files": list_generated_files(output_dir),
         "reserved_name_conflicts": _reserved_name_conflicts(all_functions),
-        "endpoints": _endpoint_metadata(all_functions),
+        "endpoints": _endpoint_metadata(all_functions, background_overrides),
         "skipped_functions": _aggregate_skipped_functions(
             code_cells, {func["name"] for func in all_functions}
         ),
@@ -595,11 +626,21 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
     if only or exclude:
         functions = _filter_functions_by_name(functions, only, exclude)
 
+    # Read off data["endpoints"] (already resolved, "# notebook-to-api:
+    # background"/"# notebook-to-api: sync" directives included -- see
+    # _endpoint_metadata's own docstring) rather than re-deriving "is
+    # this background" from scratch a second time here, the same "can't
+    # drift from the real thing" guarantee this function's own docstring
+    # above already promises.
+    is_async_by_path = {
+        endpoint["path"]: endpoint["is_async"] for endpoint in data["endpoints"]
+    }
+
     print(f"\nGenerated {len(functions)} endpoint(s):")
 
     for func in functions:
         name = func["name"]
-        suffix = "  [background]" if _is_background_function(name) else ""
+        suffix = "  [background]" if is_async_by_path.get(f"/{name}") else ""
         print(f"  POST /{name}{suffix}")
 
     if data["dependencies"]:
@@ -1145,6 +1186,14 @@ def generate_curl_commands(
 
     reserved_names = set(data["reserved_name_conflicts"])
 
+    # Read off data["endpoints"] (already resolved, "# notebook-to-api:
+    # background"/"# notebook-to-api: sync" directives included) rather
+    # than re-deriving "is this background" from scratch a second time --
+    # see print_compile_summary's own identical fix above.
+    is_async_by_path = {
+        endpoint["path"]: endpoint["is_async"] for endpoint in data["endpoints"]
+    }
+
     base_url = f"http://{host}:{port}"
 
     commands = []
@@ -1160,7 +1209,7 @@ def generate_curl_commands(
 
         url = f"{base_url}/{name}"
 
-        if _is_background_function(name):
+        if is_async_by_path.get(f"/{name}"):
 
             if callback_url:
 
@@ -1317,6 +1366,14 @@ def generate_postman_collection(
 
     reserved_names = set(data["reserved_name_conflicts"])
 
+    # Read off data["endpoints"] (already resolved, "# notebook-to-api:
+    # background"/"# notebook-to-api: sync" directives included) rather
+    # than re-deriving "is this background" from scratch a second time --
+    # see print_compile_summary's own identical fix above.
+    is_async_by_path = {
+        endpoint["path"]: endpoint["is_async"] for endpoint in data["endpoints"]
+    }
+
     base_url = f"http://{host}:{port}"
 
     collection_variables = [
@@ -1358,7 +1415,7 @@ def generate_postman_collection(
 
         item = {"name": name, "request": request}
 
-        if _is_background_function(name):
+        if is_async_by_path.get(f"/{name}"):
 
             task_id_var = f"{name}_task_id"
             collection_variables.append({"key": task_id_var, "value": ""})

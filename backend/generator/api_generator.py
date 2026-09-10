@@ -248,6 +248,28 @@ LONG_RUNNING_KEYWORDS = [
     "scrape",
 ]
 
+
+def resolve_is_background(func_name, background_overrides=None):
+    """Whether `func_name` should compile into a background/task_id
+    endpoint rather than a synchronous one -- the single place every
+    caller in this codebase decides that, so none of them can drift from
+    each other or disagree about the same function.
+
+    `background_overrides` (optional) is _extract_background_overrides's
+    own {name: True/False} result (backend/compiler.py) -- a notebook
+    author's explicit "# notebook-to-api: background"/"# notebook-to-api:
+    sync" directive always wins when `func_name` has one, the same
+    "explicit directive beats an inferred guess" precedent this project's
+    other compile-time inferences (requires/apt-requires/exclude/private)
+    already establish. Falls back to LONG_RUNNING_KEYWORDS' own substring-
+    of-the-name heuristic otherwise, exactly as before this override
+    existed.
+    """
+    if background_overrides and func_name in background_overrides:
+        return background_overrides[func_name]
+
+    return any(kw in func_name.lower() for kw in LONG_RUNNING_KEYWORDS)
+
 # Every environment variable the generated app itself reads to configure a
 # runtime limit or credential -- one single source of truth codegen below
 # builds its own os.getenv(name, default) calls from (see
@@ -709,14 +731,19 @@ def _annotation_has_own_field_description(type_str):
 # Template for generating the FastAPI application source code
 def generate_fastapi_code(
     functions, package_name="generated", source_notebook_sha256=None,
-    notebook_to_api_version="1.0.0",
+    notebook_to_api_version="1.0.0", background_overrides=None,
 ):
     """Generate FastAPI app code for the given functions.
 
-    Each function is examined; if its name contains any of the
-    LONG_RUNNING_KEYWORDS, an endpoint is created that enqueues the
+    Each function is examined via resolve_is_background above: if its
+    name contains any of the LONG_RUNNING_KEYWORDS (or `background_overrides`
+    explicitly says so), an endpoint is created that enqueues the
     function as a BackgroundTask and returns a task_id. Otherwise a
     regular synchronous endpoint is generated.
+
+    `background_overrides` (optional) is _extract_background_overrides's
+    own result (backend/compiler.py) -- see resolve_is_background's own
+    docstring above for what it overrides and why.
 
     package_name is the top-level package the generated app imports its
     runtime module from (`<package_name>.runtime.notebook_module`). It
@@ -1513,10 +1540,7 @@ def generate_fastapi_code(
     background_endpoint_count = sum(
         1
         for func in functions
-        if any(
-            kw in func["name"].lower()
-            for kw in LONG_RUNNING_KEYWORDS
-        )
+        if resolve_is_background(func["name"], background_overrides)
     )
     lines.append("# Public infrastructure endpoints")
     lines.append("@app.get('/')")
@@ -2918,7 +2942,7 @@ def generate_fastapi_code(
         )
         model_name = model_names[func_name]
         call_args = ", ".join(_call_arg_expr(arg) for arg in args)
-        is_background = any(kw in func_name.lower() for kw in LONG_RUNNING_KEYWORDS)
+        is_background = resolve_is_background(func_name, background_overrides)
         summary = (
             func_name
             .replace("_", " ")

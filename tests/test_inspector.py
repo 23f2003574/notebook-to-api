@@ -219,6 +219,33 @@ def test_inspect_notebook_data_reports_endpoints_and_flags_background_ones(tmp_p
     }
 
 
+def test_inspect_notebook_data_endpoints_honors_a_background_override_directive(
+    tmp_path,
+):
+    """"regenerate_token" contains "generate" (a LONG_RUNNING_KEYWORDS
+    match) and "run_batch_inference" matches nothing -- without honoring
+    "# notebook-to-api: sync"/"# notebook-to-api: background", this
+    preview would report the wrongly-inferred classification a real
+    compile (which does honor them) would never actually produce.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: sync\n"
+        "def regenerate_token(user_id: int) -> str:\n    return str(user_id)\n\n"
+        "# notebook-to-api: background\n"
+        "def run_batch_inference(count: int) -> int:\n    return count\n",
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    endpoints = {e["path"]: e for e in data["endpoints"]}
+
+    assert endpoints["/regenerate_token"]["is_async"] is False
+    assert endpoints["/run_batch_inference"]["is_async"] is True
+
+
 def test_inspect_notebook_data_endpoints_is_empty_for_a_notebook_with_no_functions(
     tmp_path
 ):
@@ -357,6 +384,29 @@ def test_inspect_notebook_prints_the_background_marker_next_to_its_route(
     assert "[background]" not in add_route_line
 
 
+def test_inspect_notebook_honors_a_background_override_directive(tmp_path, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: sync\n"
+        "def regenerate_token(user_id: int) -> str:\n    return str(user_id)\n\n"
+        "# notebook-to-api: background\n"
+        "def run_batch_inference(count: int) -> int:\n    return count\n",
+    )
+
+    inspect_notebook(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+
+    sync_route_line = next(
+        line for line in output.splitlines()
+        if line.strip() == "Route: POST /regenerate_token"
+    )
+    assert "[background]" not in sync_route_line
+    assert "Route: POST /run_batch_inference  [background]" in output
+
+
 def test_print_compile_summary_lists_endpoints_and_flags_background_ones(
     tmp_path, capsys
 ):
@@ -384,6 +434,31 @@ def test_print_compile_summary_lists_endpoints_and_flags_background_ones(
         line for line in output.splitlines() if line.strip() == "POST /add"
     )
     assert "[background]" not in add_line
+
+
+def test_print_compile_summary_honors_a_background_override_directive(
+    tmp_path, capsys
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: sync\n"
+        "def regenerate_token(user_id: int) -> str:\n    return str(user_id)\n\n"
+        "# notebook-to-api: background\n"
+        "def run_batch_inference(count: int) -> int:\n    return count\n",
+    )
+
+    print_compile_summary(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+
+    sync_line = next(
+        line for line in output.splitlines()
+        if line.strip() == "POST /regenerate_token"
+    )
+    assert "[background]" not in sync_line
+    assert "POST /run_batch_inference  [background]" in output
 
 
 def test_print_compile_summary_lists_third_party_dependencies(tmp_path, capsys):
@@ -1761,6 +1836,26 @@ def test_generate_curl_commands_flags_a_background_function(tmp_path):
     assert "curl -X POST http://localhost:8000/train_model" in command
 
 
+def test_generate_curl_commands_honors_a_sync_override_directive(tmp_path):
+    """"regenerate_token" contains "generate" (a LONG_RUNNING_KEYWORDS
+    match) -- without honoring the directive, this command would wrongly
+    include background-task-only flags a real, overridden compile
+    (which does honor it) would never actually accept.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: sync\n"
+        "def regenerate_token(user_id: int) -> str:\n    return str(user_id)\n",
+    )
+
+    [command] = generate_curl_commands(str(notebook_path))
+
+    assert "background task" not in command
+    assert "task_id" not in command
+
+
 def test_generate_curl_commands_excludes_a_reserved_name_conflict(tmp_path):
     """generate_fastapi_code refuses to compile a notebook containing a
     reserved-name collision at all -- a curl command targeting that path
@@ -2092,6 +2187,28 @@ def test_generate_postman_collection_omits_task_status_request_for_a_synchronous
 
     assert "event" not in item
     assert "description" not in item["request"]
+
+
+def test_generate_postman_collection_honors_a_background_override_for_a_non_matching_name(
+    tmp_path
+):
+    """"run_batch_inference" matches none of LONG_RUNNING_KEYWORDS --
+    without honoring the directive, this collection would omit the Task
+    Status request a real, overridden compile (which does honor it)
+    would actually need.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: background\n"
+        "def run_batch_inference(count: int) -> int:\n    return count\n",
+    )
+
+    collection = generate_postman_collection(str(notebook_path))
+
+    names = [item["name"] for item in collection["item"]]
+    assert "run_batch_inference - Task Status" in names
 
 
 def test_generate_postman_collection_adds_callback_url_query_to_a_background_function(

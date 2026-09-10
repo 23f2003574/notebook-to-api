@@ -1,6 +1,6 @@
 import textwrap
 
-from backend.generator.api_generator import LONG_RUNNING_KEYWORDS
+from backend.generator.api_generator import resolve_is_background
 
 
 def apt_install_content(apt_packages):
@@ -351,7 +351,10 @@ def generate_env_example(output_path="generated/.env.example", env_vars=None):
     print(f".env.example generated at: {output_path}")
 
 
-def readme_content(package_name="generated", functions=None, env_vars=None):
+def readme_content(
+    package_name="generated", functions=None, env_vars=None,
+    background_overrides=None,
+):
     """The exact README.md text generate_readme (below) writes to disk,
     as a pure string -- no filesystem access at all. See
     dockerfile_content's own docstring above for why this split exists.
@@ -418,11 +421,12 @@ def readme_content(package_name="generated", functions=None, env_vars=None):
     api_generator.py's own source directly.
 
     `functions` is the same list generate_fastapi_code (api_generator.py)
-    itself compiles into endpoints -- each already carrying "name" and,
-    for a background one, matching LONG_RUNNING_KEYWORDS. Reusing that
-    exact classification (rather than re-deriving "is this background"
-    from scratch) means the "(background task)" markers below can never
-    drift from what the compiled app.py this README ships alongside
+    itself compiles into endpoints -- each already carrying "name".
+    `background_overrides` is _extract_background_overrides's own result
+    (backend/compiler.py); together with `functions`, resolve_is_background
+    (api_generator.py) is called with the identical arguments generate_
+    fastapi_code itself uses, so the "(background task)" markers below can
+    never drift from what the compiled app.py this README ships alongside
     actually does -- the same "can't drift from the real thing" guarantee
     docker_compose_content's own "environment:" section already gives
     GENERATED_APP_ENV_VARS.
@@ -439,9 +443,7 @@ def readme_content(package_name="generated", functions=None, env_vars=None):
 
     for func in sorted(functions, key=lambda f: f["name"]):
 
-        is_background = any(
-            kw in func["name"].lower() for kw in LONG_RUNNING_KEYWORDS
-        )
+        is_background = resolve_is_background(func["name"], background_overrides)
 
         suffix = (
             " -- enqueues a background task; poll `GET /tasks/{task_id}` "
@@ -528,7 +530,7 @@ see `.env.example` for a ready-to-copy file.
 
 def generate_readme(
     output_path="generated/README.md", package_name="generated",
-    functions=None, env_vars=None,
+    functions=None, env_vars=None, background_overrides=None,
 ):
     """Write a README.md for the compiled app at `output_path`, alongside
     the Dockerfile/.dockerignore/docker-compose.yml/.env.example
@@ -538,7 +540,11 @@ def generate_readme(
     contains.
     """
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write(readme_content(package_name, functions, env_vars))
+        f.write(
+            readme_content(
+                package_name, functions, env_vars, background_overrides
+            )
+        )
 
     print(f"README.md generated at: {output_path}")
 

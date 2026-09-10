@@ -17,6 +17,7 @@ import pytest
 from backend.compiler import (
     _drop_private_functions,
     _explicit_requirement_package_name,
+    _extract_background_overrides,
     _extract_excluded_imports,
     _extract_explicit_apt_packages,
     _extract_explicit_requirements,
@@ -2172,6 +2173,95 @@ def test_drop_private_functions_treats_exclude_naming_a_private_function_as_a_no
     assert _filter_functions_by_name(filtered, only=None, exclude=exclude) == filtered
 
 
+def test_extract_background_overrides_matches_a_background_directive():
+
+    code_cells = [
+        "# notebook-to-api: background\ndef regenerate_token():\n    return 1\n"
+    ]
+
+    assert _extract_background_overrides(code_cells) == {"regenerate_token": True}
+
+
+def test_extract_background_overrides_matches_a_sync_directive():
+
+    code_cells = [
+        "# notebook-to-api: sync\ndef run_batch_inference():\n    return 1\n"
+    ]
+
+    assert _extract_background_overrides(code_cells) == {
+        "run_batch_inference": False
+    }
+
+
+def test_extract_background_overrides_tolerates_blank_lines_between_directive_and_def():
+
+    code_cells = [
+        "# notebook-to-api: background\n\n\ndef helper():\n    return 1\n"
+    ]
+
+    assert _extract_background_overrides(code_cells) == {"helper": True}
+
+
+def test_extract_background_overrides_matches_an_async_def():
+
+    code_cells = [
+        "# notebook-to-api: sync\nasync def helper():\n    return 1\n"
+    ]
+
+    assert _extract_background_overrides(code_cells) == {"helper": False}
+
+
+def test_extract_background_overrides_ignores_a_directive_with_no_following_def():
+
+    code_cells = ["# notebook-to-api: background\nx = 1\n"]
+
+    assert _extract_background_overrides(code_cells) == {}
+
+
+def test_extract_background_overrides_ignores_an_unrelated_comment():
+
+    code_cells = ["# just a regular comment\ndef add(a, b):\n    return a + b\n"]
+
+    assert _extract_background_overrides(code_cells) == {}
+
+
+def test_extract_background_overrides_collects_multiple_functions_across_cells():
+
+    code_cells = [
+        "# notebook-to-api: background\ndef regenerate_token():\n    return 1\n",
+        "# notebook-to-api: sync\ndef run_batch_inference():\n    return 1\n",
+    ]
+
+    assert _extract_background_overrides(code_cells) == {
+        "regenerate_token": True, "run_batch_inference": False,
+    }
+
+
+def test_extract_background_overrides_rejects_conflicting_directives_for_the_same_name():
+
+    code_cells = [
+        "# notebook-to-api: background\ndef helper():\n    return 1\n",
+        "# notebook-to-api: sync\ndef helper():\n    return 1\n",
+    ]
+
+    with pytest.raises(ValueError, match="Conflicting"):
+        _extract_background_overrides(code_cells)
+
+
+def test_extract_background_overrides_tolerates_the_same_directive_repeated():
+    """Not a conflict -- the identical directive for the same name, e.g.
+    across two cells that both redefine the same function, agrees with
+    itself.
+    """
+
+    code_cells = [
+        "# notebook-to-api: background\ndef helper():\n    return 1\n",
+        "# notebook-to-api: background\ndef helper():\n    return 2\n",
+    ]
+
+    assert _extract_background_overrides(code_cells) == {"helper": True}
+
+
 def test_compile_notebook_with_only_generates_an_endpoint_for_just_that_function(
     tmp_path
 ):
@@ -2264,6 +2354,113 @@ def test_compile_notebook_never_exposes_a_private_directive_marked_function(tmp_
     assert '"/add"' in generated_app
     assert '"/helper"' not in generated_app
     assert "def helper(" in runtime_module
+
+
+def test_compile_notebook_sync_directive_overrides_a_long_running_keyword_match(
+    tmp_path,
+):
+    """"regenerate_token" contains "generate" (a LONG_RUNNING_KEYWORDS
+    match) but is genuinely fast -- "# notebook-to-api: sync" must force
+    it into a real synchronous endpoint (no task_id, no BackgroundTasks),
+    not the wrongly-inferred background one it would otherwise get.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "# notebook-to-api: sync\n"
+            "def regenerate_token(user_id: int) -> str:\n"
+            "    return str(user_id)\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    generated_app = (output_dir / "app.py").read_text(encoding="utf-8")
+    readme = (output_dir / "README.md").read_text(encoding="utf-8")
+
+    assert "async def regenerate_token" not in generated_app
+    # The endpoint itself must be the plain synchronous shape -- no
+    # task_id/BackgroundTasks wiring anywhere near its own definition.
+    endpoint_source = generated_app.split("def regenerate_token", 1)[1]
+    assert "task_id" not in endpoint_source.split("\n\n", 1)[0]
+    assert "BackgroundTasks" not in endpoint_source.split("\n\n", 1)[0]
+    assert "background task" not in readme.lower().split(
+        "/regenerate_token"
+    )[1].split("\n")[0]
+
+
+def test_compile_notebook_background_directive_overrides_a_non_matching_name(
+    tmp_path,
+):
+    """"run_batch_inference" matches none of LONG_RUNNING_KEYWORDS but is
+    genuinely slow -- "# notebook-to-api: background" must force it into
+    a real background/task_id endpoint, not the wrongly-inferred
+    synchronous one it would otherwise get.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "# notebook-to-api: background\n"
+            "def run_batch_inference(count: int) -> int:\n"
+            "    return count\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    generated_app = (output_dir / "app.py").read_text(encoding="utf-8")
+    readme = (output_dir / "README.md").read_text(encoding="utf-8")
+
+    assert "def run_batch_inference" in generated_app
+    endpoint_source = generated_app.split("def run_batch_inference", 1)[1]
+    assert '"task_id": task_id, "status": "processing"' in (
+        endpoint_source.split("\n\n", 1)[0]
+    )
+    assert "background task" in readme.lower().split(
+        "/run_batch_inference"
+    )[1].split("\n")[0]
+
+
+def test_compile_notebook_conflicting_background_directives_is_a_clean_error(
+    tmp_path,
+):
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "# notebook-to-api: background\n"
+            "def helper():\n"
+            "    return 1\n"
+        )
+    )
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "# notebook-to-api: sync\n"
+            "def helper():\n"
+            "    return 2\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    with pytest.raises(ValueError, match="Conflicting"):
+        compile_notebook(str(notebook_path), str(output_dir))
 
 
 def test_compile_notebook_only_naming_a_private_function_is_a_clean_error(tmp_path):

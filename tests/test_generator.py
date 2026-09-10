@@ -3409,6 +3409,66 @@ def test_non_background_endpoint_is_not_marked_async_and_documents_its_own_resul
     assert "'result': 3" in decorator_line
 
 
+def test_sync_directive_overrides_a_long_running_keyword_name_match():
+    """"regenerate_token" contains "generate" -- a LONG_RUNNING_KEYWORDS
+    match -- but background_overrides explicitly says otherwise.
+    """
+
+    functions = [{"name": "regenerate_token", "args": [], "return_type": "str"}]
+
+    code = generate_fastapi_code(
+        functions, background_overrides={"regenerate_token": False}
+    )
+
+    decorator_line = next(
+        line for line in code.splitlines()
+        if '@app.post("/regenerate_token"' in line
+    )
+
+    assert "x-notebook-to-api-async" not in decorator_line
+
+
+def test_background_directive_overrides_a_non_matching_name():
+    """"run_batch_inference" matches none of LONG_RUNNING_KEYWORDS, but
+    background_overrides explicitly says it should be background anyway.
+    """
+
+    functions = [{"name": "run_batch_inference", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(
+        functions, background_overrides={"run_batch_inference": True}
+    )
+
+    decorator_line = next(
+        line for line in code.splitlines()
+        if '@app.post("/run_batch_inference"' in line
+    )
+
+    assert '"x-notebook-to-api-async": True' in decorator_line
+
+
+def test_background_overrides_with_no_entry_for_a_function_falls_back_to_the_heuristic():
+
+    functions = [
+        {"name": "train_model", "args": [], "return_type": "str"},
+        {"name": "add", "args": [], "return_type": "int"},
+    ]
+
+    code = generate_fastapi_code(
+        functions, background_overrides={"unrelated_function": True}
+    )
+
+    train_line = next(
+        line for line in code.splitlines() if '@app.post("/train_model"' in line
+    )
+    add_line = next(
+        line for line in code.splitlines() if '@app.post("/add"' in line
+    )
+
+    assert '"x-notebook-to-api-async": True' in train_line
+    assert "x-notebook-to-api-async" not in add_line
+
+
 def test_sync_endpoint_documents_401_429_and_500_in_its_openapi_schema(monkeypatch):
     """Confirmed missing before this feature: a generated endpoint's own
     OpenAPI schema documented only its 200 response and FastAPI's own
@@ -5742,6 +5802,38 @@ def test_readme_content_marks_a_background_function_as_such():
         "`GET /tasks/{task_id}` for the result, or pass `?callback_url=` "
         "to have it POSTed there instead once the task finishes"
     ) in content
+
+
+def test_readme_content_honors_a_sync_override_for_a_long_running_keyword_match():
+    """"regenerate_token" contains "generate" -- without the override,
+    this README would wrongly claim it's a background endpoint the same
+    way a real compile (absent this fix) would wrongly generate one.
+    """
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(
+        functions=[{"name": "regenerate_token", "args": [], "return_type": "str"}],
+        background_overrides={"regenerate_token": False},
+    )
+
+    assert "`POST /regenerate_token`" in content
+    assert "background task" not in content.lower().split(
+        "/regenerate_token"
+    )[1].split("\n")[0]
+
+
+def test_readme_content_honors_a_background_override_for_a_non_matching_name():
+
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(
+        functions=[{"name": "run_batch_inference", "args": [], "return_type": "int"}],
+        background_overrides={"run_batch_inference": True},
+    )
+
+    assert "background task" in content.lower().split(
+        "/run_batch_inference"
+    )[1].split("\n")[0]
 
 
 def test_readme_content_background_function_mentions_webhook_signing_and_redelivery():
