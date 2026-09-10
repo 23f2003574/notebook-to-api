@@ -413,10 +413,105 @@ def test_doctor_command_json_flag_emits_structured_checks(tmp_path):
     body = json.loads(proc.stdout)
     assert body["ok"] is True
     names = [check["name"] for check in body["checks"]]
-    assert names == ["python_version", "docker_cli", "output_directory_writable"]
+    assert names == [
+        "python_version", "docker_cli",
+        "package_fastapi", "package_uvicorn", "package_python_multipart",
+        "package_httpx",
+        "output_directory_writable",
+    ]
     assert all(
         set(check.keys()) == {"name", "status", "detail"} for check in body["checks"]
     )
+
+
+def test_doctor_command_reports_required_packages_as_installed(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_doctor(["--json"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    body = json.loads(proc.stdout)
+    checks_by_name = {check["name"]: check for check in body["checks"]}
+    for name in (
+        "package_fastapi", "package_uvicorn", "package_python_multipart",
+        "package_httpx",
+    ):
+        assert checks_by_name[name]["status"] == "ok", checks_by_name[name]
+
+
+def _run_doctor_with_module_blocked(module_name, args, cwd):
+    """Like _run_doctor, but with `module_name` made genuinely
+    unimportable in the subprocess -- simulating a missing pip install
+    without actually uninstalling anything from the environment running
+    these tests. Setting sys.modules[name] = None before backend.cli is
+    even imported is the standard, documented way to do this:
+    importlib.util.find_spec explicitly returns None for a name already
+    present in sys.modules as None, rather than raising or falling
+    through to a real installed package elsewhere on sys.path -- exactly
+    the "not installed" case the doctor check under test needs to
+    observe. Confirmed real fastapi/uvicorn/python-multipart/httpx
+    installs are otherwise still found normally -- only `module_name`
+    itself is affected.
+    """
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+    empty_path_dir = Path(cwd) / ".empty-path"
+    empty_path_dir.mkdir(exist_ok=True)
+    env["PATH"] = str(empty_path_dir)
+    return subprocess.run(
+        [
+            sys.executable, "-c",
+            "import sys; "
+            f"sys.modules[{module_name!r}] = None; "
+            f"sys.argv = ['notebook-to-api', 'doctor', *{list(args)!r}]; "
+            "import backend.cli; backend.cli.main()",
+        ],
+        cwd=str(cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+def test_doctor_command_warns_when_a_required_package_is_missing(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_doctor_with_module_blocked("httpx", [], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Python package 'httpx' is not installed" in proc.stdout
+    assert "pip install httpx" in proc.stdout
+    # A missing optional package is a warning, not a failure, the same
+    # "every other command works fine without it" treatment the
+    # docker_cli check already gets -- doctor must still exit 0.
+    assert "All checks passed." in proc.stdout
+
+
+def test_doctor_command_json_reports_a_missing_package_as_a_warn_status(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_doctor_with_module_blocked(
+        "multipart", ["--json"], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    body = json.loads(proc.stdout)
+    assert body["ok"] is True
+    checks_by_name = {check["name"]: check for check in body["checks"]}
+    check = checks_by_name["package_python_multipart"]
+    assert check["status"] == "warn"
+    assert "python-multipart" in check["detail"]
+    # Every other package's own check must be unaffected -- only the one
+    # actually blocked should ever report missing.
+    assert checks_by_name["package_fastapi"]["status"] == "ok"
+    assert checks_by_name["package_httpx"]["status"] == "ok"
 
 
 def test_doctor_command_json_includes_docker_daemon_check_when_docker_is_present(
@@ -435,6 +530,8 @@ def test_doctor_command_json_includes_docker_daemon_check_when_docker_is_present
     names = [check["name"] for check in body["checks"]]
     assert names == [
         "python_version", "docker_cli", "docker_daemon",
+        "package_fastapi", "package_uvicorn", "package_python_multipart",
+        "package_httpx",
         "output_directory_writable",
     ]
 

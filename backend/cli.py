@@ -1,6 +1,7 @@
 import argparse
 import contextlib
 import hmac
+import importlib.util
 import io
 import json
 import os
@@ -1449,6 +1450,48 @@ def _generate_fish_completion(parser):
     return "\n".join(lines) + "\n"
 
 
+# Python packages this tool needs for specific commands but never
+# imports at *this file's own* module scope, so `doctor` (below) can
+# actually check for them and still get a chance to report a missing one
+# before that command runs. nbformat and watchdog, by contrast, are both
+# already imported unconditionally at this file's own top -- "from
+# nbformat import ValidationError" above, and `from backend.serve import
+# serve_notebook, watch_notebook` (backend/serve.py itself does "from
+# watchdog.observers import Observer" at its own top) -- so a machine
+# missing either already fails with a plain ModuleNotFoundError the
+# instant `notebook-to-api` (this `doctor` command included) is invoked
+# at all; checking for them here would be dead code that could never
+# actually run. Each entry is (the name `importlib.util.find_spec` looks
+# up, the name `pip install` / requirements.txt actually uses -- they
+# differ for python-multipart, whose importable module is "multipart",
+# and the commands that would actually break without it.
+_OPTIONAL_RUNTIME_PACKAGES = [
+    (
+        "fastapi", "fastapi",
+        "`serve`/`watch` (their own uvicorn subprocess imports the "
+        "generated app, which imports fastapi) and the dashboard "
+        "(`python -m backend.dashboard`)",
+    ),
+    (
+        "uvicorn", "uvicorn",
+        "`serve`/`watch` (both shell out to `python -m uvicorn` to "
+        "actually run the compiled app) and the dashboard",
+    ),
+    (
+        "multipart", "python-multipart",
+        "the dashboard's own multipart file upload (`upload`'s server "
+        "side, POST /api/upload)",
+    ),
+    (
+        "httpx", "httpx",
+        "every command that talks to a dashboard or a deployed app "
+        "directly (`upload`, `list`, `download`, every `remote-*` "
+        "command, `app-call`, and every `app-status`/`app-metrics`/"
+        "`app-auth`/`app-tasks` subcommand)",
+    ),
+]
+
+
 def _dispatch_core_command(args):
     """Run one of the core notebook-to-API commands.
 
@@ -1533,6 +1576,35 @@ def _dispatch_core_command(args):
                     "name": "docker_daemon",
                     "status": "ok",
                     "detail": "Docker daemon is reachable.",
+                })
+
+        # find_spec (not an actual import) is deliberate: importing
+        # fastapi/uvicorn/httpx here just to check they exist would pull
+        # each one fully into memory for every single `doctor` run, the
+        # exact cost the lazy "import httpx" convention inside individual
+        # command handlers above already exists to avoid paying for every
+        # `notebook-to-api` invocation.
+        for import_name, requirement_name, needed_by in _OPTIONAL_RUNTIME_PACKAGES:
+
+            if importlib.util.find_spec(import_name) is None:
+
+                checks.append({
+                    "name": f"package_{requirement_name.replace('-', '_')}",
+                    "status": "warn",
+                    "detail": (
+                        f"Python package '{requirement_name}' is not "
+                        f"installed (pip install {requirement_name}) -- "
+                        f"needed by {needed_by}. Every other command "
+                        "here works fine without it."
+                    ),
+                })
+
+            else:
+
+                checks.append({
+                    "name": f"package_{requirement_name.replace('-', '_')}",
+                    "status": "ok",
+                    "detail": f"Python package '{requirement_name}' is installed.",
                 })
 
         # The nearest already-existing ancestor of --output (--output
@@ -8023,8 +8095,9 @@ def main():
         "doctor",
         help=(
             "Check this machine's own local environment (Python version, "
-            "Docker availability, output directory permissions) -- not "
-            "this dashboard's own `governance doctor`."
+            "Docker availability, required Python packages, output "
+            "directory permissions) -- not this dashboard's own "
+            "`governance doctor`."
         )
     )
     doctor_parser.add_argument(
