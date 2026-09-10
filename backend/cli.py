@@ -362,7 +362,7 @@ _CORE_COMMANDS = frozenset({
     "status", "metrics", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
     "remote-curl", "app-preview", "readme-preview", "dockerfile-preview", "docker-compose-preview", "env-example-preview", "env-vars-preview",
     "postman-preview", "k8s-preview", "openapi-preview", "verify-webhook",
-    "app-metrics", "app-call", "app-tasks", "app-status",
+    "app-metrics", "app-call", "app-tasks", "app-status", "app-auth",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -7267,6 +7267,104 @@ def _dispatch_core_command(args):
                     time.sleep(args.interval)
             except KeyboardInterrupt:
                 print("\nStopped watching.")
+    elif args.command == "app-auth":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        app_url = f"http://{args.host}:{args.port}"
+
+        def _app_get(path, headers=None):
+            try:
+                response = httpx.get(
+                    f"{app_url}{path}", headers=headers, timeout=args.timeout
+                )
+            except httpx.HTTPError as exc:
+                raise RuntimeError(
+                    f"Could not reach the compiled app at {app_url}: "
+                    f"{exc}. Is it running? (see `serve`, or `docker "
+                    "compose up`)"
+                )
+
+            # A 401 from GET /auth/validate specifically means "this
+            # --api-key isn't valid" -- exactly the thing this command
+            # exists to report, not a failure of the command itself, so
+            # it's handled by the caller below rather than raised here
+            # like every other unexpected non-2xx already is.
+            if response.status_code == 401 and path == "/auth/validate":
+                return response
+
+            if response.status_code >= 400:
+                raise RuntimeError(
+                    f"App rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            return response
+
+        # Wrapped in its own function, the same "so --watch can call the
+        # exact same fetch-and-report logic on every poll" reasoning
+        # app-status/app-metrics/app-tasks list's own identical functions
+        # already establish.
+        def _fetch_and_report_auth():
+
+            status = _app_get("/auth/status").json()
+            info = _app_get("/auth/info").json()
+
+            validate_response = _app_get(
+                "/auth/validate", headers={"X-API-Key": args.api_key}
+            )
+            if validate_response.status_code == 401:
+                validate = {
+                    "authenticated": False,
+                    "detail": _extract_dashboard_error_detail(validate_response),
+                }
+            else:
+                validate = validate_response.json()
+
+            if args.json_output:
+                result = {"status": status, "info": info, "validate": validate}
+                if args.watch:
+                    # One compact object per line (NDJSON), the same
+                    # reason app-status --json --watch's own identical
+                    # combined result is never split across lines either.
+                    result["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                    print(json.dumps(result))
+                else:
+                    print(json.dumps(result, indent=2))
+                return
+
+            if args.watch:
+                print(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S')} ---")
+
+            print(
+                f"Authentication at {app_url}: "
+                f"{status.get('authentication')} "
+                f"(api key configured: {status.get('api_key_configured')})"
+            )
+            print(f"  header: {info.get('header')}")
+            print(f"  environment variable: {info.get('environment_variable')}")
+            rate_limit = info.get("rate_limit_per_minute")
+            print(
+                "  rate limiting: "
+                f"{f'enabled ({rate_limit} requests/minute per key)' if rate_limit else 'disabled'}"
+            )
+            print(f"  configured keys: {info.get('configured_keys')}")
+            print(f"  protected endpoints: {info.get('protected_endpoints')}")
+            if validate.get("authenticated"):
+                print("  --api-key: valid")
+            else:
+                print(f"  --api-key: INVALID ({validate.get('detail')})")
+
+        if not args.watch:
+            _fetch_and_report_auth()
+        else:
+            try:
+                while True:
+                    _fetch_and_report_auth()
+                    time.sleep(args.interval)
+            except KeyboardInterrupt:
+                print("\nStopped watching.")
     elif args.command == "app-metrics":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -13242,6 +13340,64 @@ def main():
             "\"timestamp\") is printed per poll, one per line, so a "
             "consumer can stream-parse each snapshot as it arrives "
             "rather than waiting for this command to exit."
+        )
+    )
+
+    # app-auth command -- the direct-app-talk counterpart to a compiled
+    # app's own /auth/status, /auth/info, and /auth/validate, none of
+    # which app-status above ever calls (it deliberately sticks to the
+    # four *unauthenticated* infra routes -- see its own comment). The
+    # generated Python/TypeScript SDK clients already expose auth_status/
+    # auth_info/auth_validate as real methods (see generate_python_sdk's
+    # own docstring, backend/exporters/sdk_generator.py: "Also always
+    # includes health/ready/info/metrics/uptime/auth_status/auth_info/
+    # auth_validate"), but this CLI's own direct-app family never got an
+    # equivalent -- an operator wanting to confirm a --api-key actually
+    # works against a given deployment (the single most common first
+    # question when wiring up a new caller), or just see how many keys/
+    # protected endpoints it's configured with, had no way to ask short
+    # of a raw `curl -H "X-API-Key: ..."` by hand, or writing throwaway
+    # code against a generated SDK client just to check one credential.
+    app_auth_parser = subparsers.add_parser(
+        "app-auth",
+        help=(
+            "Show a compiled app's own authentication status/config, and "
+            "confirm --api-key is actually valid against it, via its GET "
+            "/auth/status, GET /auth/info, and GET /auth/validate."
+        )
+    )
+    _add_app_host_port_arguments(app_auth_parser)
+    app_auth_parser.add_argument(
+        "--watch",
+        action="store_true",
+        help=(
+            "Keep polling every --interval seconds (Ctrl+C to stop) "
+            "instead of fetching once and exiting -- the same "
+            "`app-status --watch` mirrors for this command's own "
+            "endpoints, e.g. for watching a --api-key start working "
+            "again right after a key-rotation redeploy."
+        )
+    )
+    app_auth_parser.add_argument(
+        "--interval",
+        type=float,
+        default=2.0,
+        help="Seconds to wait between polls under --watch (default: 2)."
+    )
+    app_auth_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit a combined machine-readable JSON result ({\"status\": "
+            "<GET /auth/status response>, \"info\": <GET /auth/info "
+            "response>, \"validate\": <GET /auth/validate response, or "
+            "{\"authenticated\": false, \"detail\": ...} for an invalid "
+            "--api-key>}) instead of a human-readable summary, for "
+            "scripting/automation. Under --watch, one such object (plus "
+            "a \"timestamp\") is printed per poll, one per line, the "
+            "same NDJSON-style streaming `app-status --json --watch` "
+            "already gives."
         )
     )
 

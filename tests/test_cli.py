@@ -21416,6 +21416,288 @@ def test_app_status_command_reports_an_app_error_response(tmp_path, fake_dashboa
     _assert_clean_cli_error(proc, "something went wrong")
 
 
+def test_app_auth_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "app-auth" in proc.stdout
+
+
+def test_app_auth_command_prints_status_info_and_a_valid_key_result(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"authentication": "enabled", "api_key_configured": True}),
+        _json_response(200, {
+            "authentication": "api_key",
+            "header": "X-API-Key",
+            "environment_variable": "NOTEBOOK_API_KEY",
+            "rate_limiting": True,
+            "rate_limit_per_minute": 60,
+            "key_rotation": True,
+            "configured_keys": 2,
+            "protected_endpoints": 3,
+        }),
+        _json_response(200, {"authenticated": True}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-auth", "--host", host, "--port", str(port),
+            "--api-key", "real-key",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"Authentication at http://{host}:{port}: enabled" in proc.stdout
+    assert "api key configured: True" in proc.stdout
+    assert "header: X-API-Key" in proc.stdout
+    assert "environment variable: NOTEBOOK_API_KEY" in proc.stdout
+    assert "rate limiting: enabled (60 requests/minute per key)" in proc.stdout
+    assert "configured keys: 2" in proc.stdout
+    assert "protected endpoints: 3" in proc.stdout
+    assert "--api-key: valid" in proc.stdout
+    assert handler.requests == ["/auth/status", "/auth/info", "/auth/validate"]
+    # The api key actually under test must be sent as the real header
+    # /auth/validate's own verify_api_key dependency reads -- not just
+    # threaded through argparse without ever reaching the request.
+    assert handler.request_headers[2].get("X-API-Key") == "real-key"
+
+
+def test_app_auth_command_reports_disabled_rate_limiting_plainly(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"authentication": "enabled", "api_key_configured": True}),
+        _json_response(200, {
+            "authentication": "api_key",
+            "header": "X-API-Key",
+            "environment_variable": "NOTEBOOK_API_KEY",
+            "rate_limiting": False,
+            "rate_limit_per_minute": None,
+            "key_rotation": True,
+            "configured_keys": 1,
+            "protected_endpoints": 1,
+        }),
+        _json_response(200, {"authenticated": True}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-auth", "--host", host, "--port", str(port)], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "rate limiting: disabled" in proc.stdout
+
+
+def test_app_auth_command_reports_an_invalid_api_key_without_failing(
+    tmp_path, fake_dashboard
+):
+    """A 401 from GET /auth/validate means "this --api-key is wrong" --
+    exactly what this command exists to report -- not a failure of the
+    command itself, so it must exit 0 with a clear INVALID line, the
+    same way `app-call --wait` reporting a failed task still exits 0.
+    """
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"authentication": "enabled", "api_key_configured": True}),
+        _json_response(200, {
+            "authentication": "api_key",
+            "header": "X-API-Key",
+            "environment_variable": "NOTEBOOK_API_KEY",
+            "rate_limiting": False,
+            "rate_limit_per_minute": None,
+            "key_rotation": True,
+            "configured_keys": 1,
+            "protected_endpoints": 1,
+        }),
+        _json_response(401, {"detail": "Invalid API key"}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-auth", "--host", host, "--port", str(port),
+            "--api-key", "wrong-key",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "--api-key: INVALID (Invalid API key)" in proc.stdout
+
+
+def test_app_auth_command_json_flag_emits_the_combined_raw_response(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    status_body = {"authentication": "enabled", "api_key_configured": True}
+    info_body = {"header": "X-API-Key", "configured_keys": 1}
+    handler.responses = [
+        _json_response(200, status_body),
+        _json_response(200, info_body),
+        _json_response(200, {"authenticated": True}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-auth", "--host", host, "--port", str(port), "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == {
+        "status": status_body,
+        "info": info_body,
+        "validate": {"authenticated": True},
+    }
+
+
+def test_app_auth_command_json_flag_reports_an_invalid_key(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"authentication": "enabled", "api_key_configured": True}),
+        _json_response(200, {"header": "X-API-Key", "configured_keys": 1}),
+        _json_response(401, {"detail": "Invalid API key"}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-auth", "--host", host, "--port", str(port), "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    result = json.loads(proc.stdout)
+    assert result["validate"] == {
+        "authenticated": False, "detail": "Invalid API key",
+    }
+
+
+def test_app_auth_command_watch_flag_is_registered():
+
+    proc = _run_cli(["app-auth", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "--watch" in proc.stdout
+    assert "--interval" in proc.stdout
+
+
+def test_app_auth_command_watch_polls_repeatedly_and_stops_cleanly_on_interrupt(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+
+    one_iteration = [
+        _json_response(200, {"authentication": "enabled", "api_key_configured": True}),
+        _json_response(200, {
+            "header": "X-API-Key", "environment_variable": "NOTEBOOK_API_KEY",
+            "rate_limiting": False, "rate_limit_per_minute": None,
+            "configured_keys": 1, "protected_endpoints": 1,
+        }),
+        _json_response(200, {"authenticated": True}),
+    ]
+    handler.responses = one_iteration * 50
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+
+    proc = subprocess.Popen(
+        [
+            sys.executable, "-m", "backend.cli",
+            "app-auth", "--host", host, "--port", str(port),
+            "--watch", "--interval", "0.05",
+        ],
+        cwd=str(workdir),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    time.sleep(2.5)
+    proc.send_signal(signal.SIGINT)
+
+    stdout, stderr = proc.communicate(timeout=10)
+
+    assert proc.returncode == 0, stdout + stderr
+    assert stdout.count("Authentication at") >= 2
+    assert "Stopped watching." in stdout
+
+
+def test_app_auth_command_reports_a_clean_error_when_the_app_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-auth",
+            "--host", "127.0.0.1", "--port", "1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
+def test_app_auth_command_reports_an_unexpected_app_error_response(
+    tmp_path, fake_dashboard
+):
+    """An unrelated 500 (e.g. from /auth/status itself) is a real failure
+    of this command, unlike a 401 from /auth/validate -- it must still be
+    raised, not swallowed the way an invalid key is.
+    """
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(500, {"detail": "something went wrong"}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-auth", "--host", host, "--port", str(port)], cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "something went wrong")
+
+
 def test_app_metrics_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())
