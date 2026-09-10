@@ -6469,11 +6469,14 @@ def _dispatch_core_command(args):
         dashboard_url = args.dashboard_url.rstrip("/")
         local_notebook_path = args.notebook or args.filename
 
+        remote_url = (
+            f"{dashboard_url}/api/notebooks/{args.filename}"
+            f"/versions/{args.version_id}" if args.version_id
+            else f"{dashboard_url}/api/notebooks/{args.filename}"
+        )
+
         try:
-            response = httpx.get(
-                f"{dashboard_url}/api/notebooks/{args.filename}",
-                timeout=args.timeout,
-            )
+            response = httpx.get(remote_url, timeout=args.timeout)
         except httpx.HTTPError as exc:
             raise _dashboard_connection_error(exc, dashboard_url)
 
@@ -6505,6 +6508,11 @@ def _dispatch_core_command(args):
             diff = diff_notebook_functions(remote_notebook_path, local_notebook_path)
             diff.update(classify_notebook_diff(diff))
 
+            remote_target = (
+                f"'{args.filename}' version '{args.version_id}'" if args.version_id
+                else f"'{args.filename}'"
+            )
+
             if args.content:
                 # Labeled, not left to diff_notebook_source's own
                 # "default to the path itself" fallback -- unlike `diff`'s
@@ -6513,7 +6521,7 @@ def _dispatch_core_command(args):
                 # this diff's header would recognize.
                 diff["content_diff"] = diff_notebook_source(
                     remote_notebook_path, local_notebook_path,
-                    old_label=f"'{args.filename}' on {dashboard_url}",
+                    old_label=f"{remote_target} on {dashboard_url}",
                     new_label=local_notebook_path,
                 )
 
@@ -6525,7 +6533,7 @@ def _dispatch_core_command(args):
         else:
             print(
                 f"Comparing local '{local_notebook_path}' against "
-                f"'{args.filename}' on {dashboard_url}"
+                f"{remote_target} on {dashboard_url}"
             )
             print_notebook_diff(diff)
             if args.content and diff["content_diff"]:
@@ -12588,6 +12596,32 @@ def main():
             "a file named `filename` in the current directory -- the "
             "same path `download filename` (no --output) would save it "
             "to."
+        )
+    )
+    # `diff-notebooks` (below) already has --old-version/--new-version,
+    # since GET /api/notebooks/diff supports pinning either side to a
+    # past snapshot -- but remote-diff (one local file against one
+    # already-uploaded notebook) always fetched the dashboard side's own
+    # *current* content via GET /api/notebooks/{filename}, with no way to
+    # pin it to a version instead, even though the identical capability
+    # already exists via GET /api/notebooks/{filename}/versions/
+    # {version_id} (get_notebook_version, routes/upload.py) -- confirmed
+    # missing here even though `remote-diff` is otherwise the one command
+    # of the three diff commands (`diff`, `diff-notebooks`, `remote-diff`)
+    # built specifically to compare against something already on a
+    # dashboard. A caller wanting "does my local draft still match what
+    # was actually deployed N versions ago" had no way to ask that
+    # through this command at all -- only current content.
+    remote_diff_parser.add_argument(
+        "--version-id",
+        default=None,
+        dest="version_id",
+        help=(
+            "Compare against one of `filename`'s own previously "
+            "snapshotted versions (as reported by `versions list`) "
+            "instead of its current content, via GET .../notebooks/"
+            "{filename}/versions/{version_id} instead of GET "
+            "/api/notebooks/{filename}."
         )
     )
     _add_dashboard_url_and_timeout_arguments(remote_diff_parser)

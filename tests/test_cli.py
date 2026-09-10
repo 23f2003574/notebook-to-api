@@ -18351,6 +18351,86 @@ def test_remote_diff_command_reports_added_removed_and_changed_functions(
     assert handler.requests == ["/api/notebooks/nb.ipynb"]
 
 
+def test_remote_diff_command_version_id_fetches_the_pinned_snapshot(
+    tmp_path, fake_dashboard
+):
+    """GET /api/notebooks/{filename} always fetched *current* content --
+    --version-id must instead reach GET .../notebooks/{filename}/versions/
+    {version_id}, the dedicated endpoint for a version's own raw bytes,
+    so a caller can compare a local file against a specific historical
+    snapshot instead of only ever the dashboard's current copy.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    local_path = workdir / "local.ipynb"
+    _write_notebook_with_function(
+        local_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def multiply(a: int, b: int) -> int:\n    return a * b\n",
+    )
+
+    proc = _run_cli(
+        [
+            "remote-diff", "nb.ipynb", str(local_path),
+            "--version-id", "v1.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Comparing local" in proc.stdout
+    assert "'nb.ipynb' version 'v1.ipynb'" in proc.stdout
+    assert "Added 1 endpoint(s):" in proc.stdout
+    assert "POST /multiply" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions/v1.ipynb"]
+
+
+def test_remote_diff_command_content_flag_labels_the_version_when_given(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    local_path = workdir / "local.ipynb"
+    _write_notebook_with_function(
+        local_path, "def add(a: int, b: int) -> int:\n    return a + b + 1\n"
+    )
+
+    proc = _run_cli(
+        [
+            "remote-diff", "nb.ipynb", str(local_path),
+            "--version-id", "v1.ipynb", "--content",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"'nb.ipynb' version 'v1.ipynb' on {dashboard_url}" in proc.stdout
+
+
 def test_remote_diff_command_content_flag_prints_a_line_level_diff(
     tmp_path, fake_dashboard
 ):
