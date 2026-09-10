@@ -160,7 +160,7 @@ def test_completion_bash_output_covers_every_top_level_command_and_nested_group(
     assert (
         '"app-tasks") opts="--help -h cleanup delete get list '
         'purge-completed purge-failed redeliver-failed redeliver-webhook '
-        'reset retry" ;;'
+        'reset retry wait" ;;'
         in proc.stdout
     )
 
