@@ -1890,6 +1890,80 @@ def test_compiler_pipeline_handles_magics_and_broken_cells(tmp_path):
     assert "pandas" in requirements
 
 
+def test_compiler_pipeline_preserves_a_leading_modulo_continuation_line(tmp_path):
+    """Confirmed exploitable before this fix: strip_magic_commands
+    (backend/parser/notebook_parser.py) treated every physical line
+    independently, with no awareness of Python's own lexical structure
+    -- a long expression split across lines with the operator leading
+    the continuation line (PEP 8's own recommended "break before binary
+    operator" style) had its own leading "%" indistinguishable from a
+    real top-level "%foo" IPython line magic, and got silently commented
+    out. ast.parse still succeeds on the mutilated source (a bare
+    "return (\\n    a\\n)" is valid Python), so nothing anywhere in the
+    pipeline ever raised -- the compiled endpoint just silently computed
+    the wrong result. Verified against a real compiled app via
+    TestClient, not just the generated source text: POSTing {"a": 10,
+    "b": 3} to the real endpoint must return the real `10 % 3 == 1`, not
+    the wrong `10` the bug silently produced (the entire modulo
+    discarded).
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def remainder(a: int, b: int) -> int:\n"
+            "    total = (\n"
+            "        a\n"
+            "        % b\n"
+            "    )\n"
+            "    return total\n"
+        )
+    )
+
+    notebook_path = tmp_path / "modulo.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+response = client.post(
+    "/remainder", json={{"a": 10, "b": 3}},
+    headers={{"X-API-Key": "notebook-to-api-dev-key"}},
+)
+assert response.status_code == 200, response.text
+assert response.json() == {{"result": 1}}, response.json()
+
+print("MODULO_CONTINUATION_LINE_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "MODULO_CONTINUATION_LINE_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_does_not_expose_a_writefile_cells_own_function(tmp_path):
     """Confirmed exploitable before this fix: %%writefile writes its own
     cell body to a file instead of executing it in the notebook's own

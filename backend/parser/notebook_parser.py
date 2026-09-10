@@ -1,7 +1,9 @@
+import io
 import nbformat
 import os
 import re
 import sys
+import tokenize
 
 # Ensure backend directory is in sys.path for robust imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -77,6 +79,89 @@ def detect_non_python_body_cell_magic(source):
     return None
 
 
+def _lines_unsafe_for_magic_detection(source):
+    """1-indexed line numbers strip_magic_commands' own per-line loop
+    below must never treat as a magic/introspection candidate, no matter
+    what that line's own leading/trailing characters look like: a line
+    that is really a continuation of an already-open "(", "[", or "{" --
+    entirely ordinary for a long arithmetic/formatting expression split
+    across lines (PEP 8's own recommended "break before binary operator"
+    style), e.g. "total = (\n    a\n    % b\n)" -- or a line inside a
+    multi-line string/f-string literal that merely happens to start with
+    "%"/"!"/"?" as plain text, not code.
+
+    Confirmed exploitable before this: _MAGIC_LINE_RE/_INTROSPECTION_*_RE
+    below were applied to every physical line independently, with no
+    awareness of Python's own lexical structure at all. "% b" on its own
+    continuation line inside "(...)" was indistinguishable from a real
+    top-level "%foo" magic and got commented out, silently changing
+    "a % b" into just "a" (the entire modulo operation discarded) with
+    no error anywhere -- ast.parse still succeeds on the mutilated
+    source, so nothing downstream ever notices; confirmed via a real
+    compiled function: `def f(a, b): return (a\n    % b)` returned `a`
+    unchanged instead of the real `a % b`. A "%"/"!"/"?"-leading line
+    buried inside a triple-quoted string had the identical problem --
+    its own literal text, not code, silently gained a "# " prefix,
+    corrupting the string's actual value.
+
+    Uses the standard library tokenizer purely as a lexical scanner --
+    it tolerates a raw, magic-laden cell just fine here, since tokenize
+    only requires valid *tokens*, not valid *grammar*: "%matplotlib
+    inline"/"!pip install x" both tokenize without error even though
+    neither parses (confirmed) -- rather than a second, hand-rolled
+    bracket/string-tracking pass that could itself drift out of sync
+    with Python's own real lexical rules over time. Falls back to
+    protecting nothing (preserving this function's own previous,
+    unprotected-but-already-established behavior exactly) if tokenizing
+    the cell fails for an unrelated reason -- a genuinely malformed cell
+    (an unterminated string, an unbalanced bracket at EOF) that
+    is_parseable_python (ast_parser.py) will end up rejecting outright
+    once this function's own result reaches it anyway.
+    """
+    unsafe_lines = set()
+    depth = 0
+    last_line_seen = None
+
+    try:
+
+        for tok_type, tok_string, (start_line, _), (end_line, _), _ in (
+            tokenize.generate_tokens(io.StringIO(source).readline)
+        ):
+
+            # Only sampled once per physical line, using whatever depth
+            # already stood *before* this line's own tokens run -- a
+            # bracket that both opens and closes within one line (e.g.
+            # the "()" in "pd.DataFrame()?") must never mark that same
+            # line unsafe just because depth briefly went above zero
+            # partway through it.
+            if start_line != last_line_seen:
+
+                if depth > 0:
+                    unsafe_lines.add(start_line)
+
+                last_line_seen = start_line
+
+            if (
+                tok_type in (
+                    tokenize.STRING, getattr(tokenize, "FSTRING_MIDDLE", -1)
+                )
+                and end_line > start_line
+            ):
+                unsafe_lines.update(range(start_line + 1, end_line + 1))
+
+            if tok_type == tokenize.OP:
+
+                if tok_string in "([{":
+                    depth += 1
+                elif tok_string in ")]}":
+                    depth -= 1
+
+    except (tokenize.TokenError, SyntaxError, ValueError):
+        return set()
+
+    return unsafe_lines
+
+
 def strip_magic_commands(source):
     """Comment out IPython magics, shell escapes, and object-introspection
     queries in notebook source.
@@ -116,9 +201,16 @@ def strip_magic_commands(source):
             for line in source.split("\n")
         )
 
+    unsafe_lines = _lines_unsafe_for_magic_detection(source)
+
     cleaned_lines = []
 
-    for line in source.split("\n"):
+    for line_number, line in enumerate(source.split("\n"), start=1):
+
+        if line_number in unsafe_lines:
+            cleaned_lines.append(line)
+            continue
+
         match = (
             _MAGIC_LINE_RE.match(line)
             or _INTROSPECTION_PREFIX_RE.match(line)

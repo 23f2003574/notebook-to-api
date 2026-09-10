@@ -72,6 +72,93 @@ def test_strip_magic_commands_does_not_touch_modulo_operator():
     assert strip_magic_commands(source) == source
 
 
+def test_strip_magic_commands_does_not_touch_a_leading_modulo_continuation_line():
+    """Confirmed exploitable before this fix: a long expression split
+    across lines with the operator leading the continuation line (PEP
+    8's own recommended style) had its own leading "%" indistinguishable
+    from a real top-level "%foo" line magic -- "% b" got commented out,
+    silently discarding the entire modulo operation. ast.parse still
+    succeeds on the mutilated source, so nothing anywhere else notices;
+    see test_compiler_pipeline_preserves_a_leading_modulo_continuation_
+    line (test_compiler.py) for the real, wrong-result-producing
+    consequence this has all the way through a real compile.
+    """
+
+    source = "total = (\n    a\n    % b\n)"
+
+    assert strip_magic_commands(source) == source
+
+
+def test_strip_magic_commands_does_not_touch_a_leading_bang_continuation_line():
+
+    source = "flag = (\n    a\n    != b\n)"
+
+    assert strip_magic_commands(source) == source
+
+
+def test_strip_magic_commands_still_strips_a_real_magic_after_a_closed_bracket():
+    """A same-line, fully-closed bracket (e.g. a call's own "()") must
+    never be mistaken for an unclosed one -- confirmed exploitable by an
+    earlier, broken version of this same fix: it flagged
+    "pd.DataFrame()?" as a continuation line (its own "(" and ")" briefly
+    pushed bracket depth above zero mid-line) and left the trailing "?"
+    introspection query un-stripped.
+    """
+
+    source = "pd.DataFrame()?\nx = 1"
+
+    assert strip_magic_commands(source) == "# pd.DataFrame()?\nx = 1"
+
+
+def test_strip_magic_commands_leaves_a_percent_line_inside_a_triple_quoted_string_untouched():
+    """Confirmed exploitable before this fix: a line inside a multi-line
+    string literal that merely happens to start with "%" as plain text
+    (not code) was indistinguishable from a real top-level line magic --
+    the line silently gained a "# " prefix, corrupting the string's own
+    actual value with no error anywhere.
+    """
+
+    source = 'note = """\n% not a magic, just text\n"""'
+
+    assert strip_magic_commands(source) == source
+
+
+def test_strip_magic_commands_leaves_a_bang_line_inside_a_triple_quoted_string_untouched():
+
+    source = 'note = """\n!important: read this\n"""'
+
+    assert strip_magic_commands(source) == source
+
+
+def test_strip_magic_commands_still_strips_a_real_magic_after_a_multiline_string():
+    """A genuine magic line following a multi-line string in the same
+    cell must still be recognized -- the protection above must end
+    exactly at the string's own closing line, not bleed into whatever
+    comes after it.
+    """
+
+    source = 'note = """\nplain text\n"""\n%timeit note'
+
+    assert strip_magic_commands(source) == 'note = """\nplain text\n"""\n# %timeit note'
+
+
+def test_lines_unsafe_for_magic_detection_falls_back_to_empty_on_unterminated_bracket():
+    """A genuinely malformed cell (an unclosed bracket at EOF) must never
+    crash strip_magic_commands itself -- it falls back to this
+    function's own previous, unprotected behavior, leaving
+    is_parseable_python (ast_parser.py) to reject the cell outright
+    afterward, exactly as it already would have before this fix existed.
+    """
+
+    from backend.parser.notebook_parser import _lines_unsafe_for_magic_detection
+
+    source = "total = (\n    a\n"
+
+    assert _lines_unsafe_for_magic_detection(source) == set()
+    # strip_magic_commands itself must still return cleanly, not raise.
+    assert strip_magic_commands(source) == source
+
+
 def test_detect_non_python_body_cell_magic_recognizes_writefile():
 
     assert detect_non_python_body_cell_magic(
