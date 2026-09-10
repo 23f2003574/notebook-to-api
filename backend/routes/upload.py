@@ -6407,7 +6407,8 @@ def delete_all_notebooks(
 
 @router.delete("/notebooks/versions")
 def prune_all_notebook_versions(
-    older_than_days: int = None, tag: str = None, dry_run: bool = False
+    older_than_days: int = None, tag: str = None, sha256: str = None,
+    dry_run: bool = False,
 ):
     """Permanently discard every notebook's snapshotted versions older
     than "older_than_days" days, across the whole catalog at once,
@@ -6459,6 +6460,21 @@ def prune_all_notebook_versions(
     out-of-tag notebook's own version history is left untouched and
     never contributes to "results" or total_deleted_count.
 
+    "sha256" (optional) scopes the prune the identical way "tag" does,
+    but to only the notebook(s) whose exact *current* content hashes to
+    it -- the same exact-content filter GET /api/notebooks?sha256=
+    already offers, and DELETE /api/notebooks/delete-batch already
+    extends this exact reasoning to for its own bulk deletion: a
+    notebook can be renamed or re-uploaded under a different filename
+    while keeping the same bytes, and a duplicate-content group found
+    via GET /api/notebooks/duplicates commonly carries different tags
+    across its own copies, or none at all, so "tag" alone can't scope
+    this irreversible, catalog-wide prune to "just these copies" the way
+    an operator reclaiming space from one known duplicate-content group
+    (without touching any other notebook's own version history, however
+    old) would want. Composes with "tag" as an AND, the same composition
+    GET /api/notebooks already gives the same two filters together.
+
     "dry_run" (optional, default false) reports the exact same "results"
     a real prune would -- which notebooks are affected, each one's own
     "deleted_version_ids"/"deleted_count" -- without deleting a single
@@ -6494,6 +6510,9 @@ def prune_all_notebook_versions(
             continue
 
         if tag and tag not in _read_notebook_tags(entry.name):
+            continue
+
+        if sha256 and hash_notebook_file(entry) != sha256:
             continue
 
         versions_dir = _notebook_versions_dir(entry.name)

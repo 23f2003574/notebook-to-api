@@ -3478,8 +3478,13 @@ def _dispatch_core_command(args):
             # reasoning `delete-batch`'s own confirmation already applies.
             # Not asked at all under --dry-run, which never deletes
             # anything.
+            scope_parts = []
+            if args.tag:
+                scope_parts.append(f"tagged {args.tag!r}")
+            if args.sha256:
+                scope_parts.append(f"with sha256 {args.sha256!r}")
             scope = (
-                f"every notebook tagged {args.tag!r}" if args.tag
+                f"every notebook {' and '.join(scope_parts)}" if scope_parts
                 else "every notebook"
             )
             answer = input(
@@ -3494,6 +3499,8 @@ def _dispatch_core_command(args):
         params = {"older_than_days": args.older_than_days}
         if args.tag:
             params["tag"] = args.tag
+        if args.sha256:
+            params["sha256"] = args.sha256
         if args.dry_run:
             params["dry_run"] = True
 
@@ -9812,6 +9819,18 @@ def main():
             "exact tag, via DELETE /api/notebooks/versions's own ?tag= "
             "query param, leaving every other notebook's own version "
             "history untouched. Without this, every notebook is pruned."
+        )
+    )
+    prune_versions_parser.add_argument(
+        "--sha256",
+        help=(
+            "Only prune versions for the notebook(s) whose exact current "
+            "content hashes to this, via DELETE /api/notebooks/versions's "
+            "own ?sha256= -- as reported by `find-duplicates`, for "
+            "reclaiming space from just one duplicate-content group's own "
+            "copies (which may carry different --tag values, or none at "
+            "all) rather than every notebook. Composes with --tag as an "
+            "AND, exactly like the endpoint itself."
         )
     )
     prune_versions_parser.add_argument(

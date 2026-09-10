@@ -7991,6 +7991,68 @@ def test_prune_versions_command_sends_tag_query_param(tmp_path, fake_dashboard):
     ]
 
 
+def test_prune_versions_command_sends_sha256_query_param(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "older_than_days": 30, "results": [],
+            "notebook_count_affected": 0, "total_deleted_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "prune-versions", "--older-than-days", "30", "--sha256", "a" * 64,
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        f"/api/notebooks/versions?older_than_days=30&sha256={'a' * 64}"
+    ]
+
+
+def test_prune_versions_command_confirmation_prompt_names_sha256(
+    tmp_path, fake_dashboard
+):
+    """Mirrors `delete --all --sha256`'s own identical confirmation-prompt
+    treatment -- the prompt must name the hash, the same way it already
+    names --tag, so an operator confirming this irreversible prune can
+    actually see what it's scoped to before answering.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = []
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli",
+            "prune-versions", "--older-than-days", "30", "--sha256", "a" * 64,
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=str(workdir),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        input="n\n",
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"with sha256 '{'a' * 64}'" in proc.stdout
+    assert "Aborted." in proc.stdout
+    assert handler.requests == []
+
+
 def test_prune_versions_command_reports_nothing_to_prune(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

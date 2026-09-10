@@ -16085,6 +16085,117 @@ def test_prune_all_notebook_versions_filters_by_tag():
     ).json()["versions"]) == 1
 
 
+def test_prune_all_notebook_versions_filters_by_sha256():
+    """A notebook renamed/re-uploaded under a different filename keeps
+    the same content hash -- "tag" alone can't scope this irreversible,
+    catalog-wide prune to "this exact content" the way "sha256"
+    (mirroring GET /api/notebooks' own) now can.
+    """
+
+    current_content_a = _notebook_bytes("def a_current() -> int:\n    return 1\n")
+    current_content_b = _notebook_bytes("def b_current() -> int:\n    return 2\n")
+
+    for filename, current_content in (
+        ("prune_versions_sha_a.ipynb", current_content_a),
+        ("prune_versions_sha_b.ipynb", current_content_b),
+    ):
+        client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def old() -> int:\n    return 0\n")),
+                    "application/json",
+                )
+            },
+        )
+        client.post(
+            "/api/upload?overwrite=true",
+            files={
+                "file": (filename, io.BytesIO(current_content), "application/json")
+            },
+        )
+        version_id = client.get(
+            f"/api/notebooks/{filename}/versions"
+        ).json()["versions"][0]["version_id"]
+        _backdate_notebook_version(filename, version_id, days_ago=40)
+
+    target_sha256 = hashlib.sha256(current_content_a).hexdigest()
+
+    resp = client.delete(
+        "/api/notebooks/versions",
+        params={"older_than_days": 30, "sha256": target_sha256},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["notebook_count_affected"] == 1
+    assert [r["filename"] for r in body["results"]] == ["prune_versions_sha_a.ipynb"]
+
+    assert client.get(
+        "/api/notebooks/prune_versions_sha_a.ipynb/versions"
+    ).json()["versions"] == []
+    assert len(client.get(
+        "/api/notebooks/prune_versions_sha_b.ipynb/versions"
+    ).json()["versions"]) == 1
+
+
+def test_prune_all_notebook_versions_sha256_composes_with_tag():
+
+    shared_current_content = _notebook_bytes(
+        "def shared_current() -> int:\n    return 1\n"
+    )
+
+    for filename in (
+        "prune_versions_sha_tag_a.ipynb", "prune_versions_sha_tag_b.ipynb",
+    ):
+        client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def old() -> int:\n    return 0\n")),
+                    "application/json",
+                )
+            },
+        )
+        client.post(
+            "/api/upload?overwrite=true",
+            files={
+                "file": (
+                    filename, io.BytesIO(shared_current_content), "application/json"
+                )
+            },
+        )
+        version_id = client.get(
+            f"/api/notebooks/{filename}/versions"
+        ).json()["versions"][0]["version_id"]
+        _backdate_notebook_version(filename, version_id, days_ago=40)
+
+    client.put(
+        "/api/notebooks/prune_versions_sha_tag_a.ipynb/tags", json={"tags": ["prod"]}
+    )
+
+    target_sha256 = hashlib.sha256(shared_current_content).hexdigest()
+
+    resp = client.delete(
+        "/api/notebooks/versions",
+        params={"older_than_days": 30, "sha256": target_sha256, "tag": "prod"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["notebook_count_affected"] == 1
+    assert [r["filename"] for r in body["results"]] == [
+        "prune_versions_sha_tag_a.ipynb"
+    ]
+
+    # The sha256-matching but untagged notebook must be left untouched.
+    assert len(client.get(
+        "/api/notebooks/prune_versions_sha_tag_b.ipynb/versions"
+    ).json()["versions"]) == 1
+
+
 def test_prune_all_notebook_versions_dry_run_reports_the_plan_without_deleting():
 
     filename = "prune_versions_dry_run.ipynb"
