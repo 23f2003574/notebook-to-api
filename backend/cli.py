@@ -7510,6 +7510,27 @@ def _dispatch_core_command(args):
 
             return response.json()
 
+        # Shared by both `get` (a single fetch) and `wait` (the identical
+        # fetch, repeated until the task leaves "processing") -- so the
+        # two can never drift on what a task record's own summary looks
+        # like.
+        def _print_task_record(task_id, data, json_output):
+            if json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                print(f"{task_id}: {data.get('status')}")
+                if "result" in data:
+                    print(f"  result: {data['result']!r}")
+                if "error" in data:
+                    print(f"  error: {data['error']}")
+                webhook = data.get("webhook")
+                if webhook is not None:
+                    print(
+                        "  webhook: "
+                        f"{'delivered' if webhook.get('delivered') else 'FAILED'}"
+                        f" ({webhook.get('attempts')} attempt(s))"
+                    )
+
         if args.app_tasks_command == "list":
 
             params = {}
@@ -7580,22 +7601,28 @@ def _dispatch_core_command(args):
         elif args.app_tasks_command == "get":
 
             data = _app_request("GET", f"/tasks/{args.task_id}")
+            _print_task_record(args.task_id, data, args.json_output)
 
-            if args.json_output:
-                print(json.dumps(data, indent=2))
-            else:
-                print(f"{args.task_id}: {data.get('status')}")
-                if "result" in data:
-                    print(f"  result: {data['result']!r}")
-                if "error" in data:
-                    print(f"  error: {data['error']}")
-                webhook = data.get("webhook")
-                if webhook is not None:
-                    print(
-                        "  webhook: "
-                        f"{'delivered' if webhook.get('delivered') else 'FAILED'}"
-                        f" ({webhook.get('attempts')} attempt(s))"
+        elif args.app_tasks_command == "wait":
+
+            deadline = time.time() + args.wait_timeout
+
+            while True:
+
+                data = _app_request("GET", f"/tasks/{args.task_id}")
+
+                if data.get("status") != "processing":
+                    break
+
+                if time.time() >= deadline:
+                    raise RuntimeError(
+                        f"Task {args.task_id} did not complete within "
+                        f"{args.wait_timeout}s"
                     )
+
+                time.sleep(args.poll_interval)
+
+            _print_task_record(args.task_id, data, args.json_output)
 
         elif args.app_tasks_command == "delete":
 
@@ -13545,6 +13572,43 @@ def main():
     )
     _add_app_host_port_arguments(app_tasks_get_parser)
     app_tasks_get_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit the app's own raw JSON response instead of a human-readable summary, for scripting/automation."
+    )
+
+    # `app-call --wait` already polls GET /tasks/{task_id} until a task
+    # it just submitted leaves "processing", but that loop only exists
+    # inline inside app-call's own handler -- a task_id learned any other
+    # way (`app-tasks list`, an `app-call` run without --wait, a task_id
+    # handed off between processes/scripts) had no CLI command able to
+    # block on it at all, only `app-tasks get`'s own single one-shot
+    # fetch (which reports "processing" and simply exits) or hand-rolling
+    # the identical poll loop again.
+    app_tasks_wait_parser = app_tasks_subparsers.add_parser(
+        "wait",
+        help="Poll a background task via GET /tasks/{task_id} until it leaves \"processing\"."
+    )
+    app_tasks_wait_parser.add_argument(
+        "task_id", help="Task id to wait on, as reported by `app-tasks list` or `app-call`."
+    )
+    _add_app_host_port_arguments(app_tasks_wait_parser)
+    app_tasks_wait_parser.add_argument(
+        "--wait-timeout",
+        type=float,
+        default=60.0,
+        dest="wait_timeout",
+        help="Seconds to keep polling before giving up (default: 60)."
+    )
+    app_tasks_wait_parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=1.0,
+        dest="poll_interval",
+        help="Seconds to wait between polls (default: 1)."
+    )
+    app_tasks_wait_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",

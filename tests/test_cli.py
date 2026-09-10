@@ -22548,6 +22548,132 @@ def test_app_tasks_get_command_reports_a_404_cleanly(tmp_path, fake_dashboard):
     _assert_clean_cli_error(proc, "Task abc123 not found")
 
 
+def test_app_tasks_wait_command_polls_until_the_task_leaves_processing(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"status": "processing"}),
+        _json_response(200, {"status": "processing"}),
+        _json_response(200, {"status": "completed", "result": 42}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "wait", "abc123",
+            "--host", host, "--port", str(port), "--poll-interval", "0.01",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "abc123: completed" in proc.stdout
+    assert "result: 42" in proc.stdout
+    assert handler.requests == [
+        "/tasks/abc123", "/tasks/abc123", "/tasks/abc123",
+    ]
+
+
+def test_app_tasks_wait_command_reports_a_failed_task(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"status": "failed", "error": "boom"}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-tasks", "wait", "abc123", "--host", host, "--port", str(port)],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "abc123: failed" in proc.stdout
+    assert "error: boom" in proc.stdout
+
+
+def test_app_tasks_wait_command_times_out_while_still_processing(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, {"status": "processing"})] * 50
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "wait", "abc123",
+            "--host", host, "--port", str(port),
+            "--wait-timeout", "0.2", "--poll-interval", "0.05",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "did not complete within")
+
+
+def test_app_tasks_wait_command_json_flag_emits_the_apps_own_raw_response(
+    tmp_path, fake_dashboard
+):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    body = {"status": "completed", "result": 42}
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "app-tasks", "wait", "abc123",
+            "--host", host, "--port", str(port), "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_app_tasks_wait_command_reports_a_404_cleanly(tmp_path, fake_dashboard):
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(404, {"detail": "Task abc123 not found"}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-tasks", "wait", "abc123", "--host", host, "--port", str(port)],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Task abc123 not found")
+
+
+def test_app_tasks_wait_subcommand_is_registered():
+
+    proc = _run_cli(["app-tasks", "--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "wait" in proc.stdout
+
+
 def test_app_tasks_redeliver_failed_subcommand_is_registered():
 
     proc = _run_cli(["app-tasks", "--help"], cwd=Path.cwd())
