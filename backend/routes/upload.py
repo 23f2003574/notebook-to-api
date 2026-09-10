@@ -40,6 +40,7 @@ from backend.compiler import (
     COMPILE_METADATA_FILENAME,
     NOTEBOOK_TO_API_VERSION,
     _drop_private_functions,
+    _extract_background_overrides,
     _extract_excluded_imports,
     _extract_explicit_apt_packages,
     _extract_explicit_requirements,
@@ -11293,10 +11294,23 @@ def app_preview_endpoint(data: dict):
 
         package_name = package_name_for_output_dir(GENERATED_DIR)
 
+        # Same "# notebook-to-api: background"/"# notebook-to-api: sync"
+        # directive compile_notebook_to_api (backend/compiler.py) already
+        # honors -- without this, a preview built by independently
+        # re-parsing code_cells here (rather than going through
+        # compile_notebook_to_api itself) would silently fall back to
+        # LONG_RUNNING_KEYWORDS' own unoverridden guess, showing this
+        # endpoint's whole reason to exist -- "the exact app.py a real
+        # compile would produce" -- something a real compile wouldn't
+        # actually generate for a function whose classification a
+        # notebook explicitly corrected.
+        background_overrides = _extract_background_overrides(code_cells)
+
         app_code = generate_fastapi_code(
             functions, package_name,
             source_notebook_sha256=hash_notebook_file(full_path),
             notebook_to_api_version=NOTEBOOK_TO_API_VERSION,
+            background_overrides=background_overrides,
         )
 
     except ReservedFunctionNameError as e:
@@ -11442,6 +11456,14 @@ def readme_preview_endpoint(data: dict):
 
         package_name = package_name_for_output_dir(GENERATED_DIR)
 
+        # Same "# notebook-to-api: background"/"# notebook-to-api: sync"
+        # directive compile_notebook_to_api already honors for its own
+        # generate_readme call -- without this, readme_content's own
+        # "(background task)" markers below would reflect only
+        # LONG_RUNNING_KEYWORDS' unoverridden guess, not what a real
+        # compile of this same notebook would actually produce.
+        background_overrides = _extract_background_overrides(code_cells)
+
         # Discarded -- see this endpoint's own docstring for why this is
         # still called: it's the one place a reserved-name collision is
         # actually caught, and a real compile of this same notebook would
@@ -11450,9 +11472,13 @@ def readme_preview_endpoint(data: dict):
             functions, package_name,
             source_notebook_sha256=hash_notebook_file(full_path),
             notebook_to_api_version=NOTEBOOK_TO_API_VERSION,
+            background_overrides=background_overrides,
         )
 
-        readme = readme_content(package_name, functions, GENERATED_APP_ENV_VARS)
+        readme = readme_content(
+            package_name, functions, GENERATED_APP_ENV_VARS,
+            background_overrides=background_overrides,
+        )
 
     except ReservedFunctionNameError as e:
 
@@ -12211,10 +12237,21 @@ def openapi_preview_endpoint(data: dict):
 
         package_name = package_name_for_output_dir(GENERATED_DIR)
 
+        # Same "# notebook-to-api: background"/"# notebook-to-api: sync"
+        # directive compile_notebook_to_api already honors -- without
+        # this, the schema built below (via a real app.openapi() call
+        # against the generated app -- see this endpoint's own docstring)
+        # would carry the wrong "x-notebook-to-api-async"/task_id response
+        # shape for a function whose classification a notebook explicitly
+        # corrected, contradicting what a real compile of the same
+        # notebook would actually produce.
+        background_overrides = _extract_background_overrides(code_cells)
+
         app_code = generate_fastapi_code(
             functions, temp_package_name,
             source_notebook_sha256=hash_notebook_file(full_path),
             notebook_to_api_version=NOTEBOOK_TO_API_VERSION,
+            background_overrides=background_overrides,
         )
 
     except ReservedFunctionNameError as e:

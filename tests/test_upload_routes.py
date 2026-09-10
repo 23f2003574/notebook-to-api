@@ -18659,6 +18659,51 @@ def test_app_preview_matches_what_an_actual_compile_writes():
     assert preview_body["app_code"] == actual_app_code
 
 
+def test_app_preview_matches_an_actual_compile_with_a_background_override_directive():
+    """"regenerate_token" contains "generate" (a LONG_RUNNING_KEYWORDS
+    match) -- without this endpoint honoring "# notebook-to-api: sync"
+    the same way compile_notebook_to_api itself does, this preview would
+    show a background/task_id endpoint a real compile of the identical
+    notebook would never actually produce.
+    """
+
+    content = _notebook_bytes(
+        "# notebook-to-api: sync\n"
+        "def regenerate_token(user_id: int) -> str:\n    return str(user_id)\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "app_preview_background_override.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    preview_resp = client.post(
+        "/api/app-preview",
+        json={"notebook_path": "app_preview_background_override.ipynb"},
+    )
+    assert preview_resp.status_code == 200
+    preview_body = preview_resp.json()
+
+    compile_resp = client.post(
+        "/api/compile",
+        json={"notebook_path": "app_preview_background_override.ipynb"},
+    )
+    assert compile_resp.status_code == 200
+
+    actual_app_code = client.get("/api/generated/app.py").json()["content"]
+
+    assert preview_body["app_code"] == actual_app_code
+    assert "task_id" not in preview_body["app_code"].split(
+        "def regenerate_token", 1
+    )[1].split("\n\n", 1)[0]
+
+
 def test_app_preview_bakes_in_the_notebooks_own_sha256():
 
     import hashlib
@@ -19038,6 +19083,54 @@ def test_openapi_preview_matches_what_an_actual_compile_and_export_produces():
     )
 
 
+def test_openapi_preview_matches_an_actual_compile_with_a_background_override_directive():
+    """"regenerate_token" contains "generate" (a LONG_RUNNING_KEYWORDS
+    match) -- without this endpoint honoring "# notebook-to-api: sync"
+    the same way compile_notebook_to_api itself does, the previewed
+    schema would carry a background/task_id response shape (and the
+    "x-notebook-to-api-async" marker) a real compile of the identical
+    notebook would never actually produce.
+    """
+
+    content = _notebook_bytes(
+        "# notebook-to-api: sync\n"
+        "def regenerate_token(user_id: int) -> str:\n    return str(user_id)\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "openapi_preview_background_override.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    preview_resp = client.post(
+        "/api/openapi-preview",
+        json={"notebook_path": "openapi_preview_background_override.ipynb"},
+    )
+    assert preview_resp.status_code == 200
+    preview_body = preview_resp.json()
+    operation = preview_body["schema"]["paths"]["/regenerate_token"]["post"]
+    assert "x-notebook-to-api-async" not in operation
+
+    compile_resp = client.post(
+        "/api/compile",
+        json={"notebook_path": "openapi_preview_background_override.ipynb"},
+    )
+    assert compile_resp.status_code == 200
+
+    export_resp = client.post("/api/export-openapi", json={"format": "json"})
+    assert export_resp.status_code == 200
+
+    assert preview_body["schema"]["paths"]["/regenerate_token"] == (
+        export_resp.json()["schema"]["paths"]["/regenerate_token"]
+    )
+
+
 def test_openapi_preview_respects_only_and_exclude():
 
     content = _notebook_bytes(
@@ -19309,6 +19402,49 @@ def test_readme_preview_matches_what_an_actual_compile_writes():
     compile_resp = client.post(
         "/api/compile",
         json={"notebook_path": "readme_preview_match.ipynb"},
+    )
+    assert compile_resp.status_code == 200
+
+    actual_readme = client.get("/api/generated/README.md").json()["content"]
+
+    assert preview_body["readme"] == actual_readme
+
+
+def test_readme_preview_matches_an_actual_compile_with_a_background_override_directive():
+    """"run_batch_inference" matches none of LONG_RUNNING_KEYWORDS --
+    without this endpoint honoring "# notebook-to-api: background" the
+    same way compile_notebook_to_api itself does, this preview would omit
+    the "(background task)" marker a real compile of the identical
+    notebook would actually produce.
+    """
+
+    content = _notebook_bytes(
+        "# notebook-to-api: background\n"
+        "def run_batch_inference(count: int) -> int:\n    return count\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "readme_preview_background_override.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    preview_resp = client.post(
+        "/api/readme-preview",
+        json={"notebook_path": "readme_preview_background_override.ipynb"},
+    )
+    assert preview_resp.status_code == 200
+    preview_body = preview_resp.json()
+    assert "enqueues a background task" in preview_body["readme"]
+
+    compile_resp = client.post(
+        "/api/compile",
+        json={"notebook_path": "readme_preview_background_override.ipynb"},
     )
     assert compile_resp.status_code == 200
 
