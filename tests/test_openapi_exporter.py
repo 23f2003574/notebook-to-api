@@ -144,6 +144,68 @@ def test_to_yaml_does_not_quote_a_version_looking_string():
     assert _to_yaml({"example": "not-a-date-2024"}) == "example: not-a-date-2024\n"
 
 
+def test_to_yaml_quotes_a_dot_prefixed_inf_or_nan_looking_string():
+    """Confirmed exploitable before this fix: PyYAML's own implicit
+    float resolver matches a dot-prefixed "[-+]?.(inf|Inf|INF)"/
+    ".(nan|NaN|NAN)" the same way it matches a plain "42" -- an unquoted
+    ".inf"/"-.inf"/".nan" reinterprets as a real float (inf/nan) on
+    load, not the string this tool's own JSON export already reports for
+    the identical value. _needs_yaml_quoting's own float(text) fallback
+    doesn't catch this: float(".inf") itself raises ValueError in real
+    Python (it needs a bare "inf", no leading dot).
+    """
+
+    assert _to_yaml({"example": ".inf"}) == 'example: ".inf"\n'
+    assert _to_yaml({"example": "-.inf"}) == 'example: "-.inf"\n'
+    assert _to_yaml({"example": "+.inf"}) == 'example: "+.inf"\n'
+    assert _to_yaml({"example": ".Inf"}) == 'example: ".Inf"\n'
+    assert _to_yaml({"example": ".NAN"}) == 'example: ".NAN"\n'
+
+
+def test_to_yaml_does_not_over_quote_a_plus_signed_nan():
+    """PyYAML's own resolver genuinely never signs "nan" -- only "inf"
+    can take a "+"/"-" -- confirmed against a real yaml.safe_load
+    ("+.nan"/"-.nan" both stay plain strings on load). "+.nan" (unlike
+    "-.nan", whose leading "-" is independently quoted anyway as a
+    reserved YAML indicator character -- see the leading-character check
+    above) isolates the actual boundary this regex is built to match
+    exactly: nan itself is never signed.
+    """
+
+    assert _to_yaml({"example": "+.nan"}) == "example: +.nan\n"
+
+
+def test_to_yaml_quotes_a_hex_or_binary_looking_string():
+    """Confirmed exploitable before this fix: PyYAML's own implicit int
+    resolver matches a "0x"-prefixed hex ("[-+]?0x[0-9a-fA-F_]+") and a
+    "0b"-prefixed binary ("[-+]?0b[0-1_]+") literal, the same way it
+    already matches a plain "42" -- an unquoted "0x1A"/"0b101"
+    reinterprets as a real int (26/5) on load. Realistic content, not a
+    theoretical edge case: a hex-formatted id/opcode/color string is
+    exactly this shape. float(text)'s own fallback doesn't catch this
+    either: float("0x1A") raises ValueError in real Python.
+    """
+
+    assert _to_yaml({"example": "0x1A"}) == 'example: "0x1A"\n'
+    assert _to_yaml({"example": "-0x1a"}) == 'example: "-0x1a"\n'
+    assert _to_yaml({"example": "0b101"}) == 'example: "0b101"\n'
+    assert _to_yaml({"example": "+0b101"}) == 'example: "+0b101"\n'
+
+
+def test_to_yaml_does_not_over_quote_an_uppercase_prefixed_hex_or_binary():
+    """PyYAML's own resolver only recognizes a lowercase "0x"/"0b" prefix
+    -- "0X1A"/"0B101" are left as plain strings by a real yaml.safe_load,
+    confirmed directly -- so quoting them here would be needlessly
+    conservative, not wrong. Pins the actual boundary the regex above is
+    built to match exactly, the same way test_to_yaml_does_not_quote_a_
+    version_looking_string above already pins the timestamp/sexagesimal
+    boundary.
+    """
+
+    assert _to_yaml({"example": "0X1A"}) == "example: 0X1A\n"
+    assert _to_yaml({"example": "0B101"}) == "example: 0B101\n"
+
+
 def test_to_yaml_renders_empty_dict_as_inline_mapping_not_a_string():
     """Confirmed exploitable before this fix: an empty dict value fell
     through to _yaml_scalar, which stringified it as the *text* "{}"

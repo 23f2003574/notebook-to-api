@@ -36,6 +36,25 @@ _YAML_TIMESTAMP_RE = re.compile(
 )
 _YAML_SEXAGESIMAL_RE = re.compile(r"^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+(?:\.[0-9_]*)?$")
 
+# PyYAML's own tag:yaml.org,2002:float resolver (yaml/resolver.py) also
+# matches a dot-prefixed inf/nan -- "[-+]?\.(?:inf|Inf|INF)" for inf,
+# "\.(?:nan|NaN|NAN)" for nan (nan, unlike inf, never takes a sign --
+# PyYAML genuinely leaves "-.nan"/"+.nan" as plain strings, confirmed
+# against a real yaml.safe_load) -- and its own tag:yaml.org,2002:int
+# resolver matches a "0x"/"0b"-prefixed hex/binary int
+# ("[-+]?0x[0-9a-fA-F_]+", "[-+]?0b[0-1_]+" -- lowercase prefix only;
+# "0X"/"0B" are left as plain strings by PyYAML itself, confirmed the
+# same way). Neither is caught by _needs_yaml_quoting's own float(text)
+# fallback below -- confirmed exploitable: float(".inf") and
+# float("0x1A") both raise ValueError in real Python, so a string
+# example/default value shaped like either previously round-tripped
+# through yaml.safe_load as inf/26 instead of the string this tool's own
+# JSON export (openapi.json, unaffected) already reports for the
+# identical value -- the same silent-type-change bug class
+# _YAML_TIMESTAMP_RE/_YAML_SEXAGESIMAL_RE above already exist to close.
+_YAML_INF_NAN_RE = re.compile(r"^(?:[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$")
+_YAML_HEX_OR_BINARY_RE = re.compile(r"^[-+]?0(?:x[0-9a-fA-F_]+|b[0-1_]+)$")
+
 
 def _needs_yaml_quoting(text):
     if text == "" or text != text.strip():
@@ -50,7 +69,10 @@ def _needs_yaml_quoting(text):
         return True
     if ": " in text or text.endswith(":") or " #" in text:
         return True
-    if _YAML_TIMESTAMP_RE.match(text) or _YAML_SEXAGESIMAL_RE.match(text):
+    if (
+        _YAML_TIMESTAMP_RE.match(text) or _YAML_SEXAGESIMAL_RE.match(text)
+        or _YAML_INF_NAN_RE.match(text) or _YAML_HEX_OR_BINARY_RE.match(text)
+    ):
         return True
     # A plain (unquoted) YAML scalar cannot contain a literal newline,
     # carriage return, or tab without a block-scalar indicator ("|"/">")
