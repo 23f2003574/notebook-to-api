@@ -6,6 +6,7 @@ from backend.parser.ast_parser import (
     generate_example_payload,
     generate_example_response,
     normalize_type_annotation,
+    literal_values,
     _parse_docstring_arg_descriptions,
 )
 
@@ -989,6 +990,26 @@ def test_generate_example_payload_falls_back_for_a_literal_enum_member():
     )
 
     assert payload == {"color": "Color.RED"}
+
+
+def test_literal_values_returns_the_whole_declared_set():
+
+    assert literal_values('Literal["a", "b", "c"]') == ("a", "b", "c")
+
+
+def test_literal_values_handles_a_value_containing_its_own_comma():
+
+    assert literal_values("Literal['a,b', 'c,d']") == ("a,b", "c,d")
+
+
+def test_literal_values_single_value():
+
+    assert literal_values("Literal['solo']") == ("solo",)
+
+
+def test_literal_values_falls_back_to_a_one_element_tuple_for_an_enum_member():
+
+    assert literal_values("Literal[Color.RED]") == ("Color.RED",)
 
 
 def test_generate_example_payload_uses_a_real_value_for_date_datetime_time_uuid_decimal():

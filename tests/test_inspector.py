@@ -1567,6 +1567,127 @@ def test_classify_notebook_diff_parameter_type_change_is_breaking(tmp_path):
     }]
 
 
+def test_classify_notebook_diff_widening_a_parameter_literal_is_not_breaking(tmp_path):
+    """Confirmed exploitable before this fix: a plain string-inequality
+    check flagged ANY Literal[...] value-set change as breaking,
+    including purely additive widening (every existing caller's own
+    already-valid request value is still accepted) -- the single most
+    common non-breaking edit to a Literal parameter there is, and one
+    every --fail-on-breaking CI gate this project's own diff commands
+    offer would have wrongly failed on.
+    """
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(
+        old_path,
+        "from typing import Literal\n\n"
+        'def classify(level: Literal["a", "b"]) -> str:\n    return level\n',
+    )
+    _write_notebook(
+        new_path,
+        "from typing import Literal\n\n"
+        'def classify(level: Literal["a", "b", "c"]) -> str:\n    return level\n',
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification["compatible"] is True
+    assert classification["breaking_changes"] == []
+
+
+def test_classify_notebook_diff_narrowing_a_parameter_literal_is_breaking(tmp_path):
+    """The reverse of widening: a caller that used to send "c" now gets
+    a real validation rejection it didn't get before.
+    """
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(
+        old_path,
+        "from typing import Literal\n\n"
+        'def classify(level: Literal["a", "b", "c"]) -> str:\n    return level\n',
+    )
+    _write_notebook(
+        new_path,
+        "from typing import Literal\n\n"
+        'def classify(level: Literal["a", "b"]) -> str:\n    return level\n',
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification["compatible"] is False
+    assert classification["breaking_changes"] == [{
+        "type": "parameter_type_changed",
+        "name": "classify",
+        "detail": (
+            "Parameter 'level' of 'classify' changed type from "
+            "'Literal['a', 'b', 'c']' to 'Literal['a', 'b']'."
+        ),
+    }]
+
+
+def test_classify_notebook_diff_narrowing_a_return_literal_is_not_breaking(tmp_path):
+    """The mirror image of parameter widening: an existing caller's own
+    response-handling was only ever written against the *old* type's
+    own possible values, so a return type that can now only produce a
+    subset of them can never surprise that caller.
+    """
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(
+        old_path,
+        "from typing import Literal\n\n"
+        'def classify() -> Literal["a", "b", "c"]:\n    return "a"\n',
+    )
+    _write_notebook(
+        new_path,
+        "from typing import Literal\n\n"
+        'def classify() -> Literal["a", "b"]:\n    return "a"\n',
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification["compatible"] is True
+    assert classification["breaking_changes"] == []
+
+
+def test_classify_notebook_diff_widening_a_return_literal_is_breaking(tmp_path):
+    """The mirror image of parameter narrowing: a value the endpoint
+    might now return that didn't exist -- and so wasn't handled -- before.
+    """
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(
+        old_path,
+        "from typing import Literal\n\n"
+        'def classify() -> Literal["a", "b"]:\n    return "a"\n',
+    )
+    _write_notebook(
+        new_path,
+        "from typing import Literal\n\n"
+        'def classify() -> Literal["a", "b", "c"]:\n    return "a"\n',
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification["compatible"] is False
+    assert classification["breaking_changes"] == [{
+        "type": "return_type_changed",
+        "name": "classify",
+        "detail": (
+            "'classify' return type changed from 'Literal['a', 'b']' "
+            "to 'Literal['a', 'b', 'c']'."
+        ),
+    }]
+
+
 def test_classify_notebook_diff_return_type_change_is_breaking(tmp_path):
 
     old_path = tmp_path / "old.ipynb"

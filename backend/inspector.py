@@ -25,6 +25,7 @@ from backend.parser.ast_parser import (
     extract_imports_from_code,
     extract_skipped_functions_from_code,
     deduplicate_functions_by_name,
+    literal_values,
 )
 
 from backend.generator.api_generator import (
@@ -815,6 +816,67 @@ def diff_notebook_functions(old_notebook_path, new_notebook_path):
     }
 
 
+def _is_breaking_type_change(old_type, new_type, covariant):
+    """Whether a type annotation change from `old_type` to `new_type`
+    should be considered breaking, special-casing two `Literal[...]`
+    annotations that differ only in their own declared value set --
+    used by classify_notebook_diff below for both a parameter's own
+    type (`covariant=False`) and a function's return type
+    (`covariant=True`).
+
+    A plain `old_type != new_type` check (what this replaces) flags
+    *any* difference as breaking, including widening a Literal's own
+    value set (e.g. `Literal["a", "b"]` to `Literal["a", "b", "c"]`) --
+    confirmed exploitable: a `--fail-on-breaking` CI gate (every diff
+    command/endpoint here offers one) failed a genuinely safe deploy
+    that only ever *added* a newly-allowed value, the single most common
+    non-breaking edit to a Literal parameter there is.
+
+    A parameter's own type sits in *contravariant* position: an existing
+    caller's request only ever supplies one of the *old* type's own
+    possible values, so widening it (every old value still accepted,
+    plus new ones) can never break that request -- only narrowing it (an
+    old value no longer accepted) can, since a caller that used to send
+    it now gets a real validation rejection it didn't get before.
+
+    A return type sits in the opposite, *covariant* position: an
+    existing caller's own response-handling was only ever written
+    against one of the *old* type's own possible values, so narrowing it
+    (every value the endpoint might now return is one the caller already
+    knew how to handle) can never break that caller -- only widening it
+    (a value that didn't exist, and so wasn't handled, before) can.
+    Mirrors the exact reasoning OpenAPI/protobuf enum-evolution
+    compatibility rules already use for the identical request-vs-response
+    asymmetry.
+
+    Falls through to plain inequality -- this function's own previous,
+    unchanged behavior -- for anything that isn't a Literal[...] pair on
+    both sides (an unrelated type change, or one side missing/non-Literal
+    entirely).
+    """
+    if old_type == new_type:
+        return False
+
+    if not (
+        old_type and new_type
+        and old_type.startswith("Literal[") and new_type.startswith("Literal[")
+    ):
+        return True
+
+    old_values = set(literal_values(old_type))
+    new_values = set(literal_values(new_type))
+
+    if covariant:
+        # A value the new type could produce that the old one never
+        # could -- an existing caller's response-handling has never
+        # seen it.
+        return bool(new_values - old_values)
+
+    # A value the old type could send that the new one no longer
+    # accepts -- an existing caller sending it now gets rejected.
+    return bool(old_values - new_values)
+
+
 def classify_notebook_diff(diff):
     """Classify a diff_notebook_functions report by whether it would
     break an existing caller of the compiled API, on top of the raw
@@ -871,6 +933,15 @@ def classify_notebook_diff(diff):
         (already reported under "changed" by diff_notebook_functions --
         see _function_signature_key -- but is an internal implementation
         detail invisible to an HTTP caller).
+      - widening a parameter's own Literal[...] value set (e.g.
+        Literal["a", "b"] to Literal["a", "b", "c"]) -- see
+        _is_breaking_type_change above for why "parameter_type_changed"/
+        "return_type_changed" special-case a Literal pair on both sides
+        rather than the plain string inequality every other type change
+        above still uses: a parameter's own value set only ever grows
+        more permissive for an existing caller, while a return type's
+        own value set only breaks a caller when it grows (narrowing it
+        is the safe direction instead).
     """
     breaking_changes = []
 
@@ -912,7 +983,10 @@ def classify_notebook_diff(diff):
             old_type = old_arg.get("type")
             new_type = new_arg.get("type")
 
-            if old_type is not None and new_type is not None and old_type != new_type:
+            if (
+                old_type is not None and new_type is not None
+                and _is_breaking_type_change(old_type, new_type, covariant=False)
+            ):
                 breaking_changes.append({
                     "type": "parameter_type_changed",
                     "name": name,
@@ -937,7 +1011,7 @@ def classify_notebook_diff(diff):
         old_return = entry["old"].get("return_type")
         new_return = entry["new"].get("return_type")
 
-        if old_return != new_return:
+        if _is_breaking_type_change(old_return, new_return, covariant=True):
             breaking_changes.append({
                 "type": "return_type_changed",
                 "name": name,

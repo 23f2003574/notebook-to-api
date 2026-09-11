@@ -628,10 +628,37 @@ def _first_literal_value(arg_type):
     function's own previous behavior for that case exactly, rather than
     turning a working (if imprecise) example into a hard failure.
     """
+    return literal_values(arg_type)[0]
+
+
+def literal_values(arg_type):
+    """Every value inside a `Literal[...]` annotation's own brackets, as
+    a tuple of real Python values -- the full declared value set, not
+    just _first_literal_value's own first one. Used where a caller needs
+    to reason about the *set* itself (e.g. classify_notebook_diff,
+    backend/inspector.py, telling a Literal whose allowed values only
+    grew or shrank apart from an unrelated type change entirely -- a
+    plain string-inequality check flags widening a Literal's own value
+    set as breaking just as readily as narrowing it, even though adding
+    a new allowed *request* value never rejects a request an existing
+    caller was already sending).
+
+    Same ast.literal_eval-on-"(...,)"  approach _first_literal_value
+    already uses for its own first value, applied to the whole bracket
+    content at once -- see that function's own docstring for why a blind
+    string split can't do this correctly. Falls back to a one-element
+    tuple of _first_literal_value's own best-effort single value (rather
+    than raising) for the same case it can't handle either: any one
+    value in the Literal naming an Enum member (e.g. `Literal[Color.RED,
+    "b"]`), valid per PEP 586 but not a literal expression -- the whole
+    tuple fails to parse in that case, not just that one member, since
+    ast.literal_eval either parses an expression completely or not at
+    all.
+    """
     inner = _matching_bracket_content(arg_type[len("Literal["):])
 
     try:
-        return ast.literal_eval(f"({inner},)")[0]
+        return ast.literal_eval(f"({inner},)")
     except (ValueError, SyntaxError):
         pass
 
@@ -642,9 +669,9 @@ def _first_literal_value(arg_type):
     ) or (
         first_segment.startswith("'") and first_segment.endswith("'")
     ):
-        return first_segment[1:-1]
+        first_segment = first_segment[1:-1]
 
-    return first_segment
+    return (first_segment,)
 
 
 # Shared by generate_example_payload/generate_example_response below --
