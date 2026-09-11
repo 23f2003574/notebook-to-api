@@ -6487,6 +6487,20 @@ def _dispatch_core_command(args):
                 f"{_extract_dashboard_error_detail(response)}"
             )
 
+        # Same content-integrity check `remote-curl`/`remote-postman`
+        # (and `download`/`versions get`/`remote-files get`) already
+        # perform before writing/using anything -- applied here before
+        # diff_notebook_functions ever reads the downloaded bytes.
+        sha256 = response.headers.get("x-content-sha256")
+
+        if args.expected_sha256 and args.expected_sha256 != sha256:
+
+            raise RuntimeError(
+                f"Downloaded content's sha256 ({sha256}) does not match "
+                f"the expected value ({args.expected_sha256}) -- nothing "
+                "was diffed."
+            )
+
         # Downloaded to a real temp file, not held in memory and parsed
         # some other way, so diff_notebook_functions can reuse its own
         # existing load_notebook(path)-based pipeline unchanged -- the
@@ -12764,6 +12778,24 @@ def main():
             "inspector.py) -- distinct from the structural added/removed/"
             "changed-signature report this command already prints. See "
             "`diff --content`'s own help for what this shows."
+        )
+    )
+    remote_diff_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "Verify the dashboard side's own downloaded content hash "
+            "matches this value -- read from the response's own "
+            "\"X-Content-SHA256\" header, the same header GET "
+            "/api/notebooks/{filename}[/versions/{version_id}] itself "
+            "already reports -- before diffing anything, exiting with an "
+            "error on a mismatch instead. The same content-integrity "
+            "check `download`/`versions get`/`remote-files get`/"
+            "`remote-curl`/`remote-postman` already perform for their own "
+            "downloads, applied here to the dashboard-side notebook "
+            "`remote-diff` itself fetches."
         )
     )
 

@@ -18629,6 +18629,73 @@ def test_remote_diff_command_reports_a_clean_error_when_the_dashboard_is_unreach
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_remote_diff_command_expected_sha256_succeeds_on_a_match(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n"
+            ),
+        )
+    ]
+    handler.response_headers = [{"X-Content-SHA256": "abc123"}]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    local_path = workdir / "local.ipynb"
+    _write_notebook_with_function(
+        local_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    proc = _run_cli(
+        [
+            "remote-diff", "nb.ipynb", str(local_path),
+            "--dashboard-url", dashboard_url, "--expected-sha256", "abc123",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Comparing local" in proc.stdout
+
+
+def test_remote_diff_command_expected_sha256_fails_on_a_mismatch(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n"
+            ),
+        )
+    ]
+    handler.response_headers = [{"X-Content-SHA256": "abc123"}]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    local_path = workdir / "local.ipynb"
+    _write_notebook_with_function(
+        local_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    proc = _run_cli(
+        [
+            "remote-diff", "nb.ipynb", str(local_path),
+            "--dashboard-url", dashboard_url, "--expected-sha256", "wrongvalue",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "does not match the expected value")
+
+
 def test_diff_notebooks_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())
