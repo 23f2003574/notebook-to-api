@@ -3432,6 +3432,141 @@ def test_compiler_pipeline_rejects_notebook_function_named_verify_api_key(tmp_pa
         compile_notebook(str(notebook_path), str(output_dir))
 
 
+def test_compiler_pipeline_rejects_a_parameter_named_model_config(tmp_path):
+    """Confirmed exploitable before this fix, and the worst of three
+    distinct severities: generate_fastapi_code's own model-generation
+    code already reuses "model_config" for its own unrelated purpose
+    (setting the request model's own json_schema_extra example),
+    emitting `model_config: str = Field(...)` immediately followed by
+    `model_config = {...}` in the same class body -- the second
+    assignment wins, so Pydantic parses it as its own special ClassVar,
+    not a declared field at all. Verified against the real generated
+    model: model_fields came back completely empty (the field vanished)
+    and constructing one with a real "model_config" value returned the
+    *config dict* back, not the value actually sent -- an existing
+    caller's real request value silently discarded and replaced with no
+    error anywhere. compile_notebook must fail loudly instead of
+    producing that app.
+    """
+    from backend.generator.api_generator import ReservedParameterNameError
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def process(model_config: str) -> str:\n"
+            "    return model_config\n"
+        )
+    )
+
+    notebook_path = tmp_path / "reserved_param.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    with pytest.raises(ReservedParameterNameError):
+        compile_notebook(str(notebook_path), str(output_dir))
+
+
+def test_compiler_pipeline_rejects_a_parameter_named_model_dump(tmp_path):
+    """Confirmed exploitable before this fix: Pydantic itself refuses to
+    define a request model with a field named "model_dump" at all --
+    verified against the real generated app, Python raised "ValueError:
+    Field 'model_dump' conflicts with member ... of protected namespace
+    'model_dump'" the moment it tried to import the generated module,
+    taking down the *entire* app before it could serve a single request,
+    not merely this one endpoint. compile_notebook must fail loudly with
+    its own clean, actionable error instead of letting that raw Pydantic
+    failure surface later, at generated-module-import time.
+    """
+    from backend.generator.api_generator import ReservedParameterNameError
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def process(model_dump: str) -> str:\n"
+            "    return model_dump\n"
+        )
+    )
+
+    notebook_path = tmp_path / "reserved_param_dump.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    with pytest.raises(ReservedParameterNameError):
+        compile_notebook(str(notebook_path), str(output_dir))
+
+
+def test_compiler_pipeline_rejects_a_parameter_named_dict():
+    """The third, mildest of three confirmed severities: Pydantic still
+    builds the field, but permanently shadows BaseModel's own (Pydantic
+    v1-era, still present in v2) "dict" method with it -- a real request
+    model instance's own ".dict" is now this field's value, not a
+    callable at all. Checked directly against generate_fastapi_code
+    (not a real compile, since this notebook has no other content worth
+    round-tripping through the full pipeline for) since every other
+    severity in this same reserved set is already confirmed end to end
+    above.
+    """
+    from backend.generator.api_generator import (
+        generate_fastapi_code,
+        ReservedParameterNameError,
+    )
+
+    functions = [{
+        "name": "process",
+        "args": [{
+            "name": "dict", "type": "str", "default": None,
+            "has_default": False, "kind": "positional", "description": None,
+        }],
+        "return_type": "str",
+        "is_async": False,
+        "docstring": None,
+        "example_payload": {"dict": ""},
+        "example_response": {"result": ""},
+    }]
+
+    with pytest.raises(ReservedParameterNameError):
+        generate_fastapi_code(functions, "testpkg")
+
+
+def test_compiler_pipeline_allows_a_model_prefixed_parameter_name_that_does_not_collide(
+    tmp_path,
+):
+    """"model_id"/"model_type" and the like are entirely ordinary
+    parameter names for this ML/data-tooling-oriented compiler -- only a
+    name that collides with a *real* pydantic.BaseModel attribute (see
+    RESERVED_PYDANTIC_FIELD_NAMES) is rejected, not every "model_"-
+    prefixed name.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def process(model_id: str) -> str:\n"
+            "    return model_id\n"
+        )
+    )
+
+    notebook_path = tmp_path / "not_reserved_param.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    assert (output_dir / "app.py").exists()
+
+
 def test_compiler_pipeline_rejects_notebook_function_named_evict_expired_tasks(
     tmp_path,
 ):

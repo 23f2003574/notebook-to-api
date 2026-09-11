@@ -21499,6 +21499,43 @@ def test_compile_returns_400_for_a_reserved_function_name():
     assert "health_check" in compile_resp.json()["detail"]
 
 
+def test_compile_returns_400_for_a_reserved_pydantic_field_name():
+    """generate_fastapi_code refuses to compile a function whose own
+    parameter is named "model_config" -- it collides with a real
+    pydantic.BaseModel attribute (see RESERVED_PYDANTIC_FIELD_NAMES,
+    backend/generator/api_generator.py), and this file's own
+    model-generation code already reuses that exact name for its own
+    unrelated purpose, silently discarding the field's own declared
+    value in favor of internal config bookkeeping with no error
+    anywhere -- the identical "the notebook's own fault, not this
+    server's" 400 ReservedFunctionNameError already gets for a colliding
+    function name, applied here to a colliding parameter name instead.
+    """
+
+    content = _notebook_bytes(
+        "def process(model_config: str) -> str:\n    return model_config\n"
+    )
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "reserved_param_compile_test.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+    assert upload_resp.status_code == 200
+
+    compile_resp = client.post(
+        "/api/compile", json={"notebook_path": "reserved_param_compile_test.ipynb"}
+    )
+
+    assert compile_resp.status_code == 400
+    assert "model_config" in compile_resp.json()["detail"]
+
+
 def test_compile_respects_a_configured_generated_dir(tmp_path, monkeypatch):
     """POST /api/compile previously always wrote to a hardcoded "generated"
     string, ignoring GENERATED_DIR entirely -- every other endpoint that

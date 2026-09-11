@@ -239,6 +239,74 @@ class ReservedFunctionNameError(ValueError):
     generated app itself defines."""
 
 
+# Every public (non-underscore-prefixed) attribute/method
+# `pydantic.BaseModel` itself defines (Pydantic 2.13.4, this project's own
+# pinned version) -- distinct from RESERVED_INFRASTRUCTURE_NAMES above,
+# which guards a notebook *function's* own name against app.py's top-level
+# identifiers; this guards a notebook function *parameter's* own name
+# against the one auto-generated Pydantic request model (below) that
+# parameter's name becomes a field of.
+#
+# Confirmed exploitable at three distinct severities, not theoretical --
+# each verified against a real compile's own generated request model,
+# not just read from Pydantic's own source:
+#   - "model_config": the worst case, silent data corruption with no
+#     error anywhere. This file's own model-generation code (below)
+#     already reuses the identical name for its own unrelated purpose --
+#     setting the request model's own `json_schema_extra` example --
+#     emitting `model_config: str = Field(...)` (the notebook's own
+#     field) immediately followed by `model_config = {...}` (this file's
+#     own config assignment) in the same class body. The second
+#     assignment wins: Pydantic parses "model_config" as its own special
+#     ClassVar, not a declared field at all -- confirmed via a real
+#     compile, `ProcessRequest.model_fields` came back completely empty
+#     (the field vanished) and `ProcessRequest(model_config="real
+#     value").model_config` returned the *config dict*, not "real
+#     value" -- an existing caller's actual submitted request value is
+#     silently discarded and replaced with unrelated internal
+#     bookkeeping, and the notebook function itself receives that same
+#     config dict instead of its own real argument, with nothing
+#     anywhere raising an error.
+#   - "model_dump"/"model_dump_json"/"model_validate"/
+#     "model_validate_json"/"model_validate_strings": Pydantic itself
+#     refuses to define the class at all -- confirmed via a real
+#     compile, the generated app.py raised "ValueError: Field
+#     'model_dump' conflicts with member <function BaseModel.model_dump
+#     ...> of protected namespace 'model_dump'" the moment Python tried
+#     to import it, taking down the *entire* generated app before it
+#     could serve a single request, not merely the one endpoint that
+#     parameter belongs to.
+#   - Every other name below: Pydantic still builds the field
+#     successfully, but a real BaseModel attribute/method of the same
+#     name is now permanently shadowed by it -- confirmed via a real
+#     compile, Python itself warns "Field name ... shadows an attribute
+#     in parent 'BaseModel'" at class-definition time (on every single
+#     startup of the generated app), and calling that shadowed method on
+#     a real request instance (e.g. the Pydantic v1-era `.dict()`/
+#     `.json()`/`.copy()`/`.schema()` a caller migrating an older
+#     integration might still reach for out of habit) silently resolves
+#     to the field's own value instead, raising a confusing "'str'
+#     object is not callable" nowhere close to this file's own code.
+RESERVED_PYDANTIC_FIELD_NAMES = frozenset({
+    "construct", "copy", "dict", "from_orm", "json",
+    "model_computed_fields", "model_config", "model_construct",
+    "model_copy", "model_dump", "model_dump_json", "model_extra",
+    "model_fields", "model_fields_set", "model_json_schema",
+    "model_parametrized_name", "model_post_init", "model_rebuild",
+    "model_validate", "model_validate_json", "model_validate_strings",
+    "parse_file", "parse_obj", "parse_raw", "schema", "schema_json",
+    "update_forward_refs", "validate",
+})
+
+
+class ReservedParameterNameError(ValueError):
+    """A notebook function parameter's name collides with an attribute
+    or method `pydantic.BaseModel` itself defines -- see
+    RESERVED_PYDANTIC_FIELD_NAMES above for why this can't simply be
+    left for Pydantic's own validation (or worse, silent field
+    corruption) to catch at request time instead."""
+
+
 # Keywords indicating a function should be run as a background task
 LONG_RUNNING_KEYWORDS = [
     "train",
@@ -799,6 +867,34 @@ def generate_fastapi_code(
             "generated app itself defines (auth, task management, or "
             "infrastructure routes). Rename the function(s) in the "
             "notebook and recompile."
+        )
+
+    # Checked here, before any of this function's own model/endpoint
+    # code is ever generated, for the identical "validate the notebook's
+    # own content before writing anything" reasoning the
+    # ReservedFunctionNameError check just above already established --
+    # a parameter name colliding with a real pydantic.BaseModel attribute
+    # is caught as this clean, actionable error instead of only
+    # surfacing later as Pydantic's own raw ValueError (a hard failure
+    # of the *entire* generated app) or, worse, the "model_config" case's
+    # silent field corruption with no error anywhere at all -- see
+    # RESERVED_PYDANTIC_FIELD_NAMES's own comment for both confirmed
+    # failure modes.
+    parameter_collisions = sorted(
+        (func["name"], arg["name"])
+        for func in functions
+        for arg in func.get("args", [])
+        if arg.get("name") in RESERVED_PYDANTIC_FIELD_NAMES
+    )
+    if parameter_collisions:
+        detail = ", ".join(
+            f"'{arg_name}' (in '{func_name}')"
+            for func_name, arg_name in parameter_collisions
+        )
+        raise ReservedParameterNameError(
+            f"Notebook function parameter(s) {detail} collide with an "
+            "attribute or method pydantic.BaseModel itself defines. "
+            "Rename the parameter(s) in the notebook and recompile."
         )
 
     # GET /tasks below always needs Optional[str] for its own `status`
