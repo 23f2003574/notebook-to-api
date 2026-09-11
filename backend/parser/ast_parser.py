@@ -523,6 +523,63 @@ def normalize_type_annotation(arg_type):
     return arg_type
 
 
+def _first_literal_value(arg_type):
+    """The first value inside a `Literal[...]` annotation's own brackets
+    (e.g. "a,b" for `Literal['a,b', 'c,d']`), parsed as a real Python
+    value via ast.literal_eval rather than blind string ops.
+
+    generate_example_payload/generate_example_response used to
+    independently hand-roll this via
+    ".replace('Literal[', '').rstrip(']').split(',')" -- confirmed
+    exploitable, not theoretical: for `def f(level: Literal['a,b',
+    'c,d'])`, that produced the example payload {"level": "'a"} --
+    neither of the two values the notebook author actually declared, a
+    comma-split fragment with a stray leftover quote character, since
+    the blind split lands inside the first value's own quoted string.
+    _matching_bracket_content alone (already used by
+    normalize_type_annotation to avoid the identical "blind string op
+    corrupts nested syntax" failure mode for List[.../Union[.../etc.)
+    isn't sufficient here either -- it (and _first_top_level_segment)
+    only track "[""/"]" depth, not quoting, so a "," embedded inside a
+    literal string value still looks like a top-level separator to
+    either of them.
+
+    Wrapping the whole bracket content in "(...,)" and handing it to
+    ast.literal_eval -- the same tool Python's own compiler uses to turn
+    literal syntax into a real value, rather than re-implementing
+    Python's string/number literal grammar by hand -- sidesteps that
+    entirely: it parses the bracket content as a real tuple literal
+    (quotes, embedded commas, escapes, numbers, bools, and all), and the
+    trailing "," makes a lone single-value Literal (e.g. `Literal['x']`)
+    parse as a valid one-element tuple too, rather than a parenthesized
+    expression.
+
+    Falls back to a best-effort split (only reached when
+    ast.literal_eval itself raises) for the one case it can't handle: a
+    Literal naming an Enum member (e.g. `Literal[Color.RED]`), valid per
+    PEP 586 but not a literal expression at all -- preserves this
+    function's own previous behavior for that case exactly, rather than
+    turning a working (if imprecise) example into a hard failure.
+    """
+    inner = _matching_bracket_content(arg_type[len("Literal["):])
+
+    try:
+        return ast.literal_eval(f"({inner},)")[0]
+    except (ValueError, SyntaxError):
+        pass
+
+    first_segment = inner.split(",")[0].strip()
+
+    if (
+        first_segment.startswith('"') and first_segment.endswith('"')
+    ) or (
+        first_segment.startswith("'") and first_segment.endswith("'")
+    ):
+        return first_segment[1:-1]
+
+    return first_segment
+
+
 # Shared by generate_example_payload/generate_example_response below --
 # previously two independently hand-maintained copies of the identical
 # dict, the exact "two things that must never drift apart but have no
@@ -579,29 +636,8 @@ def generate_example_response(return_type):
     )
 
     if return_type and return_type.startswith("Literal["):
-        literal_values = (
-            return_type
-            .replace("Literal[", "")
-            .rstrip("]")
-            .split(",")
-        )
-
-        first_value = literal_values[0].strip()
-
-        if (
-            first_value.startswith('"')
-            and first_value.endswith('"')
-        ):
-            first_value = first_value[1:-1]
-
-        elif (
-            first_value.startswith("'")
-            and first_value.endswith("'")
-        ):
-            first_value = first_value[1:-1]
-
         return {
-            "result": first_value
+            "result": _first_literal_value(return_type)
         }
 
     if return_type in (
@@ -634,24 +670,7 @@ def generate_example_payload(args):
         )
 
         if arg_type and arg_type.startswith("Literal["):
-            literal_values = (
-                arg_type
-                .replace("Literal[", "")
-                .rstrip("]")
-                .split(",")
-            )
-            first_value = literal_values[0].strip()
-            if (
-                first_value.startswith('"')
-                and first_value.endswith('"')
-            ):
-                first_value = first_value[1:-1]
-            elif (
-                first_value.startswith("'")
-                and first_value.endswith("'")
-            ):
-                first_value = first_value[1:-1]
-            payload[arg_name] = first_value
+            payload[arg_name] = _first_literal_value(arg_type)
             continue
 
         if arg_type in (

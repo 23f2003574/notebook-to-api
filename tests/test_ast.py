@@ -827,6 +827,20 @@ def test_generate_example_response_uses_the_literals_first_value():
     }
 
 
+def test_generate_example_response_literal_value_containing_a_comma():
+    """Before this fix, a Literal value containing its own "," (e.g.
+    `Literal['a,b', 'c,d']`) was hand-split on every "," in the source
+    text, landing the split partway through the first value's own quoted
+    string: the "result" produced was "'a" -- a comma-split fragment
+    with a stray leftover quote character, neither of the two values the
+    notebook author actually declared.
+    """
+
+    assert generate_example_response("Literal['a,b', 'c,d']") == {
+        "result": "a,b"
+    }
+
+
 def test_generate_example_payload_defaults_to_a_list_for_an_optional_list_param():
     """Before this fix, a parameter typed `Optional[List[float]]` (an
     extremely common real-world signature, e.g. `scores: Optional[List[float]]
@@ -859,6 +873,66 @@ def test_generate_example_payload_uses_the_literals_first_value():
     )
 
     assert payload == {"model": "xgboost"}
+
+
+def test_generate_example_payload_literal_value_containing_a_comma():
+    """Confirmed exploitable against a real compiled app, not just
+    generated source text: for `def f(level: Literal['a,b', 'c,d'])`,
+    the example_payload generate_curl_commands/generate_postman_collection
+    (backend/inspector.py) and a default `app-call` (backend/cli.py) all
+    actually send used to be {"level": "'a"} instead of {"level":
+    "a,b"} -- a value that is neither of the two the notebook author
+    actually declared, and one Pydantic's own Literal validation rejects
+    with a real 422.
+    """
+
+    payload = generate_example_payload(
+        [{"name": "level", "type": "Literal['a,b', 'c,d']"}]
+    )
+
+    assert payload == {"level": "a,b"}
+
+
+def test_generate_example_payload_literal_value_containing_its_own_quote_character():
+
+    payload = generate_example_payload(
+        [{"name": "text", "type": '''Literal['a"b', 'c']'''}]
+    )
+
+    assert payload == {"text": 'a"b'}
+
+
+def test_generate_example_payload_single_value_literal():
+
+    payload = generate_example_payload(
+        [{"name": "mode", "type": "Literal['solo']"}]
+    )
+
+    assert payload == {"mode": "solo"}
+
+
+def test_generate_example_payload_numeric_literal():
+
+    payload = generate_example_payload(
+        [{"name": "n", "type": "Literal[1, 2, 3]"}]
+    )
+
+    assert payload == {"n": 1}
+
+
+def test_generate_example_payload_falls_back_for_a_literal_enum_member():
+    """`Literal[Color.RED]` is valid per PEP 586 but names an Enum
+    member, not a literal expression ast.literal_eval can parse --
+    preserves this function's own previous best-effort behavior for that
+    one case exactly, rather than turning a working (if imprecise)
+    example into a hard failure.
+    """
+
+    payload = generate_example_payload(
+        [{"name": "color", "type": "Literal[Color.RED]"}]
+    )
+
+    assert payload == {"color": "Color.RED"}
 
 
 def test_generate_example_payload_uses_a_real_value_for_date_datetime_time_uuid_decimal():
