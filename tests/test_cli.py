@@ -9256,6 +9256,52 @@ def test_copy_many_command_passes_the_overwrite_flag_through(tmp_path, fake_dash
     }
 
 
+def test_copy_many_command_passes_tags_and_description_uniformly_to_every_entry(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {"filename": "a.ipynb", "new_filename": "a-copy.ipynb", "status": "success"},
+                {"filename": "b.ipynb", "new_filename": "b-copy.ipynb", "status": "success"},
+            ],
+            "succeeded_count": 2,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "copy-many", "a.ipynb:a-copy.ipynb", "b.ipynb:b-copy.ipynb",
+            "--dashboard-url", dashboard_url,
+            "--tags", "scratch,imported", "--description", "batch clone",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "entries": [
+            {
+                "filename": "a.ipynb", "new_filename": "a-copy.ipynb",
+                "overwrite": False, "tags": ["scratch", "imported"],
+                "description": "batch clone",
+            },
+            {
+                "filename": "b.ipynb", "new_filename": "b-copy.ipynb",
+                "overwrite": False, "tags": ["scratch", "imported"],
+                "description": "batch clone",
+            },
+        ]
+    }
+
+
 def test_copy_many_command_dry_run_sends_dry_run_field(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

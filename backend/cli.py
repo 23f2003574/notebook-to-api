@@ -3821,6 +3821,15 @@ def _dispatch_core_command(args):
             {**entry, "overwrite": args.overwrite} for entry in args.entry
         ]
 
+        if args.tags:
+            tags = _parse_comma_separated_names(args.tags)
+            for entry in entries:
+                entry["tags"] = tags
+
+        if args.description is not None:
+            for entry in entries:
+                entry["description"] = args.description
+
         body = {"entries": entries}
         if args.dry_run:
             body["dry_run"] = True
@@ -10354,6 +10363,38 @@ def main():
             "already exists, mirroring POST /api/notebooks/copy-batch's "
             "own per-entry \"overwrite\": true -- applies uniformly to "
             "every entry given here."
+        )
+    )
+    copy_many_parser.add_argument(
+        "--tags",
+        help=(
+            "Comma-separated tags applied uniformly to every new copy in "
+            "this batch, via POST /api/notebooks/copy-batch's own "
+            "per-entry \"tags\" field -- overrides each entry's own "
+            "inheriting its own source notebook's own tags, which is "
+            "what happens when this is omitted. The endpoint itself "
+            "supports a different \"tags\"/\"description\" per entry "
+            "(each entry names its own independent source and "
+            "destination, so its own tags/description is its own "
+            "entry's own business) -- this applies one uniform value to "
+            "every entry given here instead, the same uniform-value "
+            "convention `copy-batch`'s own --tags already applies across "
+            "its own several destinations of one fixed source. Tag each "
+            "entry differently by running `copy` once per notebook "
+            "instead."
+        )
+    )
+    copy_many_parser.add_argument(
+        "--description",
+        default=None,
+        help=(
+            "Description applied uniformly to every new copy in this "
+            "batch, via POST /api/notebooks/copy-batch's own per-entry "
+            "\"description\" field -- overrides each entry's own "
+            "inheriting its own source notebook's own description, "
+            "which is what happens when this is omitted. See --tags "
+            "above for why this is one uniform value rather than a "
+            "per-entry one."
         )
     )
     copy_many_parser.add_argument(
