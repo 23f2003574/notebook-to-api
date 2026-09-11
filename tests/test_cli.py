@@ -20561,6 +20561,35 @@ def test_clear_deploy_history_command_sends_older_than_days_query_param(
     assert handler.requests == ["/api/deploy/history?older_than_days=30"]
 
 
+def test_clear_deploy_history_command_sends_deployed_after_and_before_query_params(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "dry_run": False, "deleted_count": 1})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "clear-deploy-history",
+            "--deployed-after", "2024-01-02T00:00:00+00:00",
+            "--deployed-before", "2024-01-03T00:00:00+00:00",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/deploy/history?deployed_after=2024-01-02T00%3A00%3A00%2B00%3A00"
+        "&deployed_before=2024-01-03T00%3A00%3A00%2B00%3A00"
+    ]
+
+
 def test_clear_deploy_history_command_dry_run_skips_confirmation_and_sends_dry_run_field(
     tmp_path, fake_dashboard
 ):
@@ -21035,6 +21064,35 @@ def test_clear_compile_history_command_sends_older_than_days_query_param(
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert handler.requests == ["/api/compile/history?older_than_days=30"]
+
+
+def test_clear_compile_history_command_sends_compiled_after_and_before_query_params(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "dry_run": False, "deleted_count": 1})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "clear-compile-history",
+            "--compiled-after", "2024-01-02T00:00:00+00:00",
+            "--compiled-before", "2024-01-03T00:00:00+00:00",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/compile/history?compiled_after=2024-01-02T00%3A00%3A00%2B00%3A00"
+        "&compiled_before=2024-01-03T00%3A00%3A00%2B00%3A00"
+    ]
 
 
 def test_clear_compile_history_command_dry_run_skips_confirmation_and_sends_dry_run_field(

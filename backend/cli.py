@@ -7073,6 +7073,10 @@ def _dispatch_core_command(args):
             params["source_notebook_sha256"] = args.source_notebook_sha256
         if args.older_than_days is not None:
             params["older_than_days"] = args.older_than_days
+        if args.deployed_after:
+            params["deployed_after"] = args.deployed_after
+        if args.deployed_before:
+            params["deployed_before"] = args.deployed_before
         if args.dry_run:
             params["dry_run"] = True
 
@@ -7210,6 +7214,10 @@ def _dispatch_core_command(args):
             params["source_notebook_sha256"] = args.source_notebook_sha256
         if args.older_than_days is not None:
             params["older_than_days"] = args.older_than_days
+        if args.compiled_after:
+            params["compiled_after"] = args.compiled_after
+        if args.compiled_before:
+            params["compiled_before"] = args.compiled_before
         if args.dry_run:
             params["dry_run"] = True
 
@@ -13429,6 +13437,35 @@ def main():
         )
     )
     clear_deploy_history_parser.add_argument(
+        "--deployed-after",
+        default=None,
+        dest="deployed_after",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only discard deploy history entries on or after this ISO "
+            "8601 datetime, via DELETE /api/deploy/history's own "
+            "?deployed_after= -- the same absolute-date-range filter "
+            "`deploy-history`'s own --deployed-after already provides "
+            "for *listing* entries, applied here to purge a specific "
+            "bounded window (e.g. a bad rollout) instead of only ever "
+            "the relative, open-ended --older-than-days. A value with no "
+            "UTC offset is assumed to already be UTC. Composes with "
+            "--deployed-before to bound a window, and with "
+            "--source-notebook/--sha256/--older-than-days as an AND."
+        )
+    )
+    clear_deploy_history_parser.add_argument(
+        "--deployed-before",
+        default=None,
+        dest="deployed_before",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only discard deploy history entries on or before this ISO "
+            "8601 datetime, via DELETE /api/deploy/history's own "
+            "?deployed_before=."
+        )
+    )
+    clear_deploy_history_parser.add_argument(
         "--dry-run",
         action="store_true",
         dest="dry_run",
@@ -13617,6 +13654,35 @@ def main():
             "--notebook/--sha256: given more than one, only entries "
             "matching all of them are discarded. Without this, age plays "
             "no part in what's discarded."
+        )
+    )
+    clear_compile_history_parser.add_argument(
+        "--compiled-after",
+        default=None,
+        dest="compiled_after",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only discard compile history entries on or after this ISO "
+            "8601 datetime, via DELETE /api/compile/history's own "
+            "?compiled_after= -- the same absolute-date-range filter "
+            "`compile-history`'s own --compiled-after already provides "
+            "for *listing* entries, applied here to purge a specific "
+            "bounded window instead of only ever the relative, "
+            "open-ended --older-than-days. A value with no UTC offset is "
+            "assumed to already be UTC. Composes with --compiled-before "
+            "to bound a window, and with --notebook/--sha256/"
+            "--older-than-days as an AND."
+        )
+    )
+    clear_compile_history_parser.add_argument(
+        "--compiled-before",
+        default=None,
+        dest="compiled_before",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only discard compile history entries on or before this ISO "
+            "8601 datetime, via DELETE /api/compile/history's own "
+            "?compiled_before=."
         )
     )
     clear_compile_history_parser.add_argument(

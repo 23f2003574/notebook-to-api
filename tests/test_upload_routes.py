@@ -23293,6 +23293,47 @@ def test_clear_deploy_history_rejects_a_non_positive_older_than_days(tmp_path, m
     assert resp.status_code == 400
 
 
+def test_clear_deploy_history_filters_by_deployed_after_and_before(tmp_path, monkeypatch):
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    clear_resp = client.delete(
+        "/api/deploy/history",
+        params={
+            "deployed_after": "2024-01-02T00:00:00+00:00",
+            "deployed_before": "2024-01-02T00:00:00+00:00",
+        },
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 1}
+
+    remaining = client.get("/api/deploy/history").json()
+    assert sorted(e["tag"] for e in remaining["entries"]) == ["filter:a", "filter:c"]
+
+
+def test_clear_deploy_history_rejects_deployed_after_later_than_deployed_before(
+    tmp_path, monkeypatch
+):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_deploy_history_bad_range_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    resp = client.delete(
+        "/api/deploy/history",
+        params={
+            "deployed_after": "2026-06-01T00:00:00+00:00",
+            "deployed_before": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "deployed_after" in resp.json()["detail"]
+
+
 def test_clear_compile_history_older_than_days_keeps_recent_entries(tmp_path, monkeypatch):
 
     from backend.routes import upload as upload_module
@@ -23377,6 +23418,47 @@ def test_clear_compile_history_rejects_a_non_positive_older_than_days(tmp_path, 
     resp = client.delete("/api/compile/history", params={"older_than_days": -1})
 
     assert resp.status_code == 400
+
+
+def test_clear_compile_history_filters_by_compiled_after_and_before(tmp_path, monkeypatch):
+
+    _seed_compile_history_for_filtering(tmp_path, monkeypatch)
+
+    clear_resp = client.delete(
+        "/api/compile/history",
+        params={
+            "compiled_after": "2024-01-02T00:00:00+00:00",
+            "compiled_before": "2024-01-02T00:00:00+00:00",
+        },
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 1}
+
+    remaining = client.get("/api/compile/history").json()
+    assert sorted(e["source_notebook_sha256"] for e in remaining["entries"]) == ["aaa", "ccc"]
+
+
+def test_clear_compile_history_rejects_compiled_after_later_than_compiled_before(
+    tmp_path, monkeypatch
+):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_compile_history_bad_range_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    resp = client.delete(
+        "/api/compile/history",
+        params={
+            "compiled_after": "2026-06-01T00:00:00+00:00",
+            "compiled_before": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "compiled_after" in resp.json()["detail"]
 
 
 def test_compile_history_is_empty_before_any_compile(monkeypatch, tmp_path):

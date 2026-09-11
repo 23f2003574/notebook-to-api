@@ -13908,11 +13908,47 @@ def _deploy_history_entry_is_older_than(entry, cutoff):
         return False
 
 
+def _deploy_history_entry_is_within_date_range(entry, after_dt, before_dt):
+    """Whether `entry`'s own "deployed_at" falls on or after `after_dt`
+    and on or before `before_dt` (either bound optional) -- the DELETE
+    /api/deploy/history-side counterpart of the identical inline
+    "deployed_after"/"deployed_before" comparison GET /api/deploy/history
+    already applies to each entry it returns, needed here as its own
+    function since clear_deploy_history filters via a single
+    _should_discard predicate per entry rather than a sequence of
+    list-rebuilding passes.
+
+    An entry with a missing or unparseable "deployed_at" is treated as
+    not matching -- the same "when in doubt, don't discard" bias
+    _deploy_history_entry_is_older_than above already applies for its own
+    age-based filter.
+    """
+    deployed_at = entry.get("deployed_at")
+
+    if not deployed_at:
+        return False
+
+    try:
+        entry_deployed_at = datetime.fromisoformat(deployed_at)
+    except ValueError:
+        return False
+
+    if after_dt is not None and entry_deployed_at < after_dt:
+        return False
+
+    if before_dt is not None and entry_deployed_at > before_dt:
+        return False
+
+    return True
+
+
 @router.delete("/deploy/history")
 def clear_deploy_history(
     source_notebook_filename: str = None,
     source_notebook_sha256: str = None,
     older_than_days: int = None,
+    deployed_after: str = None,
+    deployed_before: str = None,
     dry_run: bool = False,
 ):
     """Permanently discard this dashboard's deploy history log.
@@ -13978,6 +14014,27 @@ def clear_deploy_history(
     applies. Must be a positive integer; omitted, age plays no part in
     what's discarded, exactly as before this parameter existed.
 
+    "deployed_after"/"deployed_before" (each an optional ISO 8601
+    datetime, see _parse_iso_datetime_query_param) discard only entries
+    whose own "deployed_at" falls on or after/on or before that instant,
+    inclusive on both ends -- the identical absolute-date-range filter
+    GET /api/deploy/history's own "deployed_after"/"deployed_before"
+    already provide for *listing* entries, just applied here to which
+    ones get *discarded* instead. "older_than_days" alone can only ever
+    express a relative, open-ended cutoff ("everything before N days
+    ago") -- an operator wanting to purge a specific bounded window (e.g.
+    "everything from Tuesday's two-hour bad rollout, and nothing before
+    or after it") had no way to express that end bound at all: they'd
+    either overshoot with --older-than-days (discarding good history
+    along with the bad) or have no way to stop the purge at the window's
+    own end. Composes with "source_notebook_filename"/
+    "source_notebook_sha256"/"older_than_days" as an AND, the same
+    narrowing every other multi-filter endpoint here already applies. A
+    naive value (no UTC offset) is assumed to already be UTC, matching
+    how "deployed_at" itself is always rendered. "deployed_after" later
+    than "deployed_before" is rejected with 400, the same way it already
+    is for GET /api/deploy/history's own identical pair.
+
     "dry_run" (optional, default false) reports the exact same
     "deleted_count" a real clear would, without discarding a single
     entry -- the identical preview DELETE /api/notebooks/versions' own
@@ -13997,12 +14054,26 @@ def clear_deploy_history(
         if older_than_days is not None else None
     )
 
+    deployed_after_dt = _parse_iso_datetime_query_param(deployed_after, "deployed_after")
+    deployed_before_dt = _parse_iso_datetime_query_param(deployed_before, "deployed_before")
+
+    if (
+        deployed_after_dt is not None and deployed_before_dt is not None
+        and deployed_after_dt > deployed_before_dt
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="deployed_after must not be later than deployed_before"
+        )
+
     entries = _read_deploy_history()
 
     if (
         source_notebook_filename is not None
         or source_notebook_sha256 is not None
         or cutoff is not None
+        or deployed_after_dt is not None
+        or deployed_before_dt is not None
     ):
 
         def _should_discard(entry):
@@ -14020,6 +14091,14 @@ def clear_deploy_history(
                 return False
 
             if cutoff is not None and not _deploy_history_entry_is_older_than(entry, cutoff):
+                return False
+
+            if (
+                (deployed_after_dt is not None or deployed_before_dt is not None)
+                and not _deploy_history_entry_is_within_date_range(
+                    entry, deployed_after_dt, deployed_before_dt
+                )
+            ):
                 return False
 
             return True
@@ -14292,11 +14371,39 @@ def _compile_history_entry_is_older_than(entry, cutoff):
         return False
 
 
+def _compile_history_entry_is_within_date_range(entry, after_dt, before_dt):
+    """Whether `entry`'s own "compiled_at" falls on or after `after_dt`
+    and on or before `before_dt` (either bound optional) -- the exact
+    counterpart _deploy_history_entry_is_within_date_range already
+    provides for a deploy history entry's own "deployed_at", just applied
+    to a compile history entry's own recorded timestamp instead.
+    """
+    compiled_at = entry.get("compiled_at")
+
+    if not compiled_at:
+        return False
+
+    try:
+        entry_compiled_at = datetime.fromisoformat(compiled_at)
+    except ValueError:
+        return False
+
+    if after_dt is not None and entry_compiled_at < after_dt:
+        return False
+
+    if before_dt is not None and entry_compiled_at > before_dt:
+        return False
+
+    return True
+
+
 @router.delete("/compile/history")
 def clear_compile_history(
     notebook_filename: str = None,
     source_notebook_sha256: str = None,
     older_than_days: int = None,
+    compiled_after: str = None,
+    compiled_before: str = None,
     dry_run: bool = False,
 ):
     """Permanently discard this dashboard's compile history log, the exact
@@ -14353,6 +14460,17 @@ def clear_compile_history(
     while keeping recent entries meant wiping the entire log, the
     identical gap that endpoint docstring already describes for deploy
     history.
+
+    "compiled_after"/"compiled_before" mirror the identical pair DELETE
+    /api/deploy/history's own "deployed_after"/"deployed_before" just
+    gained -- discarding only entries whose own "compiled_at" falls on or
+    after/on or before that instant (inclusive, composing with every
+    other filter above as an AND), the same bounded-window purge that
+    endpoint's own docstring already motivates ("everything from a
+    specific bad window, and nothing before or after it"), just applied
+    to this dashboard's compile history instead. A naive value is assumed
+    UTC; "compiled_after" later than "compiled_before" is rejected with
+    400, identically.
     """
 
     if older_than_days is not None and older_than_days <= 0:
@@ -14367,12 +14485,26 @@ def clear_compile_history(
         if older_than_days is not None else None
     )
 
+    compiled_after_dt = _parse_iso_datetime_query_param(compiled_after, "compiled_after")
+    compiled_before_dt = _parse_iso_datetime_query_param(compiled_before, "compiled_before")
+
+    if (
+        compiled_after_dt is not None and compiled_before_dt is not None
+        and compiled_after_dt > compiled_before_dt
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="compiled_after must not be later than compiled_before"
+        )
+
     entries = _read_compile_history()
 
     if (
         notebook_filename is not None
         or source_notebook_sha256 is not None
         or cutoff is not None
+        or compiled_after_dt is not None
+        or compiled_before_dt is not None
     ):
 
         def _should_discard(entry):
@@ -14390,6 +14522,14 @@ def clear_compile_history(
                 return False
 
             if cutoff is not None and not _compile_history_entry_is_older_than(entry, cutoff):
+                return False
+
+            if (
+                (compiled_after_dt is not None or compiled_before_dt is not None)
+                and not _compile_history_entry_is_within_date_range(
+                    entry, compiled_after_dt, compiled_before_dt
+                )
+            ):
                 return False
 
             return True
