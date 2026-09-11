@@ -4197,7 +4197,8 @@ def _compile_search_regex(pattern_text, field_name="search"):
 
 @router.get("/functions")
 def search_functions(
-    search: str = None, tag: str = None, sha256: str = None, regex: bool = False,
+    search: str = None, tag: str = None, sha256: str = None,
+    modified_after: str = None, modified_before: str = None, regex: bool = False,
     limit: int = None, offset: int = 0, format: str = "json",
 ):
     """Find which uploaded notebooks define a function whose name
@@ -4257,6 +4258,26 @@ def search_functions(
     commonly carry different tags (or none at all). Composes with "tag"
     as an AND, the same composition GET /api/notebooks already gives the
     same two filters together.
+
+    "modified_after"/"modified_before" (each an optional ISO 8601
+    datetime, see _parse_iso_datetime_query_param) scope the scan to only
+    notebooks whose own file mtime falls on or after/on or before that
+    instant, inclusive on both ends -- the identical absolute-date-range
+    filter GET /api/notebooks' own "modified_after"/"modified_before"
+    already provide for the notebook catalog, just applied here to which
+    notebooks get *scanned* for a matching function instead of which get
+    *listed*. Before this, answering "which notebook touched in a
+    specific incident window already defines a function called
+    `train_model`" (or excluding notebooks a caller knows predate a
+    naming convention) meant scanning the entire catalog and filtering
+    the response down client-side by "modified_at" (present on every GET
+    /api/notebooks entry, absent from this endpoint's own "matches").
+    Composes with "tag"/"sha256" as an AND, the same narrowing every
+    other filter here already applies. A naive value (no UTC offset) is
+    assumed to already be UTC, matching how GET /api/notebooks' own
+    "modified_at" is always rendered. "modified_after" later than
+    "modified_before" is rejected with 400, the same way it already is
+    there.
 
     "limit"/"offset" page the returned "matches" (one entry per matching
     notebook, each with every one of its own matching functions) the
@@ -4332,6 +4353,18 @@ def search_functions(
             detail="limit must be a positive integer"
         )
 
+    modified_after_dt = _parse_iso_datetime_query_param(modified_after, "modified_after")
+    modified_before_dt = _parse_iso_datetime_query_param(modified_before, "modified_before")
+
+    if (
+        modified_after_dt is not None and modified_before_dt is not None
+        and modified_after_dt > modified_before_dt
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="modified_after must not be later than modified_before"
+        )
+
     if regex:
 
         pattern = _compile_search_regex(search)
@@ -4355,6 +4388,18 @@ def search_functions(
 
         if sha256 and hash_notebook_file(entry) != sha256:
             continue
+
+        if modified_after_dt is not None or modified_before_dt is not None:
+
+            entry_modified_at = datetime.fromtimestamp(
+                entry.stat().st_mtime, tz=timezone.utc
+            )
+
+            if modified_after_dt is not None and entry_modified_at < modified_after_dt:
+                continue
+
+            if modified_before_dt is not None and entry_modified_at > modified_before_dt:
+                continue
 
         try:
 
@@ -5594,7 +5639,8 @@ def resolve_duplicate_notebooks(data: dict = None):
 
 @router.get("/notebooks/search-content")
 def search_notebook_content(
-    search: str = None, tag: str = None, sha256: str = None, regex: bool = False,
+    search: str = None, tag: str = None, sha256: str = None,
+    modified_after: str = None, modified_before: str = None, regex: bool = False,
     limit: int = None, offset: int = 0, format: str = "json",
 ):
     """Find every uploaded notebook with a code cell whose raw source
@@ -5642,6 +5688,16 @@ def search_notebook_content(
     copies for a code substring (e.g. a deprecated call site) before this,
     since "tag" alone can't scope to "this exact content" the way
     filename-based tooling never could either.
+
+    "modified_after"/"modified_before" (each an optional ISO 8601
+    datetime, see _parse_iso_datetime_query_param) scope the scan the
+    identical way GET /api/functions' own "modified_after"/
+    "modified_before" just gained -- to only notebooks whose own file
+    mtime falls on or after/on or before that instant, inclusive on both
+    ends, composing with "tag"/"sha256" as an AND. A naive value (no UTC
+    offset) is assumed to already be UTC; "modified_after" later than
+    "modified_before" is rejected with 400, the same way it already is
+    for GET /api/notebooks' own identical pair.
 
     "limit"/"offset" page the returned "matches" (one entry per matching
     notebook, each with every one of its own matching cells) the
@@ -5717,6 +5773,18 @@ def search_notebook_content(
             detail="limit must be a positive integer"
         )
 
+    modified_after_dt = _parse_iso_datetime_query_param(modified_after, "modified_after")
+    modified_before_dt = _parse_iso_datetime_query_param(modified_before, "modified_before")
+
+    if (
+        modified_after_dt is not None and modified_before_dt is not None
+        and modified_after_dt > modified_before_dt
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="modified_after must not be later than modified_before"
+        )
+
     if regex:
 
         pattern = _compile_search_regex(search)
@@ -5740,6 +5808,18 @@ def search_notebook_content(
 
         if sha256 and hash_notebook_file(entry) != sha256:
             continue
+
+        if modified_after_dt is not None or modified_before_dt is not None:
+
+            entry_modified_at = datetime.fromtimestamp(
+                entry.stat().st_mtime, tz=timezone.utc
+            )
+
+            if modified_after_dt is not None and entry_modified_at < modified_after_dt:
+                continue
+
+            if modified_before_dt is not None and entry_modified_at > modified_before_dt:
+                continue
 
         try:
 

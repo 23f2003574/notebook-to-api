@@ -2757,6 +2757,10 @@ def _dispatch_core_command(args):
             params["tag"] = args.tag
         if args.sha256:
             params["sha256"] = args.sha256
+        if args.modified_after:
+            params["modified_after"] = args.modified_after
+        if args.modified_before:
+            params["modified_before"] = args.modified_before
         if args.regex:
             params["regex"] = True
         if args.limit is not None:
@@ -2818,6 +2822,10 @@ def _dispatch_core_command(args):
             params["tag"] = args.tag
         if args.sha256:
             params["sha256"] = args.sha256
+        if args.modified_after:
+            params["modified_after"] = args.modified_after
+        if args.modified_before:
+            params["modified_before"] = args.modified_before
         if args.regex:
             params["regex"] = True
         if args.limit is not None:
@@ -9299,6 +9307,34 @@ def main():
         )
     )
     search_functions_parser.add_argument(
+        "--modified-after",
+        default=None,
+        dest="modified_after",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only scan notebooks modified on or after this ISO 8601 "
+            "datetime, mirroring GET /api/functions' own "
+            "?modified_after= -- the same absolute-date-range filter "
+            "`list`'s own --modified-after already provides for the "
+            "notebook catalog, applied here to which notebooks get "
+            "scanned for a matching function. A value with no UTC offset "
+            "is assumed to already be UTC. Composes with "
+            "--modified-before to bound a window, and with --tag/--sha256 "
+            "as an AND; rejected if later than --modified-before."
+        )
+    )
+    search_functions_parser.add_argument(
+        "--modified-before",
+        default=None,
+        dest="modified_before",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only scan notebooks modified on or before this ISO 8601 "
+            "datetime, mirroring GET /api/functions' own "
+            "?modified_before=."
+        )
+    )
+    search_functions_parser.add_argument(
         "--regex",
         action="store_true",
         help=(
@@ -9333,9 +9369,10 @@ def main():
             "own CSV response straight to stdout (redirect it to a file, "
             "e.g. `> functions.csv`) -- one row per matching function, "
             "flattened out of the \"json\" response's own per-notebook "
-            "\"matches\". Every --tag/--regex/--limit/--offset above "
-            "still applies; --json is ignored under --format csv, since "
-            "the response isn't JSON at all."
+            "\"matches\". Every --tag/--sha256/--modified-after/"
+            "--modified-before/--regex/--limit/--offset above still "
+            "applies; --json is ignored under --format csv, since the "
+            "response isn't JSON at all."
         )
     )
     _add_dashboard_url_and_timeout_arguments(search_functions_parser)
@@ -9385,6 +9422,34 @@ def main():
         )
     )
     search_content_parser.add_argument(
+        "--modified-after",
+        default=None,
+        dest="modified_after",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only scan notebooks modified on or after this ISO 8601 "
+            "datetime, mirroring GET /api/notebooks/search-content's own "
+            "?modified_after= -- the same absolute-date-range filter "
+            "`search-functions --modified-after` just gained, applied "
+            "here to which notebooks get scanned for a matching code "
+            "cell. A value with no UTC offset is assumed to already be "
+            "UTC. Composes with --modified-before to bound a window, and "
+            "with --tag/--sha256 as an AND; rejected if later than "
+            "--modified-before."
+        )
+    )
+    search_content_parser.add_argument(
+        "--modified-before",
+        default=None,
+        dest="modified_before",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only scan notebooks modified on or before this ISO 8601 "
+            "datetime, mirroring GET /api/notebooks/search-content's own "
+            "?modified_before=."
+        )
+    )
+    search_content_parser.add_argument(
         "--regex",
         action="store_true",
         help=(
@@ -9426,9 +9491,9 @@ def main():
             "it to a file, e.g. `> search_content.csv`) -- one row per "
             "matching code cell, flattened out of the \"json\" "
             "response's own per-notebook \"matches\". Every --tag/"
-            "--regex/--limit/--offset above still applies; --json is "
-            "ignored under --format csv, since the response isn't JSON "
-            "at all."
+            "--sha256/--modified-after/--modified-before/--regex/"
+            "--limit/--offset above still applies; --json is ignored "
+            "under --format csv, since the response isn't JSON at all."
         )
     )
     _add_dashboard_url_and_timeout_arguments(search_content_parser)

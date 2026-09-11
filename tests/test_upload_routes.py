@@ -5879,6 +5879,71 @@ def test_search_notebook_content_filters_by_sha256():
     assert body["matches"][0]["filename"] == "search_content_sha_a.ipynb"
 
 
+def test_search_notebook_content_filters_by_modified_after_and_before():
+
+    content = _notebook_bytes(
+        "def load_modtime_marker() -> str:\n    return pd.read_csv('x.csv')\n"
+    )
+
+    for filename in (
+        "search_content_mod_older.ipynb", "search_content_mod_newer.ipynb",
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    older_path = Path(UPLOAD_DIR) / "search_content_mod_older.ipynb"
+    older_stat = older_path.stat()
+    os.utime(older_path, (older_stat.st_atime, older_stat.st_mtime - 7200))
+
+    older_modified_at = client.get(
+        "/api/notebooks/search_content_mod_older.ipynb/info"
+    ).json()["modified_at"]
+    newer_modified_at = client.get(
+        "/api/notebooks/search_content_mod_newer.ipynb/info"
+    ).json()["modified_at"]
+
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={
+            "search": "load_modtime_marker",
+            "modified_after": newer_modified_at,
+        },
+    )
+    assert resp.status_code == 200
+    assert [m["filename"] for m in resp.json()["matches"]] == [
+        "search_content_mod_newer.ipynb"
+    ]
+
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={
+            "search": "load_modtime_marker",
+            "modified_before": older_modified_at,
+        },
+    )
+    assert resp.status_code == 200
+    assert [m["filename"] for m in resp.json()["matches"]] == [
+        "search_content_mod_older.ipynb"
+    ]
+
+
+def test_search_notebook_content_rejects_modified_after_later_than_modified_before():
+
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={
+            "search": "anything",
+            "modified_after": "2026-06-01T00:00:00+00:00",
+            "modified_before": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "modified_after" in resp.json()["detail"]
+
+
 def test_search_notebook_content_sha256_composes_with_tag():
 
     client.delete("/api/notebooks?confirm=true")
@@ -11285,6 +11350,71 @@ def test_search_functions_filters_by_sha256():
     body = resp.json()
     assert body["notebook_count"] == 1
     assert body["matches"][0]["filename"] == "search_functions_sha_a.ipynb"
+
+
+def test_search_functions_filters_by_modified_after_and_before():
+
+    content = _notebook_bytes(
+        "def train_model_modtime() -> str:\n    return 'x'\n"
+    )
+
+    for filename in (
+        "search_functions_mod_older.ipynb", "search_functions_mod_newer.ipynb",
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    older_path = Path(UPLOAD_DIR) / "search_functions_mod_older.ipynb"
+    older_stat = older_path.stat()
+    os.utime(older_path, (older_stat.st_atime, older_stat.st_mtime - 7200))
+
+    older_modified_at = client.get(
+        "/api/notebooks/search_functions_mod_older.ipynb/info"
+    ).json()["modified_at"]
+    newer_modified_at = client.get(
+        "/api/notebooks/search_functions_mod_newer.ipynb/info"
+    ).json()["modified_at"]
+
+    resp = client.get(
+        "/api/functions",
+        params={
+            "search": "train_model_modtime",
+            "modified_after": newer_modified_at,
+        },
+    )
+    assert resp.status_code == 200
+    assert [m["filename"] for m in resp.json()["matches"]] == [
+        "search_functions_mod_newer.ipynb"
+    ]
+
+    resp = client.get(
+        "/api/functions",
+        params={
+            "search": "train_model_modtime",
+            "modified_before": older_modified_at,
+        },
+    )
+    assert resp.status_code == 200
+    assert [m["filename"] for m in resp.json()["matches"]] == [
+        "search_functions_mod_older.ipynb"
+    ]
+
+
+def test_search_functions_rejects_modified_after_later_than_modified_before():
+
+    resp = client.get(
+        "/api/functions",
+        params={
+            "search": "anything",
+            "modified_after": "2026-06-01T00:00:00+00:00",
+            "modified_before": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "modified_after" in resp.json()["detail"]
 
 
 def test_search_functions_sha256_matches_every_notebook_with_that_content():
