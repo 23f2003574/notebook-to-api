@@ -6056,6 +6056,34 @@ def test_find_duplicates_command_sends_sha256_query_param(fake_dashboard):
     assert query["sha256"] == ["abc123"]
 
 
+def test_find_duplicates_command_sends_modified_after_and_before_query_params(
+    fake_dashboard,
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "duplicate_groups": [],
+            "group_count": 0, "duplicate_notebook_count": 0,
+        })
+    ]
+
+    proc = _run_cli(
+        [
+            "find-duplicates",
+            "--modified-after", "2024-01-02T00:00:00+00:00",
+            "--modified-before", "2024-01-03T00:00:00+00:00",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query["modified_after"] == ["2024-01-02T00:00:00+00:00"]
+    assert query["modified_before"] == ["2024-01-03T00:00:00+00:00"]
+
+
 def test_find_duplicates_command_sends_limit_and_offset_query_params(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

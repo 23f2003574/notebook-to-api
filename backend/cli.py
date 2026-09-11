@@ -2887,6 +2887,10 @@ def _dispatch_core_command(args):
             params["tag"] = args.tag
         if args.sha256:
             params["sha256"] = args.sha256
+        if args.modified_after:
+            params["modified_after"] = args.modified_after
+        if args.modified_before:
+            params["modified_before"] = args.modified_before
         if args.limit is not None:
             params["limit"] = args.limit
         if args.offset:
@@ -9541,6 +9545,34 @@ def main():
         )
     )
     find_duplicates_parser.add_argument(
+        "--modified-after",
+        default=None,
+        dest="modified_after",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only scan notebooks modified on or after this ISO 8601 "
+            "datetime, mirroring GET /api/notebooks/duplicates' own "
+            "?modified_after= -- the same absolute-date-range filter "
+            "`search-functions`/`search-content` already have, applied "
+            "here to which notebooks get scanned for duplicates. A value "
+            "with no UTC offset is assumed to already be UTC. Composes "
+            "with --modified-before to bound a window, and with "
+            "--tag/--sha256 as an AND; rejected if later than "
+            "--modified-before."
+        )
+    )
+    find_duplicates_parser.add_argument(
+        "--modified-before",
+        default=None,
+        dest="modified_before",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only scan notebooks modified on or before this ISO 8601 "
+            "datetime, mirroring GET /api/notebooks/duplicates' own "
+            "?modified_before=."
+        )
+    )
+    find_duplicates_parser.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -9566,9 +9598,10 @@ def main():
             "filename within a group) straight to stdout (redirect it to a "
             "file, e.g. `> duplicates.csv`) -- the same already-filtered/"
             "paginated duplicate groups the \"json\" response's own "
-            "\"duplicate_groups\" would list. Every --tag/--sha256/--limit/"
-            "--offset above still applies; --json is ignored under "
-            "--format csv, since the response isn't JSON at all."
+            "\"duplicate_groups\" would list. Every --tag/--sha256/"
+            "--modified-after/--modified-before/--limit/--offset above "
+            "still applies; --json is ignored under --format csv, since "
+            "the response isn't JSON at all."
         )
     )
     find_duplicates_parser.add_argument(

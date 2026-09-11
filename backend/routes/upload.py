@@ -5232,7 +5232,9 @@ def export_notebooks(
 
 @router.get("/notebooks/duplicates")
 def find_duplicate_notebooks(
-    tag: str = None, sha256: str = None, limit: int = None, offset: int = 0,
+    tag: str = None, sha256: str = None,
+    modified_after: str = None, modified_before: str = None,
+    limit: int = None, offset: int = 0,
     format: str = "json",
 ):
     """Group every uploaded notebook by its raw content, reporting only
@@ -5297,6 +5299,25 @@ def find_duplicate_notebooks(
     error, the same "no match is a valid, unexceptional outcome" rule
     every other filter in this file already follows.
 
+    "modified_after"/"modified_before" (each an optional ISO 8601
+    datetime, see _parse_iso_datetime_query_param) scope the scan the
+    identical way GET /api/functions' and GET
+    /api/notebooks/search-content's own "modified_after"/
+    "modified_before" already do -- to only notebooks whose own file
+    mtime falls on or after/on or before that instant, inclusive on both
+    ends, applied before a notebook is even hashed so an out-of-window
+    notebook never contributes to a group (or gets hashed at all), the
+    same "excluded before hashing" treatment "tag" above already gets and
+    for the identical reason: a group with one in-window and one
+    out-of-window member needs to be reported as if the out-of-window one
+    were never there, not just hidden or kept whole -- filtering
+    "duplicate_groups" back down client-side after the fact can't do
+    that correctly. Composes with "tag"/"sha256" as an AND, the same
+    narrowing every other filter here already applies. A naive value (no
+    UTC offset) is assumed to already be UTC; "modified_after" later than
+    "modified_before" is rejected with 400, the same way it already is
+    for GET /api/notebooks' own identical pair.
+
     "limit" and "offset" close the same gap they already close for GET
     /api/notebooks, GET /api/functions, and GET
     /api/notebooks/search-content: without them, this endpoint always
@@ -5337,6 +5358,18 @@ def find_duplicate_notebooks(
             detail="format must be 'json' or 'csv'"
         )
 
+    modified_after_dt = _parse_iso_datetime_query_param(modified_after, "modified_after")
+    modified_before_dt = _parse_iso_datetime_query_param(modified_before, "modified_before")
+
+    if (
+        modified_after_dt is not None and modified_before_dt is not None
+        and modified_after_dt > modified_before_dt
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="modified_after must not be later than modified_before"
+        )
+
     upload_root = Path(UPLOAD_DIR)
 
     entries_by_hash = {}
@@ -5348,6 +5381,18 @@ def find_duplicate_notebooks(
 
         if tag and tag not in _read_notebook_tags(entry.name):
             continue
+
+        if modified_after_dt is not None or modified_before_dt is not None:
+
+            entry_modified_at = datetime.fromtimestamp(
+                entry.stat().st_mtime, tz=timezone.utc
+            )
+
+            if modified_after_dt is not None and entry_modified_at < modified_after_dt:
+                continue
+
+            if modified_before_dt is not None and entry_modified_at > modified_before_dt:
+                continue
 
         digest = hash_notebook_file(entry)
 

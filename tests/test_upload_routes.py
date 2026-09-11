@@ -5372,6 +5372,65 @@ def test_find_duplicate_notebooks_tag_with_only_one_matching_member_yields_no_gr
     assert body["duplicate_groups"] == []
 
 
+def test_find_duplicate_notebooks_filters_by_modified_after_and_before():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in (
+        "dup_mod_old.ipynb", "dup_mod_new_a.ipynb", "dup_mod_new_b.ipynb",
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    old_path = Path(UPLOAD_DIR) / "dup_mod_old.ipynb"
+    old_stat = old_path.stat()
+    os.utime(old_path, (old_stat.st_atime, old_stat.st_mtime - 7200))
+
+    old_modified_at = client.get(
+        "/api/notebooks/dup_mod_old.ipynb/info"
+    ).json()["modified_at"]
+    new_modified_at = client.get(
+        "/api/notebooks/dup_mod_new_a.ipynb/info"
+    ).json()["modified_at"]
+
+    after_body = client.get(
+        "/api/notebooks/duplicates", params={"modified_after": new_modified_at}
+    ).json()
+    assert after_body["group_count"] == 1
+    assert after_body["duplicate_groups"][0]["filenames"] == [
+        "dup_mod_new_a.ipynb", "dup_mod_new_b.ipynb",
+    ]
+
+    # The lone "old" notebook has no in-window duplicate left once the two
+    # "new" ones are excluded -- reported as no group at all, not a
+    # single-filename one.
+    before_body = client.get(
+        "/api/notebooks/duplicates", params={"modified_before": old_modified_at}
+    ).json()
+    assert before_body["group_count"] == 0
+    assert before_body["duplicate_groups"] == []
+
+
+def test_find_duplicate_notebooks_rejects_modified_after_later_than_modified_before():
+
+    resp = client.get(
+        "/api/notebooks/duplicates",
+        params={
+            "modified_after": "2026-06-01T00:00:00+00:00",
+            "modified_before": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "modified_after" in resp.json()["detail"]
+
+
 def test_find_duplicate_notebooks_sha256_narrows_to_the_matching_group():
 
     client.delete("/api/notebooks?confirm=true")
