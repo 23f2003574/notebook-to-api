@@ -755,6 +755,22 @@ def test_normalize_type_annotation_strips_annotated_keeping_the_first_type():
     assert normalize_type_annotation('Annotated[int, "meta"]') == "int"
 
 
+def test_normalize_type_annotation_optional_literal_with_an_unbalanced_bracket_in_a_string_value():
+    """Before this fix, _matching_bracket_content (which this strips
+    "Optional[" via) tracked "["/"]" depth with no awareness of quoted
+    strings -- a Literal string value containing its own *unbalanced*
+    bracket character (e.g. "a]b", missing a matching "[") made the
+    depth counter hit 0 mid-string, truncating the result before the
+    real closing "]": this returned "Literal['a]b', 'c'" (missing its
+    own closing "]") instead of the real "Literal['a]b', 'c']".
+    """
+
+    assert (
+        normalize_type_annotation("Optional[Literal['a]b', 'c']]")
+        == "Literal['a]b', 'c']"
+    )
+
+
 def test_normalize_type_annotation_passes_through_a_plain_type_unchanged():
 
     assert normalize_type_annotation("int") == "int"
@@ -891,6 +907,46 @@ def test_generate_example_payload_literal_value_containing_a_comma():
     )
 
     assert payload == {"level": "a,b"}
+
+
+def test_generate_example_payload_literal_value_containing_an_unbalanced_bracket():
+    """Interval-notation strings (e.g. "(0,1]"/"[0,1)"), a realistic
+    Literal value for a real-world stats/math API, contain an
+    *unbalanced* "["/"]" of their own -- confirmed exploitable before
+    this fix: _matching_bracket_content's own bracket-depth scan (not
+    quote-aware) hit depth 0 mid-string, truncating the Literal's own
+    content before its real closing "]" ever ran, and the corrupted
+    remainder then fed into the same blind comma-split commit #8 fixed
+    -- {"interval": "'(0"} instead of the real "(0,1]".
+    """
+
+    payload = generate_example_payload(
+        [{"name": "interval", "type": "Literal['(0,1]', '[0,1)']"}]
+    )
+
+    assert payload == {"interval": "(0,1]"}
+
+
+def test_generate_example_response_literal_value_containing_an_unbalanced_bracket():
+
+    assert generate_example_response("Literal['(0,1]', '[0,1)']") == {
+        "result": "(0,1]"
+    }
+
+
+def test_generate_example_payload_literal_value_with_a_backslash_escaped_quote():
+    """A value containing both quote characters (e.g. `it's a "test"`)
+    is the one realistic case ast.unparse itself emits a
+    backslash-escaped quote for (picking one outer quote character and
+    escaping the other) -- _string_literal_end must not treat that
+    escaped quote as ending the string early.
+    """
+
+    payload = generate_example_payload(
+        [{"name": "q", "type": r"""Literal['it\'s a "test"', 'other']"""}]
+    )
+
+    assert payload == {"q": 'it\'s a "test"'}
 
 
 def test_generate_example_payload_literal_value_containing_its_own_quote_character():

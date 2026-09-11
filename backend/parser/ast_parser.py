@@ -408,6 +408,41 @@ def extract_skipped_functions_from_code(code):
     return skipped
 
 
+def _string_literal_end(text, start):
+    """`text[start]` is a "'"/'"' that opens a quoted string -- returns
+    the index just past that string's own matching closing quote,
+    honoring a backslash-escaped quote character inside it (e.g. the
+    escaped "'" in "'it\\'s'" doesn't end the string early). Returns
+    `len(text)` for an unterminated string, rather than raising, the
+    same "shouldn't happen for a real ast.unparse'd annotation, fall
+    back gracefully" stance _matching_bracket_content already takes for
+    unbalanced brackets.
+
+    Shared by _matching_bracket_content/_first_top_level_segment below so
+    both skip straight over a quoted string's own content instead of
+    scanning "["/"]"/`separator` characters inside it -- a Literal string
+    value is free to contain any of those as perfectly ordinary text
+    (e.g. `Literal["(0,1]", "[0,1)"]", an interval-notation type real
+    stats/math APIs use, or `Literal["a,b"]`), and neither of them is
+    really there as bracket/separator syntax at all.
+    """
+    quote = text[start]
+    i = start + 1
+
+    while i < len(text):
+
+        if text[i] == "\\":
+            i += 2
+            continue
+
+        if text[i] == quote:
+            return i + 1
+
+        i += 1
+
+    return len(text)
+
+
 def _matching_bracket_content(text):
     """`text` is everything after a generic wrapper's opening "[" (e.g.
     the "List[int]]" left over from stripping "Optional[" off the front
@@ -424,10 +459,26 @@ def _matching_bracket_content(text):
     anything in the type_defaults maps in generate_example_payload/
     generate_example_response), silently producing a `None` example for
     a field that's actually a list.
+
+    Also skips over any quoted string's own content via
+    _string_literal_end -- confirmed exploitable before this: a Literal
+    string value containing an *unbalanced* "["/"]" of its own (e.g.
+    "(0,1]", a real interval-notation value) made the depth counter hit
+    0 mid-string, truncating the result before the real closing "]" --
+    `normalize_type_annotation("Optional[Literal['a]b', 'c']]")` returned
+    "Literal['a]b', 'c'" (missing its own closing "]") instead of the
+    real "Literal['a]b', 'c']".
     """
     depth = 1
+    i = 0
 
-    for i, ch in enumerate(text):
+    while i < len(text):
+
+        ch = text[i]
+
+        if ch in ("'", '"'):
+            i = _string_literal_end(text, i)
+            continue
 
         if ch == "[":
             depth += 1
@@ -437,6 +488,8 @@ def _matching_bracket_content(text):
             if depth == 0:
                 return text[:i]
 
+        i += 1
+
     # Unbalanced input shouldn't happen for a real ast.unparse'd
     # annotation -- fall back to the whole remainder rather than raising.
     return text
@@ -444,14 +497,26 @@ def _matching_bracket_content(text):
 
 def _first_top_level_segment(text, separator):
     """The portion of `text` up to (not including) the first occurrence
-    of `separator` that isn't nested inside a "[...]" pair, e.g. for
-    "List[int], str" with separator "," this returns "List[int]" rather
-    than splitting inside List's own brackets. Returns all of `text`
-    unchanged if `separator` never occurs at bracket depth 0.
+    of `separator` that isn't nested inside a "[...]" pair or a quoted
+    string (via _string_literal_end, for the identical reason
+    _matching_bracket_content above skips one), e.g. for "List[int], str"
+    with separator "," this returns "List[int]" rather than splitting
+    inside List's own brackets, and for `Literal["a,b"], None` with
+    separator "," this returns `Literal["a,b"]` rather than splitting
+    inside the string value's own embedded comma. Returns all of `text`
+    unchanged if `separator` never occurs at bracket depth 0 outside a
+    string.
     """
     depth = 0
+    i = 0
 
-    for i, ch in enumerate(text):
+    while i < len(text):
+
+        ch = text[i]
+
+        if ch in ("'", '"'):
+            i = _string_literal_end(text, i)
+            continue
 
         if ch == "[":
             depth += 1
@@ -459,6 +524,8 @@ def _first_top_level_segment(text, separator):
             depth -= 1
         elif ch == separator and depth == 0:
             return text[:i]
+
+        i += 1
 
     return text
 
