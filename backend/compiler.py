@@ -2,6 +2,7 @@ import datetime
 import functools
 import hashlib
 import importlib.metadata
+import io
 import json
 import keyword
 import os
@@ -10,6 +11,7 @@ import shutil
 import sys
 import pathlib
 import threading
+import tokenize
 
 from pathlib import Path
 
@@ -369,6 +371,67 @@ def compiling_python_version():
     return f"{sys.version_info.major}.{sys.version_info.minor}"
 
 
+def _lines_inside_multiline_strings(cell):
+    """1-indexed physical line numbers that fall strictly inside one of
+    `cell`'s own multi-line string literals (a docstring, a template
+    string, a block of embedded documentation) -- not the line the
+    string itself opens on, since a directive-shaped comment can only
+    ever match REQUIREMENT_DIRECTIVE_PATTERN/APT_REQUIREMENT_DIRECTIVE_
+    PATTERN/EXCLUDE_DIRECTIVE_PATTERN below if the "#" is the very first
+    non-whitespace character on its own line, which is impossible on a
+    multi-line string's own opening line (that position is already
+    occupied by the string's own opening quote, or by real code before
+    it).
+
+    Those three directive patterns are matched against a cell's raw
+    source text directly (see their own docstrings for why -- a comment
+    carries no meaning for `ast.parse` to preserve, so scanning the AST
+    instead would simply never see it), with no awareness of whether the
+    matched line is a real, live comment or merely lies inside a string
+    literal's own text. Confirmed exploitable before this: a notebook
+    author documenting this tool's own directive syntax inside a
+    function's docstring -- an entirely ordinary way to explain a
+    convention to teammates -- silently activated a real "requires"/
+    "apt-requires"/"exclude" directive, corrupting requirements.txt or
+    the generated Dockerfile (or silently dropping a real import from
+    both) with no error anywhere, for a directive the author never
+    intended to actually declare.
+
+    Uses the standard library tokenizer to find each multi-line string's
+    own line span, the same approach _lines_unsafe_for_magic_detection
+    (backend/parser/notebook_parser.py) already takes for the identical
+    "a magic-shaped line inside a string is just text, not code" problem
+    -- but scoped to string spans alone, not also to bracket-continuation
+    lines the way that function is: a "#" on a continuation line inside
+    an open "("/"["/"{" is still a perfectly real Python comment (Python
+    itself draws no distinction), so a directive placed there is not a
+    false positive the way one inside a string is. Tolerant of an
+    unparseable cell the same way that function is -- falls back to
+    protecting nothing, since a genuinely malformed cell fails
+    is_parseable_python before ever reaching any of this anyway.
+    """
+    unsafe_lines = set()
+
+    try:
+
+        for tok_type, _, (start_line, _), (end_line, _), _ in (
+            tokenize.generate_tokens(io.StringIO(cell).readline)
+        ):
+
+            if (
+                tok_type in (
+                    tokenize.STRING, getattr(tokenize, "FSTRING_MIDDLE", -1)
+                )
+                and end_line > start_line
+            ):
+                unsafe_lines.update(range(start_line + 1, end_line + 1))
+
+    except (tokenize.TokenError, SyntaxError, ValueError):
+        return set()
+
+    return unsafe_lines
+
+
 # Recognizes a "# notebook-to-api: requires <spec>" comment directive
 # anywhere in a code cell's raw source -- see
 # _extract_explicit_requirements below for what it's for. Matched against
@@ -378,7 +441,11 @@ def compiling_python_version():
 # entirely. Requires the "#" to start the line (allowing leading
 # whitespace, so it's usable indented inside a function body too) so an
 # unrelated inline comment that merely happens to contain this phrase
-# elsewhere in a line of code isn't matched by accident.
+# elsewhere in a line of code isn't matched by accident. A match whose
+# own line falls inside a multi-line string literal (a docstring
+# documenting this exact directive syntax, say) is discarded by
+# _extract_explicit_requirements below via _lines_inside_multiline_strings
+# -- see that function's own docstring for why.
 REQUIREMENT_DIRECTIVE_PATTERN = re.compile(
     r"^\s*#\s*notebook-to-api:\s*requires\s+(?P<spec>\S.*)$",
     re.MULTILINE,
@@ -441,7 +508,12 @@ def _extract_explicit_requirements(code_cells):
 
     for cell in code_cells:
 
+        unsafe_lines = _lines_inside_multiline_strings(cell)
+
         for match in REQUIREMENT_DIRECTIVE_PATTERN.finditer(cell):
+
+            if cell.count("\n", 0, match.start()) + 1 in unsafe_lines:
+                continue
 
             spec = match.group("spec").strip()
 
@@ -481,7 +553,9 @@ def _extract_explicit_requirements(code_cells):
 # than the AST) for the identical reason: usable indented inside a
 # function body, immune to an unrelated inline comment merely containing
 # this phrase elsewhere in a line, and invisible to `ast.parse` in the
-# first place.
+# first place. Also same string-literal-safety treatment: a match inside
+# a multi-line string is discarded by _extract_explicit_apt_packages
+# below via _lines_inside_multiline_strings.
 APT_REQUIREMENT_DIRECTIVE_PATTERN = re.compile(
     r"^\s*#\s*notebook-to-api:\s*apt-requires\s+(?P<package>\S+)\s*$",
     re.MULTILINE,
@@ -533,7 +607,12 @@ def _extract_explicit_apt_packages(code_cells):
 
     for cell in code_cells:
 
+        unsafe_lines = _lines_inside_multiline_strings(cell)
+
         for match in APT_REQUIREMENT_DIRECTIVE_PATTERN.finditer(cell):
+
+            if cell.count("\n", 0, match.start()) + 1 in unsafe_lines:
+                continue
 
             package = match.group("package").strip()
 
@@ -551,7 +630,10 @@ def _extract_explicit_apt_packages(code_cells):
 # Same matching rules as REQUIREMENT_DIRECTIVE_PATTERN above (leading
 # whitespace allowed, "#" must start the line) for the identical reason:
 # usable indented inside a function body, and immune to an unrelated
-# inline comment merely containing this phrase elsewhere in a line.
+# inline comment merely containing this phrase elsewhere in a line. Also
+# same string-literal-safety treatment: a match inside a multi-line
+# string is discarded by _extract_excluded_imports below via
+# _lines_inside_multiline_strings.
 EXCLUDE_DIRECTIVE_PATTERN = re.compile(
     r"^\s*#\s*notebook-to-api:\s*exclude\s+(?P<name>\S+)\s*$",
     re.MULTILINE,
@@ -588,7 +670,12 @@ def _extract_excluded_imports(code_cells):
 
     for cell in code_cells:
 
+        unsafe_lines = _lines_inside_multiline_strings(cell)
+
         for match in EXCLUDE_DIRECTIVE_PATTERN.finditer(cell):
+
+            if cell.count("\n", 0, match.start()) + 1 in unsafe_lines:
+                continue
 
             name = match.group("name").strip()
 

@@ -7154,6 +7154,40 @@ def test_extract_explicit_requirements_returns_an_empty_list_with_no_directives(
     assert _extract_explicit_requirements(code_cells) == []
 
 
+def test_extract_explicit_requirements_ignores_a_directive_inside_a_docstring():
+    """Confirmed exploitable before this fix: a notebook author
+    documenting this tool's own directive syntax inside a function's
+    docstring -- an entirely ordinary way to explain a convention to
+    teammates -- silently activated a real "requires" directive, adding
+    a bogus requirements.txt line for a package that was never actually
+    needed.
+    """
+
+    code_cells = [
+        "def compute(x):\n"
+        '    """\n'
+        "    Notebook convention docs:\n"
+        "    # notebook-to-api: requires some-fake-package==1.0\n"
+        "    (just documenting the syntax here, not actually needed)\n"
+        '    """\n'
+        "    return x\n"
+    ]
+
+    assert _extract_explicit_requirements(code_cells) == []
+
+
+def test_extract_explicit_requirements_still_finds_a_directive_right_after_a_docstring():
+
+    code_cells = [
+        "def compute(x):\n"
+        '    """A normal docstring."""\n'
+        "    # notebook-to-api: requires real-package==2.0\n"
+        "    return x\n"
+    ]
+
+    assert _extract_explicit_requirements(code_cells) == ["real-package==2.0"]
+
+
 def test_extract_explicit_apt_packages_finds_a_directive_in_a_cell():
 
     code_cells = [
@@ -7245,6 +7279,19 @@ def test_extract_explicit_apt_packages_does_not_match_the_requires_directive():
 def test_extract_explicit_apt_packages_returns_an_empty_list_with_no_directives():
 
     code_cells = ["import pandas\n\ndef f() -> int:\n    return 1\n"]
+
+    assert _extract_explicit_apt_packages(code_cells) == []
+
+
+def test_extract_explicit_apt_packages_ignores_a_directive_inside_a_docstring():
+
+    code_cells = [
+        "def compute(x):\n"
+        '    """\n'
+        "    # notebook-to-api: apt-requires curl\n"
+        '    """\n'
+        "    return x\n"
+    ]
 
     assert _extract_explicit_apt_packages(code_cells) == []
 
@@ -7433,6 +7480,37 @@ def test_extract_excluded_imports_returns_an_empty_set_with_no_directives():
     code_cells = ["import pandas\n\ndef f() -> int:\n    return 1\n"]
 
     assert _extract_excluded_imports(code_cells) == set()
+
+
+def test_extract_excluded_imports_ignores_a_directive_inside_a_docstring():
+
+    code_cells = [
+        "def compute(x):\n"
+        '    """\n'
+        "    # notebook-to-api: exclude pandas\n"
+        '    """\n'
+        "    import pandas\n"
+        "    return x\n"
+    ]
+
+    assert _extract_excluded_imports(code_cells) == set()
+
+
+def test_lines_inside_multiline_strings_falls_back_to_empty_on_unterminated_bracket():
+    """A genuinely malformed cell (an unclosed bracket at EOF) must never
+    crash any of the three directive-extraction functions this feeds --
+    falls back to this function's own previous, unprotected behavior
+    (protecting nothing), leaving is_parseable_python (ast_parser.py) to
+    reject the cell outright afterward, the same fallback stance
+    _lines_unsafe_for_magic_detection (backend/parser/notebook_parser.py)
+    already takes for the identical "can't tokenize, don't crash" case.
+    """
+
+    from backend.compiler import _lines_inside_multiline_strings
+
+    source = "total = (\n    a\n"
+
+    assert _lines_inside_multiline_strings(source) == set()
 
 
 def test_extract_third_party_imports_omits_an_excluded_import():
