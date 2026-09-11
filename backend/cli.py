@@ -361,7 +361,7 @@ _CORE_COMMANDS = frozenset({
     "remote-compile", "remote-inspect", "remote-build",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
     "status", "metrics", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
-    "remote-curl", "app-preview", "readme-preview", "dockerfile-preview", "docker-compose-preview", "env-example-preview", "env-vars-preview",
+    "remote-curl", "remote-postman", "app-preview", "readme-preview", "dockerfile-preview", "docker-compose-preview", "env-example-preview", "env-vars-preview",
     "postman-preview", "k8s-preview", "openapi-preview", "verify-webhook",
     "app-metrics", "app-call", "app-tasks", "app-status", "app-auth",
 })
@@ -751,10 +751,10 @@ def _add_version_id_argument(parser, endpoint):
 
 def _add_callback_url_argument(parser):
     """Add --callback-url to `parser` -- shared by `export-curl`,
-    `export-postman`, `remote-curl`, `curl-preview`, and `postman-preview`
-    below, so their help text and dest names can't drift apart from each
-    other, the same way _add_version_id_argument already shares
-    --version-id across several of these same subparsers.
+    `export-postman`, `remote-curl`, `remote-postman`, `curl-preview`, and
+    `postman-preview` below, so their help text and dest names can't drift
+    apart from each other, the same way _add_version_id_argument already
+    shares --version-id across several of these same subparsers.
 
     Previews a background function's own ?callback_url= webhook option
     (see _deliver_task_webhook, generator/api_generator.py) in the
@@ -6689,6 +6689,83 @@ def _dispatch_core_command(args):
             print(
                 f"cURL script for {source_label} on {dashboard_url} "
                 f"written to: {output} ({len(commands)} request(s))"
+            )
+    elif args.command == "remote-postman":
+        # See `upload` above for why these are imported here rather than
+        # at module scope.
+        import httpx
+        import tempfile
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        # Same reasoning as `remote-curl` above: fetching a specific
+        # version's own raw bytes (GET .../versions/{version_id}) instead
+        # of the notebook's current content (GET /api/notebooks/{filename})
+        # is the only difference --version-id makes here.
+        fetch_url = (
+            f"{dashboard_url}/api/notebooks/{args.filename}/versions/{args.version_id}"
+            if args.version_id
+            else f"{dashboard_url}/api/notebooks/{args.filename}"
+        )
+
+        try:
+            response = httpx.get(fetch_url, timeout=args.timeout)
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        # Downloaded to a real temp file, not held in memory and parsed
+        # some other way, so generate_postman_collection can reuse its
+        # own existing load_notebook(path)-based pipeline (via
+        # inspect_notebook_data) unchanged -- the same "fetch to a temp
+        # file" approach `remote-curl` above already applies to
+        # generate_curl_commands.
+        remote_notebook_fd, remote_notebook_path = tempfile.mkstemp(suffix=".ipynb")
+
+        try:
+
+            with os.fdopen(remote_notebook_fd, "wb") as f:
+                f.write(response.content)
+
+            only = _parse_comma_separated_names(args.only)
+            exclude = _parse_comma_separated_names(args.exclude)
+
+            collection = generate_postman_collection(
+                remote_notebook_path, host=args.host, port=args.port,
+                api_key=args.api_key, only=only, exclude=exclude,
+                collection_name=args.collection_name,
+                callback_url=args.callback_url,
+            )
+
+        finally:
+            os.remove(remote_notebook_path)
+
+        source_label = (
+            f"'{args.filename}' version '{args.version_id}'" if args.version_id
+            else f"'{args.filename}'"
+        )
+
+        output = args.output or "postman_collection.json"
+
+        with open(output, "w", encoding="utf-8") as f:
+            json.dump(collection, f, indent=2)
+            f.write("\n")
+
+        if args.json_output:
+            print(json.dumps(
+                {"status": "success", "path": output, "collection": collection},
+                indent=2,
+            ))
+        else:
+            print(
+                f"\nPostman collection for {source_label} on {dashboard_url} "
+                f"written to: {output} ({len(collection['item'])} request(s))"
             )
     elif args.command == "remote-export":
         # See `upload` above for why this is imported here rather than at
@@ -12804,6 +12881,93 @@ def main():
             "Emit a machine-readable JSON result "
             "({\"status\", \"path\", \"commands\"}) instead of only "
             "writing the script file, for scripting/automation."
+        )
+    )
+
+    # remote-postman command (download a notebook already uploaded to a
+    # running dashboard -- current content, or a past snapshot via
+    # --version-id -- and write a real, runnable Postman Collection file
+    # from it, the same way remote-curl above writes a real requests.sh
+    # instead of only ever previewing one. `postman-preview` already
+    # covers "what would this collection look like" against a dashboard
+    # notebook (including --version-id, via POST /api/postman-preview's
+    # own "version_id" body field), but its own docstring says verbatim
+    # it writes no collection file -- a caller who actually wanted the
+    # file itself, to import into Postman or hand to a teammate, had to
+    # fall back to `download` (or `versions get`) followed by a separate
+    # `export-postman` against the downloaded copy. remote-curl already
+    # closed this identical gap for curl scripts; this closes it for
+    # Postman collections.
+    remote_postman_parser = subparsers.add_parser(
+        "remote-postman",
+        help="Generate a Postman Collection for a notebook already uploaded to a running dashboard instance."
+    )
+    remote_postman_parser.add_argument(
+        "filename",
+        help="Filename of the notebook already uploaded to the dashboard, as reported by `list`."
+    )
+    _add_dashboard_url_and_timeout_arguments(remote_postman_parser)
+    remote_postman_parser.add_argument(
+        "--host",
+        default="localhost",
+        help="Host the generated requests target (default: localhost) -- where the compiled app will actually run, not the dashboard itself."
+    )
+    remote_postman_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port the generated requests target (default: 8000, matching `serve`'s own default)."
+    )
+    remote_postman_parser.add_argument(
+        "--api-key",
+        default=DEFAULT_DEV_API_KEY,
+        dest="api_key",
+        help=(
+            "Value sent as the X-API-Key header, and as the collection's "
+            "own \"api_key\" variable (default: the generated app's own "
+            "default dev key, used when NOTEBOOK_API_KEY isn't set on the "
+            "server). Pass the same value configured via NOTEBOOK_API_KEY "
+            "if it's been changed."
+        )
+    )
+    remote_postman_parser.add_argument(
+        "--collection-name",
+        default=None,
+        dest="collection_name",
+        help=(
+            "Name shown for the collection in Postman (default: the "
+            "notebook's own filename, without its extension)."
+        )
+    )
+    remote_postman_parser.add_argument(
+        "--output",
+        default=None,
+        help="Path to write the generated collection to. Default: postman_collection.json"
+    )
+    remote_postman_parser.add_argument(
+        "--version-id",
+        default=None,
+        dest="version_id",
+        help=(
+            "Generate the collection from one of this notebook's own "
+            "previously snapshotted versions (as reported by `versions "
+            "list`) instead of its current content -- downloaded via GET "
+            "/api/notebooks/{filename}/versions/{version_id} instead of "
+            "GET /api/notebooks/{filename}, the same source "
+            "`postman-preview --version-id` already lets a caller preview "
+            "without writing a collection file at all."
+        )
+    )
+    _add_function_selection_arguments(remote_postman_parser)
+    _add_callback_url_argument(remote_postman_parser)
+    remote_postman_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit a machine-readable JSON result "
+            "({\"status\", \"path\", \"collection\"}) instead of only "
+            "writing the collection file, for scripting/automation."
         )
     )
 

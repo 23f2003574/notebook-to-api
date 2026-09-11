@@ -19083,6 +19083,215 @@ def test_remote_curl_command_reports_a_clean_error_when_the_dashboard_is_unreach
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_remote_postman_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "remote-postman" in proc.stdout
+
+
+def test_remote_postman_command_writes_a_collection_with_an_item_per_function(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+                "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-postman", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Postman collection for 'nb.ipynb'" in proc.stdout
+    assert "written to: postman_collection.json (2 request(s))" in proc.stdout
+    assert handler.requests == ["/api/notebooks/nb.ipynb"]
+
+    collection = json.loads(
+        (workdir / "postman_collection.json").read_text(encoding="utf-8")
+    )
+    names = [item["name"] for item in collection["item"]]
+    assert "add" in names
+    assert "subtract" in names
+
+
+def test_remote_postman_command_version_id_fetches_that_version_instead_of_current_content(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-postman", "nb.ipynb", "--dashboard-url", dashboard_url,
+            "--version-id", "20260101T000000000000_abcd1234.ipynb",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (
+        "Postman collection for 'nb.ipynb' version "
+        "'20260101T000000000000_abcd1234.ipynb'"
+    ) in proc.stdout
+    assert handler.requests == [
+        "/api/notebooks/nb.ipynb/versions/20260101T000000000000_abcd1234.ipynb"
+    ]
+
+
+def test_remote_postman_command_omits_version_id_from_the_url_by_default(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-postman", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/nb.ipynb"]
+
+
+def test_remote_postman_command_respects_host_port_api_key_collection_name_and_output(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-postman", "nb.ipynb", "--dashboard-url", dashboard_url,
+            "--host", "api.example.com", "--port", "9000",
+            "--api-key", "mykey123", "--collection-name", "My Collection",
+            "--output", "custom.json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    collection = json.loads((workdir / "custom.json").read_text(encoding="utf-8"))
+    assert collection["info"]["name"] == "My Collection"
+    variables = {v["key"]: v["value"] for v in collection["variable"]}
+    assert variables["base_url"] == "http://api.example.com:9000"
+    assert variables["api_key"] == "mykey123"
+    assert not (workdir / "postman_collection.json").exists()
+
+
+def test_remote_postman_command_json_flag_emits_machine_readable_output(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-postman", "nb.ipynb", "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+
+    assert data["status"] == "success"
+    assert data["path"] == "postman_collection.json"
+    assert len(data["collection"]["item"]) == 1
+
+
+def test_remote_postman_command_reports_a_clean_error_for_a_missing_notebook(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Notebook file not found"})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-postman", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Notebook file not found")
+
+
+def test_remote_postman_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-postman", "nb.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_remote_export_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())
