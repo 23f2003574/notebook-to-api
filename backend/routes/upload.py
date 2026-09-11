@@ -10999,7 +10999,9 @@ def validate_notebook_endpoint(
 
 @router.get("/validate-all")
 def validate_all_notebooks(
-    strict: bool = False, tag: str = None, limit: int = None, offset: int = 0,
+    strict: bool = False, tag: str = None, sha256: str = None,
+    modified_after: str = None, modified_before: str = None,
+    limit: int = None, offset: int = 0,
     format: str = "json",
 ):
     """Run the identical pass/warn/fail check POST /api/validate already
@@ -11038,6 +11040,37 @@ def validate_all_notebooks(
     out-of-tag notebook (including one that would otherwise fail to
     parse) never contributes a result or counts toward
     pass_count/warn_count/fail_count at all.
+
+    "sha256" (optional) scopes the scan to at most the notebook(s) whose
+    exact content hashes to this digest -- the same exact-content-match
+    filter GET /api/notebooks?sha256=/GET /api/functions?sha256=/GET
+    /api/notebooks/duplicates?sha256= already offer, applied here for the
+    identical reason "tag" above is: a CI job that already has a hash in
+    hand (read back from GET /api/notebooks/duplicates, say, after
+    finding a duplicate-content group and wanting to re-validate just
+    that exact content) can't reach it by "tag" alone, since a group's
+    own copies commonly carry different tags, or none at all, and a
+    notebook can be renamed or re-uploaded under a different filename
+    between validations, at which point "tag" (or a remembered filename)
+    can no longer answer "was *this exact content* actually
+    revalidated". Composes with "tag" as an AND, and is applied before a
+    notebook is even parsed, the same "out-of-scope notebook never
+    contributes a result" treatment "tag" above already gets.
+
+    "modified_after"/"modified_before" (each an optional ISO 8601
+    datetime, see _parse_iso_datetime_query_param) scope the scan the
+    identical way GET /api/functions'/GET /api/notebooks/search-content's/
+    GET /api/notebooks/duplicates' own "modified_after"/"modified_before"
+    already do -- to only notebooks whose own file mtime falls on or
+    after/on or before that instant, inclusive on both ends, composing
+    with "tag"/"sha256" as an AND. Before this, a CI job wanting to
+    re-validate just the notebooks touched in a specific incident window
+    -- narrowing down which recent change actually introduced a reserved-
+    name conflict, say -- had no way to scope this endpoint's own scan to
+    that window at all, only the entire catalog. A naive value (no UTC
+    offset) is assumed to already be UTC; "modified_after" later than
+    "modified_before" is rejected with 400, the same way it already is
+    for GET /api/notebooks' own identical pair.
 
     "limit"/"offset" page the returned "results" the identical way GET
     /api/notebooks' own "limit"/"offset" already page the notebook
@@ -11093,6 +11126,18 @@ def validate_all_notebooks(
             detail="limit must be a positive integer"
         )
 
+    modified_after_dt = _parse_iso_datetime_query_param(modified_after, "modified_after")
+    modified_before_dt = _parse_iso_datetime_query_param(modified_before, "modified_before")
+
+    if (
+        modified_after_dt is not None and modified_before_dt is not None
+        and modified_after_dt > modified_before_dt
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="modified_after must not be later than modified_before"
+        )
+
     upload_root = Path(UPLOAD_DIR)
 
     results = []
@@ -11107,6 +11152,21 @@ def validate_all_notebooks(
 
         if tag and tag not in _read_notebook_tags(entry.name):
             continue
+
+        if sha256 and hash_notebook_file(entry) != sha256:
+            continue
+
+        if modified_after_dt is not None or modified_before_dt is not None:
+
+            entry_modified_at = datetime.fromtimestamp(
+                entry.stat().st_mtime, tz=timezone.utc
+            )
+
+            if modified_after_dt is not None and entry_modified_at < modified_after_dt:
+                continue
+
+            if modified_before_dt is not None and entry_modified_at > modified_before_dt:
+                continue
 
         try:
 

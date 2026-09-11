@@ -12612,6 +12612,40 @@ def test_validate_all_command_sends_tag_query_param(tmp_path, fake_dashboard):
     assert query == {"strict": ["false"], "tag": ["prod"], "offset": ["0"]}
 
 
+def test_validate_all_command_sends_sha256_and_modified_after_and_before_query_params(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "results": [], "pass_count": 0,
+            "warn_count": 0, "fail_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "validate-all", "--sha256", "abc123",
+            "--modified-after", "2024-01-02T00:00:00+00:00",
+            "--modified-before", "2024-01-03T00:00:00+00:00",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query == {
+        "strict": ["false"], "offset": ["0"], "sha256": ["abc123"],
+        "modified_after": ["2024-01-02T00:00:00+00:00"],
+        "modified_before": ["2024-01-03T00:00:00+00:00"],
+    }
+
+
 def test_validate_all_command_exits_1_on_warnings_without_failing(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

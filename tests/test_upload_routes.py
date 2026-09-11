@@ -18565,6 +18565,122 @@ def test_validate_all_unknown_tag_yields_no_results():
     assert body["fail_count"] == 0
 
 
+def test_validate_all_sha256_narrows_to_the_matching_notebook():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    clean_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    fail_content = _notebook_bytes(
+        "def health_check() -> dict:\n    return {}\n"
+    )
+
+    for filename, content in (
+        ("validate_all_sha_clean.ipynb", clean_content),
+        ("validate_all_sha_fail.ipynb", fail_content),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    import hashlib
+    digest = hashlib.sha256(fail_content).hexdigest()
+
+    resp = client.get("/api/validate-all", params={"sha256": digest})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [r["filename"] for r in body["results"]] == ["validate_all_sha_fail.ipynb"]
+    assert body["fail_count"] == 1
+    assert body["pass_count"] == 0
+
+
+def test_validate_all_sha256_matching_no_notebook_yields_no_results():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    clean_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    resp = client.post(
+        "/api/upload",
+        files={"file": ("validate_all_sha_none.ipynb", io.BytesIO(clean_content), "application/json")},
+    )
+    assert resp.status_code == 200
+
+    resp = client.get("/api/validate-all", params={"sha256": "f" * 64})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["results"] == []
+
+
+def test_validate_all_filters_by_modified_after_and_before():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    clean_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    fail_content = _notebook_bytes(
+        "def health_check() -> dict:\n    return {}\n"
+    )
+
+    for filename, content in (
+        ("validate_all_mod_old.ipynb", clean_content),
+        ("validate_all_mod_new.ipynb", fail_content),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    old_path = Path(UPLOAD_DIR) / "validate_all_mod_old.ipynb"
+    old_stat = old_path.stat()
+    os.utime(old_path, (old_stat.st_atime, old_stat.st_mtime - 7200))
+
+    old_modified_at = client.get(
+        "/api/notebooks/validate_all_mod_old.ipynb/info"
+    ).json()["modified_at"]
+    new_modified_at = client.get(
+        "/api/notebooks/validate_all_mod_new.ipynb/info"
+    ).json()["modified_at"]
+
+    after_body = client.get(
+        "/api/validate-all", params={"modified_after": new_modified_at}
+    ).json()
+    assert [r["filename"] for r in after_body["results"]] == [
+        "validate_all_mod_new.ipynb"
+    ]
+    assert after_body["fail_count"] == 1
+
+    before_body = client.get(
+        "/api/validate-all", params={"modified_before": old_modified_at}
+    ).json()
+    assert [r["filename"] for r in before_body["results"]] == [
+        "validate_all_mod_old.ipynb"
+    ]
+    assert before_body["pass_count"] == 1
+
+
+def test_validate_all_rejects_modified_after_later_than_modified_before():
+
+    resp = client.get(
+        "/api/validate-all",
+        params={
+            "modified_after": "2026-06-01T00:00:00+00:00",
+            "modified_before": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "modified_after" in resp.json()["detail"]
+
+
 def test_validate_all_strict_turns_skipped_functions_into_a_failure():
 
     client.delete("/api/notebooks?confirm=true")

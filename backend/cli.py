@@ -4785,6 +4785,12 @@ def _dispatch_core_command(args):
         params = {"strict": args.strict, "offset": args.offset}
         if args.tag:
             params["tag"] = args.tag
+        if args.sha256:
+            params["sha256"] = args.sha256
+        if args.modified_after:
+            params["modified_after"] = args.modified_after
+        if args.modified_before:
+            params["modified_before"] = args.modified_before
         if args.limit is not None:
             params["limit"] = args.limit
         if args.format == "csv":
@@ -11257,6 +11263,47 @@ def main():
             "via GET /api/validate-all's own ?tag= query param, the same "
             "exact-match filter `search-functions --tag`/`list --tag` "
             "already accept."
+        )
+    )
+    validate_all_parser.add_argument(
+        "--sha256",
+        default=None,
+        help=(
+            "Only validate the notebook(s) whose exact content hashes to "
+            "this, via GET /api/validate-all's own ?sha256= query param "
+            "-- as reported by `find-duplicates`, for revalidating just "
+            "one duplicate-content group's own copies (which may carry "
+            "different --tag values, or none at all) rather than every "
+            "notebook on the dashboard. Composes with --tag as an AND, "
+            "exactly like the endpoint itself."
+        )
+    )
+    validate_all_parser.add_argument(
+        "--modified-after",
+        default=None,
+        dest="modified_after",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only validate notebooks modified on or after this ISO 8601 "
+            "datetime, mirroring GET /api/validate-all's own "
+            "?modified_after= -- the same absolute-date-range filter "
+            "`search-functions`/`search-content`/`find-duplicates` "
+            "already have, applied here to which notebooks get "
+            "validated. A value with no UTC offset is assumed to "
+            "already be UTC. Composes with --modified-before to bound a "
+            "window, and with --tag/--sha256 as an AND; rejected if "
+            "later than --modified-before."
+        )
+    )
+    validate_all_parser.add_argument(
+        "--modified-before",
+        default=None,
+        dest="modified_before",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only validate notebooks modified on or before this ISO "
+            "8601 datetime, mirroring GET /api/validate-all's own "
+            "?modified_before=."
         )
     )
     validate_all_parser.add_argument(
