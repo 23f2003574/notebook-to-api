@@ -6625,6 +6625,22 @@ def _dispatch_core_command(args):
                 f"{_extract_dashboard_error_detail(response)}"
             )
 
+        # Same content-integrity check `download`/`versions get`/
+        # `remote-files get` already perform before writing anything --
+        # applied here before generate_curl_commands ever reads the
+        # downloaded bytes, not just before the script is written, so a
+        # mismatch is caught even under --json (which never touches disk
+        # on its own but still runs the notebook through the parser).
+        sha256 = response.headers.get("x-content-sha256")
+
+        if args.expected_sha256 and args.expected_sha256 != sha256:
+
+            raise RuntimeError(
+                f"Downloaded content's sha256 ({sha256}) does not match "
+                f"the expected value ({args.expected_sha256}) -- nothing "
+                "was written."
+            )
+
         # Downloaded to a real temp file, not held in memory and parsed
         # some other way, so generate_curl_commands can reuse its own
         # existing load_notebook(path)-based pipeline (via
@@ -6718,6 +6734,20 @@ def _dispatch_core_command(args):
             raise RuntimeError(
                 f"Dashboard rejected the request ({response.status_code}): "
                 f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        # Same content-integrity check `remote-curl` above (and
+        # `download`/`versions get`/`remote-files get`) already perform
+        # before writing anything -- applied here before
+        # generate_postman_collection ever reads the downloaded bytes.
+        sha256 = response.headers.get("x-content-sha256")
+
+        if args.expected_sha256 and args.expected_sha256 != sha256:
+
+            raise RuntimeError(
+                f"Downloaded content's sha256 ({sha256}) does not match "
+                f"the expected value ({args.expected_sha256}) -- nothing "
+                "was written."
             )
 
         # Downloaded to a real temp file, not held in memory and parsed
@@ -12871,6 +12901,24 @@ def main():
             "a runnable script file at all."
         )
     )
+    remote_curl_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "Verify the downloaded notebook content's own hash matches "
+            "this value -- read from the response's own "
+            "\"X-Content-SHA256\" header, the same header GET "
+            "/api/notebooks/{filename}[/versions/{version_id}] itself "
+            "already reports -- before generating anything from it or "
+            "writing the script file, exiting with an error on a "
+            "mismatch instead. The same content-integrity check "
+            "`download`/`versions get`/`remote-files get` already "
+            "perform for their own downloads, applied here to the "
+            "notebook `remote-curl` itself fetches."
+        )
+    )
     _add_function_selection_arguments(remote_curl_parser)
     _add_callback_url_argument(remote_curl_parser)
     remote_curl_parser.add_argument(
@@ -12956,6 +13004,24 @@ def main():
             "GET /api/notebooks/{filename}, the same source "
             "`postman-preview --version-id` already lets a caller preview "
             "without writing a collection file at all."
+        )
+    )
+    remote_postman_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "Verify the downloaded notebook content's own hash matches "
+            "this value -- read from the response's own "
+            "\"X-Content-SHA256\" header, the same header GET "
+            "/api/notebooks/{filename}[/versions/{version_id}] itself "
+            "already reports -- before generating anything from it or "
+            "writing the collection file, exiting with an error on a "
+            "mismatch instead. The same content-integrity check "
+            "`download`/`versions get`/`remote-files get` already "
+            "perform for their own downloads, applied here to the "
+            "notebook `remote-postman` itself fetches."
         )
     )
     _add_function_selection_arguments(remote_postman_parser)
