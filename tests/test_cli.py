@@ -11898,6 +11898,69 @@ def test_remote_compile_command_passes_the_version_id_flag_through(
     }
 
 
+def test_remote_compile_command_passes_the_expected_sha256_flag_through(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebook": "nb.ipynb",
+            "version_id": None,
+            "functions": [{"name": "add"}],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "skipped_functions": [],
+            "dependencies": [],
+            "generated_files": [],
+            "message": "Notebook compiled successfully",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-compile", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--expected-sha256", "abc123",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "expected_sha256": "abc123",
+    }
+
+
+def test_remote_compile_command_reports_the_dashboards_error_for_a_mismatched_expected_sha256(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(
+            400,
+            {"detail": "Notebook does not match expected_sha256: expected abc123, got def456"},
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-compile", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--expected-sha256", "abc123",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode != 0
+    assert "expected_sha256" in proc.stdout + proc.stderr
+
+
 def test_remote_compile_command_reports_the_dashboards_error_for_conflicting_only_and_exclude(
     tmp_path, fake_dashboard
 ):
@@ -12166,6 +12229,78 @@ def test_remote_inspect_command_version_id_json_flag_emits_the_dashboards_own_re
     assert json.loads(proc.stdout) == body
 
 
+def test_remote_inspect_command_passes_expected_sha256_through_to_the_post_body(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "functions": [{"name": "add"}],
+            "dependencies": [],
+            "generated_files": [],
+            "reserved_name_conflicts": [],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "skipped_functions": [],
+            "private_functions": [],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-inspect", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--expected-sha256", "abc123",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "expected_sha256": "abc123",
+    }
+
+
+def test_remote_inspect_command_version_id_passes_expected_sha256_as_a_query_param(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "version_id": "v1.ipynb",
+            "functions": [{"name": "add"}],
+            "dependencies": [],
+            "generated_files": [],
+            "reserved_name_conflicts": [],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "skipped_functions": [],
+            "private_functions": [],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-inspect", "nb.ipynb", "--version-id", "v1.ipynb",
+            "--dashboard-url", dashboard_url, "--expected-sha256", "abc123",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/nb.ipynb/versions/v1.ipynb/inspect?expected_sha256=abc123"
+    ]
+
+
 def test_remote_inspect_command_reports_reserved_name_conflicts_skipped_and_private_functions(
     tmp_path, fake_dashboard
 ):
@@ -12334,6 +12469,36 @@ def test_remote_validate_command_passes_the_version_id_flag_through(tmp_path, fa
     assert "'nb.ipynb' version 'v1.ipynb'" in proc.stdout
     assert json.loads(handler.bodies[0]) == {
         "notebook_path": "nb.ipynb", "strict": False, "version_id": "v1.ipynb",
+    }
+
+
+def test_remote_validate_command_passes_the_expected_sha256_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "pass",
+            "notebook": "nb.ipynb",
+            "version_id": None,
+            "reserved_name_conflicts": [],
+            "skipped_functions": [],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-validate", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--expected-sha256", "abc123",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "strict": False, "expected_sha256": "abc123",
     }
 
 

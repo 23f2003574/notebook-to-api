@@ -4535,6 +4535,8 @@ def _dispatch_core_command(args):
             request_body["version_id"] = args.version_id
         if args.smoke_test:
             request_body["smoke_test"] = True
+        if args.expected_sha256:
+            request_body["expected_sha256"] = args.expected_sha256
 
         try:
             response = httpx.post(
@@ -4607,15 +4609,22 @@ def _dispatch_core_command(args):
 
         try:
             if args.version_id:
+                params = {}
+                if args.expected_sha256:
+                    params["expected_sha256"] = args.expected_sha256
                 response = httpx.get(
                     f"{dashboard_url}/api/notebooks/{args.filename}"
                     f"/versions/{args.version_id}/inspect",
+                    params=params,
                     timeout=args.timeout,
                 )
             else:
+                inspect_body = {"notebook_path": args.filename}
+                if args.expected_sha256:
+                    inspect_body["expected_sha256"] = args.expected_sha256
                 response = httpx.post(
                     f"{dashboard_url}/api/inspect",
-                    json={"notebook_path": args.filename},
+                    json=inspect_body,
                     timeout=args.timeout,
                 )
         except httpx.HTTPError as exc:
@@ -4714,6 +4723,8 @@ def _dispatch_core_command(args):
             validate_body["only"] = only
         if exclude:
             validate_body["exclude"] = exclude
+        if args.expected_sha256:
+            validate_body["expected_sha256"] = args.expected_sha256
 
         try:
             response = httpx.post(
@@ -11105,6 +11116,23 @@ def main():
     _add_function_selection_arguments(remote_compile_parser)
     _add_version_id_argument(remote_compile_parser, "POST /api/compile")
     remote_compile_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        help=(
+            "Only compile if the resolved notebook content (its current "
+            "content, or --version-id's snapshot when given) matches this "
+            "sha256 -- via POST /api/compile's own \"expected_sha256\" "
+            "body field. Guards against a race where the notebook was "
+            "overwritten (or renamed onto) between when a caller decided "
+            "to compile this filename (e.g. from a `list`/`duplicates` "
+            "result naming its sha256) and when this command actually "
+            "runs: rejected with a clean error, GENERATED_DIR untouched, "
+            "rather than silently compiling whatever content now sits "
+            "under that name."
+        )
+    )
+    remote_compile_parser.add_argument(
         "--smoke-test",
         action="store_true",
         dest="smoke_test",
@@ -11174,6 +11202,19 @@ def main():
             "{version_id}/inspect instead of POST /api/inspect."
         )
     )
+    remote_inspect_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        help=(
+            "Only inspect if the resolved notebook content (its current "
+            "content, or --version-id's snapshot when given) matches this "
+            "sha256 -- the same `remote-compile --expected-sha256` guard, "
+            "via POST /api/inspect's own \"expected_sha256\" body field "
+            "(or GET .../versions/{version_id}/inspect's own query param "
+            "of the same name, under --version-id)."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(remote_inspect_parser)
     remote_inspect_parser.add_argument(
         "--json",
@@ -11220,6 +11261,17 @@ def main():
         )
     )
     _add_function_selection_arguments(remote_validate_parser)
+    remote_validate_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        help=(
+            "Only validate if the resolved notebook content (its current "
+            "content, or --version-id's snapshot when given) matches this "
+            "sha256 -- the same `remote-compile --expected-sha256` guard, "
+            "via POST /api/validate's own \"expected_sha256\" body field."
+        )
+    )
     remote_validate_parser.add_argument(
         "--json",
         action="store_true",

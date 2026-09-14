@@ -17432,6 +17432,224 @@ def test_compile_rejects_a_non_string_version_id():
     assert resp.status_code == 400
 
 
+def test_compile_with_matching_expected_sha256_succeeds():
+
+    filename = "compile_expected_sha256_match.ipynb"
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/compile",
+        json={
+            "notebook_path": filename,
+            "expected_sha256": hashlib.sha256(content).hexdigest(),
+        },
+    )
+
+    assert resp.status_code == 200
+
+
+def test_compile_with_mismatched_expected_sha256_is_rejected_and_does_not_compile():
+
+    filename = "compile_expected_sha256_mismatch.ipynb"
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/compile",
+        json={"notebook_path": filename, "expected_sha256": "0" * 64},
+    )
+
+    assert resp.status_code == 400
+    assert "expected_sha256" in resp.json()["detail"]
+
+    notebooks = client.get("/api/notebooks").json()["notebooks"]
+    entry = next(nb for nb in notebooks if nb["filename"] == filename)
+    assert entry["currently_compiled"] is False
+
+
+def test_compile_expected_sha256_checks_the_version_snapshot_not_current_content():
+
+    filename = "compile_expected_sha256_version.ipynb"
+    old_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    new_content = _notebook_bytes(
+        "def multiply(a: int, b: int) -> int:\n    return a * b\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(old_content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(new_content), "application/json")},
+    )
+
+    version_id = client.get(f"/api/notebooks/{filename}/versions").json()["versions"][0]["version_id"]
+
+    # The old snapshot's own sha256 matches, even though it no longer
+    # matches the notebook's current content.
+    ok_resp = client.post(
+        "/api/compile",
+        json={
+            "notebook_path": filename,
+            "version_id": version_id,
+            "expected_sha256": hashlib.sha256(old_content).hexdigest(),
+        },
+    )
+    assert ok_resp.status_code == 200
+
+    mismatch_resp = client.post(
+        "/api/compile",
+        json={
+            "notebook_path": filename,
+            "version_id": version_id,
+            "expected_sha256": hashlib.sha256(new_content).hexdigest(),
+        },
+    )
+    assert mismatch_resp.status_code == 400
+
+
+def test_compile_rejects_a_non_string_expected_sha256():
+
+    filename = "compile_expected_sha256_bad_type.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.post(
+        "/api/compile", json={"notebook_path": filename, "expected_sha256": 123}
+    )
+
+    assert resp.status_code == 400
+
+
+def test_inspect_with_mismatched_expected_sha256_is_rejected():
+
+    filename = "inspect_expected_sha256_mismatch.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.post(
+        "/api/inspect",
+        json={"notebook_path": filename, "expected_sha256": "0" * 64},
+    )
+
+    assert resp.status_code == 400
+    assert "expected_sha256" in resp.json()["detail"]
+
+
+def test_inspect_with_matching_expected_sha256_succeeds():
+
+    filename = "inspect_expected_sha256_match.ipynb"
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/inspect",
+        json={
+            "notebook_path": filename,
+            "expected_sha256": hashlib.sha256(content).hexdigest(),
+        },
+    )
+
+    assert resp.status_code == 200
+
+
+def test_validate_with_mismatched_expected_sha256_is_rejected():
+
+    filename = "validate_expected_sha256_mismatch.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.post(
+        "/api/validate",
+        json={"notebook_path": filename, "expected_sha256": "0" * 64},
+    )
+
+    assert resp.status_code == 400
+    assert "expected_sha256" in resp.json()["detail"]
+
+
+def test_validate_with_matching_expected_sha256_succeeds():
+
+    filename = "validate_expected_sha256_match.ipynb"
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/validate",
+        json={
+            "notebook_path": filename,
+            "expected_sha256": hashlib.sha256(content).hexdigest(),
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "pass"
+
+
+def test_inspect_notebook_version_with_matching_expected_sha256_succeeds():
+
+    filename = "inspect_version_expected_sha256_match.ipynb"
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(
+            _notebook_bytes("def g() -> int:\n    return 2\n")
+        ), "application/json")},
+    )
+
+    version_id = client.get(f"/api/notebooks/{filename}/versions").json()["versions"][0]["version_id"]
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions/{version_id}/inspect",
+        params={"expected_sha256": hashlib.sha256(content).hexdigest()},
+    )
+
+    assert resp.status_code == 200
+
+
+def test_inspect_notebook_version_with_mismatched_expected_sha256_is_rejected():
+
+    filename = "inspect_version_expected_sha256_mismatch.ipynb"
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(_notebook_bytes(
+            "def f() -> int:\n    return 1\n"
+        )), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(_notebook_bytes(
+            "def g() -> int:\n    return 2\n"
+        )), "application/json")},
+    )
+
+    version_id = client.get(f"/api/notebooks/{filename}/versions").json()["versions"][0]["version_id"]
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions/{version_id}/inspect",
+        params={"expected_sha256": "0" * 64},
+    )
+
+    assert resp.status_code == 400
+    assert "expected_sha256" in resp.json()["detail"]
+
+
 def test_inspect_reports_skipped_functions_before_compiling():
 
     content = _notebook_bytes(

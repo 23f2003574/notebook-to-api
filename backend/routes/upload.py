@@ -9753,7 +9753,7 @@ def set_notebook_version_notes_batch(filename: str, data: dict):
 
 
 @router.get("/notebooks/{filename}/versions/{version_id}/inspect")
-def inspect_notebook_version(filename: str, version_id: str):
+def inspect_notebook_version(filename: str, version_id: str, expected_sha256: str = None):
     """Inspect one of a notebook's previously snapshotted versions --
     its functions, dependencies, reserved-name conflicts, would-be
     endpoints, and skipped functions -- exactly as POST /api/inspect
@@ -9792,6 +9792,13 @@ def inspect_notebook_version(filename: str, version_id: str):
     /api/inspect's own "generated_files" already is regardless of which
     notebook_path was actually inspected, not something tied to this
     particular version.
+
+    "expected_sha256" (optional), see _verify_expected_notebook_sha256
+    above, rejects the request with 400 before inspecting anything if
+    this version snapshot's own content doesn't match -- the same
+    "did I get exactly the content I meant to" guard POST /api/compile,
+    /api/inspect, and /api/validate's own "expected_sha256" already give
+    for a notebook's current content.
     """
 
     file_path = resolve_upload_path(filename)
@@ -9815,6 +9822,8 @@ def inspect_notebook_version(filename: str, version_id: str):
             status_code=404,
             detail="Notebook version not found"
         )
+
+    _verify_expected_notebook_sha256(version_path, expected_sha256)
 
     try:
 
@@ -10661,6 +10670,45 @@ def delete_notebook_version(filename: str, version_id: str, dry_run: bool = Fals
     }
 
 
+def _verify_expected_notebook_sha256(content_path, expected_sha256):
+    """Raise HTTPException(400) unless `expected_sha256` (when given) is
+    exactly `content_path`'s own sha256 (see hash_notebook_file,
+    backend/compiler.py) -- the same "did I get exactly the content I
+    meant to" guard POST /api/upload's own "expected_sha256" already
+    gives a caller writing a notebook, applied here to a caller reading
+    one purely by name (POST /api/compile, /api/inspect, /api/validate,
+    and GET .../versions/{version_id}/inspect).
+
+    Without this, a caller that lists notebooks (or a duplicate group),
+    notes a specific filename's sha256, then later compiles/inspects/
+    validates that filename by name alone has no way to guard against a
+    concurrent overwrite (POST /api/upload?overwrite=true, a rename onto
+    this filename, ...) landing in between -- it would silently act on
+    whatever content now sits under that name instead, with no error
+    anywhere. This closes that race the same way "expected_sha256"
+    already closes it for every upload/download pair in this file,
+    checked before any of these four endpoints does real work.
+
+    Compared case-insensitively against sha256's own always-lowercase
+    hexdigest, the same tolerance every other "expected_sha256" check in
+    this file already extends to a caller's own locally-computed value.
+    """
+    if expected_sha256 is None:
+        return
+
+    actual_sha256 = hash_notebook_file(str(content_path))
+
+    if expected_sha256.lower() != actual_sha256:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Notebook does not match expected_sha256: "
+                f"expected {expected_sha256}, got {actual_sha256}"
+            )
+        )
+
+
 @router.post("/inspect")
 def inspect_notebook_endpoint(
     data: dict
@@ -10676,6 +10724,10 @@ def inspect_notebook_endpoint(
     inline and only ever returned "functions", so callers had no way to
     get a notebook's third-party dependencies or the compiled output file
     list from the API at all.
+
+    "expected_sha256" (optional), see _verify_expected_notebook_sha256
+    above, rejects the request with 400 before inspecting anything if the
+    notebook's current content doesn't match.
     """
 
     notebook_path = data.get(
@@ -10687,6 +10739,15 @@ def inspect_notebook_endpoint(
         raise HTTPException(
             status_code=400,
             detail="notebook_path is required"
+        )
+
+    expected_sha256 = data.get("expected_sha256")
+
+    if expected_sha256 is not None and not isinstance(expected_sha256, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="expected_sha256 must be a string"
         )
 
     full_path = resolve_upload_path(notebook_path)
@@ -10710,6 +10771,8 @@ def inspect_notebook_endpoint(
             status_code=404,
             detail="Notebook file not found"
         )
+
+    _verify_expected_notebook_sha256(full_path, expected_sha256)
 
     try:
 
@@ -10888,6 +10951,11 @@ def validate_notebook_endpoint(
     CI validation gate exists to catch before it ships, not silently wave
     through as "pass" alongside a real compile-time failure like a
     reserved-name conflict.
+
+    "expected_sha256" (optional), see _verify_expected_notebook_sha256
+    above, rejects the request with 400 before validating anything if the
+    resolved content ("notebook_path"'s current content, or "version_id"'s
+    snapshot when given) doesn't match.
     """
 
     notebook_path = data.get(
@@ -10905,6 +10973,14 @@ def validate_notebook_endpoint(
     version_id = data.get("version_id")
     only = data.get("only")
     exclude = data.get("exclude")
+    expected_sha256 = data.get("expected_sha256")
+
+    if expected_sha256 is not None and not isinstance(expected_sha256, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="expected_sha256 must be a string"
+        )
 
     for field_name, field_value in (("only", only), ("exclude", exclude)):
 
@@ -10925,6 +11001,8 @@ def validate_notebook_endpoint(
         )
 
     full_path = _resolve_preview_content_path(notebook_path, version_id)
+
+    _verify_expected_notebook_sha256(full_path, expected_sha256)
 
     try:
 
@@ -12617,6 +12695,12 @@ def compile_notebook_endpoint(
     compiled app has a real cost this endpoint didn't previously pay on
     every compile, and a caller not asking for it sees this response
     completely unchanged.
+
+    "expected_sha256" (optional), see _verify_expected_notebook_sha256
+    above, rejects the request with 400 before compiling anything -- and
+    before GENERATED_DIR is touched at all -- if the resolved content
+    ("notebook_path"'s current content, or "version_id"'s snapshot when
+    given) doesn't match.
     """
 
     notebook_path = data.get(
@@ -12634,12 +12718,20 @@ def compile_notebook_endpoint(
     exclude = data.get("exclude")
     version_id = data.get("version_id")
     smoke_test = bool(data.get("smoke_test", False))
+    expected_sha256 = data.get("expected_sha256")
 
     if version_id is not None and not isinstance(version_id, str):
 
         raise HTTPException(
             status_code=400,
             detail="version_id must be a string"
+        )
+
+    if expected_sha256 is not None and not isinstance(expected_sha256, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="expected_sha256 must be a string"
         )
 
     # Mirrors the "tag"/"platform" string-type checks POST /api/deploy
@@ -12692,6 +12784,8 @@ def compile_notebook_endpoint(
         _resolve_preview_content_path(notebook_path, version_id)
         if version_id is not None else full_path
     )
+
+    _verify_expected_notebook_sha256(content_path, expected_sha256)
 
     try:
 
