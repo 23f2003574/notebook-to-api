@@ -695,6 +695,19 @@ def _extract_notebook_functions(notebook_path):
     below, which only ever needs this half of what those two compute (no
     dependencies, generated_files, or reserved_name_conflicts to diff two
     notebooks' function signatures against each other).
+
+    Each returned function dict also carries "is_background" -- the real
+    background/task_id-vs-synchronous classification generate_fastapi_code
+    would actually give it (see resolve_is_background, generator/
+    api_generator.py, and _is_background_function above), honoring a "#
+    notebook-to-api: background"/"sync" override directive exactly like a
+    real compile would. Distinct from the raw "is_async" field
+    extract_functions_from_code already attaches (whether the notebook
+    itself wrote "async def" -- a Python-level detail invisible over HTTP,
+    see _function_signature_key's own docstring): this is the endpoint's
+    actual response *contract* -- an immediate {"result": ...} versus a
+    {"task_id", "status"} a caller must poll -- so diff_notebook_functions
+    needs it to tell the two apart.
     """
     notebook = load_notebook(notebook_path)
 
@@ -705,7 +718,16 @@ def _extract_notebook_functions(notebook_path):
     for cell in code_cells:
         all_functions.extend(extract_functions_from_code(cell))
 
-    return deduplicate_functions_by_name(all_functions)
+    functions = deduplicate_functions_by_name(all_functions)
+
+    background_overrides = _extract_background_overrides(code_cells)
+
+    for func in functions:
+        func["is_background"] = _is_background_function(
+            func["name"], background_overrides
+        )
+
+    return functions
 
 
 def _function_signature_key(func):
@@ -733,6 +755,21 @@ def _function_signature_key(func):
     comparison then reported as a genuine signature change, the exact
     "docstring edit reported as a breaking change" bug this function
     otherwise already exists to prevent for the whole-function case.
+
+    Includes "is_background" (see _extract_notebook_functions above) --
+    unlike "is_async" just below (whether the notebook itself wrote
+    "async def", a Python-level detail generate_fastapi_code awaits
+    transparently either way and so is genuinely invisible over HTTP),
+    "is_background" is the endpoint's actual response *contract*: an
+    immediate {"result": ...} versus a {"task_id", "status"} a caller
+    must poll instead. Confirmed exploitable before this was included: a
+    "# notebook-to-api: background"/"sync" override directive (added,
+    removed, or flipped) on an otherwise byte-for-byte-identical function
+    flips that contract but touches no field this tuple previously
+    compared, so diff_notebook_functions reported the function as
+    "unchanged" -- and classify_notebook_diff, having nothing to see,
+    reported "compatible": True for a change that breaks every existing
+    caller of that endpoint.
     """
     args_without_docs = tuple(
         tuple(
@@ -746,6 +783,7 @@ def _function_signature_key(func):
         args_without_docs,
         func.get("return_type"),
         func.get("is_async", False),
+        func.get("is_background", False),
     )
 
 
@@ -775,9 +813,10 @@ def diff_notebook_functions(old_notebook_path, new_notebook_path):
         old_notebook_path.
       - "changed": functions present in both, sorted by name, each as
         {"name", "old", "new"} (that function's own full entry from each
-        notebook) wherever its args, return type, or sync/async-ness
-        differ (see _function_signature_key) -- a docstring-only edit
-        does not count as "changed".
+        notebook) wherever its args, return type, sync/async-ness, or
+        background/synchronous classification differ (see
+        _function_signature_key) -- a docstring-only edit does not count
+        as "changed".
       - "unchanged": names present in both with an identical signature.
     """
     old_functions = {
@@ -923,6 +962,17 @@ def classify_notebook_diff(diff):
       - a changed return type ("return_type_changed") -- an existing
         caller's own response parsing may no longer match what the
         endpoint actually returns.
+      - a changed background/synchronous classification
+        ("background_classification_changed", see "is_background",
+        _extract_notebook_functions above) -- an existing caller built
+        against an immediate {"result": ...} response now gets back
+        {"task_id", "status"} instead (or the reverse), either way a
+        different response shape than the one it was written against.
+        Breaking in both directions, unlike "parameter_type_changed"/
+        "return_type_changed" above: there's no "old caller still
+        works" direction here the way narrowing/widening a Literal can
+        have, since the two shapes share no fields a caller could
+        already be reading defensively.
 
     Deliberately NOT breaking, and so never added to "breaking_changes":
       - a function present in "added": a new endpoint no existing caller
@@ -1018,6 +1068,22 @@ def classify_notebook_diff(diff):
                 "detail": (
                     f"'{name}' return type changed from '{old_return}' "
                     f"to '{new_return}'."
+                ),
+            })
+
+        old_is_background = entry["old"].get("is_background", False)
+        new_is_background = entry["new"].get("is_background", False)
+
+        if old_is_background != new_is_background:
+            breaking_changes.append({
+                "type": "background_classification_changed",
+                "name": name,
+                "detail": (
+                    f"'{name}' changed from a "
+                    f"{'background' if old_is_background else 'synchronous'} "
+                    f"endpoint to a "
+                    f"{'background' if new_is_background else 'synchronous'} "
+                    "one -- its response shape changed."
                 ),
             })
 

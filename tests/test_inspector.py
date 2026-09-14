@@ -1352,6 +1352,36 @@ def test_diff_notebook_functions_async_change_is_reported_as_changed(tmp_path):
     assert [c["name"] for c in diff["changed"]] == ["add"]
 
 
+def test_diff_notebook_functions_background_override_directive_change_is_reported_as_changed(
+    tmp_path,
+):
+    """Confirmed exploitable before this fix: "compute_stats" matches
+    none of LONG_RUNNING_KEYWORDS, so it compiles into a synchronous
+    endpoint in both versions -- but the new version marks it "#
+    notebook-to-api: background", which flips its actual compiled
+    endpoint into a background/task_id one. Every other field
+    _function_signature_key already compared (args, return type, raw
+    "async def"-ness) is byte-for-byte identical, so before this fix the
+    function was wrongly reported as "unchanged".
+    """
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(
+        old_path, "def compute_stats(x: int) -> int:\n    return x * 2\n"
+    )
+    _write_notebook(
+        new_path,
+        "# notebook-to-api: background\n"
+        "def compute_stats(x: int) -> int:\n    return x * 2\n",
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+
+    assert [c["name"] for c in diff["changed"]] == ["compute_stats"]
+    assert diff["unchanged"] == []
+
+
 def test_diff_notebook_functions_docstring_only_edit_is_not_a_change(tmp_path):
     """A function's docstring becomes its endpoint's OpenAPI description,
     not part of its actual request/response contract -- editing just that
@@ -1724,6 +1754,98 @@ def test_classify_notebook_diff_async_only_change_is_not_breaking(tmp_path):
     classification = classify_notebook_diff(diff)
 
     assert classification == {"compatible": True, "breaking_changes": []}
+
+
+def test_classify_notebook_diff_background_override_added_is_breaking(tmp_path):
+    """test_diff_notebook_functions_background_override_directive_change_is_reported_as_changed
+    above already confirms diff_notebook_functions reports this as
+    "changed" -- unlike sync/async-ness, flipping an endpoint's own
+    background-vs-synchronous classification genuinely changes its HTTP
+    response shape ({"result": ...} vs {"task_id", "status"}), so this
+    must count as breaking.
+    """
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(
+        old_path, "def compute_stats(x: int) -> int:\n    return x * 2\n"
+    )
+    _write_notebook(
+        new_path,
+        "# notebook-to-api: background\n"
+        "def compute_stats(x: int) -> int:\n    return x * 2\n",
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification["compatible"] is False
+    assert classification["breaking_changes"] == [{
+        "type": "background_classification_changed",
+        "name": "compute_stats",
+        "detail": (
+            "'compute_stats' changed from a synchronous endpoint to a "
+            "background one -- its response shape changed."
+        ),
+    }]
+
+
+def test_classify_notebook_diff_background_override_removed_is_breaking(tmp_path):
+    """The reverse direction: "train_model" matches LONG_RUNNING_KEYWORDS
+    ("train"), so it's background by default in both versions, but the
+    new version forces it synchronous via "# notebook-to-api: sync" --
+    also breaking, since an existing caller built to poll
+    GET /tasks/{task_id} now gets the real result back immediately
+    instead, a different response shape it was never written to parse.
+    """
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(
+        old_path, "def train_model(x: int) -> int:\n    return x * 2\n"
+    )
+    _write_notebook(
+        new_path,
+        "# notebook-to-api: sync\n"
+        "def train_model(x: int) -> int:\n    return x * 2\n",
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification["compatible"] is False
+    assert classification["breaking_changes"] == [{
+        "type": "background_classification_changed",
+        "name": "train_model",
+        "detail": (
+            "'train_model' changed from a background endpoint to a "
+            "synchronous one -- its response shape changed."
+        ),
+    }]
+
+
+def test_classify_notebook_diff_unchanged_background_classification_is_not_flagged(
+    tmp_path,
+):
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(
+        old_path,
+        "# notebook-to-api: background\n"
+        "def compute_stats(x: int) -> int:\n    return x * 2\n",
+    )
+    _write_notebook(
+        new_path,
+        "# notebook-to-api: background\n"
+        "def compute_stats(x: int) -> int:\n    return x * 3\n",
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification["compatible"] is True
+    assert classification["breaking_changes"] == []
 
 
 def test_classify_notebook_diff_no_changes_is_compatible(tmp_path):
