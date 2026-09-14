@@ -5702,6 +5702,117 @@ def test_resolve_duplicate_notebooks_reports_an_invalid_keep_filename_for_just_t
     assert remaining == {"resolve_bad_a.ipynb", "resolve_bad_b.ipynb"}
 
 
+def test_resolve_duplicate_notebooks_reports_an_error_for_a_keep_key_matching_no_group():
+    """Confirmed exploitable before this fix: a "keep" key naming a
+    sha256 that isn't a *current* duplicate group at all (a typo, or a
+    group that no longer has more than one member) was silently dropped
+    -- a plain 200 with an empty "results" list, no error, no count
+    reflecting it, nothing distinguishing "this override took effect"
+    from "this override was silently ignored."
+    """
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("resolve_unmatched_keep.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    fake_sha256 = "0" * 64
+
+    resp = client.post(
+        "/api/notebooks/duplicates/resolve",
+        json={"keep": {fake_sha256: "resolve_unmatched_keep.ipynb"}},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 0
+    assert body["failed_count"] == 1
+    assert body["results"] == [{
+        "sha256": fake_sha256,
+        "status": "error",
+        "detail": f"'{fake_sha256}' is not a current duplicate group",
+    }]
+
+    # The notebook this stale/mistaken override named is untouched.
+    assert (Path(UPLOAD_DIR) / "resolve_unmatched_keep.ipynb").is_file()
+
+
+def test_resolve_duplicate_notebooks_reports_a_real_group_and_an_unmatched_keep_key_together():
+    """An unmatched "keep" key must be reported *alongside* a real
+    group's own successful resolution, not instead of it -- one bad
+    override doesn't hide or replace another, unrelated group's own
+    correct result.
+    """
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    for filename in ("resolve_mixed_a.ipynb", "resolve_mixed_b.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content_a), "application/json")},
+        )
+
+    real_sha256 = client.get(
+        "/api/notebooks/duplicates"
+    ).json()["duplicate_groups"][0]["sha256"]
+    fake_sha256 = "f" * 64
+
+    resp = client.post(
+        "/api/notebooks/duplicates/resolve",
+        json={"keep": {
+            real_sha256: "resolve_mixed_b.ipynb",
+            fake_sha256: "resolve_mixed_a.ipynb",
+        }},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_sha256 = {r["sha256"]: r for r in body["results"]}
+    assert results_by_sha256[real_sha256]["status"] == "success"
+    assert results_by_sha256[real_sha256]["kept_filename"] == "resolve_mixed_b.ipynb"
+    assert results_by_sha256[fake_sha256]["status"] == "error"
+
+    remaining = {n["filename"] for n in client.get("/api/notebooks").json()["notebooks"]}
+    assert remaining == {"resolve_mixed_b.ipynb"}
+
+
+def test_resolve_duplicate_notebooks_dry_run_also_reports_an_unmatched_keep_key():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("resolve_dry_run_unmatched.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    fake_sha256 = "1" * 64
+
+    resp = client.post(
+        "/api/notebooks/duplicates/resolve",
+        json={
+            "dry_run": True,
+            "keep": {fake_sha256: "resolve_dry_run_unmatched.ipynb"},
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["failed_count"] == 1
+    assert body["results"][0]["status"] == "error"
+
+
 def test_resolve_duplicate_notebooks_is_a_no_op_success_when_nothing_is_duplicated():
 
     client.delete("/api/notebooks?confirm=true")

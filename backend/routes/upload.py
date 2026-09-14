@@ -5528,6 +5528,20 @@ def resolve_duplicate_notebooks(data: dict = None):
     /api/notebooks/delete-batch already established, just keyed by
     "sha256" (a duplicate group's own identity) instead of "filename".
 
+    A "keep" key that doesn't match *any* currently-duplicated sha256 at
+    all -- a typo'd hash, or one for a group that no longer has more than
+    one member (already resolved by an earlier call, or one of its own
+    members was deleted/overwritten since the caller's own last GET
+    /api/notebooks/duplicates) -- gets the identical {"sha256", "status":
+    "error"} treatment, rather than being silently dropped with no trace
+    in the response at all. Confirmed exploitable before this: a caller
+    scripting "GET .../duplicates, build a keep map from its own sha256s,
+    POST .../resolve" against a catalog that changed in between (or a
+    caller who simply mistyped a hash) got back a normal 200 with that
+    key's own override simply absent -- no error, no count reflecting it,
+    nothing distinguishing "this override took effect" from "this
+    override was silently ignored."
+
     Every deletion reuses the exact same cleanup DELETE
     /api/notebooks/{filename} and POST /api/notebooks/delete-batch
     already apply per file -- removing that filename's own tags sidecar,
@@ -5700,6 +5714,29 @@ def resolve_duplicate_notebooks(data: dict = None):
             "deleted_filenames": deleted_filenames,
         })
         succeeded_count += 1
+
+    # "keep" keys that never matched any group actually iterated above --
+    # a typo'd hash, or one for a group that no longer has more than one
+    # member -- would otherwise vanish from the response with no trace at
+    # all, silently distinct from an override that really did take
+    # effect. Reported in the same order the caller's own "keep" object
+    # itself declares them, after every real group's own result, rather
+    # than interleaved by sha256 order -- an unmatched key was never a
+    # duplicate group to begin with, so it has no natural position among
+    # ones that are.
+    resolved_hashes = {sha256 for sha256, _ in duplicate_groups}
+
+    for sha256 in keep_overrides:
+
+        if sha256 in resolved_hashes:
+            continue
+
+        results.append({
+            "sha256": sha256,
+            "status": "error",
+            "detail": f"'{sha256}' is not a current duplicate group",
+        })
+        failed_count += 1
 
     return {
         "status": "success",
