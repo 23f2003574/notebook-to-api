@@ -376,6 +376,16 @@ def _json_schema_type_to_typescript(prop_schema):
     checked before "type" below since "enum" narrows a base type rather
     than replacing it, the same precedence real JSON Schema/OpenAPI
     tooling already gives it.
+
+    "const" (e.g. {"const": "only", "type": "string"}) is Pydantic's own
+    *separate* keyword for the identical narrowing "enum" gives, just for
+    a single-value Literal (a `Literal["only"]` field, or the "only" side
+    of an `Optional[Literal["only"]]`'s own "anyOf") -- confirmed via a
+    real Pydantic schema, not assumed: Pydantic emits "const", never a
+    one-element "enum", for that case. Missed by "enum" above alone (a
+    plain `dict.get("enum")` sees nothing there at all), which is exactly
+    why this checks for it separately rather than assuming a one-element
+    "enum" list covers it.
     """
     if not isinstance(prop_schema, dict):
         return "unknown"
@@ -392,6 +402,9 @@ def _json_schema_type_to_typescript(prop_schema):
                 _typescript_literal_value(value) for value in prop_schema["enum"]
             )
         )
+
+    if "const" in prop_schema:
+        return _typescript_literal_value(prop_schema["const"])
 
     schema_type = prop_schema.get("type")
 
@@ -689,6 +702,11 @@ def _json_schema_type_to_python(prop_schema):
     those (including True/False/None, already spelled exactly this way
     in Python) is already valid Literal[...] member syntax with no
     further translation needed.
+
+    "const" is Pydantic's own separate keyword for the identical
+    narrowing "enum" gives, just for a single-value Literal -- see
+    _json_schema_type_to_typescript's own docstring for why this needs
+    its own check rather than assuming a one-element "enum" covers it.
     """
     if not isinstance(prop_schema, dict):
         return "Any"
@@ -704,6 +722,9 @@ def _json_schema_type_to_python(prop_schema):
             dict.fromkeys(repr(value) for value in prop_schema["enum"])
         )
         return f"Literal[{values}]"
+
+    if "const" in prop_schema:
+        return f"Literal[{prop_schema['const']!r}]"
 
     schema_type = prop_schema.get("type")
 

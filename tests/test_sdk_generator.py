@@ -4458,6 +4458,36 @@ def test_json_schema_type_to_typescript_maps_a_nullable_enum():
     )
 
 
+def test_json_schema_type_to_typescript_maps_const_to_a_single_literal():
+    """Confirmed via a real Pydantic schema, not assumed: a single-value
+    `Literal["only"]` field generates {"const": "only", "type": "string"}
+    -- a *different* JSON-schema keyword than "enum" (never a one-element
+    "enum" list) -- so it needs its own check, missed by the "enum"
+    handling above alone.
+    """
+
+    assert (
+        _json_schema_type_to_typescript({"const": "only", "type": "string"})
+        == '"only"'
+    )
+    assert _json_schema_type_to_typescript({"const": 1}) == "1"
+    assert _json_schema_type_to_typescript({"const": True}) == "true"
+
+
+def test_json_schema_type_to_typescript_maps_a_nullable_const():
+    """Pydantic's own JSON schema represents Optional[Literal["only"]] as
+    an "anyOf" of the const schema and {"type": "null"} -- the identical
+    "anyOf" shape already covered above for "enum".
+    """
+
+    assert (
+        _json_schema_type_to_typescript(
+            {"anyOf": [{"const": "only", "type": "string"}, {"type": "null"}]}
+        )
+        == '"only" | null'
+    )
+
+
 def test_pascal_case_converts_snake_case_method_names():
 
     assert _pascal_case("train_model") == "TrainModel"
@@ -4884,6 +4914,33 @@ def test_json_schema_type_to_python_maps_a_nullable_enum():
             ]}
         )
         == "Optional[Literal['a', 'b']]"
+    )
+
+
+def test_json_schema_type_to_python_maps_const_to_a_single_literal():
+    """Confirmed via a real Pydantic schema, not assumed: a single-value
+    `Literal["only"]` field generates {"const": "only", "type": "string"}
+    -- a *different* JSON-schema keyword than "enum" (never a one-element
+    "enum" list) -- so it needs its own check, missed by the "enum"
+    handling above alone.
+    """
+    from backend.exporters.sdk_generator import _json_schema_type_to_python
+
+    assert (
+        _json_schema_type_to_python({"const": "only", "type": "string"})
+        == "Literal['only']"
+    )
+    assert _json_schema_type_to_python({"const": 1}) == "Literal[1]"
+
+
+def test_json_schema_type_to_python_maps_a_nullable_const():
+    from backend.exporters.sdk_generator import _json_schema_type_to_python
+
+    assert (
+        _json_schema_type_to_python(
+            {"anyOf": [{"const": "only", "type": "string"}, {"type": "null"}]}
+        )
+        == "Optional[Literal['only']]"
     )
 
 
