@@ -1035,6 +1035,32 @@ def _restore_version_snapshots_from_archive(archive, entry_names, versions_dir):
     already does.
 
     Returns the sorted list of version_ids actually restored.
+
+    Each version_id is resolved against `versions_dir` via
+    _resolve_path_within -- the same traversal guard every other
+    client-influenced path in this file already goes through -- rather
+    than a raw `versions_dir / version_id` join. Confirmed exploitable
+    before this: a hand-crafted archive entry named exactly
+    "versions/<filename>/.." (three "/"-separated segments, so it passes
+    both call sites' own entry-shape filtering above) produced a
+    version_id of ".." (os.path.basename("versions/<filename>/..") ==
+    "..", since basename never resolves ".." the way `.resolve()` would),
+    and `versions_dir / ".."` -- still unresolved at that point -- names
+    versions_dir's own *parent* once the filesystem actually opens it.
+    `open(that_path, "wb")` then raised an unhandled IsADirectoryError
+    (versions_dir's own parent already exists as a directory), a raw 500
+    for POST .../versions/import, and -- since this same function is also
+    called per-notebook inside POST /api/notebooks/import's own per-entry
+    try/except HTTPException, which never expected a plain OSError -- one
+    such entry crashed that *entire* multi-notebook import outright,
+    losing every other notebook's own otherwise-successful restore along
+    with it. _resolve_path_within raises a clean HTTPException(400)
+    instead, on a real path check (resolving symlinks/"."/".." fully, not
+    just rejecting a literal ".." token) -- exactly what POST
+    /api/notebooks/import's own per-entry try/except already expects, so
+    a booby-trapped entry in one notebook's own history now fails just
+    that one notebook, leaving every other entry in the batch to succeed
+    as before.
     """
     imported_version_ids = []
 
@@ -1050,7 +1076,9 @@ def _restore_version_snapshots_from_archive(archive, entry_names, versions_dir):
         if not version_id:
             continue
 
-        version_path = versions_dir / version_id
+        version_path = _resolve_path_within(
+            str(versions_dir), version_id, "notebook version"
+        )
 
         with open(version_path, "wb") as f:
             f.write(archive.read(entry_name))

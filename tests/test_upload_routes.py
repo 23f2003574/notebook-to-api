@@ -2333,6 +2333,49 @@ def test_import_notebooks_ignores_version_entries_with_no_matching_notebook_entr
     ).json()["versions"] == []
 
 
+def test_import_notebooks_reports_a_traversal_shaped_version_entry_as_a_per_notebook_failure():
+    """Confirmed exploitable before this fix: a "versions/<filename>/.."
+    entry (three "/"-separated segments, so it passes this endpoint's own
+    entry-shape filter exactly like a real "versions/<filename>/
+    <version_id>" entry would) produced a version_id of ".."
+    (os.path.basename("versions/<filename>/..") == "..", never resolved
+    the way a real path check would), and `versions_dir / ".."` names
+    versions_dir's own *parent* once actually opened -- an existing
+    directory, so `open(..., "wb")` raised an unhandled IsADirectoryError.
+    Since that's a plain OSError, not an HTTPException, this endpoint's
+    own per-entry `except HTTPException` never caught it -- it propagated
+    out of the whole request, crashing the *entire* multi-notebook import
+    with a raw 500 and losing every other notebook's own otherwise-
+    successful restore along with it, not just the booby-trapped one.
+    """
+
+    archive_bytes = _zip_bytes({
+        "import_traversal_good.ipynb": _notebook_bytes(
+            "def f() -> int:\n    return 1\n"
+        ),
+        "import_traversal_bad.ipynb": _notebook_bytes(
+            "def g() -> int:\n    return 2\n"
+        ),
+        "versions/import_traversal_bad.ipynb/..": b"malicious content",
+    })
+
+    resp = client.post(
+        "/api/notebooks/import",
+        files={"file": ("bundle.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    results_by_filename = {r["filename"]: r for r in body["results"]}
+    assert results_by_filename["import_traversal_good.ipynb"]["status"] == "success"
+    assert results_by_filename["import_traversal_bad.ipynb"]["status"] == "error"
+
+    assert (Path(UPLOAD_DIR) / "import_traversal_good.ipynb").is_file()
+
+
 def test_import_notebooks_restores_each_entrys_own_archived_tags_and_description():
 
     archive_bytes = _zip_bytes({
@@ -13661,6 +13704,31 @@ def test_import_notebook_versions_rejects_an_archive_with_multiple_current_conte
 
     resp = client.post(
         "/api/notebooks/versions_import_multi_content.ipynb/versions/import",
+        files={"file": ("backup.zip", io.BytesIO(archive_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_import_notebook_versions_rejects_a_traversal_shaped_version_entry():
+    """Confirmed exploitable before this fix: a "versions/.." entry (any
+    entry starting with "versions/" and not ending in "/" -- this
+    endpoint's own version_entries filter has no further shape check)
+    produced a version_id of ".." (os.path.basename("versions/..") ==
+    "..", never resolved the way a real path check would), and
+    `versions_dir / ".."` names versions_dir's own *parent* once actually
+    opened -- an existing directory, so `open(..., "wb")` raised an
+    unhandled IsADirectoryError: a raw 500, not a clean 400, for a
+    hand-crafted (or corrupted) backup archive.
+    """
+
+    archive_bytes = _zip_bytes({
+        "traversal.ipynb": _notebook_bytes("def f() -> int:\n    return 1\n"),
+        "versions/..": b"malicious content",
+    })
+
+    resp = client.post(
+        "/api/notebooks/versions_import_traversal.ipynb/versions/import",
         files={"file": ("backup.zip", io.BytesIO(archive_bytes), "application/zip")},
     )
 
