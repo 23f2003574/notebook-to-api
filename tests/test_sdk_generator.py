@@ -4299,6 +4299,70 @@ def test_python_type_to_typescript_still_ignores_a_pipe_nested_inside_a_generic(
     assert _python_type_to_typescript("List[int | str]") == "(number | string)[]"
 
 
+def test_python_type_to_typescript_maps_literal_to_a_string_literal_union():
+    """Before this, a `Literal[...]` parameter/return -- an extremely
+    common categorical/enum-like shape for a real API (a status, a mode)
+    -- fell all the way through to the generic "unknown", the exact loss
+    of precision this function's own docstring says generating a *typed*
+    client exists to avoid.
+    """
+
+    assert (
+        _python_type_to_typescript('Literal["draft", "published"]')
+        == '"draft" | "published"'
+    )
+    assert _python_type_to_typescript("Literal[1, 2, 3]") == "1 | 2 | 3"
+    assert _python_type_to_typescript("Literal[True, False]") == "true | false"
+    assert _python_type_to_typescript("Literal[None]") == "null"
+
+
+def test_python_type_to_typescript_deduplicates_repeated_literal_values():
+
+    assert _python_type_to_typescript('Literal["a", "a", "b"]') == '"a" | "b"'
+
+
+def test_python_type_to_typescript_handles_a_literal_value_with_its_own_comma_and_bracket():
+    """A Literal string value is free to contain a "," or "["/"]" as
+    perfectly ordinary text (e.g. an interval-notation value) -- must be
+    parsed via a real quote-aware bracket match, not this module's own
+    simpler _bracket_inner/_split_top_level (which would incorrectly
+    split or truncate on it), the identical bug class already fixed once
+    for ast_parser.py's own generate_example_payload/
+    generate_example_response.
+    """
+
+    assert (
+        _python_type_to_typescript('Literal["a,b", "c]d"]')
+        == '"a,b" | "c]d"'
+    )
+
+
+def test_python_type_to_typescript_composes_literal_with_optional_and_union():
+
+    assert (
+        _python_type_to_typescript('Optional[Literal["a", "b"]]')
+        == '"a" | "b" | null'
+    )
+    assert (
+        _python_type_to_typescript('Literal["a"] | None') == '"a" | null'
+    )
+    assert (
+        _python_type_to_typescript('List[Literal["a", "b"]]')
+        == '("a" | "b")[]'
+    )
+
+
+def test_python_type_to_typescript_falls_back_to_unknown_for_a_literal_enum_member():
+    """`Literal[Color.RED]` is valid per PEP 586, but Color.RED isn't a
+    literal expression ast.literal_eval can parse -- and the standalone
+    generated SDK client has no import for the notebook's own Enum class
+    to reference even if it could, so this must fall back to "unknown"
+    exactly like any other unrecognized construct, not guess.
+    """
+
+    assert _python_type_to_typescript("Literal[Color.RED]") == "unknown"
+
+
 def test_python_type_to_typescript_parenthesizes_a_union_array_element():
     """"number | null[]" parses in TypeScript as "number | (null[])", not
     the intended "(number | null)[]" -- a union used as an array element
@@ -4662,6 +4726,49 @@ def test_python_type_to_safe_python_annotation_still_ignores_a_pipe_nested_insid
         _python_type_to_safe_python_annotation("List[int | str]")
         == "List[Union[int, str]]"
     )
+
+
+def test_python_type_to_safe_python_annotation_passes_a_literal_through_unchanged():
+    """A self-contained `Literal[...]` is already valid Python syntax
+    exactly as given -- the module this is generated into always imports
+    Literal from typing unconditionally (see generate_python_sdk), so it
+    passes through byte for byte rather than being reconstructed value
+    by value the way List[.../Dict[...]/etc are.
+    """
+    from backend.exporters.sdk_generator import _python_type_to_safe_python_annotation
+
+    assert (
+        _python_type_to_safe_python_annotation('Literal["draft", "published"]')
+        == 'Literal["draft", "published"]'
+    )
+    assert (
+        _python_type_to_safe_python_annotation("Literal[1, 2, 3]")
+        == "Literal[1, 2, 3]"
+    )
+
+
+def test_python_type_to_safe_python_annotation_composes_literal_with_optional():
+    from backend.exporters.sdk_generator import _python_type_to_safe_python_annotation
+
+    assert (
+        _python_type_to_safe_python_annotation('Optional[Literal["a", "b"]]')
+        == 'Optional[Literal["a", "b"]]'
+    )
+    assert (
+        _python_type_to_safe_python_annotation('Literal["a"] | None')
+        == 'Optional[Literal["a"]]'
+    )
+
+
+def test_python_type_to_safe_python_annotation_falls_back_to_any_for_a_literal_enum_member():
+    """`Literal[Color.RED]` is valid per PEP 586, but the generated SDK
+    client has no import for the notebook's own Enum class -- passing it
+    through unchanged would raise a real NameError the moment the
+    generated client module is loaded, not just lose type precision.
+    """
+    from backend.exporters.sdk_generator import _python_type_to_safe_python_annotation
+
+    assert _python_type_to_safe_python_annotation("Literal[Color.RED]") == "Any"
 
 
 def test_python_type_to_safe_python_annotation_sanitizes_nested_unrecognized_names():

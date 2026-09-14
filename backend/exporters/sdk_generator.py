@@ -1,6 +1,9 @@
+import ast
 import json
 import re
 from pathlib import Path
+
+from backend.parser.ast_parser import _matching_bracket_content
 
 
 # Client methods generate_python_sdk/generate_typescript_sdk always emit
@@ -173,6 +176,61 @@ def _as_typescript_array_element(ts_type):
     return f"({ts_type})[]" if " | " in ts_type else f"{ts_type}[]"
 
 
+def _literal_annotation_values(type_str):
+    """Real Python values inside a `Literal[...]` annotation (e.g.
+    (1, 2) for "Literal[1, 2]"), or None if any of them isn't a literal
+    expression at all -- e.g. an Enum member like `Literal[Color.RED]`,
+    valid per PEP 586 but not something ast.literal_eval can parse.
+
+    Reuses _matching_bracket_content (backend/parser/ast_parser.py) --
+    the same quote-aware bracket-matching literal_values there already
+    relies on -- rather than this module's own, much simpler
+    _bracket_inner/_split_top_level, so a Literal value containing its
+    own embedded comma or bracket (e.g. "Literal['a,b', 'c]d']", a real
+    interval-notation or CSV-shaped value) is parsed correctly here too,
+    instead of exposing a second, independently-drifting copy of the
+    exact bug class already fixed once for ast_parser.py's own
+    generate_example_payload/generate_example_response.
+
+    Returns None (rather than literal_values' own best-effort single-
+    value fallback for the Enum-member case) when any value isn't a
+    literal expression: that fallback is safe for literal_values' own
+    purpose -- backing a human-readable example payload, where a
+    plausible-looking guess is better than nothing -- but not here. A
+    standalone generated SDK client has no import for the notebook's own
+    Enum class at all, so silently guessing at its first member and
+    emitting that guess as a real type annotation/union member would be
+    actively wrong, not just imprecise, and would raise a real NameError
+    the moment the generated client module is loaded if emitted as bare
+    source text.
+    """
+    inner = _matching_bracket_content(type_str[len("Literal["):])
+
+    try:
+        return ast.literal_eval(f"({inner},)")
+    except (ValueError, SyntaxError):
+        return None
+
+
+def _typescript_literal_value(value):
+    """`value` (one element of _literal_annotation_values' own result)
+    rendered as a TypeScript literal-type member -- e.g. a real,
+    double-quoted TS string literal for a Python str, "true"/"false" for
+    a Python bool (checked before the general numeric fallback below,
+    since bool is itself an int subclass and Python's own str(True) is
+    "True", not TypeScript's lowercase "true"), "null" for None, and a
+    plain numeric literal (int/float share the identical textual form in
+    both languages) for anything else.
+    """
+    if isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    return repr(value)
+
+
 def _python_type_to_typescript(type_str):
     """The closest TypeScript type for `type_str` (a raw, `ast.unparse`d
     Python annotation, e.g. "int", "List[str]", "Optional[int]" -- the
@@ -198,6 +256,18 @@ def _python_type_to_typescript(type_str):
     follows for a related but distinct purpose (simplifying an
     annotation for an example value, not translating it to another
     language's type system).
+
+    `Literal[...]` (e.g. a "status: Literal['draft', 'published']"
+    parameter -- an extremely common categorical/enum-like shape for a
+    real API) maps to a genuine TS string/number/boolean-literal union
+    ('"draft" | "published"'), via _literal_annotation_values, rather
+    than falling all the way through to the generic "unknown" every
+    other unrecognized construct gets -- the same loss of precision this
+    function's own docstring already calls out "the single biggest
+    practical advantage" of generating a typed client over an untyped
+    one for. Falls back to "unknown" only for a Literal naming an Enum
+    member (see _literal_annotation_values' own docstring for why that
+    one case can't be resolved from a bare annotation string alone).
     """
     if not type_str:
         return "unknown"
@@ -227,6 +297,14 @@ def _python_type_to_typescript(type_str):
         if len(parts) > 1:
             mapped = [_python_type_to_typescript(part) for part in parts]
             return " | ".join(dict.fromkeys(mapped))
+
+    if type_str.startswith("Literal["):
+        values = _literal_annotation_values(type_str)
+        if values is None:
+            return "unknown"
+        return " | ".join(
+            dict.fromkeys(_typescript_literal_value(value) for value in values)
+        )
 
     if type_str in _PYTHON_SCALAR_TO_TS:
         return _PYTHON_SCALAR_TO_TS[type_str]
@@ -484,6 +562,19 @@ def _python_type_to_safe_python_annotation(type_str):
                 _python_type_to_safe_python_annotation(part) for part in parts
             ]
             return _join_python_union(mapped)
+
+    # A self-contained `Literal[...]` (every value a real literal, not an
+    # Enum member reference -- see _literal_annotation_values' own
+    # docstring) is already valid Python syntax exactly as given, so it
+    # passes through unchanged rather than being reconstructed value by
+    # value -- the module this is generated into always imports Literal
+    # from typing unconditionally (see generate_python_sdk), so nothing
+    # further needs adding for it to resolve. Falls back to "Any" for a
+    # Literal naming an Enum member, the identical reason a bare
+    # unrecognized identifier does below: the generated client has no
+    # import for the notebook's own Enum class to reference.
+    if type_str.startswith("Literal["):
+        return type_str if _literal_annotation_values(type_str) is not None else "Any"
 
     if type_str in _PYTHON_SAFE_SCALARS:
         return type_str
