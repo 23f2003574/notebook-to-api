@@ -8793,9 +8793,12 @@ def main():
             "Exit with status 1 if classify_notebook_diff (backend/"
             "inspector.py) finds any breaking change between the two "
             "notebooks -- a removed endpoint, a removed or newly-required "
-            "parameter, a parameter type change, or a return type change "
-            "-- after printing the report. Purely additive changes (a new "
-            "endpoint, a new parameter with a default) never trigger this."
+            "parameter, a parameter type change, a return type change, or "
+            "a changed background/synchronous endpoint classification (a "
+            "\"# notebook-to-api: background\"/\"sync\" override directive "
+            "added, removed, or flipped) -- after printing the report. "
+            "Purely additive changes (a new endpoint, a new parameter with "
+            "a default) never trigger this."
         )
     )
     diff_parser.add_argument(

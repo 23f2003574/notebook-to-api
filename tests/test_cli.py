@@ -2729,6 +2729,43 @@ def test_diff_command_fail_on_breaking_exits_nonzero_for_a_breaking_change(tmp_p
     assert "New required parameter 'c' was added to 'add'." in proc.stdout
 
 
+def test_diff_command_fail_on_breaking_exits_nonzero_for_a_background_classification_change(
+    tmp_path,
+):
+    """classify_notebook_diff (backend/inspector.py) already flags a
+    changed background/synchronous endpoint classification as breaking
+    (see its own "background_classification_changed" type) -- but that
+    was previously only ever confirmed at the classify_notebook_diff/
+    diff_notebook_functions unit level (tests/test_inspector.py), never
+    through the actual `diff` CLI command every real user of this flag
+    actually runs. Verified here end to end: a "# notebook-to-api:
+    background" directive added to an otherwise byte-for-byte-identical
+    function (same args, same return type) must still fail this gate.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+    _write_notebook_with_function(
+        old_path, "def compute_stats(x: int) -> int:\n    return x * 2\n"
+    )
+    _write_notebook_with_function(
+        new_path,
+        "# notebook-to-api: background\n"
+        "def compute_stats(x: int) -> int:\n    return x * 2\n",
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--fail-on-breaking"], cwd=workdir
+    )
+
+    assert proc.returncode == 1
+    assert "breaking change(s)" in proc.stdout
+    assert "changed from a synchronous endpoint to a background one" in proc.stdout
+
+
 def test_diff_command_fail_on_breaking_exits_zero_when_compatible(tmp_path):
 
     workdir = tmp_path / "workdir"

@@ -6479,6 +6479,56 @@ def test_diff_notebooks_reports_compatible_when_nothing_would_break_callers():
     assert body["breaking_changes"] == []
 
 
+def test_diff_notebooks_reports_a_background_classification_change_as_breaking():
+    """classify_notebook_diff (backend/inspector.py) already flags a
+    changed background/synchronous endpoint classification as breaking
+    -- but that was previously only ever confirmed at the
+    classify_notebook_diff/diff_notebook_functions unit level
+    (tests/test_inspector.py), never through this actual dashboard
+    endpoint every other diff-family surface (remote-diff, diff-
+    notebooks, versions diff/compare) ultimately builds on. Verified
+    here end to end: a "# notebook-to-api: background" directive added
+    to an otherwise byte-for-byte-identical function must still report
+    "compatible": false with a real "background_classification_changed"
+    entry, not silently "unchanged"/"compatible": true.
+    """
+
+    old_content = _notebook_bytes(
+        "def compute_stats(x: int) -> int:\n    return x * 2\n"
+    )
+    new_content = _notebook_bytes(
+        "# notebook-to-api: background\n"
+        "def compute_stats(x: int) -> int:\n    return x * 2\n"
+    )
+
+    for filename, content in (
+        ("diff_background_old.ipynb", old_content),
+        ("diff_background_new.ipynb", new_content),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    resp = client.get(
+        "/api/notebooks/diff",
+        params={"old": "diff_background_old.ipynb", "new": "diff_background_new.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["compatible"] is False
+    assert body["breaking_changes"] == [{
+        "type": "background_classification_changed",
+        "name": "compute_stats",
+        "detail": (
+            "'compute_stats' changed from a synchronous endpoint to a "
+            "background one -- its response shape changed."
+        ),
+    }]
+
+
 def test_diff_notebooks_omits_content_diff_by_default():
 
     old_content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
