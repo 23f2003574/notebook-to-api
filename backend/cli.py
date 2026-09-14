@@ -7094,6 +7094,12 @@ def _dispatch_core_command(args):
                 target_parts.append(repr(args.source_notebook_filename))
             if args.source_notebook_sha256:
                 target_parts.append(f"sha256 {args.source_notebook_sha256!r}")
+            if args.platform:
+                target_parts.append(f"platform {args.platform!r}")
+            if args.tag:
+                target_parts.append(f"tag {args.tag!r}")
+            if args.pushed is not None:
+                target_parts.append("pushed" if args.pushed else "not pushed")
             target = (
                 f"the deploy history for {' and '.join(target_parts)} on "
                 f"{dashboard_url}" if target_parts
@@ -7109,6 +7115,12 @@ def _dispatch_core_command(args):
             params["source_notebook_filename"] = args.source_notebook_filename
         if args.source_notebook_sha256:
             params["source_notebook_sha256"] = args.source_notebook_sha256
+        if args.platform:
+            params["platform"] = args.platform
+        if args.tag:
+            params["tag"] = args.tag
+        if args.pushed is not None:
+            params["pushed"] = args.pushed
         if args.older_than_days is not None:
             params["older_than_days"] = args.older_than_days
         if args.deployed_after:
@@ -13662,6 +13674,45 @@ def main():
             "the filename recorded at deploy time, can't). Composes with "
             "--source-notebook/--older-than-days: given more than one, "
             "only entries matching all of them are discarded."
+        )
+    )
+    clear_deploy_history_parser.add_argument(
+        "--platform",
+        help=(
+            "Only discard deploy history entries built for this exact "
+            "--platform value, via DELETE /api/deploy/history's own "
+            "?platform= query param -- the same exact-match filter "
+            "`deploy-history --platform` already provides for *listing* "
+            "entries. Composes with every other filter here as an AND."
+        )
+    )
+    clear_deploy_history_parser.add_argument(
+        "--tag",
+        help=(
+            "Only discard deploy history entries built under this exact "
+            "Docker image tag (e.g. \"myapp:latest\"), via DELETE "
+            "/api/deploy/history's own ?tag= query param -- not a "
+            "notebook's own category tag. Composes with every other "
+            "filter here as an AND."
+        )
+    )
+    clear_pushed_group = clear_deploy_history_parser.add_mutually_exclusive_group()
+    clear_pushed_group.add_argument(
+        "--pushed-only",
+        action="store_const",
+        dest="pushed",
+        const=True,
+        help="Only discard deploy history entries that were pushed to a registry."
+    )
+    clear_pushed_group.add_argument(
+        "--not-pushed",
+        action="store_const",
+        dest="pushed",
+        const=False,
+        help=(
+            "Only discard deploy history entries that were not pushed to "
+            "a registry -- e.g. to clean up local-only test deploys "
+            "while keeping every real, pushed one."
         )
     )
     clear_deploy_history_parser.add_argument(

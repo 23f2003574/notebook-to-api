@@ -20829,6 +20829,67 @@ def test_clear_deploy_history_command_sends_sha256_query_param(
     ]
 
 
+def test_clear_deploy_history_command_sends_platform_tag_and_pushed_query_params(
+    tmp_path, fake_dashboard
+):
+    """Mirrors test_clear_deploy_history_command_sends_sha256_query_param:
+    DELETE /api/deploy/history's own "platform"/"tag"/"pushed" filters
+    (already available for *listing* via `deploy-history --platform`/
+    `--tag`/`--pushed-only`) had no `clear-deploy-history` counterpart of
+    their own at all.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "deleted_count": 1}),
+        _json_response(200, {"status": "success", "deleted_count": 1}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "clear-deploy-history", "--platform", "linux/amd64",
+            "--tag", "myapp:latest", "--pushed-only",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/deploy/history?platform=linux%2Famd64&tag=myapp%3Alatest&pushed=true"
+    ]
+
+    proc = _run_cli(
+        [
+            "clear-deploy-history", "--not-pushed",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests[1] == "/api/deploy/history?pushed=false"
+
+
+def test_clear_deploy_history_command_rejects_pushed_only_and_not_pushed_together(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["clear-deploy-history", "--pushed-only", "--not-pushed", "--yes"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode != 0
+    assert "not allowed with" in proc.stderr
+
+
 def test_clear_deploy_history_command_json_flag_emits_the_dashboards_own_response(
     tmp_path, fake_dashboard
 ):

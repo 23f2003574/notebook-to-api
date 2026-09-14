@@ -23826,6 +23826,138 @@ def test_clear_deploy_history_unknown_source_notebook_filename_deletes_nothing(
     assert client.get("/api/deploy/history").json()["entry_count"] == 1
 
 
+def test_clear_deploy_history_filters_by_platform(tmp_path, monkeypatch):
+    """Confirmed missing before this fix: GET /api/deploy/history's own
+    "platform" filter, matching a deploy's own --platform build target,
+    had no DELETE counterpart -- an operator wanting to drop just one
+    bad platform's worth of deploy history had to wipe the entire log
+    (or every entry for one notebook filename/content) to get there.
+    """
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_deploy_history_platform_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    for i, platform in enumerate(["linux/amd64", "linux/arm64", "linux/amd64"]):
+        upload_module._append_deploy_history_entry({
+            "deployed_at": f"2024-01-0{i + 1}T00:00:00+00:00",
+            "tag": f"clear:{i}",
+            "platform": platform,
+            "pushed": False,
+            "source_notebook_filename": "nb.ipynb",
+            "source_notebook_sha256": None,
+        })
+
+    clear_resp = client.delete(
+        "/api/deploy/history", params={"platform": "linux/amd64"}
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 2}
+
+    remaining = client.get("/api/deploy/history").json()
+    assert remaining["entry_count"] == 1
+    assert remaining["entries"][0]["platform"] == "linux/arm64"
+
+
+def test_clear_deploy_history_filters_by_tag(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_deploy_history_tag_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    for i, tag in enumerate(["myapp:latest", "myapp:v2"]):
+        upload_module._append_deploy_history_entry({
+            "deployed_at": f"2024-01-0{i + 1}T00:00:00+00:00",
+            "tag": tag,
+            "platform": None,
+            "pushed": False,
+            "source_notebook_filename": "nb.ipynb",
+            "source_notebook_sha256": None,
+        })
+
+    clear_resp = client.delete(
+        "/api/deploy/history", params={"tag": "myapp:latest"}
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 1}
+
+    remaining = client.get("/api/deploy/history").json()
+    assert remaining["entry_count"] == 1
+    assert remaining["entries"][0]["tag"] == "myapp:v2"
+
+
+def test_clear_deploy_history_filters_by_pushed(tmp_path, monkeypatch):
+    """An operator cleaning up local-only test deploys (never pushed)
+    while keeping every real, pushed deploy in the log had no way to
+    scope a clear that way before this.
+    """
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_deploy_history_pushed_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    for i, pushed in enumerate([True, False, False]):
+        upload_module._append_deploy_history_entry({
+            "deployed_at": f"2024-01-0{i + 1}T00:00:00+00:00",
+            "tag": f"clear:{i}",
+            "platform": None,
+            "pushed": pushed,
+            "source_notebook_filename": "nb.ipynb",
+            "source_notebook_sha256": None,
+        })
+
+    clear_resp = client.delete(
+        "/api/deploy/history", params={"pushed": "false"}
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 2}
+
+    remaining = client.get("/api/deploy/history").json()
+    assert remaining["entry_count"] == 1
+    assert remaining["entries"][0]["pushed"] is True
+
+
+def test_clear_deploy_history_composes_platform_tag_and_pushed(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_deploy_history_compose_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    # Only the third entry matches all three filters at once.
+    entries = [
+        {"platform": "linux/amd64", "tag": "myapp:latest", "pushed": False},
+        {"platform": "linux/arm64", "tag": "myapp:latest", "pushed": True},
+        {"platform": "linux/amd64", "tag": "myapp:latest", "pushed": True},
+    ]
+    for i, entry in enumerate(entries):
+        upload_module._append_deploy_history_entry({
+            "deployed_at": f"2024-01-0{i + 1}T00:00:00+00:00",
+            "source_notebook_filename": "nb.ipynb",
+            "source_notebook_sha256": None,
+            **entry,
+        })
+
+    clear_resp = client.delete(
+        "/api/deploy/history",
+        params={"platform": "linux/amd64", "tag": "myapp:latest", "pushed": "true"},
+    )
+
+    assert clear_resp.status_code == 200
+    assert clear_resp.json() == {"status": "success", "dry_run": False, "deleted_count": 1}
+    assert client.get("/api/deploy/history").json()["entry_count"] == 2
+
+
 def test_clear_deploy_history_filters_by_source_notebook_sha256(tmp_path, monkeypatch):
     """Confirmed missing before this fix: GET /api/deploy/history's own
     "source_notebook_sha256" filter, matching a notebook's exact content

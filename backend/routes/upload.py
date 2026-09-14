@@ -14290,6 +14290,9 @@ def _deploy_history_entry_is_within_date_range(entry, after_dt, before_dt):
 def clear_deploy_history(
     source_notebook_filename: str = None,
     source_notebook_sha256: str = None,
+    platform: str = None,
+    tag: str = None,
+    pushed: bool = None,
     older_than_days: int = None,
     deployed_after: str = None,
     deployed_before: str = None,
@@ -14344,6 +14347,23 @@ def clear_deploy_history(
     discarded, the same narrowing every other multi-filter endpoint here
     already applies. Omitted, content plays no part in what's discarded,
     exactly as before this parameter existed.
+
+    "platform", "tag", and "pushed" -- the three GET /api/deploy/history
+    already filters *listing* by, but this endpoint never picked up for
+    *discarding* -- close the identical all-or-nothing gap
+    "source_notebook_filename"/"source_notebook_sha256" already close
+    above, just for a deploy's own build metadata instead of which
+    notebook produced it. "platform" and "tag" match exactly against
+    each entry's own field of the same name (the Docker image tag a
+    deploy actually built, e.g. "myapp:latest" -- not a notebook's own
+    category tag); "pushed" (true/false) matches whether that deploy's
+    own image was actually pushed to a registry. Before this, an
+    operator wanting to discard just one bad --platform's worth of
+    deploy history, or every never-pushed local-only test deploy, had to
+    wipe the entire log (or every entry for one filename/content) to get
+    there, even though GET /api/deploy/history could already show them
+    exactly which entries those were. All three compose with every other
+    filter here as an AND, identically.
 
     "older_than_days", when given, discards only entries whose own
     "deployed_at" is older than that many days ago -- the identical
@@ -14415,6 +14435,9 @@ def clear_deploy_history(
     if (
         source_notebook_filename is not None
         or source_notebook_sha256 is not None
+        or platform is not None
+        or tag is not None
+        or pushed is not None
         or cutoff is not None
         or deployed_after_dt is not None
         or deployed_before_dt is not None
@@ -14432,6 +14455,15 @@ def clear_deploy_history(
                 source_notebook_sha256 is not None
                 and entry.get("source_notebook_sha256") != source_notebook_sha256
             ):
+                return False
+
+            if platform is not None and entry.get("platform") != platform:
+                return False
+
+            if tag is not None and entry.get("tag") != tag:
+                return False
+
+            if pushed is not None and entry.get("pushed") != pushed:
                 return False
 
             if cutoff is not None and not _deploy_history_entry_is_older_than(entry, cutoff):
