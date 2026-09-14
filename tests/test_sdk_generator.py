@@ -1,6 +1,7 @@
 import ast
 import json
 import shutil
+import socket
 import subprocess
 import sys
 import types
@@ -5292,6 +5293,28 @@ def test_verify_webhook_signature_matches_a_real_generated_apps_own_signing(
         return _FakeResponse()
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    # "example.test" is deliberately unresolvable in real DNS (RFC 6761)
+    # -- exactly why it's safe to use here without a real network request
+    # -- but _is_unsafe_webhook_host (generator/api_generator.py) now
+    # resolves callback_url's own hostname before allowing it, the same
+    # guard POST /api/notebooks/import-url's own
+    # _reject_unsafe_import_url_host (backend/routes/upload.py) already
+    # applies. Faked here the same way test_generator.py's own
+    # _fake_resolve_example_test_domain fixture already does, purely so
+    # this test's own choice of fake domain doesn't get rejected as
+    # unresolvable.
+    real_getaddrinfo = socket.getaddrinfo
+
+    def fake_getaddrinfo(host, *args, **kwargs):
+        if host == "example.test":
+            return [(
+                socket.AF_INET, socket.SOCK_STREAM, 6, "",
+                ("93.184.216.34", 0),
+            )]
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
     from fastapi.testclient import TestClient
 

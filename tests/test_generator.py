@@ -1,4 +1,5 @@
 import json
+import socket
 import sys
 import types
 import urllib.error
@@ -11,6 +12,41 @@ from backend.generator.api_generator import (
     RESERVED_INFRASTRUCTURE_NAMES,
     ReservedFunctionNameError,
 )
+
+
+@pytest.fixture(autouse=True)
+def _fake_resolve_example_test_domain(monkeypatch):
+    """Every existing background-webhook test below uses "example.test"
+    as its own callback_url host -- chosen precisely because RFC 6761
+    guarantees it never resolves in real DNS, so these tests make no real
+    network request. _is_unsafe_webhook_host (generator/api_generator.py)
+    now resolves a callback_url's own hostname before allowing it, the
+    same guard POST /api/notebooks/import-url's own
+    _reject_unsafe_import_url_host (backend/routes/upload.py) already
+    applies -- which would otherwise reject "example.test" for failing to
+    resolve at all, the identical treatment it already gives a genuinely
+    private address, purely because of *how* this test suite names its
+    fake webhook receiver, not anything a real caller's callback_url
+    would ever hit.
+
+    Faking just this one hostname's own resolution to a real, public IP
+    keeps every such test's "https://example.test/..." callback_url
+    unaffected; every other hostname (see
+    test_background_endpoint_rejects_a_private_callback_url_host below)
+    still resolves for real, so the guard's actual rejection behavior
+    stays covered by a real socket.getaddrinfo call, not a blanket bypass.
+    """
+    real_getaddrinfo = socket.getaddrinfo
+
+    def _fake_getaddrinfo(host, *args, **kwargs):
+        if host == "example.test":
+            return [(
+                socket.AF_INET, socket.SOCK_STREAM, 6, "",
+                ("93.184.216.34", 0),
+            )]
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
 
 
 def test_generated_app_env_vars_default_matches_the_actual_generated_code():
@@ -1277,6 +1313,181 @@ def test_background_endpoint_rejects_non_http_callback_url(monkeypatch):
         headers=headers,
     )
     assert accepted.status_code == 200
+
+
+def test_background_endpoint_rejects_a_private_callback_url_host(monkeypatch):
+    """The scheme check above stops "file://", but a perfectly valid
+    http(s) URL can still name a host only this app's own network can
+    reach. Confirmed exploitable before this fix: nothing here ever
+    resolved callback_url's own hostname, so a caller could point a
+    background endpoint's webhook delivery at this app's own loopback
+    interface -- reaching whatever else happens to be listening there --
+    with no error at all.
+    """
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    rejected = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "http://127.0.0.1:9999/hook"},
+        headers=headers,
+    )
+    assert rejected.status_code == 400
+    assert "non-public" in rejected.json()["detail"]
+    assert namespace["TASKS"] == {}
+
+
+def test_background_endpoint_rejects_a_cloud_metadata_callback_url_host(monkeypatch):
+    """169.254.169.254 is link-local -- the address every major cloud
+    provider's own instance-metadata service (IAM credentials included)
+    listens on, reachable only from inside that instance's own network.
+    The single most realistic real-world target this guard exists to
+    keep a caller-supplied callback_url away from.
+    """
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    rejected = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "http://169.254.169.254/latest/meta-data/"},
+        headers=headers,
+    )
+    assert rejected.status_code == 400
+    assert "non-public" in rejected.json()["detail"]
+    assert namespace["TASKS"] == {}
+
+
+def test_background_endpoint_rejects_an_unresolvable_callback_url_host(monkeypatch):
+    """A hostname that can't be resolved at all is treated the same as a
+    private one -- there's no useful "will fail to deliver anyway"
+    distinction worth making at validation time, and treating it as safe
+    would need every call site to separately handle a resolution failure
+    that never actually happens.
+    """
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    rejected = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "http://this-host-does-not-exist.invalid/hook"},
+        headers=headers,
+    )
+    assert rejected.status_code == 400
+    assert "non-public" in rejected.json()["detail"]
+    assert namespace["TASKS"] == {}
+
+
+def test_deliver_task_webhook_refuses_a_callback_url_that_now_resolves_privately(
+    monkeypatch,
+):
+    """_is_unsafe_webhook_host is re-checked inside _deliver_task_webhook
+    itself, not just once at submission time -- the only way a caller
+    could ever observe that is a callback_url that passed the submission-
+    time check but no longer resolves safely by the time delivery
+    actually happens (DNS rebinding, or the record simply changing).
+    Simulated here by mutating an already-submitted task's own stored
+    callback_url directly (bypassing the submission-time check
+    entirely, the same way a real DNS change would) and then triggering
+    POST /tasks/{task_id}/redeliver-webhook -- confirmed refused, and
+    confirmed urlopen is never even reached.
+    """
+    import urllib.request
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    urlopen_calls = []
+
+    class _FakeResponse:
+        status = 204
+
+        def close(self):
+            pass
+
+    def fake_urlopen(request, timeout=None):
+        urlopen_calls.append(request.full_url)
+        return _FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    submit_response = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/hook"},
+        headers=headers,
+    )
+    task_id = submit_response.json()["task_id"]
+    assert urlopen_calls == ["https://example.test/hook"]
+
+    namespace["TASKS"][task_id]["callback_url"] = "http://127.0.0.1:9999/hook"
+
+    redeliver_response = client.post(
+        f"/tasks/{task_id}/redeliver-webhook", headers=headers
+    )
+
+    assert redeliver_response.status_code == 200
+    assert redeliver_response.json()["webhook"] == {
+        "delivered": False,
+        "attempts": 0,
+        "status_code": None,
+        "error": (
+            "callback_url resolves to a non-public address; refusing to "
+            "deliver"
+        ),
+    }
+    # Delivery for the private host was refused before ever calling
+    # urlopen -- still just the one call from the original, safe delivery
+    # above.
+    assert urlopen_calls == ["https://example.test/hook"]
 
 
 def test_background_task_delivers_webhook_on_completion_and_failure(monkeypatch):

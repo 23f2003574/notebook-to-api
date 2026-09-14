@@ -936,6 +936,8 @@ def generate_fastapi_code(
     lines.append("import json")
     lines.append("import urllib.request")
     lines.append("import urllib.error")
+    lines.append("import socket")
+    lines.append("import ipaddress")
     lines.append("from urllib.parse import urlparse")
     lines.append("from datetime import datetime")
     lines.append("import time")
@@ -2583,6 +2585,46 @@ def generate_fastapi_code(
     lines.append("    }")
 
     lines.append("")
+    # Whether `url`'s own hostname resolves to a non-public address (or
+    # doesn't resolve at all) -- the identical private/loopback/link-
+    # local/reserved/multicast/unspecified check POST /api/notebooks/
+    # import-url's own _reject_unsafe_import_url_host (backend/routes/
+    # upload.py) already applies to a caller-supplied URL *that dashboard*
+    # fetches, reused here for the identical shape of risk: a caller-
+    # supplied URL *this compiled app* fetches. The scheme check just
+    # above this function (rejecting "file://", "gopher://", ...) already
+    # stops one request-forgery vector; it does nothing to stop a
+    # perfectly valid http(s) URL whose host is
+    # "http://169.254.169.254/" (a cloud metadata endpoint reachable from
+    # inside this app's own deployment, not the caller's) or
+    # "http://localhost:<internal-port>/" -- confirmed exploitable before
+    # this: a caller-supplied ?callback_url= pointing at either turned
+    # this app's own background-task delivery into an open proxy into
+    # infrastructure only its own network can reach, since nothing here
+    # ever inspected where the hostname actually resolved to.
+    #
+    # A resolution failure (an unroutable, typo'd, or since-deleted host)
+    # is also treated as unsafe rather than merely "will fail to
+    # deliver": the alternative -- letting socket.gaierror propagate --
+    # would need its own handling at every call site below, for no
+    # benefit over just reporting it the same way a private address is.
+    lines.append("def _is_unsafe_webhook_host(url):")
+    lines.append("    try:")
+    lines.append("        hostname = urlparse(url).hostname")
+    lines.append("        if not hostname:")
+    lines.append("            return True")
+    lines.append("        for info in socket.getaddrinfo(hostname, None):")
+    lines.append("            ip = ipaddress.ip_address(info[4][0])")
+    lines.append("            if (")
+    lines.append("                ip.is_private or ip.is_loopback")
+    lines.append("                or ip.is_link_local or ip.is_reserved")
+    lines.append("                or ip.is_multicast or ip.is_unspecified")
+    lines.append("            ):")
+    lines.append("                return True")
+    lines.append("    except (socket.gaierror, ValueError):")
+    lines.append("        return True")
+    lines.append("    return False")
+    lines.append("")
     # Delivers a single best-effort (well, WEBHOOK_MAX_RETRIES-effort) POST
     # of `payload` (the finished task's own TASKS record: status/result, or
     # status/error) to `callback_url`, so a caller can opt out of polling
@@ -2629,6 +2671,28 @@ def generate_fastapi_code(
     # feature keeps working unmodified.
     lines.append("def _deliver_task_webhook(callback_url, payload):")
     lines.append("    attempt = 0")
+    # Re-checked here, not just once at task-submission time (see the
+    # scheme validation above this function's own call site) -- delivery
+    # can happen an arbitrary amount of time after submission (a slow
+    # notebook function, a retried task, a manual POST
+    # /tasks/{task_id}/redeliver-webhook long after the original request),
+    # during which the same hostname could have started resolving
+    # somewhere unsafe (DNS rebinding, or simply a record changing) even
+    # though it looked fine when first validated. Every delivery path
+    # (the original completion, a retried task's own eventual completion,
+    # and a manual redeliver) all funnel through this one function, so
+    # checking it here protects all three without needing its own copy of
+    # this check in each of them.
+    lines.append("    if _is_unsafe_webhook_host(callback_url):")
+    lines.append("        return {")
+    lines.append("            'delivered': False,")
+    lines.append("            'attempts': 0,")
+    lines.append("            'status_code': None,")
+    lines.append(
+        "            'error': 'callback_url resolves to a non-public "
+        "address; refusing to deliver',"
+    )
+    lines.append("        }")
     lines.append("    try:")
     lines.append("        body = json.dumps(payload).encode('utf-8')")
     lines.append("        headers = {'Content-Type': 'application/json'}")
@@ -3112,7 +3176,8 @@ def generate_fastapi_code(
                 400: {
                     "description": (
                         "callback_url was given but isn't an http:// or "
-                        "https:// URL."
+                        "https:// URL, or resolves to a non-public "
+                        "address."
                     ),
                     "content": {
                         "application/json": {
@@ -3216,6 +3281,29 @@ def generate_fastapi_code(
             )
             lines.append(
                 "                    'https:// URL'"
+            )
+            lines.append("                ),")
+            lines.append("            )")
+            # The scheme check above stops "file://"/"gopher://"/etc, but
+            # a perfectly valid http(s) URL can still name a host only
+            # this app's own network can reach ("http://169.254.169.254/",
+            # a cloud metadata endpoint; "http://localhost:<internal-
+            # port>/"; ...) -- see _is_unsafe_webhook_host's own docstring
+            # above for the full "why". Checked here too (not just inside
+            # _deliver_task_webhook, which re-checks at actual delivery
+            # time) so a caller supplying an obviously-unsafe host gets an
+            # immediate, actionable 400 instead of a task that's created
+            # successfully and only reported as failed-to-deliver later.
+            lines.append("        if _is_unsafe_webhook_host(callback_url):")
+            lines.append("            raise HTTPException(")
+            lines.append("                status_code=400,")
+            lines.append("                detail=(")
+            lines.append(
+                "                    'callback_url resolves to a "
+                "non-public address; only publicly-routable URLs may be '"
+            )
+            lines.append(
+                "                    'used for webhook delivery'"
             )
             lines.append("                ),")
             lines.append("            )")
