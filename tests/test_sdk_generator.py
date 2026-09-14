@@ -4420,6 +4420,44 @@ def test_json_schema_type_to_typescript_maps_nullable_anyof():
     )
 
 
+def test_json_schema_type_to_typescript_maps_enum_to_a_string_literal_union():
+    """Confirmed exploitable before this fix: Pydantic itself generates
+    exactly {"enum": [...], "type": "string"} for a `Literal[...]`
+    request field, but this function only ever looked at "type" -- a
+    request-body field backed by a Literal collapsed to the bare "string"
+    every other plain str field already gets, discarding the exact value
+    set a caller of the generated SDK most needs surfaced.
+    """
+
+    assert (
+        _json_schema_type_to_typescript(
+            {"enum": ["draft", "published", "archived"], "type": "string"}
+        )
+        == '"draft" | "published" | "archived"'
+    )
+    assert _json_schema_type_to_typescript({"enum": [1, 2, 3]}) == "1 | 2 | 3"
+    assert (
+        _json_schema_type_to_typescript({"enum": [True, False]}) == "true | false"
+    )
+
+
+def test_json_schema_type_to_typescript_maps_a_nullable_enum():
+    """Pydantic's own JSON schema represents Optional[Literal[...]] as an
+    "anyOf" of the enum schema and {"type": "null"} -- the identical
+    "anyOf" shape test_json_schema_type_to_typescript_maps_nullable_anyof
+    above already covers for a plain Optional[str].
+    """
+
+    assert (
+        _json_schema_type_to_typescript(
+            {"anyOf": [
+                {"enum": ["a", "b"], "type": "string"}, {"type": "null"},
+            ]}
+        )
+        == '"a" | "b" | null'
+    )
+
+
 def test_pascal_case_converts_snake_case_method_names():
 
     assert _pascal_case("train_model") == "TrainModel"
@@ -4809,6 +4847,43 @@ def test_json_schema_type_to_python_maps_arrays_and_nullable_anyof():
             {"anyOf": [{"type": "string"}, {"type": "null"}]}
         )
         == "Optional[str]"
+    )
+
+
+def test_json_schema_type_to_python_maps_enum_to_a_literal_annotation():
+    """Confirmed exploitable before this fix: Pydantic itself generates
+    exactly {"enum": [...], "type": "string"} for a `Literal[...]`
+    request field, but this function only ever looked at "type" -- a
+    request-body field backed by a Literal collapsed to the bare "str"
+    every other plain str field already gets, discarding the exact value
+    set a caller of the generated SDK most needs surfaced.
+    """
+    from backend.exporters.sdk_generator import _json_schema_type_to_python
+
+    assert (
+        _json_schema_type_to_python(
+            {"enum": ["draft", "published", "archived"], "type": "string"}
+        )
+        == "Literal['draft', 'published', 'archived']"
+    )
+    assert _json_schema_type_to_python({"enum": [1, 2, 3]}) == "Literal[1, 2, 3]"
+    assert (
+        _json_schema_type_to_python({"enum": [True, False]})
+        == "Literal[True, False]"
+    )
+
+
+def test_json_schema_type_to_python_maps_a_nullable_enum():
+
+    from backend.exporters.sdk_generator import _json_schema_type_to_python
+
+    assert (
+        _json_schema_type_to_python(
+            {"anyOf": [
+                {"enum": ["a", "b"], "type": "string"}, {"type": "null"},
+            ]}
+        )
+        == "Optional[Literal['a', 'b']]"
     )
 
 

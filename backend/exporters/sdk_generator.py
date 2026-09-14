@@ -362,6 +362,20 @@ def _json_schema_type_to_typescript(prop_schema):
     (which _python_type_to_typescript above does instead, for the
     response side, where no such schema exists at all -- see
     generate_fastapi_code's own "x-notebook-to-api-return-type").
+
+    "enum" (e.g. {"enum": ["draft", "published"], "type": "string"} --
+    exactly what Pydantic itself generates for a `Literal["draft",
+    "published"]` field) maps to a real string/number/boolean/null
+    literal union, the identical _typescript_literal_value rendering
+    _python_type_to_typescript's own Literal[...] handling above already
+    uses -- reused here rather than reimplemented a second time, since
+    a JSON-schema "enum" value is already the same kind of plain Python
+    object (str/int/float/bool/None) _literal_annotation_values there
+    produces. Before this, a request-body field backed by a Literal
+    collapsed to its own bare base "type" (a plain "string" here) --
+    checked before "type" below since "enum" narrows a base type rather
+    than replacing it, the same precedence real JSON Schema/OpenAPI
+    tooling already gives it.
     """
     if not isinstance(prop_schema, dict):
         return "unknown"
@@ -371,6 +385,13 @@ def _json_schema_type_to_typescript(prop_schema):
             _json_schema_type_to_typescript(sub) for sub in prop_schema["anyOf"]
         ]
         return " | ".join(dict.fromkeys(mapped))
+
+    if "enum" in prop_schema:
+        return " | ".join(
+            dict.fromkeys(
+                _typescript_literal_value(value) for value in prop_schema["enum"]
+            )
+        )
 
     schema_type = prop_schema.get("type")
 
@@ -657,6 +678,17 @@ def _json_schema_type_to_python(prop_schema):
     _json_schema_type_to_typescript above; see its own docstring for why
     this reads the real Pydantic-validated schema rather than
     re-deriving a type from a raw annotation string.
+
+    "enum" (see _json_schema_type_to_typescript's own docstring for the
+    exact shape Pydantic generates for a Literal[...] field) maps to a
+    real Literal[...] annotation instead of collapsing to its own bare
+    base "type" (a plain "str" otherwise). Each value is rendered via
+    plain repr() -- unlike _typescript_literal_value's own bool/None
+    special-casing, a JSON-schema enum value is always one of
+    str/int/float/bool/None, and Python's own repr() of every one of
+    those (including True/False/None, already spelled exactly this way
+    in Python) is already valid Literal[...] member syntax with no
+    further translation needed.
     """
     if not isinstance(prop_schema, dict):
         return "Any"
@@ -666,6 +698,12 @@ def _json_schema_type_to_python(prop_schema):
             _json_schema_type_to_python(sub) for sub in prop_schema["anyOf"]
         ]
         return _join_python_union(mapped)
+
+    if "enum" in prop_schema:
+        values = ", ".join(
+            dict.fromkeys(repr(value) for value in prop_schema["enum"])
+        )
+        return f"Literal[{values}]"
 
     schema_type = prop_schema.get("type")
 
