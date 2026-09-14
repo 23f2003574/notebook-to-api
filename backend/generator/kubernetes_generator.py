@@ -1,3 +1,6 @@
+from backend.exporters.openapi_exporter import _yaml_scalar
+
+
 def kubernetes_manifest_content(package_name="generated", env_vars=None, image=None):
     """The exact kubernetes.yaml text generate_kubernetes_manifest (below)
     writes to disk, as a pure string -- no filesystem access at all. See
@@ -75,15 +78,45 @@ def kubernetes_manifest_content(package_name="generated", env_vars=None, image=N
     pushed to at all. Passing the real tag here is what actually closes
     that gap; see POST /api/deploy, which now does exactly that for the
     copy it writes to GENERATED_DIR after every successful build.
+
+    Every interpolated value below (`image`, `package_name`, and each
+    env entry's own "name"/"default") is rendered through _yaml_scalar
+    (backend/exporters/openapi_exporter.py) -- the same minimal, quoting-
+    aware scalar renderer GET /api/export-openapi's own YAML format
+    already uses, reused here rather than reimplemented a second time.
+    Before this, `image` in particular was interpolated as a raw,
+    unquoted f-string straight into a YAML value position -- and `image`
+    is caller-controlled, byte-for-byte, via POST /api/deploy's own "tag"
+    (written here on every successful build) and GET /api/k8s-preview's
+    own "image" query param (returned directly in that response).
+    Confirmed exploitable: a "tag" containing an embedded newline
+    followed by more YAML (e.g. "myimage:latest\\n          command:
+    [\\"sh\\", \\"-c\\", \\"...\\"]") didn't just fail to parse -- it
+    successfully injected an entirely new, attacker-chosen key into this
+    exact container's own spec, one indentation level below "image:",
+    with nothing in this function ever noticing the value it was handed
+    contained a line break at all. A YAML manifest is exactly the kind of
+    artifact this project's own docstrings elsewhere assume gets
+    `kubectl apply -f`'d with no further review (see this function's own
+    "the minimal pair `kubectl apply -f` needs" above) -- silently
+    injecting arbitrary keys into a real Deployment spec this way can
+    reach `securityContext`, `command`, `volumeMounts`, or anything else
+    a real Pod spec accepts. _yaml_scalar quotes (and properly escapes)
+    any value that isn't safe to emit bare, the identical protection
+    GET /api/export-openapi's own YAML format already gives every OpenAPI
+    schema string for the identical reason.
     """
     env_vars = env_vars or []
     image = image or f"{package_name}:latest"
 
+    package_name_scalar = _yaml_scalar(package_name)
+    image_scalar = _yaml_scalar(image)
+
     env_entries = [{"name": "PORT", "default": "8000"}] + list(env_vars)
 
     env_lines = "\n".join(
-        f'            - name: {entry["name"]}\n'
-        f'              value: "{entry["default"]}"'
+        f'            - name: {_yaml_scalar(entry["name"])}\n'
+        f'              value: {_yaml_scalar(entry["default"])}'
         for entry in env_entries
     )
 
@@ -91,22 +124,22 @@ def kubernetes_manifest_content(package_name="generated", env_vars=None, image=N
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {package_name}
+  name: {package_name_scalar}
   labels:
-    app: {package_name}
+    app: {package_name_scalar}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: {package_name}
+      app: {package_name_scalar}
   template:
     metadata:
       labels:
-        app: {package_name}
+        app: {package_name_scalar}
     spec:
       containers:
-        - name: {package_name}
-          image: {image}
+        - name: {package_name_scalar}
+          image: {image_scalar}
           ports:
             - containerPort: 8000
           env:
@@ -127,10 +160,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {package_name}
+  name: {package_name_scalar}
 spec:
   selector:
-    app: {package_name}
+    app: {package_name_scalar}
   ports:
     - port: 80
       targetPort: 8000

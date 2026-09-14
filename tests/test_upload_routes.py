@@ -21499,7 +21499,7 @@ def test_k8s_preview_requires_no_notebook_and_needs_no_body():
     assert body["status"] == "success"
     assert "kind: Deployment" in body["kubernetes_manifest"]
     assert "kind: Service" in body["kubernetes_manifest"]
-    assert 'value: "notebook-to-api-dev-key"' in body["kubernetes_manifest"]
+    assert "value: notebook-to-api-dev-key" in body["kubernetes_manifest"]
 
 
 def test_k8s_preview_matches_what_an_actual_compile_writes():
@@ -21575,6 +21575,31 @@ def test_k8s_preview_reports_the_default_image_when_none_given():
     assert resp.status_code == 200
     body = resp.json()
     assert body["image"] == f"{body['package_name']}:latest"
+
+
+def test_k8s_preview_quotes_an_image_containing_an_embedded_newline():
+    """"image" is a plain query param -- caller-controlled the same way
+    POST /api/deploy's own "tag" is -- and reaches kubernetes_manifest_
+    content completely unvalidated. Confirmed exploitable before this
+    fix: a value containing an embedded newline followed by more YAML
+    injected an entirely new key into the returned manifest's own
+    container spec, one indentation level below "image:".
+    """
+
+    malicious_image = (
+        "myimage:latest\n          securityContext:\n            privileged: true"
+    )
+
+    resp = client.get("/api/k8s-preview", params={"image": malicious_image})
+
+    assert resp.status_code == 200
+    manifest = resp.json()["kubernetes_manifest"]
+    assert "\nsecurityContext:" not in manifest
+    assert "          securityContext:\n            privileged: true\n" not in manifest
+    assert (
+        'image: "myimage:latest\\n          securityContext:\\n'
+        '            privileged: true"' in manifest
+    )
 
 
 def test_env_example_preview_requires_no_notebook_and_needs_no_body():

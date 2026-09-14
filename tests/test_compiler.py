@@ -1048,7 +1048,11 @@ def test_kubernetes_manifest_content_lists_every_env_var_with_its_own_default():
 
     content = kubernetes_manifest_content("generated", env_vars)
 
-    assert '- name: NOTEBOOK_API_KEY\n              value: "dev-key"' in content
+    # "dev-key" needs no YAML quoting (see _yaml_scalar,
+    # backend/exporters/openapi_exporter.py); "10000" does, since an
+    # unquoted "10000" would parse back as a YAML integer rather than the
+    # string value a real container env var must always be.
+    assert '- name: NOTEBOOK_API_KEY\n              value: dev-key' in content
     assert (
         '- name: NOTEBOOK_API_MAX_TASKS\n              value: "10000"' in content
     )
@@ -1098,6 +1102,78 @@ def test_kubernetes_manifest_content_respects_a_custom_image():
     assert "image: myapp:latest" not in content
 
 
+def test_kubernetes_manifest_content_quotes_an_image_containing_an_embedded_newline():
+    """Confirmed exploitable before this fix: `image` was interpolated
+    as a raw, unquoted f-string straight into a YAML value position, and
+    `image` is caller-controlled byte-for-byte via POST /api/deploy's own
+    "tag" (written here on every successful build) and GET
+    /api/k8s-preview's own "image" query param. A "tag" containing an
+    embedded newline followed by more YAML didn't just fail to parse --
+    it successfully injected an entirely new, attacker-chosen key one
+    indentation level below "image:", inside this exact container's own
+    spec (reachable: securityContext, command, volumeMounts, ...).
+    """
+
+    malicious_image = (
+        "myimage:latest\n"
+        "          securityContext:\n"
+        "            privileged: true"
+    )
+
+    content = kubernetes_manifest_content("myapp", [], image=malicious_image)
+
+    # The entire malicious value is now a single quoted YAML scalar --
+    # its embedded newlines survive only as an escaped "\n" inside the
+    # quotes, never as a real line break that could start a new key.
+    assert (
+        'image: "myimage:latest\\n          securityContext:\\n'
+        '            privileged: true"' in content
+    )
+    assert "\nsecurityContext:" not in content
+    assert "          securityContext:\n            privileged: true\n" not in content
+
+
+def test_kubernetes_manifest_content_escapes_a_double_quote_in_the_image():
+    """A value containing its own literal double quote must not be able
+    to close _yaml_scalar's own added quoting early.
+    """
+
+    content = kubernetes_manifest_content(
+        "myapp", [], image='myimage:latest"\ncommand: ["sh"]'
+    )
+
+    assert '\\"' in content
+    assert '\ncommand: ["sh"]\n' not in content
+
+
+def test_kubernetes_manifest_content_quotes_a_numeric_looking_env_default():
+    """An unquoted "10000" would parse back as a YAML integer, not the
+    string value a real container env var must always be -- the same
+    "numbers need quoting" rule GET /api/export-openapi's own YAML format
+    already applies to every OpenAPI schema string.
+    """
+
+    content = kubernetes_manifest_content(
+        "generated",
+        [{"name": "NOTEBOOK_API_MAX_TASKS", "default": "10000"}],
+    )
+
+    assert '- name: NOTEBOOK_API_MAX_TASKS\n              value: "10000"' in content
+
+
+def test_kubernetes_manifest_content_leaves_an_ordinary_env_default_unquoted():
+
+    content = kubernetes_manifest_content(
+        "generated",
+        [{"name": "NOTEBOOK_API_ALLOWED_ORIGINS", "default": "example.com"}],
+    )
+
+    assert (
+        "- name: NOTEBOOK_API_ALLOWED_ORIGINS\n              value: example.com"
+        in content
+    )
+
+
 def test_generate_kubernetes_manifest_writes_the_given_image(tmp_path):
 
     output_path = tmp_path / "kubernetes.yaml"
@@ -1142,7 +1218,7 @@ def test_compiler_pipeline_generates_a_kubernetes_manifest_file(tmp_path):
 
     manifest = manifest_path.read_text(encoding="utf-8")
     assert "  name: generated\n" in manifest
-    assert 'value: "notebook-to-api-dev-key"' in manifest
+    assert "value: notebook-to-api-dev-key" in manifest
     assert "NOTEBOOK_API_KEY" in manifest
 
 
