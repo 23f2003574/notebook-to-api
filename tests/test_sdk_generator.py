@@ -4256,6 +4256,49 @@ def test_python_type_to_typescript_maps_optional_and_union():
     assert _python_type_to_typescript("int | str") == "number | string"
 
 
+def test_python_type_to_typescript_keeps_a_top_level_union_whose_own_side_is_bracketed():
+    """Confirmed exploitable before this fix: the "|" split ran *after*
+    every List[.../Dict[.../Set[.../Tuple[.../Optional[.../Union[.../
+    Annotated[... prefix check, so "List[int] | None" -- an entirely
+    ordinary "optional list" annotation -- matched the List[ branch
+    first and returned "number[]", silently discarding its own trailing
+    "| None" half and claiming a required field the real notebook
+    function accepts omitting/None for.
+    """
+
+    assert _python_type_to_typescript("List[int] | None") == "number[] | null"
+    assert (
+        _python_type_to_typescript("Dict[str, int] | None")
+        == "Record<string, number> | null"
+    )
+    assert _python_type_to_typescript("Tuple[int, str] | None") == "unknown[] | null"
+    assert _python_type_to_typescript("Set[int] | None") == "number[] | null"
+    assert _python_type_to_typescript("Optional[int] | str") == (
+        "number | null | string"
+    )
+    assert _python_type_to_typescript("Union[int, str] | None") == (
+        "number | string | null"
+    )
+    assert _python_type_to_typescript('Annotated[int, "x"] | None') == (
+        "number | null"
+    )
+
+
+def test_python_type_to_typescript_still_ignores_a_pipe_nested_inside_a_generic():
+    """A "|" nested inside a generic's own type arguments (not a
+    top-level union of the whole annotation) must still be recognized as
+    such -- _split_top_level's own bracket-depth tracking already keeps
+    it out of the top-level split, unaffected by moving that split
+    earlier.
+    """
+
+    assert (
+        _python_type_to_typescript("Dict[str, int | float]")
+        == "Record<string, number>"
+    )
+    assert _python_type_to_typescript("List[int | str]") == "(number | string)[]"
+
+
 def test_python_type_to_typescript_parenthesizes_a_union_array_element():
     """"number | null[]" parses in TypeScript as "number | (null[])", not
     the intended "(number | null)[]" -- a union used as an array element
@@ -4567,6 +4610,58 @@ def test_python_type_to_safe_python_annotation_maps_generics_and_optional():
         == "Union[int, str]"
     )
     assert _python_type_to_safe_python_annotation("int | None") == "Optional[int]"
+
+
+def test_python_type_to_safe_python_annotation_keeps_a_union_whose_own_side_is_bracketed():
+    """Confirmed exploitable before this fix: the "|" split ran *after*
+    every List[.../Dict[.../Set[.../Tuple[.../Optional[.../Union[.../
+    Annotated[... prefix check, so "List[int] | None" -- an entirely
+    ordinary "optional list" annotation -- matched the List[ branch
+    first and returned "List[int]", silently discarding its own trailing
+    "| None" half and generating a required field the real notebook
+    function accepts omitting/None for.
+    """
+    from backend.exporters.sdk_generator import _python_type_to_safe_python_annotation
+
+    assert (
+        _python_type_to_safe_python_annotation("List[int] | None")
+        == "Optional[List[int]]"
+    )
+    assert (
+        _python_type_to_safe_python_annotation("Dict[str, int] | None")
+        == "Optional[Dict[str, int]]"
+    )
+    assert (
+        _python_type_to_safe_python_annotation("Tuple[int, str] | None")
+        == "Optional[List[Any]]"
+    )
+    assert (
+        _python_type_to_safe_python_annotation("Set[int] | None")
+        == "Optional[List[int]]"
+    )
+    assert (
+        _python_type_to_safe_python_annotation('Annotated[int, "x"] | None')
+        == "Optional[int]"
+    )
+
+
+def test_python_type_to_safe_python_annotation_still_ignores_a_pipe_nested_inside_a_generic():
+    """A "|" nested inside a generic's own type arguments (not a
+    top-level union of the whole annotation) must still be recognized as
+    such -- _split_top_level's own bracket-depth tracking already keeps
+    it out of the top-level split, unaffected by moving that split
+    earlier.
+    """
+    from backend.exporters.sdk_generator import _python_type_to_safe_python_annotation
+
+    assert (
+        _python_type_to_safe_python_annotation("Dict[str, int | float]")
+        == "Dict[str, Union[int, float]]"
+    )
+    assert (
+        _python_type_to_safe_python_annotation("List[int | str]")
+        == "List[Union[int, str]]"
+    )
 
 
 def test_python_type_to_safe_python_annotation_sanitizes_nested_unrecognized_names():

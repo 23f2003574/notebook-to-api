@@ -204,6 +204,30 @@ def _python_type_to_typescript(type_str):
 
     type_str = type_str.strip()
 
+    # A top-level PEP 604 union (e.g. "List[int] | None" or "int | str")
+    # must be split before any of the checks below -- checked first, not
+    # last, so a union whose own left-hand side happens to start with one
+    # of those prefixes isn't mistaken for a bare List[.../Dict[.../
+    # Optional[.../etc and returned with its own "| ..." half silently
+    # discarded. Confirmed exploitable with this check last (what this
+    # used to do): "List[int] | None" -- an entirely ordinary "optional
+    # list" annotation -- mapped to the bare "number[]", not
+    # "number[] | null", since the List[ branch below matched and
+    # returned first, never even seeing the trailing "| None" was there
+    # at all. Mirrors normalize_type_annotation's own identical "|"-
+    # before-prefix-checks ordering (backend/parser/ast_parser.py), which
+    # already gets this right for its own, different purpose. Not a top-
+    # level union (a "|" nested inside a generic's own arguments, e.g.
+    # "Dict[str, int | float]") splits into a single part here --
+    # _split_top_level's own bracket-depth tracking already keeps that
+    # case out of this branch, falling through to the checks below
+    # exactly as before.
+    if "|" in type_str:
+        parts = _split_top_level(type_str, "|")
+        if len(parts) > 1:
+            mapped = [_python_type_to_typescript(part) for part in parts]
+            return " | ".join(dict.fromkeys(mapped))
+
     if type_str in _PYTHON_SCALAR_TO_TS:
         return _PYTHON_SCALAR_TO_TS[type_str]
 
@@ -238,15 +262,6 @@ def _python_type_to_typescript(type_str):
         inner = _bracket_inner(type_str, len("Annotated") )
         first_arg = _split_top_level(inner)[0]
         return _python_type_to_typescript(first_arg)
-
-    if "|" in type_str:
-        # A top-level PEP 604 union (e.g. "int | None") -- not one nested
-        # inside a generic's own arguments, which _split_top_level's own
-        # bracket-depth tracking already keeps out of this split.
-        parts = _split_top_level(type_str, "|")
-        if len(parts) > 1:
-            mapped = [_python_type_to_typescript(part) for part in parts]
-            return " | ".join(dict.fromkeys(mapped))
 
     return "unknown"
 
@@ -443,6 +458,33 @@ def _python_type_to_safe_python_annotation(type_str):
 
     type_str = type_str.strip()
 
+    # A top-level PEP 604 union (e.g. "List[int] | None" or "int | str")
+    # must be split before any of the checks below -- checked first, not
+    # last, so a union whose own left-hand side happens to start with one
+    # of those prefixes isn't mistaken for a bare List[.../Dict[.../
+    # Optional[.../etc and returned with its own "| ..." half silently
+    # discarded. Confirmed exploitable with this check last (what this
+    # used to do): "List[int] | None" -- an entirely ordinary "optional
+    # list" annotation -- mapped to the bare "List[int]", not
+    # "Optional[List[int]]", since the List[ branch below matched and
+    # returned first, never even seeing the trailing "| None" was there
+    # at all -- silently claiming a required field the real notebook
+    # function accepts omitting/None for. Mirrors normalize_type_
+    # annotation's own identical "|"-before-prefix-checks ordering
+    # (backend/parser/ast_parser.py), which already gets this right for
+    # its own, different purpose. Not a top-level union (a "|" nested
+    # inside a generic's own arguments, e.g. "Dict[str, int | float]")
+    # splits into a single part here -- _split_top_level's own bracket-
+    # depth tracking already keeps that case out of this branch, falling
+    # through to the checks below exactly as before.
+    if "|" in type_str:
+        parts = _split_top_level(type_str, "|")
+        if len(parts) > 1:
+            mapped = [
+                _python_type_to_safe_python_annotation(part) for part in parts
+            ]
+            return _join_python_union(mapped)
+
     if type_str in _PYTHON_SAFE_SCALARS:
         return type_str
 
@@ -487,17 +529,6 @@ def _python_type_to_safe_python_annotation(type_str):
         inner = _bracket_inner(type_str, len("Annotated"))
         first_arg = _split_top_level(inner)[0]
         return _python_type_to_safe_python_annotation(first_arg)
-
-    if "|" in type_str:
-        # A top-level PEP 604 union -- not one nested inside a generic's
-        # own arguments, which _split_top_level's own bracket-depth
-        # tracking already keeps out of this split.
-        parts = _split_top_level(type_str, "|")
-        if len(parts) > 1:
-            mapped = [
-                _python_type_to_safe_python_annotation(part) for part in parts
-            ]
-            return _join_python_union(mapped)
 
     # An unrecognized bare identifier -- see this function's own
     # docstring for why that must never pass through unchanged.
