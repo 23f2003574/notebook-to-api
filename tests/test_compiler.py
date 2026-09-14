@@ -23,6 +23,7 @@ from backend.compiler import (
     _extract_explicit_requirements,
     _extract_private_function_names,
     _filter_functions_by_name,
+    _normalize_distribution_name,
     clear_stale_export_artifacts,
     COMPILE_LOCK,
     compile_notebook,
@@ -4675,6 +4676,46 @@ def test_resolve_requirements_conflict_detection_is_case_insensitive():
     assert numpy_lines == ["NumPy==1.24.0"]
 
 
+def test_resolve_requirements_conflict_detection_normalizes_hyphens_and_underscores(
+    monkeypatch,
+):
+    """PyPI normalizes "-"/"_"/"." runs in a project name to a single "-"
+    (PEP 503), not just case -- "python-dateutil" and "python_dateutil"
+    are the identical distribution to pip. Confirmed exploitable with
+    only case-folding (what this check used to do): a notebook `import
+    dateutil` (auto-resolving to "python-dateutil" via
+    distribution_name_for_import) alongside its own "# notebook-to-api:
+    requires python_dateutil==2.9.0" -- an entirely ordinary, pip-valid
+    way to spell that pin -- produced *both* "python-dateutil==<auto>"
+    and "python_dateutil==2.9.0" in requirements.txt, the identical
+    "Double requirement given" pip failure this same conflict-detection
+    already exists to prevent, just reproduced through a separator
+    difference instead of a case one. distribution_name_for_import is
+    monkeypatched here (not a real installed package) so this test's own
+    result doesn't depend on what happens to be installed in whatever
+    environment runs it.
+    """
+    import backend.compiler as compiler_module
+
+    monkeypatch.setattr(
+        compiler_module,
+        "distribution_name_for_import",
+        lambda import_name: (
+            "python-dateutil" if import_name == "dateutil" else import_name
+        ),
+    )
+
+    requirements = resolve_requirements(
+        ["dateutil"], explicit_requirements=["python_dateutil==2.9.0"]
+    )
+
+    dateutil_lines = [
+        line for line in requirements
+        if _normalize_distribution_name(line.split("==")[0]) == "python-dateutil"
+    ]
+    assert dateutil_lines == ["python_dateutil==2.9.0"]
+
+
 def test_resolve_requirements_keeps_auto_detected_lines_with_no_explicit_conflict():
 
     requirements = resolve_requirements(
@@ -7619,6 +7660,24 @@ def test_extract_explicit_requirements_conflict_detection_is_case_insensitive():
         _extract_explicit_requirements(code_cells)
 
 
+def test_extract_explicit_requirements_conflict_detection_normalizes_separators():
+    """PyPI normalizes "-"/"_"/"." runs in a project name to a single "-"
+    (PEP 503), not just case -- "python-dateutil" and "python_dateutil"
+    are the identical distribution to pip, so two directives spelled with
+    different separators for the same package must still be recognized
+    as conflicting, the identical "Double requirement given" pip failure
+    this check already exists to catch for the case-only variant above.
+    """
+
+    code_cells = [
+        "# notebook-to-api: requires python-dateutil==2.8.0\n"
+        "# notebook-to-api: requires python_dateutil==2.9.0\n"
+    ]
+
+    with pytest.raises(ValueError, match="(?i)python.dateutil"):
+        _extract_explicit_requirements(code_cells)
+
+
 def test_extract_explicit_requirements_error_names_both_conflicting_specs():
 
     code_cells = [
@@ -7707,6 +7766,28 @@ def test_explicit_requirement_package_name_handles_every_pep_508_continuation():
     assert _explicit_requirement_package_name(
         "my-private-pkg @ git+https://example.com/pkg.git"
     ) == "my-private-pkg"
+
+
+def test_normalize_distribution_name_folds_case():
+
+    assert _normalize_distribution_name("NumPy") == "numpy"
+    assert _normalize_distribution_name("numpy") == "numpy"
+    assert _normalize_distribution_name("nUmPy") == "numpy"
+
+
+def test_normalize_distribution_name_collapses_separator_runs_to_a_single_hyphen():
+    """PEP 503: PyPI normalizes any run of "-"/"_"/"." in a project name
+    to a single "-" -- "python-dateutil", "python_dateutil", and
+    "python.dateutil" (or any mix, including a run like "a--b"/"a_.-b")
+    are all the identical distribution to pip.
+    """
+
+    assert _normalize_distribution_name("python-dateutil") == "python-dateutil"
+    assert _normalize_distribution_name("python_dateutil") == "python-dateutil"
+    assert _normalize_distribution_name("python.dateutil") == "python-dateutil"
+    assert _normalize_distribution_name("Python_Date-Util") == "python-date-util"
+    assert _normalize_distribution_name("zope.interface") == "zope-interface"
+    assert _normalize_distribution_name("a--b__c..d") == "a-b-c-d"
 
 
 def test_extract_excluded_imports_finds_a_directive_in_a_cell():

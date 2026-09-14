@@ -476,9 +476,11 @@ def _extract_explicit_requirements(code_cells):
     requirements.txt line would.
 
     Raises ValueError if two *different* specs name the same package (via
-    _explicit_requirement_package_name below, case-insensitively -- PyPI
-    distribution names are themselves case-insensitive) -- e.g. one cell
-    declaring "# notebook-to-api: requires numpy==1.24.0" and another
+    _explicit_requirement_package_name below, normalized the identical
+    way PyPI itself does -- see _normalize_distribution_name -- so
+    "numpy"/"NumPy" and "python-dateutil"/"python_dateutil" are each
+    recognized as the same package) -- e.g. one cell declaring
+    "# notebook-to-api: requires numpy==1.24.0" and another
     "# notebook-to-api: requires numpy==1.26.0", commonly left behind
     after pinning a different version while iterating on a notebook.
     "seen"/exact-duplicate removal just above only catches the identical-
@@ -524,7 +526,7 @@ def _extract_explicit_requirements(code_cells):
 
             if package_name is not None:
 
-                normalized_name = package_name.lower()
+                normalized_name = _normalize_distribution_name(package_name)
                 conflicting_spec = spec_by_package_name.get(normalized_name)
 
                 if conflicting_spec is not None:
@@ -936,6 +938,27 @@ def _explicit_requirement_package_name(spec):
     return match.group(1) if match else None
 
 
+# PEP 503's own normalization algorithm, verbatim: lowercase, then
+# collapse any run of "-"/"_"/"." into a single "-". PyPI treats
+# "scikit-learn"/"scikit_learn"/"Scikit.Learn"/... as the exact same
+# project for this reason -- pip resolves all of them identically -- so
+# any comparison here asking "do these two specs name the same
+# distribution" must normalize this way too, not just lowercase (which
+# only handles the case-insensitivity half of PyPI's own equivalence
+# rule, not the separator half).
+_PEP_503_SEPARATOR_RUN_PATTERN = re.compile(r"[-_.]+")
+
+
+def _normalize_distribution_name(name):
+    """`name` normalized the identical way PyPI itself normalizes a
+    project name (PEP 503) -- used everywhere in this file that asks "do
+    these two package names refer to the same PyPI distribution", so
+    "python-dateutil" and "python_dateutil" (or "NumPy" and "numpy") are
+    always recognized as the same package, exactly as pip itself would.
+    """
+    return _PEP_503_SEPARATOR_RUN_PATTERN.sub("-", name).lower()
+
+
 def resolve_requirements(imports, explicit_requirements=None):
     """The exact, sorted requirements.txt lines write_requirements (below)
     would write for `imports` (a notebook's own third-party imports, e.g.
@@ -998,13 +1021,22 @@ def resolve_requirements(imports, explicit_requirements=None):
 
     explicit_requirements = explicit_requirements or []
 
-    # Case-insensitive: PyPI distribution names are themselves
-    # case-insensitive (pip normalizes "NumPy"/"numpy"/"nUmPy" to the
-    # identical project), so a directive spelled differently than this
-    # tool's own auto-resolved distribution_name_for_import result must
-    # still be recognized as naming the same package.
+    # Normalized via _normalize_distribution_name -- the identical PEP
+    # 503 rule PyPI itself applies to a project name -- not just
+    # lowercased: PyPI treats "numpy"/"NumPy" as the same project (case),
+    # but also "python-dateutil"/"python_dateutil" and "zope.interface"/
+    # "zope-interface" (separator runs). Confirmed exploitable with only
+    # case-folding: a notebook `import dateutil` (auto-resolves to
+    # "python-dateutil" via distribution_name_for_import) alongside its
+    # own "# notebook-to-api: requires python_dateutil==2.9.0" -- a
+    # perfectly ordinary, pip-valid way to spell that pin -- produced
+    # *both* "python-dateutil==<auto>" and "python_dateutil==2.9.0" in
+    # requirements.txt, the exact "Double requirement given" pip failure
+    # this function's own docstring already describes fixing, just
+    # reproduced through a separator spelling difference instead of a
+    # case one.
     explicit_package_names = {
-        name.lower()
+        _normalize_distribution_name(name)
         for name in (
             _explicit_requirement_package_name(spec)
             for spec in explicit_requirements
@@ -1024,7 +1056,7 @@ def resolve_requirements(imports, explicit_requirements=None):
     # resolved in the explicit one's favor.
     pinned_deps = [
         _pinned_requirement(dep) for dep in distribution_names
-        if dep.lower() not in explicit_package_names
+        if _normalize_distribution_name(dep) not in explicit_package_names
     ]
 
     return sorted(set(pinned_deps) | set(explicit_requirements))
