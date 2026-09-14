@@ -702,11 +702,26 @@ def literal_values(arg_type):
 # value below is a real, Pydantic-v2-valid literal for its own type,
 # confirmed to round-trip through a real compiled endpoint successfully
 # rather than merely "look plausible."
+#
+# "bytes" (added here) fell through the same fallback to None for the
+# identical reason -- an entirely ordinary parameter/return type this
+# compiler already treats as first-class everywhere else (see
+# _python_type_to_safe_python_annotation/_python_type_to_typescript,
+# backend/exporters/sdk_generator.py, both of which already map it
+# alongside int/float/str/bool). Confirmed exploitable the same way:
+# `def f(data: bytes)`'s own generated Pydantic field rejects a JSON
+# `null` with a real 422 ({"type": "bytes_type", "msg": "Input should be
+# a valid bytes"}), the exact value None produced here. Pydantic v2
+# accepts (and utf-8 encodes) a plain JSON string for a `bytes` field --
+# confirmed against a real compiled endpoint -- so "" (the same "empty
+# but valid" convention "str"/"list"/"dict"/"tuple"/"set" above already
+# use) round-trips successfully as b"".
 _EXAMPLE_TYPE_DEFAULTS = {
     "int": 0,
     "float": 0.0,
     "str": "",
     "bool": False,
+    "bytes": "",
     "list": [],
     "dict": {},
     "tuple": [],

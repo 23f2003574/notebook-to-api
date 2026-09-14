@@ -1041,6 +1041,47 @@ def test_generate_example_payload_uses_a_real_value_for_date_datetime_time_uuid_
     }
 
 
+def test_generate_example_payload_uses_a_real_value_for_bytes():
+    """Confirmed exploitable before this fix: "bytes" fell through the
+    same `type_defaults.get(arg_type, None)` fallback as date/datetime/
+    time/UUID/Decimal did before their own fix -- None. POSTing the
+    resulting `{"data": None}` against a real compiled `def f(data:
+    bytes)` endpoint gets a real 422 back ("Input should be a valid
+    bytes"), even though "bytes" is already treated as a first-class
+    scalar type everywhere else this compiler generates code for it (see
+    _python_type_to_safe_python_annotation/_python_type_to_typescript,
+    backend/exporters/sdk_generator.py).
+    """
+
+    payload = generate_example_payload([{"name": "data", "type": "bytes"}])
+
+    assert payload == {"data": ""}
+
+    from pydantic import BaseModel
+
+    class M(BaseModel):
+        data: bytes
+
+    # The example value must actually validate, not just "look
+    # plausible" -- the same round-trip check the date/datetime/UUID/
+    # Decimal fix already applies to its own new example values.
+    assert M(**payload).data == b""
+
+
+def test_generate_example_payload_still_prefers_an_explicit_default_for_bytes():
+
+    payload = generate_example_payload(
+        [{"name": "data", "type": "bytes", "default": "hello"}]
+    )
+
+    assert payload == {"data": "hello"}
+
+
+def test_generate_example_response_uses_a_real_value_for_bytes():
+
+    assert generate_example_response("bytes") == {"result": ""}
+
+
 def test_generate_example_payload_still_prefers_an_explicit_default_for_these_types():
 
     payload = generate_example_payload(
@@ -1074,7 +1115,7 @@ def test_generate_example_payload_and_response_share_one_type_defaults_source():
     """
 
     for type_name in (
-        "int", "float", "str", "bool", "list", "dict", "tuple", "set",
+        "int", "float", "str", "bool", "bytes", "list", "dict", "tuple", "set",
         "date", "datetime", "time", "UUID", "Decimal",
     ):
         payload_value = generate_example_payload(
