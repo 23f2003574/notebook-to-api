@@ -14177,6 +14177,112 @@ def test_import_notebook_versions_rejects_a_mismatched_expected_sha256_before_wr
     assert not (Path(UPLOAD_DIR) / filename).is_file()
 
 
+def test_import_notebook_versions_rejects_when_the_version_history_would_exceed_max_total_storage_bytes(
+    monkeypatch,
+):
+    """MAX_TOTAL_STORAGE_BYTES' own docstring already describes it as a
+    whole-catalog cap covering every notebook's current content *plus*
+    its full version history -- but _restore_version_snapshots_from_archive
+    (shared by this endpoint and POST /api/notebooks/import) wrote every
+    version entry it was given completely unconditionally, with no check
+    against that cap at all. Confirmed exploitable before this fix: an
+    operator relying on NOTEBOOK_API_MAX_TOTAL_STORAGE_BYTES to bound
+    disk usage had it silently bypassed by importing a version-history-
+    heavy backup archive.
+    """
+
+    from backend.routes import upload as upload_module
+
+    filename = "versions_import_storage_cap_source.ipynb"
+    original_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    current_content = _notebook_bytes("def g() -> int:\n    return 2\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(original_content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(current_content), "application/json")},
+    )
+
+    export_bytes = client.get(f"/api/notebooks/{filename}/versions/export").content
+
+    new_filename = "versions_import_storage_cap_target.ipynb"
+
+    # Just enough room for the current-content half alone (so
+    # _save_uploaded_notebook's own, separate MAX_TOTAL_STORAGE_BYTES
+    # check -- already covered by
+    # test_upload_rejects_a_new_notebook_once_max_total_storage_bytes_is_reached
+    # -- doesn't itself reject this first, before ever reaching the
+    # version-history restore this test actually means to exercise) but
+    # not for the version history riding along with it too.
+    current_total = upload_module._current_total_storage_bytes()
+    monkeypatch.setattr(
+        upload_module, "MAX_TOTAL_STORAGE_BYTES", current_total + len(current_content)
+    )
+
+    resp = client.post(
+        f"/api/notebooks/{new_filename}/versions/import",
+        files={"file": ("backup.zip", io.BytesIO(export_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 413
+    assert "maximum total storage" in resp.json()["detail"].lower()
+
+    # The current-content half was still written (it fit within the cap
+    # on its own) -- only the version-history restore was rejected,
+    # leaving no version snapshots behind.
+    assert client.get(f"/api/notebooks/{new_filename}").status_code == 200
+    assert client.get(f"/api/notebooks/{new_filename}/versions").json()["versions"] == []
+
+
+def test_import_notebook_versions_batch_reports_a_storage_cap_error_per_notebook(
+    monkeypatch,
+):
+    """The identical cap, applied through POST /api/notebooks/import's
+    own per-notebook try/except HTTPException -- one notebook's version
+    history exceeding the cap fails just that notebook's own batch
+    entry, not the whole request.
+    """
+
+    from backend.routes import upload as upload_module
+
+    filename = "versions_import_batch_storage_cap_source.ipynb"
+    original_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    current_content = _notebook_bytes("def g() -> int:\n    return 2\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(original_content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(current_content), "application/json")},
+    )
+
+    export_bytes = client.get(
+        "/api/notebooks/export?include_versions=true"
+    ).content
+
+    client.delete(f"/api/notebooks/{filename}")
+
+    current_total = upload_module._current_total_storage_bytes()
+    monkeypatch.setattr(upload_module, "MAX_TOTAL_STORAGE_BYTES", current_total)
+
+    resp = client.post(
+        "/api/notebooks/import",
+        files={"file": ("backup.zip", io.BytesIO(export_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    matching = [r for r in body["results"] if r["filename"] == filename]
+    assert len(matching) == 1
+    assert matching[0]["status"] == "error"
+    assert "maximum total storage" in matching[0]["detail"].lower()
+
+
 def test_inspect_notebook_version_reports_functions_and_dependencies_for_that_snapshot():
 
     filename = "versions_inspect_snapshot.ipynb"

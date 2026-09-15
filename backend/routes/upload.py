@@ -1061,11 +1061,55 @@ def _restore_version_snapshots_from_archive(archive, entry_names, versions_dir):
     a booby-trapped entry in one notebook's own history now fails just
     that one notebook, leaving every other entry in the batch to succeed
     as before.
+
+    Rejects the whole restore with 413 if the *combined uncompressed
+    size* of every entry in `entry_names` would push
+    _current_total_storage_bytes() over MAX_TOTAL_STORAGE_BYTES --
+    checked once, up front, before a single byte is written (or
+    `versions_dir` even created), the same fail-fast-before-doing-any-
+    work precedent MAX_NOTEBOOKS' own check in _save_uploaded_notebook
+    already sets. Confirmed exploitable before this: MAX_TOTAL_STORAGE_
+    BYTES' own docstring above already describes it as a *whole-catalog*
+    byte budget covering "every '.ipynb' file's own current content plus
+    its full version history combined" -- but this function, called by
+    both POST /api/notebooks/{filename}/versions/import and POST
+    /api/notebooks/import to restore a notebook's version history from a
+    backup archive, wrote every entry it was given completely
+    unconditionally, with no check against that budget at all. An
+    operator relying on NOTEBOOK_API_MAX_TOTAL_STORAGE_BYTES to bound
+    disk usage (the exact scenario its own docstring motivates) had that
+    cap silently bypassed by importing a version-history-heavy archive
+    through either endpoint -- the one write path into a notebook's own
+    version history this cap never actually reached, even though GET
+    /api/notebooks/storage already reports the version-history bytes
+    it's supposed to be counted against. A zip archive can hold far more
+    uncompressed data than its own compressed size on disk, so this
+    checks each entry's own real `file_size` (from the zip's central
+    directory, read without decompressing) rather than the far smaller
+    number of bytes the uploaded request itself contained.
     """
     imported_version_ids = []
 
     if not entry_names:
         return imported_version_ids
+
+    if MAX_TOTAL_STORAGE_BYTES:
+
+        incoming_bytes = sum(
+            archive.getinfo(entry_name).file_size for entry_name in entry_names
+        )
+
+        if _current_total_storage_bytes() + incoming_bytes > MAX_TOTAL_STORAGE_BYTES:
+
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    "Restoring this archive's version history would exceed "
+                    f"the maximum total storage of {MAX_TOTAL_STORAGE_BYTES} "
+                    "bytes (NOTEBOOK_API_MAX_TOTAL_STORAGE_BYTES) -- delete "
+                    "or prune some existing notebooks/versions first."
+                )
+            )
 
     versions_dir.mkdir(parents=True, exist_ok=True)
 
