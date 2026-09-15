@@ -1087,10 +1087,12 @@ def test_kubernetes_manifest_content_sanitizes_an_underscore_and_uppercase_packa
     assert "      app: my-notebook-app\n" in content
     assert "        app: my-notebook-app\n" in content
 
-    # The image default is untouched by this sanitization -- it's a
-    # separate, already-quoted caller-supplied value, not a name this
-    # function derives from package_name itself.
-    assert "image: My_Notebook_App:latest\n" in content
+    # The image *default* is separately lowercased (a later fix, since a
+    # Docker image repository name must itself be all-lowercase) -- but
+    # is otherwise still built straight from package_name, underscore(s)
+    # and all: unlike a Kubernetes resource name, Docker's own naming
+    # rule for a repository name allows underscores.
+    assert "image: my_notebook_app:latest\n" in content
 
 
 def test_kubernetes_manifest_content_falls_back_to_generated_for_an_all_underscore_name():
@@ -1187,6 +1189,43 @@ def test_kubernetes_manifest_content_defaults_image_to_package_name_latest():
     content_explicit_none = kubernetes_manifest_content("myapp", [], image=None)
 
     assert content_explicit_none == content
+
+
+def test_kubernetes_manifest_content_lowercases_an_uppercase_package_name_in_the_default_image():
+    """A Docker image repository name must itself be all-lowercase --
+    confirmed exploitable before this fix: a compiled package named
+    "MyNotebookApp" (a plain Python identifier, the only thing
+    package_name_for_output_dir actually enforces) baked
+    "MyNotebookApp:latest" into this manifest's own default "image:",
+    a reference `docker build`/`docker pull` themselves reject outright.
+    POST /api/deploy's own tag default already lowercases for exactly
+    this reason -- this brings the plain-compile default (no explicit
+    deploy) in line with it.
+    """
+
+    content = kubernetes_manifest_content("MyNotebookApp", [])
+
+    assert "image: mynotebookapp:latest\n" in content
+    assert "image: MyNotebookApp:latest\n" not in content
+
+    # But a resource name/label value derived from the same package_name
+    # is unaffected by this -- already lowercased (and sanitized) by
+    # _k8s_resource_name regardless.
+    assert "  name: mynotebookapp\n" in content
+
+
+def test_kubernetes_manifest_content_does_not_lowercase_a_caller_supplied_image():
+    """Only the *default* image (derived from package_name) is
+    lowercased -- a caller-supplied "image" is used exactly as given,
+    since it's an already-existing registry reference this function has
+    no business rewriting.
+    """
+
+    content = kubernetes_manifest_content(
+        "MyNotebookApp", [], image="Registry.Example.com/MyApp:v1"
+    )
+
+    assert "image: Registry.Example.com/MyApp:v1\n" in content
 
 
 def test_kubernetes_manifest_content_respects_a_custom_image():

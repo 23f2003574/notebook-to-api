@@ -114,19 +114,23 @@ def kubernetes_manifest_content(package_name="generated", env_vars=None, image=N
     way to make on an operator's behalf.
 
     `image` (optional) is the container's own "image:" reference --
-    defaults to "{package_name}:latest" exactly as before this parameter
-    existed, but a real cluster can't `docker build` on an operator's
-    behalf the way a local `docker compose up` effectively can: it can
-    only ever pull an already-pushed image by its exact tag. Before this,
-    the hardcoded "{package_name}:latest" default was the *only* value
-    this manifest could ever contain, silently wrong the moment a caller
-    actually deployed under any other tag (POST /api/deploy's own "tag",
-    or the CLI's `deploy --tag`) -- `kubectl apply -f` against this
-    manifest would then either pull an unrelated ":latest" image nothing
-    just built, or fail outright against a registry that was never
-    pushed to at all. Passing the real tag here is what actually closes
-    that gap; see POST /api/deploy, which now does exactly that for the
-    copy it writes to GENERATED_DIR after every successful build.
+    defaults to "{package_name.lower()}:latest" exactly as before this
+    parameter existed (module-level comment below aside -- see there for
+    why the default alone is lowercased), but a real cluster can't
+    `docker build` on an operator's behalf the way a local `docker
+    compose up` effectively can: it can only ever pull an already-pushed
+    image by its exact tag. Before this, the hardcoded default was the
+    *only* value this manifest could ever contain, silently wrong the
+    moment a caller actually deployed under any other tag (POST
+    /api/deploy's own "tag", or the CLI's `deploy --tag`) --
+    `kubectl apply -f` against this manifest would then either pull an
+    unrelated ":latest" image nothing just built, or fail outright
+    against a registry that was never pushed to at all. Passing the real
+    tag here is what actually closes that gap; see POST /api/deploy,
+    which now does exactly that for the copy it writes to GENERATED_DIR
+    after every successful build. A caller-supplied `image` is used
+    exactly as given, uppercase and all -- only the *default*, derived
+    from `package_name`, is ever lowercased.
 
     Every interpolated value below (`image`, `package_name`, and each
     env entry's own "name"/"default") is rendered through _yaml_scalar
@@ -163,13 +167,27 @@ def kubernetes_manifest_content(package_name="generated", env_vars=None, image=N
     only) is stricter than the plain `str.isidentifier()` check
     package_name_for_output_dir (backend/compiler.py) already enforces --
     see that helper's own docstring for the exact underscore/uppercase
-    failure this closes. `image` is deliberately left as-is here: it's a
-    caller-supplied registry reference already handled (and quoted) on its
-    own terms above, not a name this function derives from `package_name`
-    itself.
+    failure this closes. A caller-*supplied* `image` is used exactly as
+    given, uppercase and all: it's a registry reference already handled
+    (and quoted) on its own terms above, not a name this function derives
+    from `package_name` itself. Only the *default* -- "{package_name}:
+    latest", built from `package_name` when no `image` is given at all --
+    is lowercased first: a Docker image repository name must itself be
+    all-lowercase, and `package_name` -- again, only ever validated as a
+    plain Python identifier -- can just as easily carry an uppercase
+    letter as it can the underscore _k8s_resource_name above already has
+    to handle. Confirmed exploitable before this: a compiled package
+    named "MyNotebookApp" baked "MyNotebookApp:latest" into this
+    manifest's own "image:" by default, a reference `docker build`/
+    `docker pull` themselves reject outright ("invalid reference format:
+    repository name must be lowercase"). POST /api/deploy's own tag
+    default (`generated_path.name.lower()`, routes/upload.py) already
+    lowercases for exactly this reason -- this just brings the *plain-
+    compile* default (no explicit deploy at all) in line with it, rather
+    than leaving this one path still baking in an invalid reference.
     """
     env_vars = env_vars or []
-    image = image or f"{package_name}:latest"
+    image = image or f"{package_name.lower()}:latest"
 
     package_name_scalar = _yaml_scalar(_k8s_resource_name(package_name))
     image_scalar = _yaml_scalar(image)

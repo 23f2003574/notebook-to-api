@@ -12507,14 +12507,24 @@ def k8s_preview_endpoint(image: str = None):
     for their own artifacts.
 
     "image" (optional) previews the manifest's own "image:" reference
-    under a tag other than the "{package_name}:latest" default -- the
-    exact tag a caller intends to `docker build -t`/`docker push` via
+    under a tag other than the "{package_name.lower()}:latest" default --
+    the exact tag a caller intends to `docker build -t`/`docker push` via
     POST /api/deploy's own "tag", so the manifest they'll actually
     `kubectl apply -f` can be checked *before* ever running that deploy,
     the same "preview before committing to a real compile" relationship
     every other preview endpoint here already has with its own real
-    counterpart. Omitted (the default), byte-for-byte identical to
-    before this parameter existed.
+    counterpart. Omitted, this reports the identical default
+    kubernetes_manifest_content itself now falls back to -- lowercased,
+    since a Docker image repository name must itself be all-lowercase
+    (see that function's own docstring, backend/generator/
+    kubernetes_generator.py) -- matching POST /api/deploy's own tag
+    default (`generated_path.name.lower()`) rather than the raw,
+    potentially-uppercase "package_name" this preview reported before
+    that fix: a caller who never overrides "image" here would otherwise
+    have seen this preview's own default silently disagree with what a
+    real deploy would actually tag the image, the exact drift this
+    endpoint's own docstring above says reusing kubernetes_manifest_
+    content directly is supposed to make impossible.
     """
 
     package_name = package_name_for_output_dir(GENERATED_DIR)
@@ -12522,7 +12532,7 @@ def k8s_preview_endpoint(image: str = None):
     return {
         "status": "success",
         "package_name": package_name,
-        "image": image or f"{package_name}:latest",
+        "image": image or f"{package_name.lower()}:latest",
         "kubernetes_manifest": kubernetes_manifest_content(
             package_name, GENERATED_APP_ENV_VARS, image
         ),

@@ -22200,8 +22200,38 @@ def test_k8s_preview_reflects_a_configured_package_name(monkeypatch, tmp_path):
     assert resp.status_code == 200
     body = resp.json()
     assert body["package_name"] == "my_custom_pkg"
-    assert "  name: my_custom_pkg\n" in body["kubernetes_manifest"]
+    # The manifest's own "metadata.name"/label values are sanitized to a
+    # DNS-1123-legal name (underscores become '-') -- the image default
+    # isn't subject to that same rule (Docker allows underscores), just
+    # lowercased.
+    assert "  name: my-custom-pkg\n" in body["kubernetes_manifest"]
     assert "image: my_custom_pkg:latest\n" in body["kubernetes_manifest"]
+
+
+def test_k8s_preview_lowercases_the_default_image_for_an_uppercase_package_name(
+    monkeypatch, tmp_path
+):
+    """A Docker image repository name must itself be all-lowercase --
+    confirmed exploitable before this fix: this preview's own "image"
+    field (and its "kubernetes_manifest" text) reported the raw,
+    potentially-uppercase "package_name" verbatim as the default image,
+    silently disagreeing with POST /api/deploy's own already-lowercased
+    tag default (`generated_path.name.lower()`) for the exact same
+    package -- the one drift this endpoint's own docstring says reusing
+    kubernetes_manifest_content directly is supposed to make impossible.
+    """
+
+    generated_dir = tmp_path / "My_Custom_Pkg"
+    monkeypatch.setattr("backend.routes.upload.GENERATED_DIR", str(generated_dir))
+
+    resp = client.get("/api/k8s-preview")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["package_name"] == "My_Custom_Pkg"
+    assert body["image"] == "my_custom_pkg:latest"
+    assert "image: my_custom_pkg:latest\n" in body["kubernetes_manifest"]
+    assert "image: My_Custom_Pkg:latest\n" not in body["kubernetes_manifest"]
 
 
 def test_k8s_preview_does_not_touch_generated_dir(monkeypatch, tmp_path):
