@@ -171,6 +171,29 @@ class NotebookChangeHandler(FileSystemEventHandler):
             # Debounce: avoid multiple rapid recompiles
             current_time = time.time()
             if current_time - self.last_compile_time < self.debounce_seconds:
+                # Confirmed exploitable before this: this branch returned
+                # with no output of any kind -- the only silent branch
+                # anywhere in this handler (on_modified/on_created's own
+                # "not the watched notebook" no-op aside, which has
+                # nothing to report in the first place). An editor that
+                # writes a notebook's file more than once per logical save
+                # (this class' own docstring already gives the temp-file-
+                # then-rename example) is the common, harmless case this
+                # debounce exists to collapse -- but a genuinely distinct,
+                # separate edit saved within debounce_seconds of the
+                # previous recompile is silently skipped exactly the same
+                # way, with the compiled app left serving stale output and
+                # nothing here to tell a developer that happened. Without
+                # this print, that's indistinguishable from `serve`/
+                # `watch` already having picked the edit up.
+                remaining = self.debounce_seconds - (current_time - self.last_compile_time)
+                print(
+                    f"\n⏳ Notebook changed again within {self.debounce_seconds}s "
+                    f"of the last recompile ({remaining:.1f}s left in the "
+                    "debounce window) -- skipping this one. Save again "
+                    "once the window has passed if this edit should "
+                    "still be picked up."
+                )
                 return
 
             self.last_compile_time = current_time

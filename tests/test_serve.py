@@ -1442,6 +1442,80 @@ def test_notebook_change_handler_respects_a_custom_debounce_window(tmp_path, mon
     assert compiled_calls == [(str(notebook_path), str(output_dir))]
 
 
+def test_notebook_change_handler_reports_a_debounced_change_instead_of_staying_silent(
+    tmp_path, monkeypatch, capsys,
+):
+    """Confirmed exploitable before this fix: a notebook edit saved within
+    debounce_seconds of the previous recompile was silently skipped, with
+    no output of any kind -- indistinguishable, from the terminal a
+    developer is watching, from `serve`/`watch` already having picked
+    the edit up and recompiled it. Every other branch in this handler
+    (an unrelated file, the watched notebook itself moving/deleted, a
+    successful or failing recompile) already prints something; only this
+    one didn't.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    fake_now = [100.0]
+    monkeypatch.setattr(serve_module.time, "time", lambda: fake_now[0])
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 100.0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+
+    fake_now[0] = 100.5  # within the 1-second debounce window
+    handler.on_modified(event)
+
+    assert compiled_calls == []
+    output = capsys.readouterr().out
+    assert "changed again within 1.0s of the last recompile" in output
+    assert "0.5s left in the debounce window" in output
+    assert "Save again once the window has passed" in output
+
+
+def test_notebook_change_handler_does_not_report_debouncing_for_a_first_change(
+    tmp_path, monkeypatch, capsys,
+):
+    """The complement of the test above: an ordinary change that clears
+    the debounce window must print only the normal recompile messages,
+    not the debounce notice -- that notice belongs solely to the branch
+    that actually skips a recompile.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    monkeypatch.setattr(
+        serve_module, "compile_notebook", lambda nb, out, **kwargs: None
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    fake_now = [100.0]
+    monkeypatch.setattr(serve_module.time, "time", lambda: fake_now[0])
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0.0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_modified(event)
+
+    output = capsys.readouterr().out
+    assert "debounce window" not in output
+    assert "Recompiling API" in output
+
+
 def test_notebook_change_handler_reports_compilation_errors_without_raising(tmp_path, monkeypatch, capsys):
 
     notebook_path = tmp_path / "nb.ipynb"
