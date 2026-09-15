@@ -8977,6 +8977,90 @@ def test_copy_notebook_dry_run_still_reports_a_same_name_collision():
     assert resp.status_code == 409
 
 
+def test_copy_notebook_rejects_a_new_destination_once_max_notebooks_is_reached(
+    monkeypatch,
+):
+    """_copy_notebook_to never checked MAX_NOTEBOOKS at all before this
+    fix -- confirmed exploitable: copying an existing notebook under a
+    new filename is functionally identical to "download it and re-upload
+    it under a new name" (this endpoint's own docstring's own comparison
+    for why it exists), which *would* have been caught by this cap, so
+    an operator relying on NOTEBOOK_API_MAX_NOTEBOOKS to bound the
+    catalog had it silently bypassed by copying instead of uploading.
+    """
+
+    from backend.routes import upload as upload_module
+
+    _upload_sample_notebook("copy_max_notebooks_source.ipynb")
+
+    monkeypatch.setattr(
+        upload_module, "MAX_NOTEBOOKS", upload_module._current_notebook_count()
+    )
+
+    resp = client.post(
+        "/api/notebooks/copy_max_notebooks_source.ipynb/copy",
+        json={"new_filename": "copy_max_notebooks_new.ipynb"},
+    )
+
+    assert resp.status_code == 400
+    assert "maximum of" in resp.json()["detail"].lower()
+    assert not (Path(UPLOAD_DIR) / "copy_max_notebooks_new.ipynb").exists()
+
+
+def test_copy_notebook_onto_an_existing_destination_is_never_blocked_by_max_notebooks(
+    monkeypatch,
+):
+    """Mirrors _save_uploaded_notebook's own identical MAX_NOTEBOOKS
+    exemption for an overwrite -- copying onto an already-existing
+    filename never changes the catalog's own notebook *count*, so it's
+    never subject to this cap regardless of how close to it the catalog
+    already is.
+    """
+
+    from backend.routes import upload as upload_module
+
+    _upload_sample_notebook("copy_max_notebooks_overwrite_source.ipynb")
+    _upload_sample_notebook("copy_max_notebooks_overwrite_target.ipynb")
+
+    monkeypatch.setattr(
+        upload_module, "MAX_NOTEBOOKS", upload_module._current_notebook_count()
+    )
+
+    resp = client.post(
+        "/api/notebooks/copy_max_notebooks_overwrite_source.ipynb/copy",
+        json={
+            "new_filename": "copy_max_notebooks_overwrite_target.ipynb",
+            "overwrite": True,
+        },
+    )
+
+    assert resp.status_code == 200
+
+
+def test_copy_notebook_rejects_once_max_total_storage_bytes_is_reached(monkeypatch):
+    """_copy_notebook_to never checked MAX_TOTAL_STORAGE_BYTES at all
+    before this fix -- the identical enforcement gap as MAX_NOTEBOOKS
+    above, just for the whole-catalog byte budget instead of the
+    notebook count.
+    """
+
+    from backend.routes import upload as upload_module
+
+    _upload_sample_notebook("copy_max_storage_source.ipynb")
+
+    current_total = upload_module._current_total_storage_bytes()
+    monkeypatch.setattr(upload_module, "MAX_TOTAL_STORAGE_BYTES", current_total)
+
+    resp = client.post(
+        "/api/notebooks/copy_max_storage_source.ipynb/copy",
+        json={"new_filename": "copy_max_storage_new.ipynb"},
+    )
+
+    assert resp.status_code == 413
+    assert "maximum total storage" in resp.json()["detail"].lower()
+    assert not (Path(UPLOAD_DIR) / "copy_max_storage_new.ipynb").exists()
+
+
 def test_copy_notebook_does_not_copy_version_history():
 
     _upload_sample_notebook("copy_versions_source.ipynb")
@@ -15070,6 +15154,105 @@ def test_copy_notebook_version_rejects_collision_without_overwrite():
 
     assert resp.status_code == 409
     os.remove(Path(UPLOAD_DIR) / "versions_copy_collision_target.ipynb")
+
+
+def test_copy_notebook_version_rejects_once_max_total_storage_bytes_is_reached(
+    monkeypatch,
+):
+    """_copy_notebook_version_to never checked either catalog-wide cap at
+    all before this fix -- the identical gap _copy_notebook_to's own fix
+    closes for copying a notebook's *current* content, just for copying
+    one of its past *version snapshots* into a brand-new notebook
+    instead.
+    """
+
+    from backend.routes import upload as upload_module
+
+    filename = "versions_copy_max_storage_source.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    current_total = upload_module._current_total_storage_bytes()
+    monkeypatch.setattr(upload_module, "MAX_TOTAL_STORAGE_BYTES", current_total)
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/copy",
+        json={"new_filename": "versions_copy_max_storage_new.ipynb"},
+    )
+
+    assert resp.status_code == 413
+    assert "maximum total storage" in resp.json()["detail"].lower()
+    assert not (Path(UPLOAD_DIR) / "versions_copy_max_storage_new.ipynb").exists()
+
+
+def test_copy_notebook_version_rejects_a_new_destination_once_max_notebooks_is_reached(
+    monkeypatch,
+):
+
+    from backend.routes import upload as upload_module
+
+    filename = "versions_copy_max_notebooks_source.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    monkeypatch.setattr(
+        upload_module, "MAX_NOTEBOOKS", upload_module._current_notebook_count()
+    )
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/copy",
+        json={"new_filename": "versions_copy_max_notebooks_new.ipynb"},
+    )
+
+    assert resp.status_code == 400
+    assert "maximum of" in resp.json()["detail"].lower()
+    assert not (Path(UPLOAD_DIR) / "versions_copy_max_notebooks_new.ipynb").exists()
 
 
 def test_copy_notebook_version_dry_run_reports_the_new_filename_without_copying():

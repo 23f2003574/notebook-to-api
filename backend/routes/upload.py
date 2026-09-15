@@ -7952,6 +7952,25 @@ def _copy_notebook_to(
     anything, the same "report what a real batch would do without doing
     it" preview POST /api/notebooks/{filename}/versions/delete-batch's
     own "dry_run" already provides one level down from here.
+
+    Also enforces MAX_NOTEBOOKS (for a brand-new destination filename)
+    and MAX_TOTAL_STORAGE_BYTES (always, since a copy duplicates
+    `source_path`'s own bytes onto disk a second time regardless of
+    whether the destination is new or an overwrite) -- the identical two
+    catalog-wide caps _save_uploaded_notebook already enforces for a real
+    upload. Confirmed exploitable before this: neither cap was ever
+    checked here at all, so an operator relying on either
+    NOTEBOOK_API_MAX_NOTEBOOKS or NOTEBOOK_API_MAX_TOTAL_STORAGE_BYTES to
+    bound the catalog had both silently bypassed by copying an existing
+    notebook under a new filename instead of uploading one -- an
+    operation this function's own docstring above already compares
+    directly to "download it and re-upload it under a new name by hand",
+    which *would* have been caught by either cap. Checked here (both
+    checks apply to POST /api/notebooks/{filename}/copy-batch and POST
+    /api/notebooks/copy-batch too, which call this function once per
+    destination) rather than once per caller, for the identical reason
+    every other check in this function already lives here instead of
+    duplicated across its three call sites.
     """
 
     if not isinstance(new_filename, str) or not new_filename:
@@ -7986,6 +8005,39 @@ def _copy_notebook_to(
                 detail=(
                     f"A notebook named '{new_filename}' already exists. "
                     'Pass "overwrite": true to replace it.'
+                )
+            )
+
+        if (
+            MAX_NOTEBOOKS
+            and not dest_path.exists()
+            and _current_notebook_count() >= MAX_NOTEBOOKS
+        ):
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"This dashboard already has the maximum of "
+                    f"{MAX_NOTEBOOKS} notebook(s) allowed "
+                    "(NOTEBOOK_API_MAX_NOTEBOOKS) -- delete an existing "
+                    "one first, or overwrite one instead of adding a new "
+                    "one."
+                )
+            )
+
+        if (
+            MAX_TOTAL_STORAGE_BYTES
+            and _current_total_storage_bytes() + source_path.stat().st_size
+            > MAX_TOTAL_STORAGE_BYTES
+        ):
+
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"This copy would exceed the maximum total storage of "
+                    f"{MAX_TOTAL_STORAGE_BYTES} bytes "
+                    "(NOTEBOOK_API_MAX_TOTAL_STORAGE_BYTES) -- delete or "
+                    "prune some existing notebooks/versions first."
                 )
             )
 
@@ -10371,6 +10423,13 @@ def _copy_notebook_version_to(
     actually calling shutil.copy2, the same "report what a real batch
     would do without doing it" preview _copy_notebook_to's own "dry_run"
     already provides for copying a notebook's current content.
+
+    Also enforces MAX_NOTEBOOKS/MAX_TOTAL_STORAGE_BYTES exactly as
+    _copy_notebook_to's own identical checks do -- see that function's
+    own docstring for the exact gap this closes; a version snapshot's
+    own bytes landing at a brand-new filename via this endpoint is the
+    identical unbounded-growth path that one already fixed for a
+    current-content copy.
     """
 
     version_path = _resolve_path_within(
@@ -10420,6 +10479,39 @@ def _copy_notebook_version_to(
                 detail=(
                     f"A notebook named '{new_filename}' already exists. "
                     'Pass "overwrite": true to replace it.'
+                )
+            )
+
+        if (
+            MAX_NOTEBOOKS
+            and not dest_path.exists()
+            and _current_notebook_count() >= MAX_NOTEBOOKS
+        ):
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"This dashboard already has the maximum of "
+                    f"{MAX_NOTEBOOKS} notebook(s) allowed "
+                    "(NOTEBOOK_API_MAX_NOTEBOOKS) -- delete an existing "
+                    "one first, or overwrite one instead of adding a new "
+                    "one."
+                )
+            )
+
+        if (
+            MAX_TOTAL_STORAGE_BYTES
+            and _current_total_storage_bytes() + version_path.stat().st_size
+            > MAX_TOTAL_STORAGE_BYTES
+        ):
+
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"This copy would exceed the maximum total storage of "
+                    f"{MAX_TOTAL_STORAGE_BYTES} bytes "
+                    "(NOTEBOOK_API_MAX_TOTAL_STORAGE_BYTES) -- delete or "
+                    "prune some existing notebooks/versions first."
                 )
             )
 
