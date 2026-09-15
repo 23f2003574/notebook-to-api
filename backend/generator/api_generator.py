@@ -1341,6 +1341,20 @@ def generate_fastapi_code(
     lines.append("")
     # Simple in‑memory task registry used by background endpoints
     lines.append("TASKS = {}")
+    # Maps a caller-supplied Idempotency-Key header to the task_id it
+    # already created. Without this, a background endpoint retried after
+    # an ambiguous connection failure (the caller's request reached this
+    # server and a task was already created and queued, but the response
+    # carrying that task_id never made it back -- the exact failure mode
+    # both generated SDK clients' own _request/requestWithRetry already
+    # retry on) submits the *same* notebook function call a second time,
+    # running whatever side effect it has (writing to a database, sending
+    # an email, charging a card) twice with no error or warning anywhere.
+    # Populated/read under the same _TASKS_ADMISSION_LOCK as TASKS itself
+    # below, and pruned in lockstep with it in _evict_expired_tasks, so it
+    # never outlives (or leaks memory past) the TASKS entries it points
+    # to.
+    lines.append("IDEMPOTENCY_KEYS = {}")
     # A background-task submission endpoint (below) is a plain
     # synchronous `def`, not `async def` -- FastAPI runs a synchronous
     # endpoint in Starlette's own threadpool, not the single asyncio
@@ -1608,6 +1622,19 @@ def generate_fastapi_code(
     lines.append("    ]")
     lines.append("    for task_id in expired_ids:")
     lines.append("        TASKS.pop(task_id, None)")
+    # Every IDEMPOTENCY_KEYS entry exists solely to point back at a live
+    # TASKS entry (see submit_task's own idempotency_key handling below)
+    # -- once that entry is gone, whether just evicted above or removed
+    # some other way entirely (DELETE /tasks/{task_id}, /tasks/cleanup,
+    # /tasks/reset), the mapping is dead weight that would otherwise
+    # accumulate in memory for as long as this process runs, since
+    # nothing else here ever prunes it.
+    lines.append("    stale_idempotency_keys = [")
+    lines.append("        key for key, task_id in IDEMPOTENCY_KEYS.items()")
+    lines.append("        if task_id not in TASKS")
+    lines.append("    ]")
+    lines.append("    for key in stale_idempotency_keys:")
+    lines.append("        IDEMPOTENCY_KEYS.pop(key, None)")
     lines.append("")
     lines.append("def verify_api_key(response: Response, x_api_key: str = Header(None)):")
     lines.append("    # hmac.compare_digest instead of != : a plain string")
@@ -3532,6 +3559,8 @@ def generate_fastapi_code(
             lines.append(
                 f"def {func_name}(req: {model_name}, background_tasks: "
                 "BackgroundTasks, callback_url: Optional[str] = None, "
+                "idempotency_key: Optional[str] = "
+                'Header(None, alias="Idempotency-Key"), '
                 "_: None = Depends(verify_api_key)):"
             )
             # A caller opting into webhook delivery (rather than polling
@@ -3599,6 +3628,55 @@ def generate_fastapi_code(
             # worker threads without it.
             lines.append("    with _TASKS_ADMISSION_LOCK:")
             lines.append("        _evict_expired_tasks()")
+            # Checked -- and, on a hit, returned from -- before the
+            # MAX_PENDING_TASKS admission check just below, not after: a
+            # caller's own retry of a call it already submitted (the
+            # generated SDK clients' own _request/requestWithRetry send
+            # the identical Idempotency-Key on every retry attempt of one
+            # logical call, see sdk_generator.py) must never be turned
+            # away with a 503 just because unrelated traffic has since
+            # filled the queue, and must never re-run the underlying
+            # notebook function a second time even when it hasn't. Only a
+            # key this exact process has seen before is ever in
+            # IDEMPOTENCY_KEYS -- a caller that never sent one (or sends a
+            # fresh one per call, as any non-retry submission does)
+            # always falls through to the normal admission/creation path
+            # below unaffected.
+            # isinstance(..., str), not merely "is not None": FastAPI's
+            # own dependency injection always resolves a missing
+            # "Idempotency-Key" header to a real None (or an actual
+            # string when present) before this function body ever runs,
+            # but idempotency_key's own default value here is the
+            # fastapi.Header(...) sentinel object itself, not None -- a
+            # caller that reaches this function directly, bypassing
+            # FastAPI's own request handling entirely (as this app's own
+            # test suite does to exercise MAX_PENDING_TASKS' concurrency
+            # under real threads, with no ASGI server involved), gets
+            # that literal sentinel back, unresolved. Confirmed
+            # exploitable with the weaker "is not None" check: since a
+            # bare `def`'s default argument is one single object shared
+            # by every call that omits it, every such direct call
+            # collided on that identical sentinel as if it were the same
+            # real caller-supplied key, so the *second* concurrent
+            # request already found the *first*'s task_id sitting in
+            # IDEMPOTENCY_KEYS and returned it immediately -- completely
+            # bypassing the MAX_PENDING_TASKS admission check below for
+            # every request after the first.
+            lines.append(
+                "        if isinstance(idempotency_key, str) and "
+                "idempotency_key in IDEMPOTENCY_KEYS:"
+            )
+            lines.append(
+                "            existing_task_id = IDEMPOTENCY_KEYS[idempotency_key]"
+            )
+            lines.append(
+                "            existing_task = TASKS.get(existing_task_id)"
+            )
+            lines.append("            if existing_task is not None:")
+            lines.append(
+                "                return {\"task_id\": existing_task_id, "
+                "\"status\": existing_task[\"status\"]}"
+            )
             lines.append("        if len(TASKS) >= MAX_PENDING_TASKS:")
             lines.append("            raise HTTPException(")
             lines.append("                status_code=503,")
@@ -3629,6 +3707,14 @@ def generate_fastapi_code(
                 "        TASKS[task_id] = {\"status\": \"processing\", "
                 "\"created_at\": time.time(), \"callback_url\": callback_url}"
             )
+            # Recorded only now, after TASKS[task_id] above already exists
+            # -- so a concurrent lookup of this same key (see the
+            # short-circuit above; both run under this same lock, so
+            # there's no race between the two, but ordering still matters
+            # for a crash mid-request) can never observe a key mapped to a
+            # task_id that isn't in TASKS yet.
+            lines.append("        if isinstance(idempotency_key, str):")
+            lines.append("            IDEMPOTENCY_KEYS[idempotency_key] = task_id")
             # '_replay' records exactly what would be needed to run this
             # exact call a second time: the notebook function's own name
             # (looked up on notebook_module again at retry time, rather

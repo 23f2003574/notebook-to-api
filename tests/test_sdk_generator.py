@@ -2042,6 +2042,103 @@ def test_generate_python_sdk_gives_up_after_max_retries(tmp_path, monkeypatch):
     assert len(calls) == 3, "1 initial attempt + 2 retries"
 
 
+def test_generate_python_sdk_background_endpoint_sends_the_same_idempotency_key_on_retry(
+    tmp_path, monkeypatch
+):
+    """Confirmed missing before this feature: a background endpoint's own
+    generated method sent no "Idempotency-Key" header at all, so a retry
+    after an ambiguous connection failure (the exact case _request's own
+    docstring already calls out -- a raised exception carrying no
+    response) resubmitted the identical call with nothing letting the
+    server (see IDEMPOTENCY_KEYS in api_generator.py) recognize it as a
+    repeat rather than a brand new one. Every retry of one logical call
+    must carry the *same* key -- a fresh key per attempt would defeat the
+    server-side dedup entirely.
+    """
+
+    schema = {
+        "/train_model": {
+            "post": {"operationId": "train_model", "x-notebook-to-api-async": True}
+        }
+    }
+    schema_path = _write_schema(tmp_path, schema)
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    class FakeResponse:
+        status_code = 503
+        headers = {}
+
+        def raise_for_status(self):
+            raise RuntimeError("503 error")
+
+    calls = []
+
+    def fake_post(url, json=None, headers=None, timeout=None, params=None):
+        calls.append(headers)
+        if len(calls) < 3:
+            return FakeResponse()
+        return types.SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"task_id": "abc", "status": "processing"},
+        )
+
+    namespace = _exec_python_client_with_fake_requests(
+        output_path, monkeypatch, post=fake_post
+    )
+
+    client = namespace["NotebookAPIClient"](
+        "http://localhost:8000", backoff_factor=0
+    )
+    result = client.train_model({})
+
+    assert result == {"task_id": "abc", "status": "processing"}
+    assert len(calls) == 3
+    keys = {headers["Idempotency-Key"] for headers in calls}
+    assert len(keys) == 1, "every retry of one call must reuse the same key"
+
+
+def test_generate_python_sdk_background_endpoint_uses_a_fresh_idempotency_key_per_call(
+    tmp_path, monkeypatch
+):
+    """The opposite of the test above: two independent, non-retried
+    submissions must each get their own distinct key -- reusing one
+    across unrelated calls would make the second silently return the
+    first's task instead of actually submitting.
+    """
+
+    schema = {
+        "/train_model": {
+            "post": {"operationId": "train_model", "x-notebook-to-api-async": True}
+        }
+    }
+    schema_path = _write_schema(tmp_path, schema)
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    calls = []
+
+    def fake_post(url, json=None, headers=None, timeout=None, params=None):
+        calls.append(headers)
+        return types.SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"task_id": "abc", "status": "processing"},
+        )
+
+    namespace = _exec_python_client_with_fake_requests(
+        output_path, monkeypatch, post=fake_post
+    )
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    client.train_model({})
+    client.train_model({})
+
+    assert len(calls) == 2
+    assert calls[0]["Idempotency-Key"] != calls[1]["Idempotency-Key"]
+
+
 def test_generate_python_sdk_max_retries_zero_disables_retry(tmp_path, monkeypatch):
     """max_retries=0 must reproduce the exact pre-feature behavior: raise
     on the very first transient failure, never retry at all.
@@ -2367,6 +2464,42 @@ def test_generate_typescript_sdk_sends_api_key_header(tmp_path):
 
     assert '"X-API-Key": this.apiKey' in source
     assert "notebook-to-api-dev-key" in source
+
+
+def test_generate_typescript_sdk_background_submission_sends_an_idempotency_key(
+    tmp_path,
+):
+    """Mirrors the Python client's own idempotency-key addition: the
+    shared `request()` helper -- used only for background/async endpoint
+    submissions (see is_background's own call site) -- must generate one
+    id per call and send it as "Idempotency-Key", so a retry after an
+    ambiguous connection failure (requestWithRetry's own catch block)
+    lets the generated server (see IDEMPOTENCY_KEYS in api_generator.py)
+    recognize the repeat instead of running the notebook function again.
+    Confirmed missing before this feature: no header of this name was
+    ever sent anywhere in the generated TypeScript client.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert "private async request(path: string, payload: unknown" in source
+    assert "const idempotencyKey" in source
+    assert '"Idempotency-Key": idempotencyKey' in source
+    # Generated once per call, before requestWithRetry's own `fn` closure
+    # -- not inside it -- so every retry of one call reuses the same id
+    # rather than generating a fresh one per attempt.
+    request_method = source.split("private async request(path: string, payload: unknown")[1]
+    assert request_method.index("const idempotencyKey") < request_method.index(
+        "requestWithRetry(url, () =>"
+    )
 
 
 def test_generate_typescript_sdk_method_name_handles_multi_segment_paths(tmp_path):

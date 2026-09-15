@@ -1123,6 +1123,7 @@ def generate_python_sdk(
     lines.append("import hmac")
     lines.append("import os")
     lines.append("import time")
+    lines.append("import uuid")
     lines.append("import requests")
     # Confirmed missing before this feature: every generated method's
     # own payload parameter was typed as a bare dict, with no return
@@ -1810,10 +1811,32 @@ def generate_python_sdk(
         lines.append(
             f"        {_python_method_docstring(description, static_doc)}"
         )
+        if is_background:
+            # Generated once per call, outside the lambda below, and
+            # reused unchanged by every retry _request makes of it --
+            # never a fresh uuid per attempt. _request already retries a
+            # connection-level failure carrying no response at all (see
+            # its own docstring), the exact case where this call may have
+            # already reached the generated server and created a task
+            # before the failure happened; sending the same
+            # Idempotency-Key on the retry lets that server recognize the
+            # repeat and hand back the original task_id instead of
+            # enqueuing (and running) this notebook function a second
+            # time (see IDEMPOTENCY_KEYS in api_generator.py). A fresh
+            # uuid per attempt would defeat this entirely -- the server
+            # would see a different key every time and treat each retry
+            # as a brand new submission.
+            lines.append("        idempotency_key = str(uuid.uuid4())")
         lines.append("        return self._request(lambda: requests.post(")
         lines.append(f'            f"{{self.base_url}}{path}",')
         lines.append(f'            json=payload,')
-        lines.append(f'            headers={{"X-API-Key": self.api_key}},')
+        if is_background:
+            lines.append(
+                '            headers={"X-API-Key": self.api_key, '
+                '"Idempotency-Key": idempotency_key},'
+            )
+        else:
+            lines.append(f'            headers={{"X-API-Key": self.api_key}},')
         lines.append(f'            timeout=self.timeout,')
         if is_background:
             lines.append(
@@ -2113,6 +2136,26 @@ def generate_typescript_sdk(
         'callback_url: callbackUrl }).toString()}`;'
     )
     lines.append("    }")
+    # Generated once per call to this method, outside the `fn` closure
+    # below, and reused unchanged by every retry requestWithRetry makes
+    # of it -- never a fresh id per attempt. requestWithRetry already
+    # retries a connection-level failure carrying no response at all (see
+    # its own try/catch above), the exact case where this call may have
+    # already reached the generated server and created a task before the
+    # failure happened; sending the same Idempotency-Key on the retry
+    # lets that server recognize the repeat and hand back the original
+    # task_id instead of enqueuing (and running) this notebook function a
+    # second time (see IDEMPOTENCY_KEYS in api_generator.py). This
+    # `request` helper is only ever used for background/async endpoint
+    # submissions (see is_background's own call site above) -- a
+    # synchronous endpoint's own method calls requestWithRetry directly
+    # and needs no idempotency key, since its own generated server-side
+    # branch has no task state to deduplicate against in the first place.
+    lines.append(
+        "    const idempotencyKey = (typeof crypto !== "
+        '"undefined" && crypto.randomUUID) ? crypto.randomUUID() : '
+        '`${Date.now()}-${Math.random().toString(16).slice(2)}`;'
+    )
     lines.append(
         "    return this.requestWithRetry(url, () => fetch(`${this.baseUrl}${url}`, {"
     )
@@ -2120,6 +2163,7 @@ def generate_typescript_sdk(
     lines.append("      headers: {")
     lines.append('        "Content-Type": "application/json",')
     lines.append('        "X-API-Key": this.apiKey,')
+    lines.append('        "Idempotency-Key": idempotencyKey,')
     lines.append("      },")
     lines.append("      body: JSON.stringify(payload),")
     lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")

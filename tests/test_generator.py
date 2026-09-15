@@ -1564,6 +1564,135 @@ def test_background_endpoint_max_pending_tasks_is_atomic_under_concurrent_thread
     assert len(namespace["TASKS"]) == 5
 
 
+def test_background_endpoint_retried_with_the_same_idempotency_key_does_not_rerun_it(
+    monkeypatch,
+):
+    """A background endpoint retried after an ambiguous connection
+    failure (the exact case both generated SDK clients' own retry logic
+    handles -- see sdk_generator.py's _request/requestWithRetry) must not
+    run the underlying notebook function a second time just because the
+    caller couldn't tell whether its first request actually landed.
+    Confirmed exploitable before this fix: nothing here tracked a
+    caller-supplied "Idempotency-Key" header at all, so a second POST
+    with the same key -- indistinguishable, from this app's own
+    perspective, from a genuinely new submission -- always created a
+    brand new task_id and enqueued the notebook function again.
+    """
+    functions = [{"name": "train_model", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "IDEMPOTENCY_KEYS = {}" in code
+    assert 'Header(None, alias="Idempotency-Key")' in code
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    call_count = {"n": 0}
+
+    def fake_train_model():
+        call_count["n"] += 1
+        return 42
+
+    namespace["notebook_module"].train_model = fake_train_model
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {
+        "X-API-Key": "notebook-to-api-dev-key",
+        "Idempotency-Key": "retry-key-123",
+    }
+
+    first = client.post("/train_model", json={}, headers=headers)
+    second = client.post("/train_model", json={}, headers=headers)
+
+    assert first.status_code == 200 == second.status_code
+    assert first.json() == {"task_id": second.json()["task_id"], "status": "processing"}
+    assert len(namespace["TASKS"]) == 1
+
+    # Give the single background task a moment to actually run before
+    # asserting it only ran once -- BackgroundTasks executes after the
+    # response is sent, not synchronously inside the POST above.
+    import time as _time
+
+    for _ in range(50):
+        if namespace["TASKS"][first.json()["task_id"]].get("status") != "processing":
+            break
+        _time.sleep(0.01)
+
+    assert call_count["n"] == 1
+
+
+def test_background_endpoint_with_a_fresh_idempotency_key_each_time_creates_two_tasks(
+    monkeypatch,
+):
+    """The opposite of the test above: two submissions that each carry
+    their own distinct Idempotency-Key (an ordinary, non-retry caller
+    that always generates a fresh one per logical call, the same way
+    both generated SDK clients do) must still create two independent
+    tasks -- the dedup above must never collapse unrelated calls just
+    because both happened to supply *some* key.
+    """
+    functions = [{"name": "train_model", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].train_model = lambda: 42
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+
+    first = client.post(
+        "/train_model", json={},
+        headers={"X-API-Key": "notebook-to-api-dev-key", "Idempotency-Key": "key-a"},
+    )
+    second = client.post(
+        "/train_model", json={},
+        headers={"X-API-Key": "notebook-to-api-dev-key", "Idempotency-Key": "key-b"},
+    )
+
+    assert first.status_code == 200 == second.status_code
+    assert first.json()["task_id"] != second.json()["task_id"]
+    assert len(namespace["TASKS"]) == 2
+
+
+def test_background_endpoint_without_an_idempotency_key_still_works_as_before(
+    monkeypatch,
+):
+    """No regression for the overwhelming majority of existing callers,
+    including every already-generated SDK client out there predating
+    this feature: omitting the header entirely must behave exactly as it
+    always has, creating a new task per call with no dedup applied.
+    """
+    functions = [{"name": "train_model", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].train_model = lambda: 42
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    first = client.post("/train_model", json={}, headers=headers)
+    second = client.post("/train_model", json={}, headers=headers)
+
+    assert first.status_code == 200 == second.status_code
+    assert first.json()["task_id"] != second.json()["task_id"]
+    assert len(namespace["TASKS"]) == 2
+    assert namespace["IDEMPOTENCY_KEYS"] == {}
+
+
 def test_non_background_endpoint_has_no_max_pending_tasks_check():
     """A synchronous endpoint never touches TASKS at all -- the check
     only belongs in a background endpoint's own body (or the always-
@@ -4065,6 +4194,43 @@ def test_evict_expired_tasks_never_evicts_a_processing_task(monkeypatch):
 
     assert "still-running" in namespace["TASKS"]
     assert "long-done" not in namespace["TASKS"]
+
+
+def test_evict_expired_tasks_prunes_idempotency_keys_pointing_at_gone_tasks(
+    monkeypatch,
+):
+    """IDEMPOTENCY_KEYS exists solely to point back at a live TASKS entry
+    (see submit_task's own idempotency_key handling) -- without this
+    sweep, a key whose task was evicted above (or removed some other way
+    entirely -- DELETE /tasks/{task_id}, /tasks/cleanup, /tasks/reset)
+    would sit in IDEMPOTENCY_KEYS forever, since nothing else here ever
+    prunes it, growing memory without bound on a long-running deployment
+    handling steady retried-submission traffic.
+    """
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    long_ago = namespace["time"].time() - namespace["TASK_TTL_SECONDS"] - 1
+
+    namespace["TASKS"]["still-running"] = {
+        "status": "processing", "created_at": long_ago,
+    }
+    namespace["TASKS"]["long-done"] = {
+        "status": "completed", "created_at": long_ago, "result": "ok",
+    }
+    namespace["IDEMPOTENCY_KEYS"]["key-for-still-running"] = "still-running"
+    namespace["IDEMPOTENCY_KEYS"]["key-for-long-done"] = "long-done"
+    namespace["IDEMPOTENCY_KEYS"]["key-for-already-gone"] = "never-existed"
+
+    namespace["_evict_expired_tasks"]()
+
+    assert namespace["IDEMPOTENCY_KEYS"] == {"key-for-still-running": "still-running"}
 
 
 def test_delete_task_rejects_deletion_of_a_processing_task(monkeypatch):
