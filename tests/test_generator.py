@@ -1256,6 +1256,86 @@ def test_background_endpoint_rejects_new_tasks_past_max_pending_tasks():
     assert "status_code=503" in code
 
 
+def test_background_endpoint_max_pending_tasks_is_atomic_under_concurrent_threads(
+    monkeypatch,
+):
+    """The background-task submission endpoint is a plain synchronous
+    `def`, not `async def` -- FastAPI runs it in Starlette's own
+    threadpool, not the single asyncio event loop, so two concurrent
+    submissions can genuinely run its own admission-control sequence
+    (evict, check len(TASKS) against MAX_PENDING_TASKS, insert) on two
+    different worker threads at once. Confirmed exploitable before this
+    fix: with no lock around that sequence, 20 real concurrent threads
+    (with an artificially widened race window, simulating realistic
+    thread-scheduling under load) against MAX_PENDING_TASKS=5 all
+    succeeded -- every thread read the same not-yet-at-capacity count
+    before any of them inserted -- leaving 20 entries in TASKS instead of
+    the intended cap of 5, the exact unbounded-memory-growth failure mode
+    this check exists to prevent.
+    """
+    import threading
+
+    functions = [{"name": "train_model", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "_TASKS_ADMISSION_LOCK = threading.Lock()" in code
+    assert "with _TASKS_ADMISSION_LOCK:" in code
+
+    parent = types.ModuleType("generated")
+    runtime_pkg = types.ModuleType("generated.runtime")
+    notebook_module = types.ModuleType("generated.runtime.notebook_module")
+    notebook_module.train_model = lambda x: x
+    monkeypatch.setitem(sys.modules, "generated", parent)
+    monkeypatch.setitem(sys.modules, "generated.runtime", runtime_pkg)
+    monkeypatch.setitem(
+        sys.modules, "generated.runtime.notebook_module", notebook_module
+    )
+
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["MAX_PENDING_TASKS"] = 5
+
+    class _SlowLenDict(dict):
+        """Widens the real race window artificially -- without this, the
+        real check-then-insert sequence is short enough that the race,
+        while still present, is rare in a quick test run.
+        """
+        def __len__(self):
+            count = super().__len__()
+            import time as _time
+            _time.sleep(0.01)
+            return count
+
+    namespace["TASKS"] = _SlowLenDict()
+
+    class _FakeReq:
+        x = 1
+
+    class _FakeBackgroundTasks:
+        def add_task(self, *args, **kwargs):
+            pass
+
+    outcomes = []
+
+    def worker():
+        try:
+            namespace["train_model"](_FakeReq(), _FakeBackgroundTasks())
+            outcomes.append("admitted")
+        except Exception:
+            outcomes.append("rejected")
+
+    threads = [threading.Thread(target=worker) for _ in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert outcomes.count("admitted") == 5
+    assert outcomes.count("rejected") == 15
+    assert len(namespace["TASKS"]) == 5
+
+
 def test_non_background_endpoint_has_no_max_pending_tasks_check():
     """A synchronous endpoint never touches TASKS at all -- the check
     only belongs in a background endpoint's own body (or the always-
@@ -1288,6 +1368,28 @@ def test_notebook_function_named_max_pending_tasks_is_rejected():
     ]
 
     with pytest.raises(ReservedFunctionNameError, match="MAX_PENDING_TASKS"):
+        generate_fastapi_code(functions)
+
+
+def test_notebook_function_named_tasks_admission_lock_is_rejected():
+    """_TASKS_ADMISSION_LOCK -- the threading.Lock a background
+    endpoint's own submission code and retry_task both use to make their
+    shared "evict, check MAX_PENDING_TASKS, insert" sequence atomic
+    across concurrent worker threads -- is read by name from inside both,
+    resolved at call time. A notebook function of this exact name would
+    rebind it to a function object at module-execution time; the very
+    next background submission would then fail with a bare 500 the
+    moment `with _TASKS_ADMISSION_LOCK:` tried to use a function object
+    as a context manager -- the identical "one bad name breaks a
+    subsystem every background endpoint depends on" exposure
+    MAX_PENDING_TASKS' own entry above already guards against.
+    """
+
+    functions = [
+        {"name": "_TASKS_ADMISSION_LOCK", "args": [], "return_type": "dict"}
+    ]
+
+    with pytest.raises(ReservedFunctionNameError, match="_TASKS_ADMISSION_LOCK"):
         generate_fastapi_code(functions)
 
 

@@ -111,7 +111,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # removed from _enforce_rate_limit's own name instead of the call
     # site.
     "_enforce_rate_limit", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_WINDOW_SECONDS",
-    "_RATE_LIMIT_WINDOWS", "_RATE_LIMIT_LOCK",
+    "_RATE_LIMIT_WINDOWS", "_RATE_LIMIT_LOCK", "_TASKS_ADMISSION_LOCK",
     "verify_api_key", "custom_openapi",
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
     "validate_auth", "service_info", "service_config", "metrics", "uptime",
@@ -1341,6 +1341,27 @@ def generate_fastapi_code(
     lines.append("")
     # Simple in‑memory task registry used by background endpoints
     lines.append("TASKS = {}")
+    # A background-task submission endpoint (below) is a plain
+    # synchronous `def`, not `async def` -- FastAPI runs a synchronous
+    # endpoint in Starlette's own threadpool, not the single asyncio
+    # event loop, exactly like verify_api_key/_enforce_rate_limit already
+    # are (see _RATE_LIMIT_LOCK's own comment above for the identical
+    # reasoning). Its own admission-control sequence -- evict expired
+    # tasks, check len(TASKS) against MAX_PENDING_TASKS, then insert a
+    # new entry -- is a classic non-atomic check-then-act with no lock at
+    # all before this: two concurrent submissions can both read the same
+    # not-yet-at-capacity count on two different worker threads, both
+    # pass the check, and both insert, overshooting MAX_PENDING_TASKS by
+    # as many requests as raced through. Confirmed exploitable via a real
+    # generated app: 20 concurrent submissions (with an artificially
+    # widened race window) against MAX_PENDING_TASKS=5 all succeeded,
+    # leaving 20 entries in TASKS instead of being capped at 5 -- the
+    # exact unbounded-memory-growth failure mode this cap exists to
+    # prevent, under precisely the concurrent-burst scenario (legitimate
+    # traffic, or a caller deliberately flooding submissions) it exists
+    # to withstand. retry_task below shares this identical admission-
+    # control sequence (and so this identical lock) for the same reason.
+    lines.append("_TASKS_ADMISSION_LOCK = threading.Lock()")
     lines.append(
         'TASK_TTL_SECONDS = int(os.getenv('
         '"NOTEBOOK_API_TASK_TTL_SECONDS", '
@@ -2554,52 +2575,60 @@ def generate_fastapi_code(
     # A retry is a brand-new submission in every way that matters -- same
     # MAX_PENDING_TASKS admission check POST /{func_name} itself already
     # enforces (a retry storm must not be able to bypass it), same lazy
-    # eviction sweep first.
-    lines.append("    _evict_expired_tasks()")
-    lines.append("    if len(TASKS) >= MAX_PENDING_TASKS:")
-    lines.append("        raise HTTPException(")
-    lines.append("            status_code=503,")
-    lines.append("            detail=(")
+    # eviction sweep first -- and the identical _TASKS_ADMISSION_LOCK
+    # that endpoint's own admission check/insert are held under (see that
+    # lock's own definition above for the race this closes): retry_task
+    # is `async def`, so it never races against *itself* the way a
+    # synchronous, threadpool-run endpoint could, but it mutates this
+    # same TASKS dict the synchronous submission endpoint does, so both
+    # must still serialize against each other.
+    lines.append("    with _TASKS_ADMISSION_LOCK:")
+    lines.append("        _evict_expired_tasks()")
+    lines.append("        if len(TASKS) >= MAX_PENDING_TASKS:")
+    lines.append("            raise HTTPException(")
+    lines.append("                status_code=503,")
+    lines.append("                detail=(")
     lines.append(
-        "                f'Too many pending background tasks (limit '"
+        "                    f'Too many pending background tasks (limit '"
     )
     lines.append(
-        "                f'{MAX_PENDING_TASKS}); try again once some have '"
+        "                    f'{MAX_PENDING_TASKS}); try again once some have '"
     )
-    lines.append("                'finished.'")
-    lines.append("            ),")
-    lines.append("        )")
+    lines.append("                    'finished.'")
+    lines.append("                ),")
+    lines.append("            )")
     lines.append("")
     # Looked up by name on notebook_module again, rather than trusting
     # anything cached from the original submission -- the same
     # "resolve fresh, don't assume it's unchanged" reasoning
     # notebook_module's own docstring already carries elsewhere in this
-    # file.
-    lines.append("    func = getattr(notebook_module, replay['func_name'], None)")
-    lines.append("    if func is None:")
-    lines.append("        raise HTTPException(")
-    lines.append("            status_code=500,")
-    lines.append("            detail=(")
+    # file. Still inside the same lock -- a plain getattr, no I/O, so
+    # holding the lock across it is not a meaningful cost.
+    lines.append("        func = getattr(notebook_module, replay['func_name'], None)")
+    lines.append("        if func is None:")
+    lines.append("            raise HTTPException(")
+    lines.append("                status_code=500,")
+    lines.append("                detail=(")
     lines.append(
-        "                f\"Task {task_id}'s own function "
+        "                    f\"Task {task_id}'s own function "
         "{replay['func_name']!r} no longer exists in this deployment\""
     )
-    lines.append("            ),")
-    lines.append("        )")
+    lines.append("                ),")
+    lines.append("            )")
     lines.append("")
-    lines.append("    new_task_id = uuid.uuid4().hex")
-    lines.append("    callback_url = task.get('callback_url')")
-    lines.append("    TASKS[new_task_id] = {")
-    lines.append("        'status': 'processing',")
-    lines.append("        'created_at': time.time(),")
-    lines.append("        'callback_url': callback_url,")
+    lines.append("        new_task_id = uuid.uuid4().hex")
+    lines.append("        callback_url = task.get('callback_url')")
+    lines.append("        TASKS[new_task_id] = {")
+    lines.append("            'status': 'processing',")
+    lines.append("            'created_at': time.time(),")
+    lines.append("            'callback_url': callback_url,")
     # 'retried_from' is left in the caller-facing shape on purpose (unlike
     # '_replay') -- it is exactly the kind of lineage a caller polling
     # GET /tasks/{new_task_id} benefits from seeing: which original,
     # now-failed task this one is a re-run of.
-    lines.append("        'retried_from': task_id,")
-    lines.append("        '_replay': replay,")
-    lines.append("    }")
+    lines.append("            'retried_from': task_id,")
+    lines.append("            '_replay': replay,")
+    lines.append("        }")
     lines.append(
         "    background_tasks.add_task(_run_background_task, func, "
         "new_task_id, *replay['args'], callback_url=callback_url, "
@@ -3314,16 +3343,6 @@ def generate_fastapi_code(
                 "BackgroundTasks, callback_url: Optional[str] = None, "
                 "_: None = Depends(verify_api_key)):"
             )
-            lines.append("    _evict_expired_tasks()")
-            lines.append("    if len(TASKS) >= MAX_PENDING_TASKS:")
-            lines.append("        raise HTTPException(")
-            lines.append("            status_code=503,")
-            lines.append("            detail=(")
-            lines.append("                f'Too many pending background tasks (limit '")
-            lines.append("                f'{MAX_PENDING_TASKS}); try again once some have '")
-            lines.append("                'finished.'")
-            lines.append("            ),")
-            lines.append("        )")
             # A caller opting into webhook delivery (rather than polling
             # get_task/wait_for_task) supplies this per-request, not via a
             # server-side operator setting -- so, unlike every other limit
@@ -3333,7 +3352,15 @@ def generate_fastapi_code(
             # urllib.request.urlopen inside _deliver_task_webhook at all --
             # validated here, before a task is even created, so the error
             # is immediate and actionable rather than a silent delivery
-            # failure discovered only much later.
+            # failure discovered only much later. Checked before the
+            # MAX_PENDING_TASKS admission check just below (previously
+            # after it) specifically so _is_unsafe_webhook_host's own real
+            # DNS lookup -- genuinely slow, unbounded I/O -- never happens
+            # while _TASKS_ADMISSION_LOCK is held; the only user-visible
+            # effect is which of the two error codes a request carrying
+            # *both* a full queue and an invalid callback_url gets back
+            # (400 now, 503 before), an edge case with no other observable
+            # difference either way.
             lines.append("    if callback_url is not None:")
             lines.append("        if urlparse(callback_url).scheme not in ('http', 'https'):")
             lines.append("            raise HTTPException(")
@@ -3370,7 +3397,29 @@ def generate_fastapi_code(
             )
             lines.append("                ),")
             lines.append("            )")
-            lines.append("    task_id = uuid.uuid4().hex")
+            # _evict_expired_tasks/the len(TASKS) admission check/the
+            # actual TASKS[task_id] insert below are held under one lock
+            # (see _TASKS_ADMISSION_LOCK's own definition for the
+            # "confirmed exploitable" race this closes) -- this endpoint
+            # is a plain synchronous `def`, run in Starlette's own
+            # threadpool exactly like verify_api_key/_enforce_rate_limit
+            # already are, so two concurrent submissions can genuinely
+            # interleave their own check-then-insert here on different
+            # worker threads without it.
+            lines.append("    with _TASKS_ADMISSION_LOCK:")
+            lines.append("        _evict_expired_tasks()")
+            lines.append("        if len(TASKS) >= MAX_PENDING_TASKS:")
+            lines.append("            raise HTTPException(")
+            lines.append("                status_code=503,")
+            lines.append("                detail=(")
+            lines.append("                    f'Too many pending background tasks (limit '")
+            lines.append(
+                "                    f'{MAX_PENDING_TASKS}); try again once some have '"
+            )
+            lines.append("                    'finished.'")
+            lines.append("                ),")
+            lines.append("            )")
+            lines.append("        task_id = uuid.uuid4().hex")
             # 'callback_url' recorded on the task itself (not just passed
             # through to _run_background_task below and then discarded) so
             # POST /tasks/{task_id}/redeliver-webhook can later redeliver
@@ -3378,9 +3427,15 @@ def generate_fastapi_code(
             # it -- before this, the URL only ever existed as a local
             # variable inside this one request/the fire-and-forget
             # background task it kicks off, gone the moment both
-            # completed.
+            # completed. Still inside the same lock as the admission
+            # check above: the insert itself is what the check exists to
+            # gate, so it must happen before the lock is ever released,
+            # not after -- releasing in between would let two threads
+            # each pass the check against the same pre-insert count and
+            # both proceed to insert, the exact race this lock exists to
+            # close.
             lines.append(
-                "    TASKS[task_id] = {\"status\": \"processing\", "
+                "        TASKS[task_id] = {\"status\": \"processing\", "
                 "\"created_at\": time.time(), \"callback_url\": callback_url}"
             )
             # '_replay' records exactly what would be needed to run this
