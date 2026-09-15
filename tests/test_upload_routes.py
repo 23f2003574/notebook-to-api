@@ -13926,6 +13926,138 @@ def test_export_notebook_versions_returns_404_for_missing_notebook():
     assert resp.status_code == 404
 
 
+def test_export_notebook_versions_filters_by_saved_after_and_before():
+    """Confirmed missing before this fix: GET .../versions already
+    accepts "saved_after"/"saved_before" (this endpoint's own sibling),
+    but this one only ever accepted an explicit "version_ids" list or
+    "everything" -- backing up "every version saved during last night's
+    bad deploy" meant first calling GET .../versions?saved_after=...
+    just to enumerate the matching version_ids, then passing that list
+    back in here.
+    """
+
+    filename = "versions_export_saved_filter.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+
+    all_versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(all_versions) == 2
+
+    older_version, newer_version = all_versions[1], all_versions[0]
+    _age_notebook_version(filename, older_version["version_id"], 7200)
+
+    newer_saved_at = newer_version["saved_at"]
+
+    export_resp = client.get(
+        f"/api/notebooks/{filename}/versions/export",
+        params={"saved_after": newer_saved_at},
+    )
+
+    assert export_resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(export_resp.content)) as archive:
+        names = set(archive.namelist())
+        # Current content is always included, regardless of the filter.
+        assert filename in names
+        assert f"versions/{newer_version['version_id']}" in names
+        assert f"versions/{older_version['version_id']}" not in names
+
+
+def test_export_notebook_versions_saved_range_matching_nothing_still_exports_current_content():
+
+    filename = "versions_export_saved_filter_empty.ipynb"
+    current_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(current_content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    export_resp = client.get(
+        f"/api/notebooks/{filename}/versions/export",
+        params={"saved_after": "2099-01-01T00:00:00+00:00"},
+    )
+
+    assert export_resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(export_resp.content)) as archive:
+        names = set(archive.namelist())
+        assert filename in names
+        assert not any(name.startswith("versions/") for name in names)
+
+
+def test_export_notebook_versions_rejects_saved_after_later_than_saved_before():
+
+    filename = "versions_export_saved_range_conflict.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions/export",
+        params={
+            "saved_after": "2026-06-01T00:00:00+00:00",
+            "saved_before": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert resp.status_code == 400
+
+
+def test_export_notebook_versions_rejects_version_ids_with_saved_after():
+
+    filename = "versions_export_conflict_version_ids_saved_after.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions/export",
+        params={
+            "version_ids": "does-not-matter",
+            "saved_after": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "version_ids and saved_after/saved_before" in resp.json()["detail"]
+
+
 def test_import_notebook_versions_round_trips_an_export_archive():
 
     filename = "versions_import_round_trip.ipynb"

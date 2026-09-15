@@ -9151,7 +9151,10 @@ def list_notebook_versions(
 
 
 @router.get("/notebooks/{filename}/versions/export")
-def export_notebook_versions(filename: str, version_ids: str = None):
+def export_notebook_versions(
+    filename: str, version_ids: str = None,
+    saved_after: str = None, saved_before: str = None,
+):
     """Download a previously uploaded notebook's current content together
     with its entire snapshotted version history, bundled into a single
     .zip -- a complete, restorable backup of everything POST
@@ -9223,6 +9226,34 @@ def export_notebook_versions(filename: str, version_ids: str = None):
     even before this. Omitted (the default), every version is bundled,
     exactly as before this.
 
+    "saved_after"/"saved_before" (each an optional ISO 8601 datetime,
+    parsed/validated by _parse_iso_datetime_query_param -- added
+    alongside this same docstring's original feature, not a separate
+    change) narrow the bundled history to snapshots whose own "saved_at"
+    falls on or after/before the given bound, the identical inclusive
+    date-range GET /api/notebooks/{filename}/versions' own "saved_after"/
+    "saved_before" already filters by -- reusing that same mtime-based
+    "saved_at" derivation here rather than re-deriving it a second way.
+    Before this, archiving only "everything captured during last night's
+    bad deploy" (that endpoint's own docstring gives this exact case)
+    ahead of DELETE .../versions clearing the rest meant first calling
+    GET .../versions?saved_after=...&saved_before=... just to enumerate
+    the matching version_ids, then passing that list back into
+    "version_ids" here -- the identical two-request gap GET
+    /api/notebooks/export's own "modified_after"/"modified_before"
+    already closed for exporting several *notebooks* by when they were
+    last touched, just one level down, for a single notebook's own past
+    *versions* instead. Mutually exclusive with "version_ids", for the
+    identical reason "filenames" and "modified_after"/"modified_before"
+    already are on that sibling endpoint: each already selects the
+    bundled set a completely different way. A range matching no version
+    at all simply bundles none -- the notebook's own current content and
+    tags/description are still always included, the same "narrows only
+    which past snapshots are bundled" contract "version_ids" above
+    already has. "saved_after" later than "saved_before" is rejected
+    with 400, the same way GET .../versions already rejects that
+    combination.
+
     The "X-Bundle-SHA256" response header is the same _bundle_sha256 GET
     /api/download's own identical header already summarizes a compiled
     bundle's own file set with, computed here over the archive's own
@@ -9240,6 +9271,28 @@ def export_notebook_versions(filename: str, version_ids: str = None):
         raise HTTPException(
             status_code=404,
             detail="Notebook file not found"
+        )
+
+    if version_ids and (saved_after or saved_before):
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "version_ids and saved_after/saved_before can't both be "
+                "given -- choose one."
+            )
+        )
+
+    saved_after_dt = _parse_iso_datetime_query_param(saved_after, "saved_after")
+    saved_before_dt = _parse_iso_datetime_query_param(saved_before, "saved_before")
+
+    if (
+        saved_after_dt is not None and saved_before_dt is not None
+        and saved_after_dt > saved_before_dt
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="saved_after must not be later than saved_before"
         )
 
     versions_dir = _notebook_versions_dir(file_path.name)
@@ -9275,6 +9328,29 @@ def export_notebook_versions(filename: str, version_ids: str = None):
                 status_code=404,
                 detail=f"Notebook version(s) not found: {', '.join(missing)}"
             )
+
+    elif saved_after_dt is not None or saved_before_dt is not None:
+
+        version_paths = []
+
+        if versions_dir.is_dir():
+
+            for entry in sorted(versions_dir.iterdir()):
+
+                if not entry.is_file():
+                    continue
+
+                entry_saved_at = datetime.fromtimestamp(
+                    entry.stat().st_mtime, tz=timezone.utc
+                )
+
+                if saved_after_dt is not None and entry_saved_at < saved_after_dt:
+                    continue
+
+                if saved_before_dt is not None and entry_saved_at > saved_before_dt:
+                    continue
+
+                version_paths.append(entry)
 
     else:
 

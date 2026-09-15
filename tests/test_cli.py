@@ -16640,6 +16640,40 @@ def test_versions_export_command_version_id_sends_a_comma_separated_query_param(
     ]
 
 
+def test_versions_export_command_sends_saved_after_and_before_query_params(
+    tmp_path, fake_dashboard
+):
+    """Mirrors test_versions_export_command_version_id_sends_a_comma_
+    separated_query_param: GET /api/notebooks/{filename}/versions/
+    export's own "saved_after"/"saved_before" filters (mirroring
+    `versions list`'s own identical pair) had no CLI flags of their own
+    here at all.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "export", "nb.ipynb",
+            "--saved-after", "2026-01-01T00:00:00+00:00",
+            "--saved-before", "2026-06-01T00:00:00+00:00",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/nb.ipynb/versions/export?saved_after=2026-01-01T00%3A00%3A00%2B00%3A00"
+        "&saved_before=2026-06-01T00%3A00%3A00%2B00%3A00"
+    ]
+
+
 def test_versions_export_command_omits_version_ids_query_param_by_default(
     tmp_path, fake_dashboard
 ):

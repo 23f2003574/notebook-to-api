@@ -5902,6 +5902,10 @@ def _dispatch_core_command(args):
             params = {}
             if args.version_ids:
                 params["version_ids"] = ",".join(args.version_ids)
+            if args.saved_after:
+                params["saved_after"] = args.saved_after
+            if args.saved_before:
+                params["saved_before"] = args.saved_before
 
             try:
                 response = httpx.get(
@@ -12566,6 +12570,31 @@ def main():
             "arguments already give for picking which notebooks go into "
             "a catalog-wide export, just applied here to which versions "
             "of one notebook. Omit to bundle every version, as before."
+        )
+    )
+    versions_export_parser.add_argument(
+        "--saved-after",
+        default=None,
+        dest="saved_after",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only bundle versions saved on or after this ISO 8601 "
+            "datetime, via GET /api/notebooks/{filename}/versions/"
+            "export's own ?saved_after= query param -- the same "
+            "date-range filter `versions list` already supports, e.g. "
+            "to back up everything saved during a specific incident "
+            "window. Can't be combined with --version-id."
+        )
+    )
+    versions_export_parser.add_argument(
+        "--saved-before",
+        default=None,
+        dest="saved_before",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only bundle versions saved on or before this ISO 8601 "
+            "datetime, mirroring GET /api/notebooks/{filename}/versions/"
+            "export's own ?saved_before=."
         )
     )
     _add_dashboard_url_and_timeout_arguments(versions_export_parser)
