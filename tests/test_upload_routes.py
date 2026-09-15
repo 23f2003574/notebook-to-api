@@ -5016,6 +5016,112 @@ def test_export_notebooks_by_tag_returns_404_when_nothing_matches():
     assert resp.status_code == 404
 
 
+def test_export_notebooks_by_sha256_bundles_only_the_matching_duplicate_group():
+    """Confirmed missing before this fix: GET /api/notebooks/duplicates
+    and every other catalog-wide endpoint (search-functions, search-
+    content, find-duplicates, validate-all) already accept a "sha256"
+    filter scoping to exact content, but this endpoint's own selection
+    was "filenames" (an explicit list) or "tag" only -- exporting "just
+    this one known duplicate-content group's own copies" (e.g. before
+    POST /api/notebooks/duplicates/resolve discards all but one) meant
+    first fetching that group's own filenames from GET
+    /api/notebooks/duplicates and passing them here by hand.
+    """
+
+    client.delete("/api/notebooks?confirm=true")
+
+    duplicate_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    other_content = _notebook_bytes(
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+
+    for filename in ("export_sha256_a.ipynb", "export_sha256_b.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(duplicate_content), "application/json")},
+        )
+    client.post(
+        "/api/upload",
+        files={
+            "file": ("export_sha256_other.ipynb", io.BytesIO(other_content), "application/json")
+        },
+    )
+
+    sha256 = client.get(
+        "/api/notebooks/duplicates"
+    ).json()["duplicate_groups"][0]["sha256"]
+
+    resp = client.get("/api/notebooks/export", params={"sha256": sha256})
+
+    assert resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as archive:
+        ipynb_entries = [n for n in archive.namelist() if n.endswith(".ipynb")]
+        assert sorted(ipynb_entries) == ["export_sha256_a.ipynb", "export_sha256_b.ipynb"]
+
+
+def test_export_notebooks_sha256_composes_with_tag():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    duplicate_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in ("export_compose_a.ipynb", "export_compose_b.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(duplicate_content), "application/json")},
+        )
+
+    client.put("/api/notebooks/export_compose_a.ipynb/tags", json={"tags": ["prod"]})
+    client.put("/api/notebooks/export_compose_b.ipynb/tags", json={"tags": ["staging"]})
+
+    sha256 = client.get(
+        "/api/notebooks/duplicates"
+    ).json()["duplicate_groups"][0]["sha256"]
+
+    resp = client.get(
+        "/api/notebooks/export", params={"sha256": sha256, "tag": "prod"}
+    )
+
+    assert resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as archive:
+        ipynb_entries = [n for n in archive.namelist() if n.endswith(".ipynb")]
+        assert ipynb_entries == ["export_compose_a.ipynb"]
+
+
+def test_export_notebooks_by_sha256_returns_404_when_nothing_matches():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    _upload_sample_notebook("export_sha256_unmatched.ipynb")
+
+    resp = client.get("/api/notebooks/export", params={"sha256": "0" * 64})
+
+    assert resp.status_code == 404
+
+
+def test_export_notebooks_rejects_both_filenames_and_sha256():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    _upload_sample_notebook("export_filenames_sha256_conflict.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/export",
+        params={
+            "filenames": "export_filenames_sha256_conflict.ipynb",
+            "sha256": "0" * 64,
+        },
+    )
+
+    assert resp.status_code == 400
+
+
 def test_export_notebooks_rejects_both_filenames_and_tag():
 
     _upload_sample_notebook("export_both_a.ipynb")

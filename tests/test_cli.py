@@ -7121,6 +7121,66 @@ def test_export_notebooks_command_sends_tag_query_param(tmp_path, fake_dashboard
     assert handler.requests == ["/api/notebooks/export?tag=prod"]
 
 
+def test_export_notebooks_command_sends_sha256_query_param(tmp_path, fake_dashboard):
+    """Mirrors test_export_notebooks_command_sends_tag_query_param: GET
+    /api/notebooks/export's own "sha256" filter had no --sha256 flag of
+    its own here at all, even though `list`/`find-duplicates` already
+    thread the identically-named exact-content filter through.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["export-notebooks", "--sha256", "a" * 64, "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [f"/api/notebooks/export?sha256={'a' * 64}"]
+
+
+def test_export_notebooks_command_sends_tag_and_sha256_together(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "export-notebooks", "--tag", "prod", "--sha256", "a" * 64,
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [f"/api/notebooks/export?tag=prod&sha256={'a' * 64}"]
+
+
+def test_export_notebooks_command_rejects_filename_and_sha256_together(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "export-notebooks", "a.ipynb", "--sha256", "a" * 64,
+            "--dashboard-url", "http://127.0.0.1:1",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "either a filename or --sha256, not both")
+
+
 def test_export_notebooks_command_sends_include_versions_query_param(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

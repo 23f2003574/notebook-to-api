@@ -3210,11 +3210,16 @@ def _dispatch_core_command(args):
         if args.filename and args.tag:
             raise RuntimeError("Pass either a filename or --tag, not both.")
 
+        if args.filename and args.sha256:
+            raise RuntimeError("Pass either a filename or --sha256, not both.")
+
         params = {}
         if args.filename:
             params["filenames"] = ",".join(args.filename)
         if args.tag:
             params["tag"] = args.tag
+        if args.sha256:
+            params["sha256"] = args.sha256
         if args.include_versions:
             params["include_versions"] = True
 
@@ -9890,6 +9895,20 @@ def main():
             "via GET /api/notebooks/export's own ?tag= query param, "
             "instead of naming filenames directly. Can't be combined "
             "with an explicit filename."
+        )
+    )
+    export_notebooks_parser.add_argument(
+        "--sha256",
+        help=(
+            "Export only the notebook(s) whose exact current content "
+            "hashes to this, via GET /api/notebooks/export's own "
+            "?sha256= query param -- the same exact-content filter "
+            "`list`/`find-duplicates` already support, e.g. to back up "
+            "one known duplicate-content group's own copies (which may "
+            "carry different --tag values, or none at all) before "
+            "`resolve-duplicates` discards all but one. Composes with "
+            "--tag as an AND; can't be combined with an explicit "
+            "filename."
         )
     )
     export_notebooks_parser.add_argument(

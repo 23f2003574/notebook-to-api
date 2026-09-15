@@ -5047,7 +5047,8 @@ def list_notebooks(
 
 @router.get("/notebooks/export")
 def export_notebooks(
-    filenames: str = None, tag: str = None, include_versions: bool = False
+    filenames: str = None, tag: str = None, sha256: str = None,
+    include_versions: bool = False
 ):
     """Download a caller-chosen set of already-uploaded notebooks -- or,
     with "filenames" omitted, every uploaded notebook -- bundled into one
@@ -5081,6 +5082,27 @@ def export_notebooks(
     to export" 404 an empty catalog already gets, not a per-tag 404, since
     a tag (unlike a specific filename) was never guaranteed to exist in
     the first place.
+
+    "sha256" (also mutually exclusive with "filenames", for the identical
+    reason "tag" already is) exports only the notebook(s) whose exact
+    *current* content hashes to it -- the same exact-content filter GET
+    /api/notebooks?sha256= and GET /api/notebooks/duplicates already
+    offer, and every other catalog-wide endpoint here (search-functions,
+    search-content, find-duplicates, validate-all) already composes
+    alongside "tag" the same way this does. A duplicate-content group
+    found via GET /api/notebooks/duplicates commonly carries different
+    tags across its own copies, or none at all -- so before this,
+    exporting "just this one known duplicate group's own copies" (e.g. to
+    back them up before POST /api/notebooks/duplicates/resolve discards
+    all but one) meant first fetching that group's own "filenames" from
+    GET /api/notebooks/duplicates and passing them here as "filenames"
+    by hand; "tag" alone could never scope this endpoint to exact content
+    the way its own sibling catalog-wide endpoints already let a caller
+    do directly. Composes with "tag" as an AND -- given both, only
+    notebooks matching both are exported -- the same narrowing every
+    other catalog-wide endpoint here already applies to the same two
+    filters together. Like "tag", a "sha256" matching no notebook at all
+    is simply an empty selection, not its own 404.
 
     Unlike POST /api/tags/{tag}/apply and POST /api/notebooks/delete-batch,
     a "filenames"-selected export is all-or-nothing rather than "one bad
@@ -5155,6 +5177,13 @@ def export_notebooks(
             detail="filenames and tag can't both be given -- choose one."
         )
 
+    if filenames and sha256:
+
+        raise HTTPException(
+            status_code=400,
+            detail="filenames and sha256 can't both be given -- choose one."
+        )
+
     upload_root = Path(UPLOAD_DIR)
 
     if filenames:
@@ -5187,13 +5216,14 @@ def export_notebooks(
                 detail=f"Notebook file(s) not found: {', '.join(missing)}"
             )
 
-    elif tag:
+    elif tag or sha256:
 
         notebooks_to_export = [
             (entry.name, entry)
             for entry in sorted(upload_root.iterdir())
             if entry.is_file() and entry.suffix == ".ipynb"
-            and tag in _read_notebook_tags(entry.name)
+            and (not tag or tag in _read_notebook_tags(entry.name))
+            and (not sha256 or hash_notebook_file(entry) == sha256)
         ]
 
     else:
