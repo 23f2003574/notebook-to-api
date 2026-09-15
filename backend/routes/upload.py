@@ -288,9 +288,10 @@ def _validate_batch_entry_count(items, noun="entries"):
     /api/notebooks/copy-batch, POST /api/notebooks/rename-batch, POST
     /api/notebooks/tags-batch, POST /api/notebooks/description-batch,
     POST /api/notebooks/{filename}/versions/delete-batch, POST
-    /api/notebooks/versions/restore-batch, and POST
-    /api/notebooks/{filename}/versions/note-batch) had no equivalent cap
-    at all:
+    /api/notebooks/versions/restore-batch, POST
+    /api/notebooks/{filename}/versions/note-batch, and POST
+    /api/notebooks/duplicates/resolve's own "keep" object) had no
+    equivalent cap at all:
     a single request naming an arbitrarily large "filenames"/"entries"/
     "version_ids" list could hold a per-destination lock (see
     _rename_lock_for/_version_lock_for) or perform a per-entry filesystem
@@ -5729,6 +5730,19 @@ def resolve_duplicate_notebooks(data: dict = None):
     "sha256" matching no duplicate group (or exactly one notebook, not a
     duplicate) simply resolves nothing, the same "no match is a valid
     outcome" reasoning "tag" already follows here.
+
+    "keep" is also bounded by the identical MAX_BATCH_UPLOAD_FILES cap
+    _validate_batch_entry_count already enforces for every other list/
+    object-taking batch endpoint in this file -- see that function's own
+    docstring for the full enumeration and the "ties up a worker thread
+    with nothing to cap the total" reasoning behind it. Confirmed
+    exploitable before this: this was the one batch-shaped endpoint that
+    enumeration never actually named, so a request naming an arbitrarily
+    large "keep" object -- most of it, or even all of it, naming a sha256
+    that isn't a current duplicate group at all and so contributes
+    nothing but its own {"sha256", "status": "error"} entry to
+    "results" -- had no cap here at all, unlike literally every other
+    batch endpoint this dashboard exposes.
     """
 
     data = data or {}
@@ -5759,6 +5773,8 @@ def resolve_duplicate_notebooks(data: dict = None):
             status_code=400,
             detail="keep must be an object mapping sha256 to a filename"
         )
+
+    _validate_batch_entry_count(keep_overrides, noun="keep entries")
 
     dry_run = bool(data.get("dry_run", False))
 

@@ -5979,6 +5979,29 @@ def test_resolve_duplicate_notebooks_rejects_a_non_object_keep_value():
     assert resp.status_code == 400
 
 
+def test_resolve_duplicate_notebooks_rejects_more_keep_entries_than_the_configured_maximum(
+    monkeypatch,
+):
+    """_validate_batch_entry_count already caps every other list/object-
+    taking batch endpoint in this file -- confirmed missing here before
+    this fix, the one such endpoint its own docstring never actually
+    named: an arbitrarily large "keep" object had no cap at all, unlike
+    literally every sibling batch endpoint this dashboard exposes.
+    """
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 1)
+
+    resp = client.post(
+        "/api/notebooks/duplicates/resolve",
+        json={"keep": {"a" * 64: "a.ipynb", "b" * 64: "b.ipynb"}},
+    )
+
+    assert resp.status_code == 400
+    assert "at most 1" in resp.json()["detail"]
+
+
 def test_resolve_duplicate_notebooks_scopes_to_a_tag():
 
     client.delete("/api/notebooks?confirm=true")
