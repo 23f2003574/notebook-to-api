@@ -4488,6 +4488,41 @@ def test_json_schema_type_to_typescript_maps_a_nullable_const():
     )
 
 
+def test_json_schema_type_to_typescript_maps_dict_value_types():
+    """`Dict[str, int]` generates {"type": "object", "additionalProperties":
+    {"type": "integer"}} -- the value type must survive into the
+    TypeScript index signature, not collapse to `Record<string,
+    unknown>` the way a plain object schema with no additionalProperties
+    correctly still does.
+    """
+
+    assert (
+        _json_schema_type_to_typescript(
+            {"type": "object", "additionalProperties": {"type": "integer"}}
+        )
+        == "Record<string, number>"
+    )
+    assert (
+        _json_schema_type_to_typescript(
+            {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            }
+        )
+        == "Record<string, string[]>"
+    )
+    assert (
+        _json_schema_type_to_typescript({"type": "object"}) == "Record<string, unknown>"
+    )
+    assert (
+        _json_schema_type_to_typescript({"type": "object", "additionalProperties": True})
+        == "Record<string, unknown>"
+    )
+
+
 def test_pascal_case_converts_snake_case_method_names():
 
     assert _pascal_case("train_model") == "TrainModel"
@@ -4941,6 +4976,39 @@ def test_json_schema_type_to_python_maps_a_nullable_const():
             {"anyOf": [{"const": "only", "type": "string"}, {"type": "null"}]}
         )
         == "Optional[Literal['only']]"
+    )
+
+
+def test_json_schema_type_to_python_maps_dict_value_types():
+    """`Dict[str, int]` generates {"type": "object", "additionalProperties":
+    {"type": "integer"}} -- the value type must survive into the Python
+    annotation, not collapse to `Dict[str, Any]` the way a plain object
+    schema with no additionalProperties correctly still does.
+    """
+    from backend.exporters.sdk_generator import _json_schema_type_to_python
+
+    assert (
+        _json_schema_type_to_python(
+            {"type": "object", "additionalProperties": {"type": "integer"}}
+        )
+        == "Dict[str, int]"
+    )
+    assert (
+        _json_schema_type_to_python(
+            {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            }
+        )
+        == "Dict[str, List[str]]"
+    )
+    assert _json_schema_type_to_python({"type": "object"}) == "Dict[str, Any]"
+    assert (
+        _json_schema_type_to_python({"type": "object", "additionalProperties": True})
+        == "Dict[str, Any]"
     )
 
 

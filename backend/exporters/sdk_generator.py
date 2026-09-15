@@ -386,6 +386,15 @@ def _json_schema_type_to_typescript(prop_schema):
     plain `dict.get("enum")` sees nothing there at all), which is exactly
     why this checks for it separately rather than assuming a one-element
     "enum" list covers it.
+
+    A `Dict[str, X]` field's own "type": "object" also carries an
+    "additionalProperties" sub-schema for X (e.g. {"type": "object",
+    "additionalProperties": {"type": "integer"}} for `Dict[str, int]`,
+    confirmed via a real Pydantic schema) -- recursed into here rather
+    than discarded, so `Dict[str, int]` types as `Record<string,
+    number>`, not the value-erasing `Record<string, unknown>` a bare
+    `dict.get("type")` lookup alone would produce for every Dict field
+    regardless of its own value type.
     """
     if not isinstance(prop_schema, dict):
         return "unknown"
@@ -413,6 +422,9 @@ def _json_schema_type_to_typescript(prop_schema):
         return _as_typescript_array_element(item_type)
 
     if schema_type == "object":
+        value_schema = prop_schema.get("additionalProperties")
+        if isinstance(value_schema, dict):
+            return f"Record<string, {_json_schema_type_to_typescript(value_schema)}>"
         return "Record<string, unknown>"
 
     return _JSON_SCHEMA_TYPE_TO_TS.get(schema_type, "unknown")
@@ -732,6 +744,9 @@ def _json_schema_type_to_python(prop_schema):
         return f"List[{_json_schema_type_to_python(prop_schema.get('items', {}))}]"
 
     if schema_type == "object":
+        value_schema = prop_schema.get("additionalProperties")
+        if isinstance(value_schema, dict):
+            return f"Dict[str, {_json_schema_type_to_python(value_schema)}]"
         return "Dict[str, Any]"
 
     return _JSON_SCHEMA_TYPE_TO_PYTHON.get(schema_type, "Any")
