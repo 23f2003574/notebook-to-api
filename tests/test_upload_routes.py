@@ -13736,6 +13736,127 @@ def test_import_notebook_versions_round_trips_an_export_archive():
     assert restored_contents == {original_content, middle_content}
 
 
+def test_import_notebook_versions_dry_run_writes_nothing():
+    """"dry_run" reports the identical preview a real import would --
+    without writing `filename`'s own current content, its version
+    history, or its tags/description -- the same "restore-batch already
+    has this, the single-notebook operation it batches doesn't" gap
+    POST /api/notebooks/versions/restore-batch's own dry_run closed for
+    restore_notebook_version (Commit #9).
+    """
+
+    filename = "versions_import_dry_run_source.ipynb"
+    original_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    current_content = _notebook_bytes("def g() -> int:\n    return 2\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(original_content), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(current_content), "application/json")},
+    )
+    client.put(f"/api/notebooks/{filename}/tags", json={"tags": ["prod"]})
+
+    original_versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(original_versions) == 1
+
+    export_bytes = client.get(f"/api/notebooks/{filename}/versions/export").content
+
+    new_filename = "versions_import_dry_run_target.ipynb"
+
+    import_resp = client.post(
+        f"/api/notebooks/{new_filename}/versions/import?dry_run=true",
+        files={"file": ("backup.zip", io.BytesIO(export_bytes), "application/zip")},
+    )
+
+    assert import_resp.status_code == 200
+    body = import_resp.json()
+    assert body["status"] == "success"
+    assert body["dry_run"] is True
+    assert body["filename"] == new_filename
+    assert body["overwritten"] is False
+    assert body["imported_version_count"] == 1
+    assert set(body["imported_version_ids"]) == {v["version_id"] for v in original_versions}
+    assert body["restored_tags"] == ["prod"]
+
+    # Nothing was actually written.
+    assert client.get(f"/api/notebooks/{new_filename}").status_code == 404
+    assert not (Path(UPLOAD_DIR) / new_filename).exists()
+
+
+def test_import_notebook_versions_dry_run_reports_a_would_be_collision():
+    """A dry run still runs the same-name collision check a real import
+    would -- _save_uploaded_notebook's own "dry_run" already validates
+    this without writing, the identical check its real write path uses.
+    """
+
+    existing_filename = "versions_import_dry_run_collision.ipynb"
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                existing_filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+
+    export_bytes = client.get(
+        f"/api/notebooks/{existing_filename}/versions/export"
+    ).content
+
+    resp = client.post(
+        f"/api/notebooks/{existing_filename}/versions/import?dry_run=true",
+        files={"file": ("backup.zip", io.BytesIO(export_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 409
+
+
+def test_import_notebook_versions_dry_run_reports_overwritten_true():
+    """`overwrite=true` under a dry run reports "overwritten": true (the
+    target already exists) without actually snapshotting or replacing
+    its current content.
+    """
+
+    existing_filename = "versions_import_dry_run_overwrite.ipynb"
+    existing_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    client.post(
+        "/api/upload",
+        files={
+            "file": (existing_filename, io.BytesIO(existing_content), "application/json")
+        },
+    )
+
+    source_filename = "versions_import_dry_run_overwrite_source.ipynb"
+    source_content = _notebook_bytes("def g() -> int:\n    return 2\n")
+    client.post(
+        "/api/upload",
+        files={"file": (source_filename, io.BytesIO(source_content), "application/json")},
+    )
+
+    export_bytes = client.get(
+        f"/api/notebooks/{source_filename}/versions/export"
+    ).content
+
+    resp = client.post(
+        f"/api/notebooks/{existing_filename}/versions/import"
+        "?dry_run=true&overwrite=true",
+        files={"file": ("backup.zip", io.BytesIO(export_bytes), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["overwritten"] is True
+
+    # The existing notebook's own content is untouched.
+    assert client.get(f"/api/notebooks/{existing_filename}").content == existing_content
+    assert client.get(f"/api/notebooks/{existing_filename}/versions").json()["versions"] == []
+
+
 def test_export_notebook_versions_round_trips_tags_and_description():
 
     filename = "versions_meta_round_trip.ipynb"

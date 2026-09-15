@@ -16425,6 +16425,35 @@ def test_versions_import_command_passes_the_overwrite_flag_through(tmp_path, fak
     assert handler.requests == ["/api/notebooks/nb.ipynb/versions/import?overwrite=true"]
 
 
+def test_versions_import_command_passes_the_dry_run_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb", "dry_run": True,
+            "overwritten": False, "imported_version_ids": [],
+            "imported_version_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "backup.zip"
+    _write_zip(zip_path, {"nb.ipynb": b"{}"})
+
+    proc = _run_cli(
+        [
+            "versions", "import", "nb.ipynb", str(zip_path),
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions/import?overwrite=false&dry_run=true"]
+    assert "Would restore" in proc.stdout
+
+
 def test_versions_import_command_passes_the_expected_sha256_flag_through(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

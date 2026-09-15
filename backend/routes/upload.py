@@ -9099,7 +9099,7 @@ def export_notebook_versions(filename: str, version_ids: str = None):
 @router.post("/notebooks/{filename}/versions/import")
 async def import_notebook_versions(
     filename: str, file: UploadFile = File(...), overwrite: bool = False,
-    expected_sha256: str = None,
+    expected_sha256: str = None, dry_run: bool = False,
 ):
     """Restore a notebook's current content together with its entire
     snapshotted version history from a single .zip -- the counterpart to
@@ -9176,6 +9176,33 @@ async def import_notebook_versions(
     /api/upload's identical query param already closes for a single
     notebook, applied here to GET .../versions/export's own
     "X-Bundle-SHA256".
+
+    "dry_run" (optional, default false) validates the archive's own shape
+    (exactly one current-content entry, "expected_sha256" if given) and
+    reports the identical "overwritten"/"imported_version_count"/
+    "restored_tags"/"restored_description"/"restored_source_url" a real
+    restore would, without writing `filename`'s own current content,
+    snapshotting whatever's there now, restoring a single version entry,
+    or touching its tags/description/source_url -- the same "confirm
+    what a real run would do without doing it" contract POST
+    /api/notebooks/import's own "dry_run" already provides for restoring
+    several notebooks from a catalog-wide export at once, which this
+    endpoint never picked up despite being that same operation's
+    single-notebook counterpart (the same "batch has it, the operation it
+    batches doesn't" gap Commit #9's own restore_notebook_version fix
+    already closed for POST .../versions/restore-batch). Before this, a
+    caller wanting to confirm an archive is actually well-formed and
+    would land where expected -- e.g. before scripting an unattended
+    restore across many notebooks -- had no way to check short of doing
+    the restore for real. "imported_version_ids" under a dry run is
+    every archive entry's own would-be version_id (its basename, sorted,
+    duplicates collapsed) -- the identical value _restore_version_
+    snapshots_from_archive would itself compute for each one, but without
+    that function's own traversal-safety re-check (_resolve_path_within)
+    that only a real write actually exercises, the same "a dry run
+    previews, it doesn't fully replicate every write-path safety check"
+    trade-off POST /api/notebooks/import's own dry-run branch already
+    makes (there, reporting only a count for the identical reason).
     """
 
     if not file.filename.endswith(".zip"):
@@ -9241,15 +9268,7 @@ async def import_notebook_versions(
         file=io.BytesIO(current_content_bytes), filename=filename
     )
 
-    result = await _save_uploaded_notebook(upload_file, overwrite)
-
-    file_path = resolve_upload_path(filename)
-    versions_dir = _notebook_versions_dir(file_path.name)
-
-    with _version_lock_for(file_path.name):
-        imported_version_ids = _restore_version_snapshots_from_archive(
-            archive, version_entries, versions_dir
-        )
+    result = await _save_uploaded_notebook(upload_file, overwrite, dry_run=dry_run)
 
     archived_tags, archived_description, archived_source_url = (
         _read_notebook_metadata_from_archive(
@@ -9257,18 +9276,37 @@ async def import_notebook_versions(
         )
     )
 
-    if archived_tags is not None:
-        _write_notebook_tags(file_path.name, archived_tags)
+    if dry_run:
 
-    if archived_description is not None:
-        _write_notebook_description(file_path.name, archived_description)
+        imported_version_ids = sorted({
+            os.path.basename(name)
+            for name in version_entries
+            if os.path.basename(name)
+        })
 
-    if archived_source_url is not None:
-        _write_notebook_source_url(file_path.name, archived_source_url)
+    else:
+
+        file_path = resolve_upload_path(filename)
+        versions_dir = _notebook_versions_dir(file_path.name)
+
+        with _version_lock_for(file_path.name):
+            imported_version_ids = _restore_version_snapshots_from_archive(
+                archive, version_entries, versions_dir
+            )
+
+        if archived_tags is not None:
+            _write_notebook_tags(file_path.name, archived_tags)
+
+        if archived_description is not None:
+            _write_notebook_description(file_path.name, archived_description)
+
+        if archived_source_url is not None:
+            _write_notebook_source_url(file_path.name, archived_source_url)
 
     return {
         "status": "success",
         "filename": filename,
+        "dry_run": dry_run,
         "overwritten": result["overwritten"],
         "imported_version_ids": imported_version_ids,
         "imported_version_count": len(imported_version_ids),

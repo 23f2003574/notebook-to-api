@@ -5830,6 +5830,8 @@ def _dispatch_core_command(args):
             params = {"overwrite": args.overwrite}
             if args.expected_sha256:
                 params["expected_sha256"] = args.expected_sha256
+            if args.dry_run:
+                params["dry_run"] = True
 
             try:
 
@@ -5861,8 +5863,9 @@ def _dispatch_core_command(args):
             if args.json_output:
                 print(json.dumps(data, indent=2))
             else:
+                verb = "Would restore" if data.get("dry_run") else "Restored"
                 print(
-                    f"Restored '{data.get('filename', args.filename)}' "
+                    f"{verb} '{data.get('filename', args.filename)}' "
                     f"(overwritten: {data.get('overwritten')}) with "
                     f"{data.get('imported_version_count', 0)} version(s) "
                     f"on {dashboard_url}"
@@ -12359,14 +12362,33 @@ def main():
         )
     )
     versions_import_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Validate the archive and report what would be restored -- "
+            "the identical \"overwritten\"/\"imported_version_ids\"/"
+            "\"restored_tags\"/\"restored_description\"/"
+            "\"restored_source_url\" a real import would -- without "
+            "writing `filename`'s own current content, its version "
+            "history, or its tags/description/source_url, via POST "
+            "/api/notebooks/{filename}/versions/import's own "
+            "?dry_run=true. `versions restore-batch --dry-run` already "
+            "provides this same preview for restoring several notebooks "
+            "at once; this single-notebook counterpart never picked it "
+            "up until now."
+        )
+    )
+    versions_import_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
-            "\"filename\", \"overwritten\", \"imported_version_ids\", "
-            "\"imported_version_count\"}) instead of a human-readable "
-            "summary, for scripting/automation."
+            "\"filename\", \"dry_run\", \"overwritten\", "
+            "\"imported_version_ids\", \"imported_version_count\"}) "
+            "instead of a human-readable summary, for scripting/"
+            "automation."
         )
     )
 
