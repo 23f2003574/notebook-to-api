@@ -395,6 +395,21 @@ def _json_schema_type_to_typescript(prop_schema):
     number>`, not the value-erasing `Record<string, unknown>` a bare
     `dict.get("type")` lookup alone would produce for every Dict field
     regardless of its own value type.
+
+    A fixed-length, heterogeneous `Tuple[X, Y, ...]` field renders as
+    "type": "array" with its own "prefixItems" (one sub-schema per
+    position) instead of "items" -- confirmed via a real Pydantic schema:
+    `Tuple[int, str]` generates {"type": "array", "prefixItems":
+    [{"type": "integer"}, {"type": "string"}]}, no "items" key at all.
+    Missed by the plain array branch below (`prop_schema.get("items",
+    {})` sees nothing there and falls back to {}, i.e. "unknown"), which
+    collapsed every such field to `unknown[]` -- discarding both its
+    fixed length and each position's own type. Checked first here, since
+    "prefixItems" takes precedence over "items" as a tuple's own shape,
+    and rendered as a real TypeScript tuple type (`[number, string]`)
+    instead. A homogeneous, open-ended `Tuple[X, ...]` is unaffected --
+    confirmed via the same real schema: Pydantic renders that as a plain
+    "items" array like any other List, with no "prefixItems" at all.
     """
     if not isinstance(prop_schema, dict):
         return "unknown"
@@ -418,6 +433,12 @@ def _json_schema_type_to_typescript(prop_schema):
     schema_type = prop_schema.get("type")
 
     if schema_type == "array":
+        prefix_items = prop_schema.get("prefixItems")
+        if isinstance(prefix_items, list):
+            element_types = [
+                _json_schema_type_to_typescript(item) for item in prefix_items
+            ]
+            return f"[{', '.join(element_types)}]"
         item_type = _json_schema_type_to_typescript(prop_schema.get("items", {}))
         return _as_typescript_array_element(item_type)
 
@@ -719,6 +740,13 @@ def _json_schema_type_to_python(prop_schema):
     narrowing "enum" gives, just for a single-value Literal -- see
     _json_schema_type_to_typescript's own docstring for why this needs
     its own check rather than assuming a one-element "enum" covers it.
+
+    "prefixItems" (Pydantic's own shape for a fixed-length, heterogeneous
+    `Tuple[X, Y, ...]` field -- see _json_schema_type_to_typescript's own
+    docstring for the exact schema this generates) maps to a real
+    `Tuple[X, Y, ...]` annotation instead of the value- and length-erasing
+    `List[Any]` a bare `prop_schema.get("items", {})` lookup alone
+    produces for it (a fixed-tuple schema carries no "items" key at all).
     """
     if not isinstance(prop_schema, dict):
         return "Any"
@@ -741,6 +769,12 @@ def _json_schema_type_to_python(prop_schema):
     schema_type = prop_schema.get("type")
 
     if schema_type == "array":
+        prefix_items = prop_schema.get("prefixItems")
+        if isinstance(prefix_items, list):
+            element_types = ", ".join(
+                _json_schema_type_to_python(item) for item in prefix_items
+            )
+            return f"Tuple[{element_types}]"
         return f"List[{_json_schema_type_to_python(prop_schema.get('items', {}))}]"
 
     if schema_type == "object":
@@ -1101,7 +1135,7 @@ def generate_python_sdk(
     # file nothing lints, and tracking it exactly would add real
     # complexity for no functional benefit.
     lines.append(
-        "from typing import Any, Dict, List, Literal, Optional, TypedDict, Union"
+        "from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, Union"
     )
     lines.append("")
     lines.append("")

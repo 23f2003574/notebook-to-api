@@ -4523,6 +4523,36 @@ def test_json_schema_type_to_typescript_maps_dict_value_types():
     )
 
 
+def test_json_schema_type_to_typescript_maps_a_fixed_length_tuple():
+    """`Tuple[int, str]` generates {"type": "array", "prefixItems":
+    [{"type": "integer"}, {"type": "string"}]}, no "items" key at all --
+    confirmed against a real Pydantic schema. Each position's own type
+    must survive into a real TypeScript tuple type, not collapse to
+    `unknown[]` the way a bare `prop_schema.get("items", {})` lookup
+    would.
+    """
+
+    assert (
+        _json_schema_type_to_typescript(
+            {
+                "type": "array",
+                "prefixItems": [{"type": "integer"}, {"type": "string"}],
+                "minItems": 2,
+                "maxItems": 2,
+            }
+        )
+        == "[number, string]"
+    )
+    # A homogeneous, open-ended Tuple[X, ...] carries no "prefixItems" at
+    # all -- unaffected, still a plain array.
+    assert (
+        _json_schema_type_to_typescript(
+            {"type": "array", "items": {"type": "number"}}
+        )
+        == "number[]"
+    )
+
+
 def test_pascal_case_converts_snake_case_method_names():
 
     assert _pascal_case("train_model") == "TrainModel"
@@ -5010,6 +5040,86 @@ def test_json_schema_type_to_python_maps_dict_value_types():
         _json_schema_type_to_python({"type": "object", "additionalProperties": True})
         == "Dict[str, Any]"
     )
+
+
+def test_json_schema_type_to_python_maps_a_fixed_length_tuple():
+    """See the TypeScript-side test's own docstring for the exact
+    Pydantic schema shape this covers -- the Python-client mirror of it.
+    """
+    from backend.exporters.sdk_generator import _json_schema_type_to_python
+
+    assert (
+        _json_schema_type_to_python(
+            {
+                "type": "array",
+                "prefixItems": [{"type": "integer"}, {"type": "string"}],
+                "minItems": 2,
+                "maxItems": 2,
+            }
+        )
+        == "Tuple[int, str]"
+    )
+    assert (
+        _json_schema_type_to_python({"type": "array", "items": {"type": "number"}})
+        == "List[float]"
+    )
+
+
+def test_generate_python_sdk_imports_tuple_for_a_fixed_length_tuple_field(tmp_path):
+    """The generated client's own module-level `from typing import ...`
+    line must actually import Tuple -- otherwise a schema containing a
+    fixed-length tuple field renders a `Tuple[...]` annotation with
+    nothing importing the name it uses, a NameError the moment the
+    generated file is itself imported.
+    """
+
+    schema = {
+        "paths": {
+            "/pair": {
+                "post": {
+                    "operationId": "pair",
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/PairRequest"}
+                            }
+                        }
+                    },
+                }
+            }
+        },
+        "components": {
+            "schemas": {
+                "PairRequest": {
+                    "properties": {
+                        "pair": {
+                            "type": "array",
+                            "prefixItems": [
+                                {"type": "integer"},
+                                {"type": "string"},
+                            ],
+                        },
+                    },
+                    "required": ["pair"],
+                }
+            }
+        },
+    }
+
+    schema_path = _write_schema(tmp_path, {})
+    schema_path.write_text(json.dumps(schema), encoding="utf-8")
+    output_path = schema_path.parent / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+    ast.parse(source)
+
+    import_line = next(
+        line for line in source.splitlines() if line.startswith("from typing import")
+    )
+    assert "Tuple" in import_line
+    assert "    pair: Tuple[int, str]" in source
 
 
 def test_python_typeddict_lines_splits_required_and_optional_fields():
