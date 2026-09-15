@@ -14,6 +14,7 @@ from backend.dashboard import (
     dashboard_host,
     dashboard_json_logs_enabled,
     dashboard_log_level,
+    dashboard_max_request_body_bytes,
     dashboard_port,
     dashboard_rate_limit_per_minute,
     dashboard_reload,
@@ -242,6 +243,127 @@ def test_evict_stale_dashboard_rate_limit_windows_only_sweeps_past_the_threshold
     # elapsed, leaving the still-current ones untouched.
     _evict_stale_dashboard_rate_limit_windows(now)
     assert set(_DASHBOARD_RATE_LIMIT_WINDOWS) == {"fresh", "one-more"}
+
+
+def test_dashboard_max_request_body_bytes_defaults_to_ten_megabytes(monkeypatch):
+
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_MAX_REQUEST_BYTES", raising=False)
+
+    assert dashboard_max_request_body_bytes() == 10 * 1024 * 1024
+
+
+def test_dashboard_max_request_body_bytes_env_var_overrides_the_default(monkeypatch):
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_MAX_REQUEST_BYTES", "1024")
+
+    assert dashboard_max_request_body_bytes() == 1024
+
+
+def test_dashboard_rejects_an_oversized_json_body_before_reading_it(monkeypatch):
+    """Confirmed exploitable before this fix: every JSON-body endpoint
+    this dashboard exposes (PUT .../tags, POST .../duplicates/resolve,
+    every *-batch endpoint, ...) had no upstream size check at all --
+    FastAPI/Starlette fully buffers a request body into memory to parse
+    it as JSON before any of this dashboard's own per-field/per-count
+    validations ever run, so an arbitrarily large body forced unbounded
+    memory consumption before being rejected for any other reason. Only
+    the declared Content-Length is inspected here -- the body itself
+    (`content=b"{}"`, deliberately tiny) is never actually read, the same
+    "reject before reading" contract the generated app's own
+    MaxRequestBodySizeMiddleware already provides.
+    """
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_MAX_REQUEST_BYTES", "1024")
+
+    resp = client.put(
+        "/api/notebooks/does-not-exist.ipynb/tags",
+        content=b"{}",
+        headers={"content-length": "2048", "content-type": "application/json"},
+    )
+
+    assert resp.status_code == 413
+    assert "exceeds the maximum allowed size" in resp.json()["detail"]
+
+
+def test_dashboard_allows_a_json_body_within_the_configured_limit(monkeypatch):
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_MAX_REQUEST_BYTES", "1024")
+
+    resp = client.put(
+        "/api/notebooks/does-not-exist.ipynb/tags", json={"tags": ["a"]}
+    )
+
+    # 404 (unknown notebook), not 413 -- the request body itself was well
+    # within the configured limit.
+    assert resp.status_code == 404
+
+
+def test_dashboard_body_size_limit_skips_multipart_requests():
+    """POST /api/upload/POST /api/upload/batch already enforce their own,
+    more precise size limits (MAX_UPLOAD_BYTES per file, checked
+    incrementally while streaming) via multipart/form-data -- this check
+    must never reject a legitimate multi-file batch upload whose own
+    aggregate Content-Length can exceed a single file's own cap.
+    """
+    import io
+
+    nb_bytes = json.dumps(
+        {"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}
+    ).encode()
+
+    resp = client.post(
+        "/api/upload",
+        files={
+            "file": ("body_limit_multipart.ipynb", io.BytesIO(nb_bytes), "application/json")
+        },
+    )
+
+    assert resp.status_code == 200
+    client.delete("/api/notebooks/body_limit_multipart.ipynb")
+
+
+def test_dashboard_body_size_413_response_still_gets_cors_headers(monkeypatch):
+    """CORSMiddleware is added after this middleware (see
+    _enforce_dashboard_max_request_body_bytes's own docstring), so it
+    still wraps it and adds Access-Control-Allow-Origin/-Credentials to a
+    413 -- the identical "a legitimate frontend's own JS must still be
+    able to read why a request was rejected" reasoning
+    test_dashboard_rate_limit_429_response_still_gets_cors_headers above
+    already establishes for a 429.
+    """
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_MAX_REQUEST_BYTES", "1024")
+
+    resp = client.put(
+        "/api/notebooks/does-not-exist.ipynb/tags",
+        content=b"{}",
+        headers={
+            "content-length": "2048",
+            "content-type": "application/json",
+            "Origin": "http://localhost:5173",
+        },
+    )
+
+    assert resp.status_code == 413
+    assert resp.headers["access-control-allow-origin"] == "http://localhost:5173"
+    assert resp.headers["access-control-allow-credentials"] == "true"
+
+
+def test_dashboard_body_size_limit_ignores_a_malformed_content_length(monkeypatch):
+    """A non-integer Content-Length is left for Starlette itself to
+    reject however it already would, rather than this middleware raising
+    an unhandled ValueError of its own.
+    """
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_MAX_REQUEST_BYTES", "1024")
+
+    resp = client.put(
+        "/api/notebooks/does-not-exist.ipynb/tags",
+        content=b"{}",
+        headers={"content-length": "not-a-number", "content-type": "application/json"},
+    )
+
+    assert resp.status_code != 413
 
 
 def test_dashboard_cors_exposes_custom_response_headers_to_cross_origin_js():

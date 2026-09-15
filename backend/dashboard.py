@@ -367,11 +367,99 @@ async def _enforce_dashboard_rate_limit(request: Request, call_next):
     return await call_next(request)
 
 
+def dashboard_max_request_body_bytes():
+    """Bytes a single non-multipart request body to this dashboard may
+    declare via its own Content-Length header before being rejected with
+    413, via NOTEBOOK_API_DASHBOARD_MAX_REQUEST_BYTES -- defaults to the
+    same 10MB MAX_UPLOAD_BYTES (backend/routes/upload.py) already
+    defaults to, so an operator who never touches either env var gets the
+    identical ceiling on both.
+
+    Every *generated* app this dashboard produces already gets its own
+    MaxRequestBodySizeMiddleware for free (generate_fastapi_code,
+    backend/generator/api_generator.py) -- but this dashboard's own
+    management API had no equivalent at all for any of its many JSON-body
+    endpoints (PUT /api/notebooks/{filename}/tags, .../description, POST
+    /api/notebooks/duplicates/resolve, every *-batch endpoint, ...):
+    FastAPI/Starlette fully buffers a request body into memory to parse
+    it as JSON *before* any of this dashboard's own per-field/per-count
+    validations (_validate_batch_entry_count, a tag/description length
+    cap, ...) ever get a chance to reject it for being malformed. An
+    arbitrarily large (multi-GB) JSON body sent to any of these forces
+    this dashboard process to buffer the whole thing in memory first --
+    the exact unbounded-memory-consumption class MaxRequestBodySizeMiddleware
+    already exists to prevent for a *generated* app, never applied to the
+    dashboard serving it. Read fresh on every request (like
+    dashboard_rate_limit_per_minute() above) rather than cached at import
+    time, so tests can toggle it via monkeypatch without reloading this
+    module.
+    """
+    return int(
+        os.getenv("NOTEBOOK_API_DASHBOARD_MAX_REQUEST_BYTES", str(10 * 1024 * 1024))
+    )
+
+
+@app.middleware("http")
+async def _enforce_dashboard_max_request_body_bytes(request: Request, call_next):
+    """Reject a request with 413 before its body is ever read, once its
+    own declared Content-Length exceeds dashboard_max_request_body_bytes()
+    -- see that function's own docstring for the gap this closes.
+
+    Deliberately skipped for multipart/form-data entirely: POST
+    /api/upload, /api/upload/batch, /api/notebooks/import, and
+    /api/notebooks/import-url already enforce their own, more precise
+    size limits (MAX_UPLOAD_BYTES per file, checked incrementally while
+    streaming each chunk to disk -- see _save_uploaded_notebook,
+    backend/routes/upload.py -- not declared upfront the way this check
+    works), and a batch upload's own aggregate Content-Length (several
+    files in one multipart body) can legitimately exceed a single file's
+    own cap -- this check would otherwise reject a perfectly ordinary
+    multi-file batch upload that every one of those files, individually,
+    already passes.
+
+    Registered *after* _enforce_dashboard_rate_limit above (so this ends
+    up wrapping it, running first on the way in): an oversized request
+    should never consume a caller's own rate-limit quota just to be
+    rejected for its size instead. Also registered before
+    app.add_middleware(CORSMiddleware, ...) below, so CORSMiddleware
+    still ends up the outermost middleware of all three -- the identical
+    ordering reasoning _enforce_dashboard_rate_limit's own docstring
+    already gives, just for a different response code.
+    """
+    content_type = request.headers.get("content-type", "")
+
+    if not content_type.startswith("multipart/form-data"):
+
+        content_length = request.headers.get("content-length")
+
+        if content_length is not None:
+
+            try:
+                too_large = int(content_length) > dashboard_max_request_body_bytes()
+            except ValueError:
+                too_large = False
+
+            if too_large:
+
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "detail": (
+                            "Request body exceeds the maximum allowed size "
+                            f"of {dashboard_max_request_body_bytes()} bytes"
+                        )
+                    },
+                )
+
+    return await call_next(request)
+
+
 # Enable CORS for the frontend, credentialed requests restricted to a
 # known allowlist -- see allowed_origins() docstring. Added *after*
-# _enforce_dashboard_rate_limit above (see that middleware's own
-# docstring for why the ordering here matters) so this ends up the
-# outermost middleware, wrapping the rate limiter -- every response,
+# _enforce_dashboard_rate_limit/_enforce_dashboard_max_request_body_bytes
+# above (see either middleware's own docstring for why the ordering here
+# matters) so this ends up the outermost middleware, wrapping both --
+# every response,
 # including a 429 from it, still gets CORS headers applied.
 app.add_middleware(
     CORSMiddleware,
