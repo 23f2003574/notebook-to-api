@@ -6598,6 +6598,7 @@ def delete_all_notebooks(
 @router.delete("/notebooks/versions")
 def prune_all_notebook_versions(
     older_than_days: int = None, tag: str = None, sha256: str = None,
+    saved_after: str = None, saved_before: str = None,
     dry_run: bool = False,
 ):
     """Permanently discard every notebook's snapshotted versions older
@@ -6665,6 +6666,23 @@ def prune_all_notebook_versions(
     old) would want. Composes with "tag" as an AND, the same composition
     GET /api/notebooks already gives the same two filters together.
 
+    "saved_after"/"saved_before" (each an optional ISO 8601 datetime,
+    parsed/validated by _parse_iso_datetime_query_param exactly like GET
+    .../versions' own identically-named pair) further narrow the prune to
+    versions whose own "saved_at" falls on or after/on or before the
+    given bound, inclusive on both ends -- composing with the mandatory
+    "older_than_days" as an AND, the same "purge a specific bounded
+    window" gap DELETE /api/deploy/history's own "deployed_after"/
+    "deployed_before" already close alongside its own "older_than_days".
+    "older_than_days" alone can only ever express a relative, open-ended
+    cutoff ("everything before N days ago"); an operator wanting to purge
+    old versions across the whole catalog but also bound how far back
+    that purge reaches (e.g. "everything older than 30 days, but nothing
+    from before this catalog's own migration date") had no way to
+    express that second bound at all. A "saved_after" later than
+    "saved_before" is rejected with 400, the same way it already is for
+    GET .../versions' own identical pair.
+
     "dry_run" (optional, default false) reports the exact same "results"
     a real prune would -- which notebooks are affected, each one's own
     "deleted_version_ids"/"deleted_count" -- without deleting a single
@@ -6685,6 +6703,18 @@ def prune_all_notebook_versions(
         raise HTTPException(
             status_code=400,
             detail="older_than_days is required and must be a positive integer"
+        )
+
+    saved_after_dt = _parse_iso_datetime_query_param(saved_after, "saved_after")
+    saved_before_dt = _parse_iso_datetime_query_param(saved_before, "saved_before")
+
+    if (
+        saved_after_dt is not None and saved_before_dt is not None
+        and saved_after_dt > saved_before_dt
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="saved_after must not be later than saved_before"
         )
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
@@ -6723,11 +6753,19 @@ def prune_all_notebook_versions(
                     version_file.stat().st_mtime, tz=timezone.utc
                 )
 
-                if saved_at < cutoff:
-                    if not dry_run:
-                        version_file.unlink()
-                        _remove_version_note(entry.name, version_file.name)
-                    deleted_version_ids.append(version_file.name)
+                if saved_at >= cutoff:
+                    continue
+
+                if saved_after_dt is not None and saved_at < saved_after_dt:
+                    continue
+
+                if saved_before_dt is not None and saved_at > saved_before_dt:
+                    continue
+
+                if not dry_run:
+                    version_file.unlink()
+                    _remove_version_note(entry.name, version_file.name)
+                deleted_version_ids.append(version_file.name)
 
         if deleted_version_ids:
 
@@ -9212,7 +9250,8 @@ async def import_notebook_versions(
 
 @router.delete("/notebooks/{filename}/versions")
 def clear_notebook_versions(
-    filename: str, dry_run: bool = False, older_than_days: int = None
+    filename: str, dry_run: bool = False, older_than_days: int = None,
+    saved_after: str = None, saved_before: str = None,
 ):
     """Permanently discard every one of a notebook's snapshotted previous
     versions at once, without touching the notebook's own current content,
@@ -9269,6 +9308,26 @@ def clear_notebook_versions(
     A version's own age is its "saved_at" -- the identical on-disk mtime
     GET .../versions already reports for each entry -- so nothing about
     what counts as a version's age is redefined here.
+
+    "saved_after"/"saved_before" (each an optional ISO 8601 datetime,
+    parsed/validated by _parse_iso_datetime_query_param exactly like GET
+    .../versions' own identically-named pair) narrow the clear to
+    versions whose own "saved_at" falls on or after/on or before the
+    given bound, inclusive on both ends -- composing with
+    "older_than_days" as an AND, the same "purge a specific bounded
+    window" gap DELETE /api/deploy/history's own "deployed_after"/
+    "deployed_before" already close alongside its own "older_than_days",
+    just applied here to a notebook's version history instead. Before
+    this, "older_than_days" alone could only ever express a relative,
+    open-ended cutoff ("everything before N days ago") -- an operator
+    wanting to discard just the run of versions saved during one bad
+    editing session (e.g. "everything from Tuesday's two-hour incident,
+    and nothing before or after it") had no way to express that window's
+    own end bound at all, short of a plain `clear` (destroying every
+    other version too) or GETting .../versions and deleting each stale
+    version_id by hand via `versions delete-batch`. A "saved_after"
+    later than "saved_before" is rejected with 400, the same way it
+    already is for GET .../versions' own identical pair.
     """
 
     if older_than_days is not None and older_than_days <= 0:
@@ -9276,6 +9335,18 @@ def clear_notebook_versions(
         raise HTTPException(
             status_code=400,
             detail="older_than_days must be a positive integer"
+        )
+
+    saved_after_dt = _parse_iso_datetime_query_param(saved_after, "saved_after")
+    saved_before_dt = _parse_iso_datetime_query_param(saved_before, "saved_before")
+
+    if (
+        saved_after_dt is not None and saved_before_dt is not None
+        and saved_after_dt > saved_before_dt
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="saved_after must not be later than saved_before"
         )
 
     file_path = resolve_upload_path(filename)
@@ -9291,7 +9362,7 @@ def clear_notebook_versions(
 
     with _version_lock_for(file_path.name):
 
-        if older_than_days is None:
+        if older_than_days is None and saved_after_dt is None and saved_before_dt is None:
 
             deleted_version_ids = sorted(
                 entry.name for entry in versions_dir.iterdir()
@@ -9304,7 +9375,10 @@ def clear_notebook_versions(
 
         else:
 
-            cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+            cutoff = (
+                datetime.now(timezone.utc) - timedelta(days=older_than_days)
+                if older_than_days is not None else None
+            )
 
             deleted_version_ids = []
 
@@ -9319,13 +9393,20 @@ def clear_notebook_versions(
                         version_file.stat().st_mtime, tz=timezone.utc
                     )
 
-                    if saved_at < cutoff:
+                    if cutoff is not None and saved_at >= cutoff:
+                        continue
 
-                        if not dry_run:
-                            version_file.unlink()
-                            _remove_version_note(file_path.name, version_file.name)
+                    if saved_after_dt is not None and saved_at < saved_after_dt:
+                        continue
 
-                        deleted_version_ids.append(version_file.name)
+                    if saved_before_dt is not None and saved_at > saved_before_dt:
+                        continue
+
+                    if not dry_run:
+                        version_file.unlink()
+                        _remove_version_note(file_path.name, version_file.name)
+
+                    deleted_version_ids.append(version_file.name)
 
             deleted_version_ids.sort()
 

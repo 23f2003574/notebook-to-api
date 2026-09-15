@@ -3513,6 +3513,10 @@ def _dispatch_core_command(args):
             params["tag"] = args.tag
         if args.sha256:
             params["sha256"] = args.sha256
+        if args.saved_after:
+            params["saved_after"] = args.saved_after
+        if args.saved_before:
+            params["saved_before"] = args.saved_before
         if args.dry_run:
             params["dry_run"] = True
 
@@ -6300,6 +6304,10 @@ def _dispatch_core_command(args):
                 f" older than {args.older_than_days} day(s)" if args.older_than_days
                 else ""
             )
+            if args.saved_after:
+                age_clause += f" saved on/after {args.saved_after}"
+            if args.saved_before:
+                age_clause += f" saved on/before {args.saved_before}"
 
             if not args.dry_run and not args.yes:
                 # DELETE /api/notebooks/{filename}/versions
@@ -6318,6 +6326,10 @@ def _dispatch_core_command(args):
             params = {"dry_run": True} if args.dry_run else {}
             if args.older_than_days:
                 params["older_than_days"] = args.older_than_days
+            if args.saved_after:
+                params["saved_after"] = args.saved_after
+            if args.saved_before:
+                params["saved_before"] = args.saved_before
 
             try:
                 response = httpx.delete(
@@ -10121,6 +10133,32 @@ def main():
         )
     )
     prune_versions_parser.add_argument(
+        "--saved-after",
+        default=None,
+        dest="saved_after",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only prune versions saved on or after this ISO 8601 "
+            "datetime, via DELETE /api/notebooks/versions's own "
+            "?saved_after= query param -- composes with the mandatory "
+            "--older-than-days as an AND, bounding how far back a "
+            "catalog-wide prune reaches (e.g. \"older than 30 days, but "
+            "nothing from before this catalog's own migration date\"). A "
+            "value with no UTC offset is assumed to already be UTC."
+        )
+    )
+    prune_versions_parser.add_argument(
+        "--saved-before",
+        default=None,
+        dest="saved_before",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only prune versions saved on or before this ISO 8601 "
+            "datetime, via DELETE /api/notebooks/versions's own "
+            "?saved_before=."
+        )
+    )
+    prune_versions_parser.add_argument(
         "--dry-run",
         action="store_true",
         dest="dry_run",
@@ -12664,6 +12702,35 @@ def main():
             "already applies catalog-wide, just scoped to this one "
             "notebook instead of every notebook. Without this, every "
             "version is discarded regardless of age, as before."
+        )
+    )
+    versions_clear_parser.add_argument(
+        "--saved-after",
+        default=None,
+        dest="saved_after",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only discard versions saved on or after this ISO 8601 "
+            "datetime, via DELETE /api/notebooks/{filename}/versions's "
+            "own ?saved_after= query param -- the same absolute-date-"
+            "range filter `versions list --saved-after` already provides "
+            "for *listing* versions, applied here to purge a specific "
+            "bounded window (e.g. a bad editing session) instead of only "
+            "ever the relative, open-ended --older-than-days. A value "
+            "with no UTC offset is assumed to already be UTC. Composes "
+            "with --saved-before to bound a window, and with "
+            "--older-than-days as an AND."
+        )
+    )
+    versions_clear_parser.add_argument(
+        "--saved-before",
+        default=None,
+        dest="saved_before",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only discard versions saved on or before this ISO 8601 "
+            "datetime, via DELETE /api/notebooks/{filename}/versions's "
+            "own ?saved_before=."
         )
     )
     versions_clear_parser.add_argument(

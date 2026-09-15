@@ -16315,6 +16315,196 @@ def test_clear_notebook_versions_older_than_days_rejects_a_non_positive_value():
     assert resp.status_code == 400
 
 
+def test_clear_notebook_versions_filters_by_saved_before():
+    """Confirmed missing before this fix: GET .../versions' own
+    "saved_before" filter, matching a bounded window of an existing
+    notebook's own version history, had no DELETE counterpart -- an
+    operator wanting to purge just an old run of versions (keeping every
+    more-recent one) had to use "older_than_days" alone, which can only
+    ever express an open-ended relative cutoff, not a specific window.
+    """
+
+    filename = "versions_clear_saved_before.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    old_version_id = versions[0]["version_id"]
+    _backdate_notebook_version(filename, old_version_id, days_ago=40)
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=35)).isoformat()
+
+    resp = client.delete(
+        f"/api/notebooks/{filename}/versions", params={"saved_before": cutoff}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["deleted_count"] == 1
+    assert body["deleted_version_ids"] == [old_version_id]
+
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert old_version_id not in [v["version_id"] for v in remaining]
+
+
+def test_clear_notebook_versions_filters_by_saved_after():
+
+    filename = "versions_clear_saved_after.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    recent_version_id = versions[0]["version_id"]
+    old_version_id = versions[1]["version_id"]
+    _backdate_notebook_version(filename, old_version_id, days_ago=40)
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+
+    # Only the recent (non-backdated) version is "saved_after" this
+    # recent a cutoff.
+    resp = client.delete(
+        f"/api/notebooks/{filename}/versions", params={"saved_after": cutoff}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["deleted_count"] == 1
+    assert body["deleted_version_ids"] == [recent_version_id]
+
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert [v["version_id"] for v in remaining] == [old_version_id]
+
+
+def test_clear_notebook_versions_saved_before_composes_with_older_than_days():
+    """"older_than_days" and "saved_before" must compose as an AND, not
+    either alone -- only a version matching *both* is discarded.
+    """
+
+    filename = "versions_clear_compose.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def i() -> int:\n    return 4\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    oldest_id, middle_id = versions[2]["version_id"], versions[1]["version_id"]
+    _backdate_notebook_version(filename, oldest_id, days_ago=60)
+    _backdate_notebook_version(filename, middle_id, days_ago=40)
+
+    # older_than_days=30 alone would catch both backdated versions;
+    # saved_before further narrows to only the older of the two.
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=50)).isoformat()
+
+    resp = client.delete(
+        f"/api/notebooks/{filename}/versions",
+        params={"older_than_days": 30, "saved_before": cutoff},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["deleted_version_ids"] == [oldest_id]
+
+
+def test_clear_notebook_versions_rejects_saved_after_later_than_saved_before():
+
+    filename = "versions_clear_invalid_range.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.delete(
+        f"/api/notebooks/{filename}/versions",
+        params={
+            "saved_after": "2024-06-01T00:00:00Z",
+            "saved_before": "2024-01-01T00:00:00Z",
+        },
+    )
+
+    assert resp.status_code == 400
+
+
 def test_notebook_versions_are_pruned_beyond_the_configured_maximum():
 
     filename = "versions_pruned.ipynb"
@@ -16760,6 +16950,147 @@ def test_prune_all_notebook_versions_requires_a_positive_older_than_days():
     assert resp.status_code == 400
 
     resp = client.delete("/api/notebooks/versions", params={"older_than_days": -5})
+    assert resp.status_code == 400
+
+
+def test_prune_all_notebook_versions_saved_before_narrows_the_mandatory_cutoff():
+    """Confirmed missing before this fix: GET .../versions' own
+    "saved_before" filter had no catalog-wide DELETE counterpart --
+    "older_than_days" alone can only ever express an open-ended relative
+    cutoff, with no way to also bound how far back a catalog-wide prune
+    reaches.
+    """
+
+    filename = "prune_versions_saved_before.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    recent_id, oldest_id = versions[0]["version_id"], versions[1]["version_id"]
+    _backdate_notebook_version(filename, oldest_id, days_ago=60)
+    _backdate_notebook_version(filename, recent_id, days_ago=40)
+
+    # older_than_days=30 alone would catch both; saved_before further
+    # narrows to only the older of the two.
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=50)).isoformat()
+
+    resp = client.delete(
+        "/api/notebooks/versions",
+        params={"older_than_days": 30, "saved_before": cutoff},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_deleted_count"] == 1
+    assert body["results"] == [{
+        "filename": filename,
+        "deleted_version_ids": [oldest_id],
+        "deleted_count": 1,
+    }]
+
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert [v["version_id"] for v in remaining] == [recent_id]
+
+
+def test_prune_all_notebook_versions_saved_after_narrows_the_mandatory_cutoff():
+
+    filename = "prune_versions_saved_after.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    recent_id, oldest_id = versions[0]["version_id"], versions[1]["version_id"]
+    _backdate_notebook_version(filename, oldest_id, days_ago=60)
+    _backdate_notebook_version(filename, recent_id, days_ago=40)
+
+    # older_than_days=30 alone would catch both; saved_after further
+    # narrows to only the more recent of the two.
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=50)).isoformat()
+
+    resp = client.delete(
+        "/api/notebooks/versions",
+        params={"older_than_days": 30, "saved_after": cutoff},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_deleted_count"] == 1
+    assert body["results"] == [{
+        "filename": filename,
+        "deleted_version_ids": [recent_id],
+        "deleted_count": 1,
+    }]
+
+
+def test_prune_all_notebook_versions_rejects_saved_after_later_than_saved_before():
+
+    resp = client.delete(
+        "/api/notebooks/versions",
+        params={
+            "older_than_days": 30,
+            "saved_after": "2024-06-01T00:00:00Z",
+            "saved_before": "2024-01-01T00:00:00Z",
+        },
+    )
+
     assert resp.status_code == 400
 
 
