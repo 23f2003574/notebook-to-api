@@ -8,6 +8,7 @@ from backend.parser.ast_parser import (
     normalize_type_annotation,
     literal_values,
     _parse_docstring_arg_descriptions,
+    _parse_docstring_return_description,
 )
 
 
@@ -130,6 +131,7 @@ def train(epochs: int, lr: float) -> str:
     assert args_by_name["lr"]["description"] == (
         "Learning rate for the optimizer."
     )
+    assert funcs[0]["return_description"] == "A short summary string."
 
 
 def test_function_extraction_arg_description_is_none_when_undocumented():
@@ -144,6 +146,75 @@ def add(a: int, b: int) -> int:
 
     assert funcs[0]["args"][0]["description"] is None
     assert funcs[0]["args"][1]["description"] is None
+    assert funcs[0]["return_description"] is None
+
+
+def test_parse_docstring_return_description_returns_none_for_no_docstring():
+
+    assert _parse_docstring_return_description(None) is None
+    assert _parse_docstring_return_description("") is None
+
+
+def test_parse_docstring_return_description_returns_none_with_no_returns_section():
+
+    docstring = "Summary.\n\nArgs:\n    x: The input.\n"
+
+    assert _parse_docstring_return_description(docstring) is None
+
+
+def test_parse_docstring_return_description_handles_return_singular_header():
+
+    docstring = "Summary.\n\nReturn:\n    The result.\n"
+
+    assert _parse_docstring_return_description(docstring) == "The result."
+
+
+def test_parse_docstring_return_description_joins_wrapped_continuation_lines():
+
+    docstring = (
+        "Summary.\n\n"
+        "Returns:\n"
+        "    A long description that a human\n"
+        "    wrapped onto a second line.\n"
+    )
+
+    assert _parse_docstring_return_description(docstring) == (
+        "A long description that a human wrapped onto a second line."
+    )
+
+
+def test_parse_docstring_return_description_stops_at_the_next_section():
+    """An "Args:" section appearing after "Returns:" (an unusual but
+    plausible ordering) must not be swallowed into the return
+    description.
+    """
+
+    docstring = (
+        "Summary.\n\n"
+        "Returns:\n"
+        "    The output.\n\n"
+        "Raises:\n"
+        "    ValueError: if x is negative.\n"
+    )
+
+    assert _parse_docstring_return_description(docstring) == "The output."
+
+
+def test_parse_docstring_return_description_ignores_numpy_style():
+    """Only Google-style is parsed -- a NumPy-style underlined
+    "Returns\\n-------" section has no "Returns:"/"Return:" header line
+    at all, so this must yield None rather than a wrong extraction.
+    """
+
+    docstring = (
+        "Summary.\n\n"
+        "Returns\n"
+        "-------\n"
+        "float\n"
+        "    The output.\n"
+    )
+
+    assert _parse_docstring_return_description(docstring) is None
 
 
 def test_parse_docstring_arg_descriptions_returns_empty_dict_for_no_docstring():

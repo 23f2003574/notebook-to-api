@@ -3875,6 +3875,46 @@ def test_field_falls_back_to_generic_description_when_undocumented():
     assert "description=\"Parameter 'epochs' of type int\"" in code
 
 
+def test_response_uses_docstring_return_description_over_the_generic_fallback():
+    """Confirmed missing before this feature: extract_functions_from_code
+    (backend/parser/ast_parser.py) now attaches a function's own
+    Google-style "Returns:" description as "return_description", but
+    generate_fastapi_code ignored it entirely and always used the
+    generic "Returns {return_type}" -- no matter how thoroughly the
+    notebook author had actually documented what the function returns.
+    """
+
+    functions = [
+        {
+            "name": "get_score",
+            "args": [],
+            "return_type": "float",
+            "return_description": "The normalized score between 0 and 1.",
+        }
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    assert "The normalized score between 0 and 1." in code
+    assert "'Returns float'" not in code
+
+
+def test_response_falls_back_to_generic_description_when_return_undocumented():
+
+    functions = [
+        {
+            "name": "get_score",
+            "args": [],
+            "return_type": "float",
+            "return_description": None,
+        }
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    assert "Returns float" in code
+
+
 def test_field_does_not_override_an_annotations_own_field_description():
     """Confirmed exploitable before this fix: Pydantic merges an
     Annotated[...] metadata's own FieldInfo with the one assigned as the

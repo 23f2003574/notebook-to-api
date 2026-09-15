@@ -112,6 +112,83 @@ def _parse_docstring_arg_descriptions(docstring):
     return descriptions
 
 
+# Matches a Google-style docstring section header introducing the
+# function's own return-value documentation -- see
+# _parse_docstring_return_description below for what this is for.
+_RETURN_SECTION_HEADER_PATTERN = re.compile(r"^(Returns|Return):$")
+
+
+def _parse_docstring_return_description(docstring):
+    """The notebook author's own free-text description of what a
+    function returns, from `docstring`'s own Google-style "Returns:"/
+    "Return:" section -- or None if `docstring` is empty or has no such
+    section.
+
+    The mirror image of _parse_docstring_arg_descriptions above, for the
+    identical reason: generate_fastapi_code (api_generator.py) had no
+    choice but to fall back to a generic "Returns {return_type}" for
+    every single endpoint's own OpenAPI response description, no matter
+    how thoroughly a notebook author had actually documented what the
+    function returns.
+
+    Unlike an Args:-style section (one "name: description" entry per
+    parameter), a Returns:-style section is just a single, possibly
+    multi-line, free-text description with no "name:" prefix of its own
+    -- so this simply joins every line in the section (from the line
+    right after the header, until a dedent back out of it) with single
+    spaces, the same "long sentence a human wrapped across lines"
+    normalization _parse_docstring_arg_descriptions already applies per
+    entry.
+
+    None (not "") for a docstring with no Returns:-style section at all,
+    or one whose own body is empty/all-whitespace -- the same "distinct
+    from an empty string" convention `docstring` and each parameter's own
+    "description" already follow, so the generator can tell "author
+    didn't document this" apart from "documented, but genuinely empty"
+    via a single falsy check either way.
+    """
+    if not docstring:
+        return None
+
+    lines = docstring.splitlines()
+
+    in_section = False
+    section_indent = None
+    parts = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        if not in_section:
+            if _RETURN_SECTION_HEADER_PATTERN.match(stripped):
+                in_section = True
+                section_indent = None
+            continue
+
+        if not stripped:
+            # A blank line inside the section -- could just be spacing
+            # before/after the description -- doesn't end it on its own,
+            # the same reasoning _parse_docstring_arg_descriptions
+            # already applies for its own per-entry blank lines.
+            continue
+
+        indent = len(line) - len(line.lstrip())
+
+        if section_indent is None:
+            section_indent = indent
+        elif indent < section_indent:
+            # Dedented back out of the Returns:-style section entirely
+            # -- e.g. a "Raises:" header at the same level "Returns:"
+            # itself started at.
+            break
+
+        parts.append(stripped)
+
+    text = " ".join(parts).strip()
+
+    return text or None
+
+
 def deduplicate_functions_by_name(functions):
     """Collapse repeated function definitions, keeping the last one.
 
@@ -333,12 +410,23 @@ def extract_functions_from_code(code):
                     arg_info["name"]
                 )
 
+            # Attaches the function's own Google-style "Returns:"
+            # description (see _parse_docstring_return_description
+            # above), if the docstring documents one -- generate_fastapi_
+            # code (api_generator.py) prefers this over its own generic
+            # "Returns {return_type}" fallback whenever present. None
+            # (not simply omitted) for a docstring with no such section,
+            # the same "distinct from absent/empty" convention every
+            # other docstring-derived field here already follows.
+            return_description = _parse_docstring_return_description(docstring)
+
             function_info = {
                 "name": node.name,
                 "args": args,
                 "return_type": return_type,
                 "is_async": isinstance(node, ast.AsyncFunctionDef),
                 "docstring": docstring,
+                "return_description": return_description,
                 "example_payload": generate_example_payload(args),
                 "example_response": generate_example_response(
                     return_type

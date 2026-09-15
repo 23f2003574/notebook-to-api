@@ -3097,7 +3097,16 @@ def generate_fastapi_code(
             "return_type",
             "unknown"
         )
-        response_description = (
+        # Prefers the notebook author's own "Returns:"-section docstring
+        # description (extract_functions_from_code's "return_description",
+        # from _parse_docstring_return_description, backend/parser/
+        # ast_parser.py) over the generic, type-only fallback every
+        # endpoint's own OpenAPI response description used to get
+        # regardless of how thoroughly the function was actually
+        # documented -- the identical "prefer the author's own words"
+        # precedent field_description already establishes below for each
+        # parameter's own "Args:"-section description.
+        response_description = func.get("return_description") or (
             f"Returns {return_type}"
         )
         model_name = model_names[func_name]
