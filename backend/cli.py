@@ -5619,10 +5619,14 @@ def _dispatch_core_command(args):
 
         elif args.versions_command == "note-set":
 
+            note_body = {"note": args.note}
+            if args.dry_run:
+                note_body["dry_run"] = True
+
             try:
                 response = httpx.put(
                     f"{dashboard_url}/api/notebooks/{args.filename}/versions/{args.version_id}/note",
-                    json={"note": args.note},
+                    json=note_body,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -5641,10 +5645,17 @@ def _dispatch_core_command(args):
                 print(json.dumps(data, indent=2))
             else:
                 note = data.get("note", "")
-                print(
-                    f"{args.filename} version '{args.version_id}' note set "
-                    f"to: {note if note else '(cleared)'}"
-                )
+                if data.get("dry_run"):
+                    print(
+                        f"Would set {args.filename} version "
+                        f"'{args.version_id}' note to: "
+                        f"{note if note else '(cleared)'}"
+                    )
+                else:
+                    print(
+                        f"{args.filename} version '{args.version_id}' note set "
+                        f"to: {note if note else '(cleared)'}"
+                    )
 
         elif args.versions_command == "note-batch":
 
@@ -12162,13 +12173,29 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(versions_note_set_parser)
     versions_note_set_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report the note that would be set -- validated and "
+            "normalized exactly as a real call would -- without actually "
+            "replacing the version's own previously-recorded note, via "
+            "PUT .../versions/{version_id}/note's own \"dry_run\" body "
+            "field. `versions note-batch --dry-run` already provides this "
+            "same preview for setting several versions' own notes at "
+            "once; this single-version counterpart never picked it up "
+            "until now."
+        )
+    )
+    versions_note_set_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response "
-            "({\"status\", \"filename\", \"version_id\", \"note\"}) "
-            "instead of a human-readable summary, for scripting/automation."
+            "({\"status\", \"filename\", \"version_id\", \"note\", "
+            "\"dry_run\"}) instead of a human-readable summary, for "
+            "scripting/automation."
         )
     )
 

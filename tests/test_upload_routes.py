@@ -27953,10 +27953,65 @@ def test_set_notebook_version_note_round_trips_through_get():
         "filename": filename,
         "version_id": version_id,
         "note": "known-good, before the refactor",
+        "dry_run": False,
     }
 
     get_resp = client.get(f"/api/notebooks/{filename}/versions/{version_id}/note")
     assert get_resp.json()["note"] == "known-good, before the refactor"
+
+
+def test_set_notebook_version_note_dry_run_writes_nothing():
+    """PUT .../versions/{version_id}/note never had a "dry_run" at all --
+    the same "batch has it, the single-target operation it batches
+    doesn't" gap already closed for restore_notebook_version and POST
+    .../versions/import elsewhere in this file. POST .../versions/
+    note-batch's own "dry_run" already provides this same preview one
+    level up.
+    """
+
+    filename = "version_note_dry_run.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    resp = client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "known-good, before the refactor", "dry_run": True},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["note"] == "known-good, before the refactor"
+
+    # Nothing was actually written.
+    assert client.get(
+        f"/api/notebooks/{filename}/versions/{version_id}/note"
+    ).json()["note"] == ""
+
+
+def test_set_notebook_version_note_dry_run_still_validates_the_note():
+
+    filename = "version_note_dry_run_invalid.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    resp = client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "x" * 501, "dry_run": True},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_set_notebook_version_note_dry_run_still_reports_a_404_for_an_unknown_version():
+
+    filename = "version_note_dry_run_404.ipynb"
+    _upload_and_create_one_version(filename)
+
+    resp = client.put(
+        f"/api/notebooks/{filename}/versions/does-not-exist.ipynb/note",
+        json={"note": "known-good", "dry_run": True},
+    )
+
+    assert resp.status_code == 404
 
 
 def test_set_notebook_version_note_strips_surrounding_whitespace():

@@ -9951,6 +9951,21 @@ def set_notebook_version_note(filename: str, version_id: str, data: dict):
     unlike a notebook's tags/description, which exist independently of
     any single version and so have no equivalent existence check to make
     here.
+
+    "dry_run" (optional, default false, in the request body) reports the
+    exact same "note" (validated and normalized) a real call would,
+    without actually replacing the version's own previously-recorded
+    note -- the same preview POST /api/notebooks/{filename}/versions/
+    note-batch's own "dry_run" already provides for setting several
+    versions' own notes at once, which this single-version counterpart
+    (the one every note-batch entry itself ultimately reduces to) never
+    picked up, the same "batch has it, the operation it batches doesn't"
+    gap already closed for restore_notebook_version and POST .../
+    versions/import elsewhere in this file. Before this, a caller wanting
+    to confirm a specific `note` value would actually validate (or that
+    `version_id` was typed correctly) before overwriting whatever note
+    was already recorded had no way to check that short of doing the
+    write for real.
     """
 
     file_path = resolve_upload_path(filename)
@@ -9977,13 +9992,17 @@ def set_notebook_version_note(filename: str, version_id: str, data: dict):
 
     note = _validate_and_normalize_version_note(data.get("note"))
 
-    _write_version_note(file_path.name, version_id, note)
+    dry_run = bool(data.get("dry_run", False))
+
+    if not dry_run:
+        _write_version_note(file_path.name, version_id, note)
 
     return {
         "status": "success",
         "filename": filename,
         "version_id": version_id,
         "note": note,
+        "dry_run": dry_run,
     }
 
 

@@ -15720,6 +15720,35 @@ def test_versions_note_set_command_with_empty_string_clears_it(tmp_path, fake_da
     assert json.loads(handler.bodies[0]) == {"note": ""}
 
 
+def test_versions_note_set_command_passes_the_dry_run_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "version_id": "v1.ipynb", "note": "known-good", "dry_run": True,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "note-set", "nb.ipynb", "v1.ipynb", "known-good",
+            "--dashboard-url", dashboard_url, "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (
+        "Would set nb.ipynb version 'v1.ipynb' note to: known-good"
+        in proc.stdout
+    )
+    assert json.loads(handler.bodies[0]) == {"note": "known-good", "dry_run": True}
+
+
 def test_versions_note_set_command_json_flag_emits_the_dashboards_own_response(
     tmp_path, fake_dashboard
 ):
