@@ -1736,6 +1736,49 @@ def test_classify_notebook_diff_return_type_change_is_breaking(tmp_path):
     }]
 
 
+def test_classify_notebook_diff_gaining_a_return_type_annotation_is_not_breaking(
+    tmp_path,
+):
+    """Confirmed exploitable before this fix: _is_breaking_type_change's
+    own plain "one side missing" fallback treated a function merely
+    *gaining* a return-type annotation identically to a real type-to-
+    type change -- but the endpoint's own actual `{"result": result}`
+    response is byte-for-byte identical either way, a purely additive,
+    non-breaking edit "parameter_type_changed" above already guards
+    against for the identical "one side has no annotation at all" case
+    on the parameter side.
+    """
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(old_path, "def add(a: int, b: int):\n    return a + b\n")
+    _write_notebook(new_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification == {"compatible": True, "breaking_changes": []}
+
+
+def test_classify_notebook_diff_losing_a_return_type_annotation_is_not_breaking(
+    tmp_path,
+):
+    """The reverse direction of gaining one above -- also guarded, the
+    same "one side missing" skip the parameter-type check already
+    applies regardless of which side lost its annotation.
+    """
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(old_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _write_notebook(new_path, "def add(a: int, b: int):\n    return a + b\n")
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification == {"compatible": True, "breaking_changes": []}
+
+
 def test_classify_notebook_diff_async_only_change_is_not_breaking(tmp_path):
     """test_diff_notebook_functions_async_change_is_reported_as_changed
     above already confirms diff_notebook_functions reports this as

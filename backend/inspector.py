@@ -992,6 +992,24 @@ def classify_notebook_diff(diff):
         more permissive for an existing caller, while a return type's
         own value set only breaks a caller when it grows (narrowing it
         is the safe direction instead).
+      - a parameter's type annotation being added or removed entirely
+        (one side None, the "no annotation at all" case
+        _extract_notebook_functions itself reports for an unannotated
+        parameter/return -- not a real type, so there's nothing on that
+        side to compare against). "parameter_type_changed" above already
+        skips its own _is_breaking_type_change call for exactly this
+        reason -- but "return_type_changed" below did not, and
+        _is_breaking_type_change's own plain "one side missing" fallback
+        (the same branch a genuine type-to-type change falls through to)
+        treated that identically to a real, breaking change: a function
+        merely *gaining* a return-type annotation (`def f():` to `def
+        f() -> int:`, a purely additive, non-breaking narrowing from
+        "no declared type" to a specific one -- the endpoint's own actual
+        `{"result": result}` response is byte-for-byte identical either
+        way) was wrongly reported as "return_type_changed", the exact
+        "additive edit fails a --fail-on-breaking CI gate meant to catch
+        real breaks" bug class this whole function exists to prevent.
+        Guarded here the identical way the parameter side already is.
     """
     breaking_changes = []
 
@@ -1061,7 +1079,10 @@ def classify_notebook_diff(diff):
         old_return = entry["old"].get("return_type")
         new_return = entry["new"].get("return_type")
 
-        if _is_breaking_type_change(old_return, new_return, covariant=True):
+        if (
+            old_return is not None and new_return is not None
+            and _is_breaking_type_change(old_return, new_return, covariant=True)
+        ):
             breaking_changes.append({
                 "type": "return_type_changed",
                 "name": name,
