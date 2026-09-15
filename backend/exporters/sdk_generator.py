@@ -2224,9 +2224,24 @@ def generate_typescript_sdk(
     lines.append("        }")
     lines.append("        if (Date.now() >= deadline) {")
     lines.append(
-        "          throw new Error(`Task ${taskId} did not complete "
-        "within ${timeoutMs}ms`);"
+        "          const timeoutError: any = new Error(`Task ${taskId} "
+        "did not complete within ${timeoutMs}ms`);"
     )
+    # `.isTimeout` (not a dedicated Error subclass, matching this
+    # client's own existing "attach a field to a plain Error" convention
+    # -- see `.status` on the requestWithRetry/getTask error above)
+    # mirrors generate_python_sdk's identical wait_for_task, which
+    # already raises a distinct, separately-catchable TimeoutError here
+    # instead of the same plain Exception every other failure there
+    # raises. Confirmed missing before this: a TypeScript caller wanting
+    # to retry-with-backoff specifically on a timeout (rather than
+    # surfacing a real 404/401 immediately) had no field or type to
+    # branch on -- only a fragile `err.message.includes(...)` string
+    # match -- to tell "timed out waiting" apart from any other thrown
+    # error, even though the Python client already lets a caller write a
+    # clean `except TimeoutError:` for the identical situation.
+    lines.append("          timeoutError.isTimeout = true;")
+    lines.append("          throw timeoutError;")
     lines.append("        }")
     lines.append(
         "        await new Promise((resolve) => setTimeout(resolve, "
@@ -2239,9 +2254,11 @@ def generate_typescript_sdk(
     lines.append("      }")
     lines.append("      if (Date.now() >= deadline) {")
     lines.append(
-        "        throw new Error(`Task ${taskId} did not complete within "
-        "${timeoutMs}ms`);"
+        "        const timeoutError: any = new Error(`Task ${taskId} did "
+        "not complete within ${timeoutMs}ms`);"
     )
+    lines.append("        timeoutError.isTimeout = true;")
+    lines.append("        throw timeoutError;")
     lines.append("      }")
     lines.append(
         "      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));"

@@ -2847,6 +2847,127 @@ def test_generate_typescript_sdk_wait_for_task_throws_on_timeout(tmp_path):
     shutil.which("node") is None,
     reason="requires a Node.js runtime to execute the generated TypeScript client",
 )
+def test_generate_typescript_sdk_wait_for_task_timeout_error_is_distinguishable(tmp_path):
+    """Mirrors generate_python_sdk's own wait_for_task, which raises a
+    distinct, separately-catchable TimeoutError rather than the same
+    plain Exception every other failure there raises. Confirmed missing
+    before this fix: waitForTask threw a plain `new Error(...)` on
+    timeout here too -- the identical type/shape as every *other*
+    failure this client can throw (a real 401/404/...), leaving a
+    TypeScript caller wanting to retry-with-backoff specifically on a
+    timeout with no field or type to branch on, only a fragile
+    `err.message.includes(...)` string match.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        globalThis.fetch = async (url, opts) => {{
+          return {{ ok: true, json: async () => ({{ status: "processing" }}) }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        try {{
+          await client.waitForTask("abc123", {{ pollIntervalMs: 0, timeoutMs: 0 }});
+          console.log(JSON.stringify({{ threw: false }}));
+        }} catch (err) {{
+          console.log(JSON.stringify({{ threw: true, isTimeout: err.isTimeout }}));
+        }}
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["threw"] is True
+    assert output["isTimeout"] is True
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_wait_for_task_non_timeout_error_is_not_marked_timeout(
+    tmp_path,
+):
+    """The complement of the test above: a real 404 from getTask (the
+    task_id doesn't exist at all) must NOT be marked isTimeout -- only
+    the deadline-exceeded branch should ever set it.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        globalThis.fetch = async (url, opts) => {{
+          return {{
+            ok: false, status: 404,
+            json: async () => ({{ detail: "not found" }}),
+          }};
+        }};
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+
+        try {{
+          await client.waitForTask("abc123", {{ pollIntervalMs: 0, timeoutMs: 5000 }});
+          console.log(JSON.stringify({{ threw: false }}));
+        }} catch (err) {{
+          console.log(JSON.stringify({{
+            threw: true, status: err.status, isTimeout: err.isTimeout,
+          }}));
+        }}
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["threw"] is True
+    assert output["status"] == 404
+    # JSON.stringify drops an "undefined" value's key entirely -- absence
+    # here (not a JSON `null`) is exactly what err.isTimeout never being
+    # set looks like.
+    assert "isTimeout" not in output
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
 def test_generate_typescript_sdk_wait_for_task_retries_transient_errors_before_succeeding(
     tmp_path,
 ):
