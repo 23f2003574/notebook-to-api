@@ -15812,6 +15812,60 @@ def test_restore_notebook_version_itself_snapshots_the_content_it_replaces():
     assert downloaded.content == second_content
 
 
+def test_restore_notebook_version_rejects_once_max_total_storage_bytes_is_reached(
+    monkeypatch,
+):
+    """Restoring snapshots the content it's about to replace -- the exact
+    same "duplicate existing content onto disk a second time" write
+    pattern POST /api/upload?overwrite=true's own MAX_TOTAL_STORAGE_BYTES
+    check already covers for an ordinary overwrite. Confirmed exploitable
+    before this fix: restoring instead of overwriting silently bypassed
+    that same cap entirely.
+    """
+
+    from backend.routes import upload as upload_module
+
+    filename = "versions_restore_max_storage.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    first_version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    versions_before = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+
+    current_total = upload_module._current_total_storage_bytes()
+    monkeypatch.setattr(upload_module, "MAX_TOTAL_STORAGE_BYTES", current_total)
+
+    resp = client.post(f"/api/notebooks/{filename}/versions/{first_version_id}/restore")
+
+    assert resp.status_code == 413
+    assert "maximum total storage" in resp.json()["detail"].lower()
+
+    # Nothing was actually restored or snapshotted.
+    assert client.get(f"/api/notebooks/{filename}/versions").json()["versions"] == versions_before
+
+
 def test_restore_notebook_version_returns_404_for_missing_notebook():
 
     resp = client.post(
@@ -16043,6 +16097,58 @@ def test_restore_notebook_versions_batch_reports_a_bad_entry_without_aborting_th
     assert results_by_filename[filename]["status"] == "success"
     assert results_by_filename["does_not_exist.ipynb"]["status"] == "error"
     assert "not found" in results_by_filename["does_not_exist.ipynb"]["detail"]
+
+
+def test_restore_notebook_versions_batch_reports_a_storage_cap_error_per_entry(
+    monkeypatch,
+):
+    """The identical MAX_TOTAL_STORAGE_BYTES check the single-notebook
+    restore now runs, applied per entry here -- one entry exceeding the
+    cap fails just that entry, not the whole batch, the same isolation
+    every other per-entry failure in this loop already gets.
+    """
+
+    from backend.routes import upload as upload_module
+
+    filename = "versions_restore_batch_storage_cap.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    current_total = upload_module._current_total_storage_bytes()
+    monkeypatch.setattr(upload_module, "MAX_TOTAL_STORAGE_BYTES", current_total)
+
+    resp = client.post(
+        "/api/notebooks/versions/restore-batch",
+        json={"entries": [{"filename": filename, "version_id": version_id}]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["failed_count"] == 1
+    assert body["results"][0]["status"] == "error"
+    assert "maximum total storage" in body["results"][0]["detail"].lower()
 
 
 def test_restore_notebook_versions_batch_dry_run_reports_the_plan_without_restoring():

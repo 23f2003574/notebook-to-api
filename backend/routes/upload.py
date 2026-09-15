@@ -975,6 +975,61 @@ def _snapshot_current_notebook_version(file_path: Path) -> None:
     _prune_notebook_versions(versions_dir)
 
 
+def _restore_notebook_version_onto(file_path: Path, version_path: Path) -> None:
+    """Make `version_path`'s content `file_path`'s own current content
+    again -- the exact snapshot-then-copy sequence restore_notebook_
+    version and restore_notebook_versions_batch (below) each need,
+    factored out here once both had it, so it stops drifting between the
+    two the way _copy_notebook_to already prevents for the identical
+    "one implementation, several call sites" reason (see that function's
+    own docstring).
+
+    Enforces MAX_TOTAL_STORAGE_BYTES first -- _snapshot_current_notebook_
+    version below adds a brand-new file to disk (a full copy of
+    `file_path`'s own current bytes, about to be overwritten), the exact
+    same "duplicate existing content onto disk a second time" write
+    pattern _copy_notebook_to's own identical check already covers for
+    POST /api/notebooks/{filename}/copy. Confirmed exploitable before
+    this: restoring a notebook to a past version -- undoing an unwanted
+    overwrite, this project's whole reason for keeping version history at
+    all -- silently bypassed the exact cap POST /api/upload's own
+    overwrite path already enforces for the identical snapshot-then-
+    replace sequence (see _save_uploaded_notebook's own MAX_TOTAL_STORAGE_
+    BYTES check just before its own call to
+    _snapshot_current_notebook_version). An operator relying on
+    NOTEBOOK_API_MAX_TOTAL_STORAGE_BYTES to bound disk usage had it
+    silently bypassed by restoring instead of overwriting -- the one
+    remaining write path that duplicates a notebook's own bytes onto disk
+    this cap never actually reached, completing the same enforcement this
+    project's own MAX_TOTAL_STORAGE_BYTES docstring already promises for
+    "every '.ipynb' file's own current content plus its full version
+    history combined" across every way that combination can grow.
+    Unlike _copy_notebook_to's own MAX_NOTEBOOKS check, no such check is
+    needed here at all: restoring never creates a new *notebook* (the
+    catalog's own count, at `file_path`, is unchanged either way), only a
+    new *version snapshot* of an already-counted one.
+    """
+    if (
+        MAX_TOTAL_STORAGE_BYTES
+        and _current_total_storage_bytes() + file_path.stat().st_size
+        > MAX_TOTAL_STORAGE_BYTES
+    ):
+
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Restoring this version would exceed the maximum total "
+                f"storage of {MAX_TOTAL_STORAGE_BYTES} bytes "
+                "(NOTEBOOK_API_MAX_TOTAL_STORAGE_BYTES) -- delete or "
+                "prune some existing notebooks/versions first."
+            )
+        )
+
+    _snapshot_current_notebook_version(file_path)
+
+    shutil.copy2(version_path, file_path)
+
+
 _version_locks_by_filename = {}
 
 
@@ -10738,6 +10793,12 @@ def restore_notebook_version(filename: str, version_id: str, dry_run: bool = Fal
     GENERATED_DIR, but previously gave no signal of that at all short of
     a separate GET /api/notebooks call to check
     "notebook_changed_since_compile" for the same filename afterward.
+
+    Also enforces MAX_TOTAL_STORAGE_BYTES, via _restore_notebook_version_
+    onto's own identical check -- see its own docstring for the gap this
+    closes (the exact write path POST /api/upload?overwrite=true's own
+    check already covers for an ordinary overwrite, silently bypassed
+    here before this fix).
     """
 
     file_path = resolve_upload_path(filename)
@@ -10772,9 +10833,7 @@ def restore_notebook_version(filename: str, version_id: str, dry_run: bool = Fal
 
         with _version_lock_for(file_path.name):
 
-            _snapshot_current_notebook_version(file_path)
-
-            shutil.copy2(version_path, file_path)
+            _restore_notebook_version_onto(file_path, version_path)
 
     return {
         "status": "success",
@@ -10840,6 +10899,12 @@ def restore_notebook_versions_batch(data: dict):
     once per entry -- it can't change mid-request (nothing here ever
     triggers a compile), so re-reading .compile_metadata.json for every
     entry would be pure repeated work for the same answer.
+
+    Also enforces MAX_TOTAL_STORAGE_BYTES per entry (via the same shared
+    _restore_notebook_version_onto both this and the singular restore
+    call), reported as that one entry's own "error" rather than aborting
+    the rest of the batch -- the identical per-entry isolation every
+    other check in this loop already gets.
     """
 
     entries = data.get("entries")
@@ -10913,9 +10978,7 @@ def restore_notebook_versions_batch(data: dict):
 
                 with _version_lock_for(file_path.name):
 
-                    _snapshot_current_notebook_version(file_path)
-
-                    shutil.copy2(version_path, file_path)
+                    _restore_notebook_version_onto(file_path, version_path)
 
             results.append({
                 "filename": filename,
