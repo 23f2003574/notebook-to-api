@@ -610,6 +610,9 @@ Dockerfile
 docker-compose.yml
 kubernetes.yaml
 .env.example
+.env
+.env.local
+.env.*.local
 README.md
 openapi.json
 openapi.yaml
@@ -660,6 +663,26 @@ def generate_dockerignore(output_path="generated/.dockerignore"):
     field is the source notebook's *absolute filesystem path on the
     compiling server*. Left unexcluded, every `deploy`/`docker build`
     baked that server-side path straight into the shipped image.
+
+    .env/.env.local/.env.*.local (added alongside this same docstring's
+    original feature, not a separate change) close a real secrets-leak
+    gap this .dockerignore had from the start: docker_compose_content's
+    own docstring above already tells an operator to override any
+    NOTEBOOK_API_* default for a real deployment via "a `.env` file
+    alongside this one" (the same "cp .env.example .env" workflow
+    env_example_content's own docstring documents), but nothing here ever
+    excluded the real `.env` that workflow produces -- only the template
+    `.env.example` was. An operator who followed that documented workflow
+    (a real NOTEBOOK_API_KEY/NOTEBOOK_API_WEBHOOK_SECRET in `generated/
+    .env`) and then ran `docker build .` from this same directory had
+    `COPY . {package_name}/` pick that file straight up into an image
+    layer -- recoverable via `docker history`/`docker save` even after a
+    later layer removes it, the exact secrets-baked-into-an-image-layer
+    class this .dockerignore already exists to prevent for every other
+    file here. `.env.local`/`.env.*.local` (the Vite/Next.js convention
+    for a per-machine override on top of `.env` itself) are excluded for
+    the identical reason, on the chance an operator reaches for that
+    naming instead.
     """
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(dockerignore_content())

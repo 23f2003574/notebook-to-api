@@ -6771,6 +6771,55 @@ def test_generate_dockerignore_writes_exactly_what_dockerignore_content_returns(
     assert output_path.read_text(encoding="utf-8") == dockerignore_content()
 
 
+def test_dockerignore_content_excludes_a_real_env_file(tmp_path, monkeypatch):
+    """Confirmed exploitable before this fix: docker_compose_content's own
+    docstring already tells an operator to override a NOTEBOOK_API_*
+    default for a real deployment via "a `.env` file alongside this
+    one" -- the same file env_example_content's own "cp .env.example
+    .env" workflow produces -- but only the *template* ".env.example"
+    was ever excluded here, never the real ".env" that workflow creates.
+    An operator who followed that documented workflow and then ran
+    `docker build .` from this directory had `COPY . {package_name}/`
+    (dockerfile_content) bake a real NOTEBOOK_API_KEY/
+    NOTEBOOK_API_WEBHOOK_SECRET straight into an image layer -- exactly
+    the class of build-context leak this .dockerignore already exists to
+    prevent for every other file it lists.
+    """
+    from backend.generator.docker_generator import dockerignore_content
+
+    monkeypatch.chdir(tmp_path)
+
+    content = dockerignore_content()
+
+    assert ".env.example" in content
+    assert "\n.env\n" in content
+    assert ".env.local" in content
+    assert ".env.*.local" in content
+
+
+def test_dockerignore_env_pattern_actually_matches_a_real_env_filename():
+    """Not just a substring check: ".env" must appear as its own pattern
+    line, matching a real Docker .dockerignore's line-based glob syntax
+    (https://docs.docker.com/engine/reference/builder/#dockerignore-file)
+    -- a bare "env" or ".env" glued onto another pattern (e.g. inside
+    "*.env.example") would satisfy a naive substring check while still
+    never actually excluding a real ".env" file from the build context.
+    """
+    from backend.generator.docker_generator import dockerignore_content
+    from fnmatch import fnmatch
+
+    patterns = [
+        line for line in dockerignore_content().splitlines() if line.strip()
+    ]
+
+    assert any(fnmatch(".env", pattern) for pattern in patterns)
+    assert any(fnmatch(".env.local", pattern) for pattern in patterns)
+    assert any(fnmatch(".env.production.local", pattern) for pattern in patterns)
+    # .env.example itself must still be excluded independently -- this
+    # feature must not have accidentally merged the two patterns.
+    assert any(fnmatch(".env.example", pattern) for pattern in patterns)
+
+
 def test_readme_content_is_a_pure_string_with_no_disk_access(tmp_path, monkeypatch):
     from backend.generator.docker_generator import readme_content
 
