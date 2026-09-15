@@ -539,6 +539,73 @@ def test_inspect_notebook_report_excludes_standard_library_imports(tmp_path, cap
     assert "- sys" not in dependencies_section
 
 
+def test_inspect_notebook_data_reports_explicit_apt_packages(tmp_path):
+    """Confirmed missing before this fix: a notebook author's own
+    "# notebook-to-api: apt-requires <package>" directive already
+    changed the real compiled Dockerfile's own `apt-get install` line
+    (_extract_explicit_apt_packages, backend/compiler.py), but
+    inspect_notebook_data -- read by POST /api/inspect, POST
+    /api/validate, POST /api/compile's own response, GET
+    /api/validate-all, and print_compile_summary -- never surfaced it at
+    all, leaving every one of those callers with zero visibility into a
+    system-level dependency their own notebook was about to require.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: apt-requires ffmpeg\n"
+        "# notebook-to-api: apt-requires libpq-dev\n\n"
+        "def process(x: int) -> int:\n    return x\n",
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    assert data["apt_packages"] == ["ffmpeg", "libpq-dev"]
+
+
+def test_inspect_notebook_data_apt_packages_is_empty_by_default(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    assert data["apt_packages"] == []
+
+
+def test_print_compile_summary_prints_apt_packages(tmp_path, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: apt-requires ffmpeg\n\n"
+        "def process(x: int) -> int:\n    return x\n",
+    )
+
+    print_compile_summary(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "System packages (apt): ffmpeg" in output
+
+
+def test_print_compile_summary_omits_apt_packages_line_by_default(tmp_path, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    print_compile_summary(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+    assert "System packages" not in output
+
+
 def test_inspect_notebook_data_dependencies_omits_an_excluded_import(tmp_path):
 
     notebook_path = tmp_path / "nb.ipynb"

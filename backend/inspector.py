@@ -9,6 +9,7 @@ from backend.compiler import (
     COMPILE_METADATA_FILENAME,
     _extract_background_overrides,
     _extract_excluded_imports,
+    _extract_explicit_apt_packages,
     _extract_private_function_names,
     _filter_functions_by_name,
     distribution_name_for_import,
@@ -560,9 +561,30 @@ def inspect_notebook_data(
     # can't drift" reasoning above already exists to prevent.
     background_overrides = _extract_background_overrides(code_cells)
 
+    # See the identical comment above "dependencies"/"excluded_imports"/
+    # "background_overrides" -- read through this one function by every
+    # caller (POST /api/inspect, POST /api/validate, POST /api/compile's
+    # own response, GET /api/validate-all, print_compile_summary below)
+    # so none of them can drift out of sync with what
+    # apt_install_content/generate_dockerfile (backend/generator/
+    # docker_generator.py) actually bakes into the generated Dockerfile.
+    # Confirmed missing before this: a notebook author's own
+    # "# notebook-to-api: apt-requires <package>" directive already
+    # changed the real compiled Dockerfile's own `apt-get install` line
+    # (_extract_explicit_apt_packages, backend/compiler.py), but nothing
+    # here ever surfaced that anywhere a caller previewing or just-
+    # compiled a notebook would see it -- "dependencies" only ever
+    # reported *pip* packages, leaving a caller with zero visibility into
+    # a system-level dependency (a typo'd package name, an unexpected
+    # apt-get network requirement at build time) their own notebook was
+    # about to require, right up until `docker build` itself either
+    # succeeded silently or failed on it.
+    apt_packages = _extract_explicit_apt_packages(code_cells)
+
     return {
         "functions": all_functions,
         "dependencies": _third_party_dependencies(all_imports),
+        "apt_packages": apt_packages,
         "generated_files": list_generated_files(output_dir),
         "reserved_name_conflicts": _reserved_name_conflicts(all_functions),
         "endpoints": _endpoint_metadata(all_functions, background_overrides),
@@ -599,8 +621,9 @@ def inspect_notebook_data(
 def print_compile_summary(notebook_path, output_dir="generated", only=None, exclude=None):
     """Print what compiling `notebook_path` into `output_dir` actually
     produced: its endpoints (flagging background/task_id-based ones the
-    same way POST /api/compile's "endpoints" field does) and third-party
-    dependencies.
+    same way POST /api/compile's "endpoints" field does), third-party
+    dependencies, and any explicit "# notebook-to-api: apt-requires"
+    system packages.
 
     Shared by the CLI's `compile` command and `serve`'s initial compile
     and every hot-recompile it triggers. Before this existed for `serve`,
@@ -646,6 +669,9 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
 
     if data["dependencies"]:
         print(f"\nDependencies: {', '.join(data['dependencies'])}")
+
+    if data["apt_packages"]:
+        print(f"System packages (apt): {', '.join(data['apt_packages'])}")
 
     if data["skipped_functions"]:
         print(
