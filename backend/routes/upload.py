@@ -11987,10 +11987,26 @@ def requirements_preview_endpoint(data: dict):
 
     excluded_imports = sorted(_extract_excluded_imports(code_cells))
 
-    requirements = resolve_requirements(
-        extract_third_party_imports(code_cells),
-        explicit_requirements=explicit_requirements,
-    )
+    try:
+
+        requirements = resolve_requirements(
+            extract_third_party_imports(code_cells),
+            explicit_requirements=explicit_requirements,
+            excluded_imports=excluded_imports,
+        )
+
+    except ValueError as e:
+
+        # resolve_requirements (backend/compiler.py) raises this for a
+        # "# notebook-to-api: requires" directive naming the same package
+        # a "# notebook-to-api: exclude" directive opts out -- the
+        # identical "notebook's own content is the problem, not this
+        # server" 400 treatment the explicit_requirements extraction
+        # above already gets for its own conflicting-directive case.
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
 
     return {
         "status": "success",

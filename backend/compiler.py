@@ -959,13 +959,37 @@ def _normalize_distribution_name(name):
     return _PEP_503_SEPARATOR_RUN_PATTERN.sub("-", name).lower()
 
 
-def resolve_requirements(imports, explicit_requirements=None):
+def resolve_requirements(imports, explicit_requirements=None, excluded_imports=None):
     """The exact, sorted requirements.txt lines write_requirements (below)
     would write for `imports` (a notebook's own third-party imports, e.g.
     from extract_third_party_imports above) and `explicit_requirements`
     (see _extract_explicit_requirements) -- computed without writing
     anything to disk, so a caller can preview what a compile would
     produce there without actually running one.
+
+    `excluded_imports` (see _extract_excluded_imports) raises ValueError
+    when an explicit requirement names the same package a "# notebook-to-
+    api: exclude" directive opts out of requirements.txt -- a direct
+    contradiction of the notebook's own declared intent, the same
+    "conflicting directives" treatment _extract_explicit_requirements'
+    own docstring already gives two "requires" directives naming the
+    same package, or _extract_background_overrides' own identical
+    treatment for "background"/"sync" on the same function. Confirmed
+    exploitable before this check existed: `extract_third_party_imports`
+    already drops an excluded import from `imports` before it ever
+    reaches this function, but a stale/leftover "# notebook-to-api:
+    requires numpy==1.24.0" directive left behind after adding
+    "# notebook-to-api: exclude numpy" (e.g. numpy already vendored into
+    a custom base image, the exact use case _extract_excluded_imports'
+    own docstring gives) still made it into requirements.txt unfiltered,
+    silently overriding the author's own explicit opt-out and pip-
+    installing the very package "exclude" was supposed to keep out.
+    Resolved against `distribution_name_for_import` the same way
+    `imports` itself already is just below, since "exclude" names a raw
+    *import* name while "requires" names a PyPI *distribution* name, and
+    the two frequently differ (see distribution_name_for_import's own
+    docstring) -- an "exclude cv2" must still catch a "requires
+    opencv-python==...", not just a literal "requires cv2==...".
 
     Factored out of write_requirements, which used to compute this same
     value immediately before writing it out; write_requirements below now
@@ -1044,6 +1068,30 @@ def resolve_requirements(imports, explicit_requirements=None):
         if name is not None
     }
 
+    excluded_import_by_distribution_name = {
+        _normalize_distribution_name(distribution_name_for_import(name)): name
+        for name in (excluded_imports or ())
+    }
+
+    for spec in explicit_requirements:
+
+        package_name = _explicit_requirement_package_name(spec)
+
+        if package_name is None:
+            continue
+
+        excluded_import_name = excluded_import_by_distribution_name.get(
+            _normalize_distribution_name(package_name)
+        )
+
+        if excluded_import_name is not None:
+            raise ValueError(
+                f"'# notebook-to-api: requires {spec}' conflicts with "
+                f"'# notebook-to-api: exclude {excluded_import_name}' -- "
+                f"both name the same package ('{package_name}'). Remove "
+                "one of them."
+            )
+
     # Drops any auto-detected distribution an explicit directive already
     # names -- see this function's own docstring above for the conflicting-
     # pin this closes. Still deduplicated only by exact matching text
@@ -1062,14 +1110,16 @@ def resolve_requirements(imports, explicit_requirements=None):
     return sorted(set(pinned_deps) | set(explicit_requirements))
 
 
-def write_requirements(imports, output_dir, explicit_requirements=None):
+def write_requirements(
+    imports, output_dir, explicit_requirements=None, excluded_imports=None
+):
 
     requirements_path = os.path.join(
         output_dir,
         "requirements.txt"
     )
 
-    all_deps = resolve_requirements(imports, explicit_requirements)
+    all_deps = resolve_requirements(imports, explicit_requirements, excluded_imports)
 
     with open(requirements_path, "w", encoding="utf-8") as f:
         for dep in all_deps:
@@ -1494,6 +1544,25 @@ def compile_notebook_to_api(
         # function's own control flow reaches it.
         apt_packages = _extract_explicit_apt_packages(code_cells)
 
+        excluded_imports = _extract_excluded_imports(code_cells)
+
+        # resolve_requirements' own return value is discarded here -- this
+        # call exists purely so its own "exclude"/"requires" conflict
+        # check (see its docstring) raises before write_runtime_module
+        # below writes anything at all, the identical "validate before
+        # any write" reasoning explicit_requirements' own extraction just
+        # above already follows for a conflict between two "requires"
+        # directives. write_requirements further down recomputes the same
+        # result to actually write it -- imports can change between here
+        # and there in no way that matters (code_cells is already fixed),
+        # so recomputing costs nothing but a second, cheap pass over
+        # already-parsed cells.
+        resolve_requirements(
+            extract_third_party_imports(code_cells),
+            explicit_requirements=explicit_requirements,
+            excluded_imports=excluded_imports,
+        )
+
         # Computed here for the same reason: available before
         # generate_fastapi_code/generate_readme are called further down,
         # regardless of which branch of this function's own control flow
@@ -1573,7 +1642,8 @@ def compile_notebook_to_api(
         write_requirements(
             extract_third_party_imports(code_cells),
             output_dir,
-            explicit_requirements=explicit_requirements
+            explicit_requirements=explicit_requirements,
+            excluded_imports=excluded_imports,
         )
 
         write_generated_api(

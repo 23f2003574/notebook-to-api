@@ -18414,6 +18414,35 @@ def test_compile_rejects_both_only_and_exclude():
     assert "only and exclude" in compile_resp.json()["detail"]
 
 
+def test_compile_rejects_a_requires_directive_conflicting_with_exclude():
+
+    content = _notebook_bytes(
+        "# notebook-to-api: exclude numpy\n"
+        "# notebook-to-api: requires numpy==1.24.0\n"
+        "import numpy\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "compile_exclude_requires_conflict.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/compile",
+        json={"notebook_path": "compile_exclude_requires_conflict.ipynb"},
+    )
+
+    assert resp.status_code == 400
+    assert "exclude numpy" in resp.json()["detail"]
+
+
 def test_compile_only_names_an_unknown_function():
     content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
 
@@ -20586,6 +20615,42 @@ def test_requirements_preview_omits_an_excluded_import():
         dep.startswith("nbformat") for dep in body["requirements"]
     )
     assert body["excluded_imports"] == ["nbformat"]
+
+
+def test_requirements_preview_rejects_a_requires_directive_conflicting_with_exclude():
+    """Confirmed missing before this fix: a stale/leftover "# notebook-
+    to-api: requires numpy==1.24.0" directive left behind after adding
+    "# notebook-to-api: exclude numpy" (e.g. numpy already vendored into
+    a custom base image) silently made it into "requirements" here
+    unfiltered, overriding the author's own explicit opt-out with no
+    indication anything was wrong.
+    """
+
+    content = _notebook_bytes(
+        "# notebook-to-api: exclude numpy\n"
+        "# notebook-to-api: requires numpy==1.24.0\n"
+        "import numpy\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "requirements_preview_exclude_conflict.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/requirements-preview",
+        json={"notebook_path": "requirements_preview_exclude_conflict.ipynb"},
+    )
+
+    assert resp.status_code == 400
+    assert "exclude numpy" in resp.json()["detail"]
 
 
 def test_requirements_preview_excluded_imports_field_is_empty_without_a_directive():

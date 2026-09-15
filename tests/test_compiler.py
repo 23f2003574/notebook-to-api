@@ -4871,6 +4871,87 @@ def test_resolve_requirements_keeps_auto_detected_lines_with_no_explicit_conflic
     assert "a-private-pkg==1.0.0" in requirements
 
 
+def test_resolve_requirements_raises_when_an_explicit_requirement_conflicts_with_an_exclude(
+    monkeypatch,
+):
+    """Confirmed exploitable before this fix: extract_third_party_imports
+    already drops an excluded import from the auto-detected side, but a
+    stale/leftover "# notebook-to-api: requires numpy==1.24.0" left
+    behind after adding "# notebook-to-api: exclude numpy" (e.g. numpy
+    already vendored into a custom base image) still made it into
+    requirements.txt unfiltered -- silently overriding the author's own
+    explicit opt-out.
+    """
+    import backend.compiler as compiler_module
+
+    monkeypatch.setattr(
+        compiler_module, "distribution_name_for_import", lambda name: name
+    )
+
+    with pytest.raises(ValueError, match="exclude numpy"):
+        resolve_requirements(
+            [], explicit_requirements=["numpy==1.24.0"],
+            excluded_imports={"numpy"},
+        )
+
+
+def test_resolve_requirements_exclude_conflict_resolves_distribution_name(
+    monkeypatch,
+):
+    """"exclude" names a raw *import* name ("cv2") while "requires" names
+    a PyPI *distribution* name ("opencv-python") -- the two frequently
+    differ (see distribution_name_for_import), so the conflict check must
+    resolve "cv2" through it rather than comparing literal text.
+    """
+    import backend.compiler as compiler_module
+
+    monkeypatch.setattr(
+        compiler_module,
+        "distribution_name_for_import",
+        lambda name: "opencv-python" if name == "cv2" else name,
+    )
+
+    with pytest.raises(ValueError, match="exclude cv2"):
+        resolve_requirements(
+            [], explicit_requirements=["opencv-python==4.9.0.80"],
+            excluded_imports={"cv2"},
+        )
+
+
+def test_resolve_requirements_no_conflict_when_excluded_import_is_unrelated():
+
+    requirements = resolve_requirements(
+        ["requests"], explicit_requirements=["numpy==1.24.0"],
+        excluded_imports={"pytest"},
+    )
+
+    assert "numpy==1.24.0" in requirements
+
+
+def test_compile_raises_when_a_requires_directive_conflicts_with_an_exclude_directive(
+    tmp_path
+):
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "# notebook-to-api: exclude numpy\n"
+            "# notebook-to-api: requires numpy==1.24.0\n"
+            "import numpy\n\n"
+            "def process(x: int) -> int:\n    return x\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    with pytest.raises(ValueError, match="exclude numpy"):
+        compile_notebook_to_api(str(notebook_path), str(tmp_path / "generated"))
+
+
 def test_compile_drops_the_auto_detected_dependency_that_conflicts_with_an_explicit_pin(
     tmp_path
 ):
