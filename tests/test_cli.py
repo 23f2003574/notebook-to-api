@@ -22264,6 +22264,141 @@ def test_status_command_prints_the_dashboard_max_request_body_bytes(
     assert "dashboard max request body: 10485760 bytes" in proc.stdout
 
 
+def test_status_command_prints_the_max_version_note_length(tmp_path, fake_dashboard):
+    """GET /api/config has reported "max_version_note_length" since PUT
+    .../versions/{version_id}/note's own per-field length cap was added,
+    the identical field "max_description_length" (already printed here)
+    surfaces for PUT .../description -- but this status command never
+    picked it up, leaving an operator wanting to validate a version note
+    client-side (the exact reason this endpoint's own docstring gives for
+    every other field here) with no way to see it short of reading the
+    raw GET /api/config response directly instead of this command's own
+    human-readable summary.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "healthy", "service": "notebook-to-api",
+            "compiled_app_present": False,
+        }),
+        _json_response(200, {
+            "status": "success",
+            "allowed_origins": [],
+            "max_upload_bytes": 10485760,
+            "max_batch_upload_files": 50,
+            "max_notebooks": 0,
+            "max_notebook_versions": 20,
+            "max_tag_length": 40,
+            "max_tags_per_notebook": 20,
+            "max_description_length": 500,
+            "max_version_note_length": 1000,
+            "max_deploy_history_entries": 50,
+            "max_compile_history_entries": 50,
+            "deploy_subprocess_timeout_seconds": 600,
+            "url_import_timeout_seconds": 30,
+            "stale_upload_temp_file_seconds": 3600,
+            "notebook_sort_keys": ["name", "size", "uploaded_at"],
+            "notebook_sort_orders": ["asc", "desc"],
+            "compiling_python_version": "3.12",
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["status", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "max version note length: 1000" in proc.stdout
+
+
+def test_status_command_prints_dashboard_json_logs_enabled(tmp_path, fake_dashboard):
+    """dashboard_json_logs_enabled has been part of GET /api/config's own
+    response since NOTEBOOK_API_DASHBOARD_JSON_LOGS was added, but this
+    status command's own "Configured limits" summary never surfaced it --
+    an operator confirming whether structured JSON request logging is
+    actually enabled on a running dashboard had no way to see it here.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "healthy", "service": "notebook-to-api",
+            "compiled_app_present": False,
+        }),
+        _json_response(200, {
+            "status": "success",
+            "allowed_origins": [],
+            "dashboard_json_logs_enabled": True,
+            "max_upload_bytes": 10485760,
+            "max_batch_upload_files": 50,
+            "max_notebooks": 0,
+            "max_notebook_versions": 20,
+            "max_tag_length": 40,
+            "max_tags_per_notebook": 20,
+            "max_description_length": 500,
+            "max_deploy_history_entries": 50,
+            "max_compile_history_entries": 50,
+            "deploy_subprocess_timeout_seconds": 600,
+            "url_import_timeout_seconds": 30,
+            "stale_upload_temp_file_seconds": 3600,
+            "notebook_sort_keys": ["name", "size", "uploaded_at"],
+            "notebook_sort_orders": ["asc", "desc"],
+            "compiling_python_version": "3.12",
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["status", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "dashboard JSON logs: enabled" in proc.stdout
+
+
+def test_status_command_prints_disabled_for_dashboard_json_logs_by_default(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "healthy", "service": "notebook-to-api",
+            "compiled_app_present": False,
+        }),
+        _json_response(200, {
+            "status": "success",
+            "allowed_origins": [],
+            "dashboard_json_logs_enabled": False,
+            "max_upload_bytes": 10485760,
+            "max_batch_upload_files": 50,
+            "max_notebooks": 0,
+            "max_notebook_versions": 20,
+            "max_tag_length": 40,
+            "max_tags_per_notebook": 20,
+            "max_description_length": 500,
+            "max_deploy_history_entries": 50,
+            "max_compile_history_entries": 50,
+            "deploy_subprocess_timeout_seconds": 600,
+            "url_import_timeout_seconds": 30,
+            "stale_upload_temp_file_seconds": 3600,
+            "notebook_sort_keys": ["name", "size", "uploaded_at"],
+            "notebook_sort_orders": ["asc", "desc"],
+            "compiling_python_version": "3.12",
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["status", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "dashboard JSON logs: disabled" in proc.stdout
+
+
 def test_status_command_prints_allowed_origins(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

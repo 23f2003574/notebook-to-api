@@ -7428,6 +7428,7 @@ def _dispatch_core_command(args):
             print(f"  max tag length: {config.get('max_tag_length')}")
             print(f"  max tags per notebook: {config.get('max_tags_per_notebook')}")
             print(f"  max description length: {config.get('max_description_length')}")
+            print(f"  max version note length: {config.get('max_version_note_length')}")
             print(f"  max source url length: {config.get('max_source_url_length')}")
             print(f"  max search regex length: {config.get('max_search_regex_length')}")
             print(f"  max deploy history entries: {config.get('max_deploy_history_entries')}")
@@ -7446,6 +7447,10 @@ def _dispatch_core_command(args):
             print(
                 "  dashboard max request body: "
                 f"{config.get('dashboard_max_request_body_bytes')} bytes"
+            )
+            print(
+                "  dashboard JSON logs: "
+                f"{'enabled' if config.get('dashboard_json_logs_enabled') else 'disabled'}"
             )
             print(f"\nCompiling Python version: {config.get('compiling_python_version')}")
 
