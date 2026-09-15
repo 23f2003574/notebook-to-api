@@ -96,6 +96,45 @@ def test_strip_magic_commands_does_not_touch_a_leading_bang_continuation_line():
     assert strip_magic_commands(source) == source
 
 
+def test_strip_magic_commands_does_not_touch_a_backslash_continued_modulo_line():
+    """Confirmed exploitable before this fix: a long expression continued
+    via a trailing "\\" with no enclosing bracket at all -- a perfectly
+    ordinary way to split one without adding parens -- had the identical
+    problem test_strip_magic_commands_does_not_touch_a_leading_modulo_
+    continuation_line above already covers for the bracketed case: the
+    continuation line's own leading "%" was indistinguishable from a real
+    top-level "%foo" line magic, silently discarding the entire modulo
+    operation with no error anywhere. The bracket-depth tracking this
+    function's own docstring describes never sees a bare "\\" at all --
+    only an explicit "([{"/")]}" token -- so it missed this case
+    entirely.
+    """
+
+    source = "total = a \\\n    % b"
+
+    assert strip_magic_commands(source) == source
+
+
+def test_strip_magic_commands_does_not_touch_a_backslash_continued_bang_line():
+
+    source = "flag = a \\\n    != b"
+
+    assert strip_magic_commands(source) == source
+
+
+def test_strip_magic_commands_still_strips_a_real_magic_after_a_backslash_continuation():
+    """The protection for a backslash continuation must end exactly at
+    the continuation's own last line, not bleed into whatever comes
+    after it -- the same boundary
+    test_strip_magic_commands_still_strips_a_real_magic_after_a_multiline_string
+    below already confirms for the multi-line-string case.
+    """
+
+    source = "total = a \\\n    + b\n%timeit total"
+
+    assert strip_magic_commands(source) == "total = a \\\n    + b\n# %timeit total"
+
+
 def test_strip_magic_commands_still_strips_a_real_magic_after_a_closed_bracket():
     """A same-line, fully-closed bracket (e.g. a call's own "()") must
     never be mistaken for an unclosed one -- confirmed exploitable by an

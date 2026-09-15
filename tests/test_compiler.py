@@ -2183,6 +2183,73 @@ print("MODULO_CONTINUATION_LINE_E2E_OK")
     assert "MODULO_CONTINUATION_LINE_E2E_OK" in proc.stdout
 
 
+def test_compiler_pipeline_preserves_a_backslash_continued_modulo_line(tmp_path):
+    """The identical bug as
+    test_compiler_pipeline_preserves_a_leading_modulo_continuation_line
+    above, just continued via a trailing "\\" with no enclosing bracket
+    at all instead -- a perfectly ordinary way to split a long expression
+    without adding parens. strip_magic_commands' bracket-depth tracking
+    never sees a bare "\\" (only an explicit "([{"/")]}" token), so it
+    missed this case entirely before this fix: the continuation line's
+    own leading "%" got silently commented out, discarding the entire
+    modulo operation with no error anywhere. Verified against a real
+    compiled app via TestClient, not just the generated source text.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def remainder(a: int, b: int) -> int:\n"
+            "    total = a \\\n"
+            "        % b\n"
+            "    return total\n"
+        )
+    )
+
+    notebook_path = tmp_path / "backslash_modulo.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+response = client.post(
+    "/remainder", json={{"a": 10, "b": 3}},
+    headers={{"X-API-Key": "notebook-to-api-dev-key"}},
+)
+assert response.status_code == 200, response.text
+assert response.json() == {{"result": 1}}, response.json()
+
+print("BACKSLASH_MODULO_CONTINUATION_LINE_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "BACKSLASH_MODULO_CONTINUATION_LINE_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_does_not_expose_a_writefile_cells_own_function(tmp_path):
     """Confirmed exploitable before this fix: %%writefile writes its own
     cell body to a file instead of executing it in the notebook's own

@@ -86,9 +86,10 @@ def _lines_unsafe_for_magic_detection(source):
     that is really a continuation of an already-open "(", "[", or "{" --
     entirely ordinary for a long arithmetic/formatting expression split
     across lines (PEP 8's own recommended "break before binary operator"
-    style), e.g. "total = (\n    a\n    % b\n)" -- or a line inside a
-    multi-line string/f-string literal that merely happens to start with
-    "%"/"!"/"?" as plain text, not code.
+    style), e.g. "total = (\n    a\n    % b\n)" -- a line continued via a
+    trailing "\\" with no enclosing bracket at all (e.g. "total = a \\\n
+    % b"), or a line inside a multi-line string/f-string literal that
+    merely happens to start with "%"/"!"/"?" as plain text, not code.
 
     Confirmed exploitable before this: _MAGIC_LINE_RE/_INTROSPECTION_*_RE
     below were applied to every physical line independently, with no
@@ -102,7 +103,14 @@ def _lines_unsafe_for_magic_detection(source):
     unchanged instead of the real `a % b`. A "%"/"!"/"?"-leading line
     buried inside a triple-quoted string had the identical problem --
     its own literal text, not code, silently gained a "# " prefix,
-    corrupting the string's actual value.
+    corrupting the string's actual value. A backslash-continued line
+    with no bracket involved at all had the identical problem, missed by
+    the bracket-depth tracking below (which only ever sees an *explicit*
+    "([{"/")]}" token, never a bare "\\" line continuation): confirmed
+    via a real compiled function, `def f(a, b): total = a \\\n    % b\n
+    return total` -- a perfectly ordinary way to split a long expression
+    without adding parens -- returned the unmodified `a` instead of the
+    real `a % b`, the exact same silent-corruption class.
 
     Uses the standard library tokenizer purely as a lexical scanner --
     it tolerates a raw, magic-laden cell just fine here, since tokenize
@@ -110,17 +118,34 @@ def _lines_unsafe_for_magic_detection(source):
     inline"/"!pip install x" both tokenize without error even though
     neither parses (confirmed) -- rather than a second, hand-rolled
     bracket/string-tracking pass that could itself drift out of sync
-    with Python's own real lexical rules over time. Falls back to
-    protecting nothing (preserving this function's own previous,
-    unprotected-but-already-established behavior exactly) if tokenizing
-    the cell fails for an unrelated reason -- a genuinely malformed cell
-    (an unterminated string, an unbalanced bracket at EOF) that
-    is_parseable_python (ast_parser.py) will end up rejecting outright
-    once this function's own result reaches it anyway.
+    with Python's own real lexical rules over time. The backslash-
+    continuation case above is detected the identical, tokenize-only way
+    (no raw source text ever re-scanned by hand for a trailing "\\"):
+    tokenize emits an explicit NEWLINE or NL token at the end of every
+    *ordinary* physical line (confirmed: a NEWLINE for a normal
+    top-level statement, an NL for a blank/comment-only line or a
+    bracket-continuation line alike) -- but for a backslash-continued
+    line, tokenize emits neither, and the very next token simply starts
+    on a later line with nothing marking the break at all. Tracking
+    whether the previous token was one of those two line-ending types
+    catches exactly that gap, with no extra assumption about *why* the
+    line broke (a bracket already open would also produce this same
+    "next token, later line, no line-ending token in between" shape, but
+    that case is already caught by the depth check below regardless, so
+    the two checks simply overlap harmlessly there).
+
+    Falls back to protecting nothing (preserving this function's own
+    previous, unprotected-but-already-established behavior exactly) if
+    tokenizing the cell fails for an unrelated reason -- a genuinely
+    malformed cell (an unterminated string, an unbalanced bracket at
+    EOF) that is_parseable_python (ast_parser.py) will end up rejecting
+    outright once this function's own result reaches it anyway.
     """
     unsafe_lines = set()
     depth = 0
     last_line_seen = None
+    last_token_end_line = None
+    last_token_was_line_ender = False
 
     try:
 
@@ -148,6 +173,24 @@ def _lines_unsafe_for_magic_detection(source):
                 and end_line > start_line
             ):
                 unsafe_lines.update(range(start_line + 1, end_line + 1))
+
+            # A backslash line continuation: unlike every ordinary line
+            # break (always followed by a NEWLINE or NL token before the
+            # next token starts), this token's own start_line jumps ahead
+            # of the previous token's end_line with no line-ending token
+            # of either kind in between.
+            if (
+                not last_token_was_line_ender
+                and last_token_end_line is not None
+                and start_line > last_token_end_line
+            ):
+                unsafe_lines.update(range(last_token_end_line + 1, start_line + 1))
+
+            if tok_type not in (tokenize.INDENT, tokenize.DEDENT):
+                last_token_end_line = end_line
+                last_token_was_line_ender = tok_type in (
+                    tokenize.NEWLINE, tokenize.NL
+                )
 
             if tok_type == tokenize.OP:
 
