@@ -1695,16 +1695,58 @@ def generate_fastapi_code(
     lines.append("        .get('schemas', {}).items()")
     lines.append("    ):")
     lines.append("        _model_cls = globals().get(_model_name)")
+    lines.append(
+        "        if not (isinstance(_model_cls, type) "
+        "and issubclass(_model_cls, BaseModel)):"
+    )
+    lines.append("            continue")
+    lines.append("")
     lines.append("        _example = (")
     lines.append("            getattr(_model_cls, 'model_config', {})")
     lines.append("            .get('json_schema_extra', {})")
     lines.append("            .get('example')")
-    lines.append("            if isinstance(_model_cls, type)")
-    lines.append("            and issubclass(_model_cls, BaseModel)")
-    lines.append("            else None")
     lines.append("        )")
     lines.append("        if _example is not None:")
     lines.append("            _model_schema['example'] = _example")
+    lines.append("")
+    # The identical get_openapi() stripping above, one level down: not
+    # just a model's own top-level "example", but every individual
+    # field's own "default" whose real, declared value is None.
+    # Confirmed exploitable via the exact same model: GreetRequest.
+    # model_json_schema() (pure Pydantic) correctly gives "name" a
+    # "default": null entry (Optional[str] = None is very much a real,
+    # optional field with a real default, the same as any other) -- but
+    # this schema's own properties/name never got a "default" key at
+    # all, having gone through get_openapi() instead. A schema reader
+    # can still tell the field is optional from this model's own
+    # "required" list either way, but loses the field's own actual
+    # fallback value entirely -- the identical "the example/default this
+    # project's own generated model already gets right is silently
+    # discarded the moment anyone reads the served schema instead of the
+    # model class directly" gap the "example" restoration just above
+    # closes, just for a field's own "default" instead of the model's
+    # own "example". model_fields (not model_json_schema() a second
+    # time) is used here since it's a direct, real Python object -- the
+    # exact FieldInfo this model class was actually built from -- rather
+    # than re-deriving the same value through Pydantic's own schema
+    # builder a second time only to risk the identical loss again.
+    lines.append("        for _field_name, _field_info in (")
+    lines.append("            _model_cls.model_fields.items()")
+    lines.append("        ):")
+    lines.append("            if _field_info.is_required():")
+    lines.append("                continue")
+    lines.append(
+        "            _prop_schema = ("
+        "_model_schema.get('properties', {}).get(_field_name)"
+        ")"
+    )
+    lines.append(
+        "            if _prop_schema is not None "
+        "and 'default' not in _prop_schema:"
+    )
+    lines.append(
+        "                _prop_schema['default'] = _field_info.default"
+    )
     lines.append("")
     # The identical get_openapi() stripping above, for the *other* place
     # every generated endpoint's own example ever lives -- a synchronous

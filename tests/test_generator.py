@@ -268,6 +268,96 @@ def test_custom_openapi_restores_a_none_valued_example_field_get_openapi_drops(
     }
 
 
+def test_custom_openapi_restores_a_none_valued_field_default_get_openapi_drops(
+    monkeypatch,
+):
+    """The identical get_openapi() stripping the test above fixes for a
+    model's own top-level "example", one level down: an individual
+    field's own "default" whose real, declared value is None.
+
+    Confirmed exploitable via the exact same model: GreetRequest.
+    model_json_schema() (pure Pydantic) correctly gives "name" a
+    "default": null entry -- Optional[str] = None is a real, optional
+    field with a real default, the same as any other -- but this
+    schema's own components/schemas/GreetRequest/properties/name never
+    got a "default" key at all when reached through get_openapi()
+    instead, discarding the field's own actual fallback value entirely
+    for anyone reading the served schema (a Swagger UI form, a
+    third-party client/contract-testing tool generating from
+    /openapi.json) rather than the generated source text directly.
+    """
+    from typing import Optional
+
+    functions = [{
+        "name": "greet",
+        "args": [
+            {
+                "name": "name", "type": "Optional[str]", "default": None,
+                "has_default": True, "kind": "positional",
+            },
+            {
+                "name": "age", "type": "int", "default": 5,
+                "has_default": True, "kind": "positional",
+            },
+        ],
+        "return_type": "str",
+    }]
+
+    code = generate_fastapi_code(functions)
+
+    assert "for _field_name, _field_info in (" in code
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].greet = lambda name=None, age=5: name or "anon"
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    schema = client.get("/openapi.json").json()
+
+    properties = schema["components"]["schemas"]["GreetRequest"]["properties"]
+    assert properties["name"]["default"] is None
+    assert properties["age"]["default"] == 5
+
+
+def test_custom_openapi_field_default_restoration_does_not_disturb_a_required_field(
+    monkeypatch,
+):
+    """A field with no default at all (required) must never gain a
+    fabricated "default": null it never actually had -- the restoration
+    loop only ever fills in a *real* default get_openapi() itself
+    dropped, never invents one for a field that has none.
+    """
+
+    functions = [{
+        "name": "greet",
+        "args": [
+            {
+                "name": "name", "type": "str", "has_default": False,
+                "kind": "positional",
+            },
+        ],
+        "return_type": "str",
+    }]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].greet = lambda name: name
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    schema = client.get("/openapi.json").json()
+
+    properties = schema["components"]["schemas"]["GreetRequest"]["properties"]
+    assert "default" not in properties["name"]
+
+
 def test_custom_openapi_restores_a_none_valued_response_example_get_openapi_drops(
     monkeypatch,
 ):
