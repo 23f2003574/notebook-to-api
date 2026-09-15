@@ -5148,6 +5148,7 @@ def list_notebooks(
 @router.get("/notebooks/export")
 def export_notebooks(
     filenames: str = None, tag: str = None, sha256: str = None,
+    modified_after: str = None, modified_before: str = None,
     include_versions: bool = False
 ):
     """Download a caller-chosen set of already-uploaded notebooks -- or,
@@ -5255,6 +5256,27 @@ def export_notebooks(
     state, not an error" reasoning "versions/<filename>/" above already
     follows.
 
+    "modified_after"/"modified_before" (each an optional ISO 8601
+    datetime, see _parse_iso_datetime_query_param -- added alongside this
+    same docstring's original feature, not a separate change) scope the
+    export the identical way GET /api/notebooks/duplicates' own
+    "modified_after"/"modified_before" already do, and compose with
+    "tag"/"sha256" as an AND exactly like those two already compose with
+    each other. Every other catalog-wide endpoint here (search-functions,
+    search-content, find-duplicates, validate-all) already gained this
+    exact date-range pair alongside "tag"/"sha256" -- this endpoint's own
+    docstring already gives the matching real-world reason those did (an
+    operator backing up "every notebook touched during a specific
+    incident window" before further changes), but had no way to scope an
+    export that way before this: only by filename list (requires already
+    knowing them) or by tag/exact-content-hash, neither of which answers
+    "what changed recently" at all. Like "tag"/"sha256", a date range
+    matching no notebook at all is simply an empty selection, not its own
+    404; "modified_after" later than "modified_before" is rejected with
+    400, the same way it already is on every sibling endpoint above.
+    Mutually exclusive with "filenames", for the identical reason
+    "tag"/"sha256" already are.
+
     The "X-Bundle-SHA256" response header is the same _bundle_sha256 GET
     /api/download's own identical header already summarizes a compiled
     bundle's own file set with (see that endpoint's own docstring),
@@ -5282,6 +5304,28 @@ def export_notebooks(
         raise HTTPException(
             status_code=400,
             detail="filenames and sha256 can't both be given -- choose one."
+        )
+
+    if filenames and (modified_after or modified_before):
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "filenames and modified_after/modified_before can't both "
+                "be given -- choose one."
+            )
+        )
+
+    modified_after_dt = _parse_iso_datetime_query_param(modified_after, "modified_after")
+    modified_before_dt = _parse_iso_datetime_query_param(modified_before, "modified_before")
+
+    if (
+        modified_after_dt is not None and modified_before_dt is not None
+        and modified_after_dt > modified_before_dt
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="modified_after must not be later than modified_before"
         )
 
     upload_root = Path(UPLOAD_DIR)
@@ -5316,7 +5360,10 @@ def export_notebooks(
                 detail=f"Notebook file(s) not found: {', '.join(missing)}"
             )
 
-    elif tag or sha256:
+    elif (
+        tag or sha256
+        or modified_after_dt is not None or modified_before_dt is not None
+    ):
 
         notebooks_to_export = [
             (entry.name, entry)
@@ -5324,6 +5371,16 @@ def export_notebooks(
             if entry.is_file() and entry.suffix == ".ipynb"
             and (not tag or tag in _read_notebook_tags(entry.name))
             and (not sha256 or hash_notebook_file(entry) == sha256)
+            and (
+                modified_after_dt is None
+                or datetime.fromtimestamp(entry.stat().st_mtime, tz=timezone.utc)
+                >= modified_after_dt
+            )
+            and (
+                modified_before_dt is None
+                or datetime.fromtimestamp(entry.stat().st_mtime, tz=timezone.utc)
+                <= modified_before_dt
+            )
         ]
 
     else:

@@ -3324,6 +3324,11 @@ def _dispatch_core_command(args):
         if args.filename and args.sha256:
             raise RuntimeError("Pass either a filename or --sha256, not both.")
 
+        if args.filename and (args.modified_after or args.modified_before):
+            raise RuntimeError(
+                "Pass either a filename or --modified-after/--modified-before, not both."
+            )
+
         params = {}
         if args.filename:
             params["filenames"] = ",".join(args.filename)
@@ -3331,6 +3336,10 @@ def _dispatch_core_command(args):
             params["tag"] = args.tag
         if args.sha256:
             params["sha256"] = args.sha256
+        if args.modified_after:
+            params["modified_after"] = args.modified_after
+        if args.modified_before:
+            params["modified_before"] = args.modified_before
         if args.include_versions:
             params["include_versions"] = True
 
@@ -10142,6 +10151,33 @@ def main():
             "`resolve-duplicates` discards all but one. Composes with "
             "--tag as an AND; can't be combined with an explicit "
             "filename."
+        )
+    )
+    export_notebooks_parser.add_argument(
+        "--modified-after",
+        default=None,
+        dest="modified_after",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only export notebooks modified on or after this ISO 8601 "
+            "datetime, via GET /api/notebooks/export's own "
+            "?modified_after= query param -- the same date-range filter "
+            "`find-duplicates`/`search-functions`/`search-content` "
+            "already support, e.g. to back up every notebook touched "
+            "during a specific incident window. Composes with --tag/"
+            "--sha256 as an AND; can't be combined with an explicit "
+            "filename."
+        )
+    )
+    export_notebooks_parser.add_argument(
+        "--modified-before",
+        default=None,
+        dest="modified_before",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only export notebooks modified on or before this ISO 8601 "
+            "datetime, mirroring GET /api/notebooks/export's own "
+            "?modified_before=."
         )
     )
     export_notebooks_parser.add_argument(

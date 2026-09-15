@@ -5134,6 +5134,135 @@ def test_export_notebooks_rejects_both_filenames_and_tag():
     assert resp.status_code == 400
 
 
+def test_export_notebooks_filters_by_modified_after_and_before():
+    """Confirmed missing before this fix: every other catalog-wide
+    endpoint (search-functions, search-content, find-duplicates,
+    validate-all) already accepts modified_after/modified_before, but
+    this endpoint's own selection was "filenames"/"tag"/"sha256" only --
+    an operator backing up "every notebook touched during a specific
+    incident window" (this endpoint's own docstring gives the identical
+    real-world reason its siblings gained this filter) had no way to
+    scope an export that way.
+    """
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in ("export_mod_old.ipynb", "export_mod_new.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    old_path = Path(UPLOAD_DIR) / "export_mod_old.ipynb"
+    old_stat = old_path.stat()
+    os.utime(old_path, (old_stat.st_atime, old_stat.st_mtime - 7200))
+
+    old_modified_at = client.get(
+        "/api/notebooks/export_mod_old.ipynb/info"
+    ).json()["modified_at"]
+    new_modified_at = client.get(
+        "/api/notebooks/export_mod_new.ipynb/info"
+    ).json()["modified_at"]
+
+    after_resp = client.get(
+        "/api/notebooks/export", params={"modified_after": new_modified_at}
+    )
+    assert after_resp.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(after_resp.content)) as archive:
+        ipynb_entries = [n for n in archive.namelist() if n.endswith(".ipynb")]
+        assert ipynb_entries == ["export_mod_new.ipynb"]
+
+    before_resp = client.get(
+        "/api/notebooks/export", params={"modified_before": old_modified_at}
+    )
+    assert before_resp.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(before_resp.content)) as archive:
+        ipynb_entries = [n for n in archive.namelist() if n.endswith(".ipynb")]
+        assert ipynb_entries == ["export_mod_old.ipynb"]
+
+
+def test_export_notebooks_modified_after_composes_with_tag():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in ("export_mod_tag_a.ipynb", "export_mod_tag_b.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    client.put("/api/notebooks/export_mod_tag_a.ipynb/tags", json={"tags": ["prod"]})
+    client.put("/api/notebooks/export_mod_tag_b.ipynb/tags", json={"tags": ["prod"]})
+
+    old_path = Path(UPLOAD_DIR) / "export_mod_tag_a.ipynb"
+    old_stat = old_path.stat()
+    os.utime(old_path, (old_stat.st_atime, old_stat.st_mtime - 7200))
+
+    new_modified_at = client.get(
+        "/api/notebooks/export_mod_tag_b.ipynb/info"
+    ).json()["modified_at"]
+
+    resp = client.get(
+        "/api/notebooks/export",
+        params={"tag": "prod", "modified_after": new_modified_at},
+    )
+
+    assert resp.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as archive:
+        ipynb_entries = [n for n in archive.namelist() if n.endswith(".ipynb")]
+        assert ipynb_entries == ["export_mod_tag_b.ipynb"]
+
+
+def test_export_notebooks_modified_after_returns_404_when_nothing_matches():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    _upload_sample_notebook("export_mod_unmatched.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/export",
+        params={"modified_after": "2099-01-01T00:00:00+00:00"},
+    )
+
+    assert resp.status_code == 404
+
+
+def test_export_notebooks_rejects_modified_after_later_than_modified_before():
+
+    resp = client.get(
+        "/api/notebooks/export",
+        params={
+            "modified_after": "2026-06-01T00:00:00+00:00",
+            "modified_before": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert resp.status_code == 400
+
+
+def test_export_notebooks_rejects_both_filenames_and_modified_after():
+
+    _upload_sample_notebook("export_filenames_modified_conflict.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/export",
+        params={
+            "filenames": "export_filenames_modified_conflict.ipynb",
+            "modified_after": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert resp.status_code == 400
+
+
 def test_export_notebooks_include_versions_bundles_each_notebooks_own_history():
 
     client.delete("/api/notebooks?confirm=true")
