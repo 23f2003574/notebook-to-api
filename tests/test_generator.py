@@ -210,6 +210,64 @@ def test_public_url_is_a_reserved_infrastructure_name():
     assert "PUBLIC_URL" in RESERVED_INFRASTRUCTURE_NAMES
 
 
+def test_custom_openapi_restores_a_none_valued_example_field_get_openapi_drops(
+    monkeypatch,
+):
+    """FastAPI's own get_openapi() (called inside custom_openapi, not
+    this project's own code) silently drops any None-valued key from a
+    model's own "example" while rebuilding the served schema -- confirmed
+    via a real compiled app: BaseModel.model_json_schema() on the exact
+    same model correctly keeps {"name": None, "age": 5} (generate_
+    example_payload's own "Optional[X] = None keeps its real default"
+    fix, backend/parser/ast_parser.py, working as intended), but this
+    schema's own components/schemas/GreetRequest/example, reached only
+    through get_openapi(), silently came back as {"age": 5} -- the
+    "name" key gone entirely, defeating that exact fix the moment anyone
+    actually reads the served schema (/docs, /openapi.json, or a
+    third-party tool generating a client from it) instead of the
+    generated source text directly. The same "the framework silently
+    drops/reshapes something this project's own code already got right,
+    so compensate for it right where the schema is finalized" pattern
+    test_generate_fastapi_code_passes_servers_to_get_openapi above
+    already established for a different FastAPI gap.
+    """
+    from typing import Optional
+
+    functions = [{
+        "name": "greet",
+        "args": [
+            {
+                "name": "name", "type": "Optional[str]", "default": None,
+                "has_default": True, "kind": "positional",
+            },
+            {
+                "name": "age", "type": "int", "default": 5,
+                "has_default": True, "kind": "positional",
+            },
+        ],
+        "return_type": "str",
+        "example_payload": {"name": None, "age": 5},
+    }]
+
+    code = generate_fastapi_code(functions)
+
+    assert "for _model_name, _model_schema in (" in code
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].greet = lambda name=None, age=5: name or "anon"
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    schema = client.get("/openapi.json").json()
+
+    assert schema["components"]["schemas"]["GreetRequest"]["example"] == {
+        "name": None, "age": 5,
+    }
+
+
 def test_generate_fastapi_code_defaults_to_docs_enabled():
     """docs_url/redoc_url/openapi_url must default to their own normal
     FastAPI paths -- NOTEBOOK_API_DISABLE_DOCS defaults to "false", so an

@@ -1668,6 +1668,44 @@ def generate_fastapi_code(
     lines.append("        'name': API_KEY_HEADER_NAME")
     lines.append("    }")
     lines.append("")
+    # get_openapi() above silently drops any None-valued key from a
+    # model's own "example" (set via model_config['json_schema_extra']
+    # below, on every generated {Pascal}Request class) while rebuilding
+    # this served schema -- confirmed exploitable: BaseModel.
+    # model_json_schema() on the exact same model correctly keeps
+    # {"name": None, "age": 5}, but this schema's own components/
+    # schemas/{Pascal}Request/example, reached only through get_openapi()
+    # (a FastAPI utility, not this project's own code), silently comes
+    # back as {"age": 5} -- the "name" key is gone entirely. This
+    # defeats generate_example_payload's own "Optional[X] = None keeps
+    # its real declared default, not a generic placeholder" fix
+    # (backend/parser/ast_parser.py): the example is computed correctly
+    # and embedded correctly in this very model's own json_schema_extra,
+    # but the schema anyone actually reads -- /docs (Swagger UI),
+    # /openapi.json, or any third-party tool generating a client from
+    # it -- never sees the field this example most needed to show a
+    # real value for. Restored here by re-copying each request model's
+    # own already-correct example back over whatever get_openapi() built
+    # for it, the same "the framework silently drops/reshapes something
+    # this project's own code already got right, so compensate for it
+    # right where the schema is finalized" pattern the "servers=" fix
+    # just above already established for a different FastAPI gap.
+    lines.append("    for _model_name, _model_schema in (")
+    lines.append("        openapi_schema.get('components', {})")
+    lines.append("        .get('schemas', {}).items()")
+    lines.append("    ):")
+    lines.append("        _model_cls = globals().get(_model_name)")
+    lines.append("        _example = (")
+    lines.append("            getattr(_model_cls, 'model_config', {})")
+    lines.append("            .get('json_schema_extra', {})")
+    lines.append("            .get('example')")
+    lines.append("            if isinstance(_model_cls, type)")
+    lines.append("            and issubclass(_model_cls, BaseModel)")
+    lines.append("            else None")
+    lines.append("        )")
+    lines.append("        if _example is not None:")
+    lines.append("            _model_schema['example'] = _example")
+    lines.append("")
     lines.append("    app.openapi_schema = openapi_schema")
     lines.append("    return app.openapi_schema")
     lines.append("")
