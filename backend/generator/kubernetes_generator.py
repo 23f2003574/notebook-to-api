@@ -1,4 +1,53 @@
+import re
+
 from backend.exporters.openapi_exporter import _yaml_scalar
+
+# Kubernetes' own DNS-1123 label rule for a resource's "metadata.name" (and,
+# identically, a label value): lowercase alphanumeric or '-', must start and
+# end with an alphanumeric character, max 63 characters. `package_name` only
+# has to satisfy Python's own `str.isidentifier()` (package_name_for_output_dir,
+# backend/compiler.py) -- which happily allows uppercase letters and
+# underscores, *neither* of which are legal here. Confirmed exploitable: a
+# perfectly ordinary `--output my_notebook_app` (underscores are completely
+# idiomatic in a Python package name) compiled without error, but
+# `kubectl apply -f kubernetes.yaml` against the resulting manifest failed
+# outright with "metadata.name: Invalid value: \"my_notebook_app\": ... a
+# lowercase RFC 1123 subdomain must consist of lower case alphanumeric
+# characters, '-' or '.'" -- the one artifact this function exists to let an
+# operator apply with no further editing (see this module's own "the minimal
+# pair `kubectl apply -f` needs" below) was actually invalid the moment the
+# compiled package name contained an underscore or a capital letter, with
+# nothing about the compile itself ever warning of it.
+_K8S_NAME_INVALID_CHARS_RE = re.compile(r"[^a-z0-9-]+")
+
+
+def _k8s_resource_name(package_name):
+    """A DNS-1123-legal resource name derived from `package_name` (see the
+    module-level comment above for exactly which names this fixes).
+
+    Lowercases the name, then replaces any run of characters other than
+    `[a-z0-9-]` (an underscore chief among them, for a real package name)
+    with a single '-', so "My_App" becomes "my-app" rather than either an
+    invalid literal pass-through or a value that collapses two distinct
+    package names to the same manifest name (e.g. "my__app" and "my_app"
+    both becoming "my-app" is an acceptable, documented trade-off here --
+    still deterministic and still far better than an invalid manifest).
+    Leading/trailing '-' (which a name starting or ending with an
+    underscore would otherwise leave behind, itself still illegal here) is
+    then stripped, and the result is truncated to Kubernetes' own 63-
+    character limit -- re-stripping any '-' the truncation itself exposed
+    at the new end.
+
+    Falls back to the literal "generated" (the same default `package_name`
+    already uses elsewhere in this module) on the one input that survives
+    all of the above as an empty string: a name made up entirely of
+    characters this regex strips (e.g. "___") -- an empty "metadata.name"
+    is its own, differently-worded Kubernetes validation error, not
+    something a real `--output` value would plausibly produce, but not
+    reachable here now either way.
+    """
+    name = _K8S_NAME_INVALID_CHARS_RE.sub("-", package_name.lower()).strip("-")
+    return name[:63].strip("-") or "generated"
 
 
 def kubernetes_manifest_content(package_name="generated", env_vars=None, image=None):
@@ -105,11 +154,24 @@ def kubernetes_manifest_content(package_name="generated", env_vars=None, image=N
     any value that isn't safe to emit bare, the identical protection
     GET /api/export-openapi's own YAML format already gives every OpenAPI
     schema string for the identical reason.
+
+    `package_name` -- valid everywhere else it's used, including as this
+    manifest's own container/module name inside the Dockerfile's `COPY .
+    {package_name}/` -- is additionally passed through _k8s_resource_name
+    (above) everywhere it becomes a "metadata.name" or label value, since
+    Kubernetes' own DNS-1123 naming rule (lowercase alphanumeric or '-'
+    only) is stricter than the plain `str.isidentifier()` check
+    package_name_for_output_dir (backend/compiler.py) already enforces --
+    see that helper's own docstring for the exact underscore/uppercase
+    failure this closes. `image` is deliberately left as-is here: it's a
+    caller-supplied registry reference already handled (and quoted) on its
+    own terms above, not a name this function derives from `package_name`
+    itself.
     """
     env_vars = env_vars or []
     image = image or f"{package_name}:latest"
 
-    package_name_scalar = _yaml_scalar(package_name)
+    package_name_scalar = _yaml_scalar(_k8s_resource_name(package_name))
     image_scalar = _yaml_scalar(image)
 
     env_entries = [{"name": "PORT", "default": "8000"}] + list(env_vars)

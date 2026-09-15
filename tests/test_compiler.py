@@ -1070,6 +1070,45 @@ def test_kubernetes_manifest_content_uses_the_given_package_name_throughout():
     assert "image: myapp:latest\n" in content
 
 
+def test_kubernetes_manifest_content_sanitizes_an_underscore_and_uppercase_package_name():
+    """`package_name` only has to satisfy Python's own `isidentifier()`
+    (package_name_for_output_dir, backend/compiler.py), which allows
+    underscores and uppercase letters -- neither legal in a Kubernetes
+    "metadata.name"/label value (lowercase alphanumeric or '-' only).
+    Confirmed exploitable before this fix: `kubernetes_manifest_content`
+    interpolated "My_Notebook_App" verbatim into "metadata: name:",
+    producing a manifest `kubectl apply -f` rejects outright.
+    """
+    content = kubernetes_manifest_content("My_Notebook_App", [])
+
+    assert "name: My_Notebook_App" not in content
+    assert content.count("  name: my-notebook-app\n") == 2  # Deployment + Service
+    assert "    app: my-notebook-app\n" in content
+    assert "      app: my-notebook-app\n" in content
+    assert "        app: my-notebook-app\n" in content
+
+    # The image default is untouched by this sanitization -- it's a
+    # separate, already-quoted caller-supplied value, not a name this
+    # function derives from package_name itself.
+    assert "image: My_Notebook_App:latest\n" in content
+
+
+def test_kubernetes_manifest_content_falls_back_to_generated_for_an_all_underscore_name():
+    content = kubernetes_manifest_content("___", [])
+
+    assert "  name: generated\n" in content
+    assert "    app: generated\n" in content
+
+
+def test_kubernetes_manifest_content_truncates_a_package_name_over_63_characters():
+    long_name = "a" * 80
+
+    content = kubernetes_manifest_content(long_name, [])
+
+    assert f"  name: {'a' * 63}\n" in content
+    assert f"  name: {'a' * 64}\n" not in content
+
+
 def test_kubernetes_manifest_content_renders_both_a_deployment_and_a_service():
 
     content = kubernetes_manifest_content("generated", [])
