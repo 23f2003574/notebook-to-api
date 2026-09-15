@@ -1590,9 +1590,19 @@ def generate_fastapi_code(
     lines.append("    # /tasks/{task_id} for it saw a plain 404 instead -- indistinguishable")
     lines.append("    # from a task_id that never existed at all.")
     lines.append("    now = time.time()")
+    # list(...) snapshot -- not a live iteration. Both call sites below
+    # run under _TASKS_ADMISSION_LOCK, but that lock only ever serializes
+    # against *each other* -- it does nothing to stop a completely
+    # unrelated concurrent mutation elsewhere (DELETE /tasks/{task_id},
+    # /tasks/cleanup, /tasks/reset, or _run_background_task's own
+    # completion write, none of which take this lock) from changing
+    # TASKS' own size while this list comprehension is mid-iteration. See
+    # list_tasks' own "tasks_snapshot" comment above for the identical
+    # "RuntimeError: dictionary changed size during iteration" this
+    # guards against.
     lines.append("    expired_ids = [")
     lines.append("        task_id")
-    lines.append("        for task_id, task in TASKS.items()")
+    lines.append("        for task_id, task in list(TASKS.items())")
     lines.append("        if task.get('status') != 'processing'")
     lines.append("        and now - task.get('created_at', now) > TASK_TTL_SECONDS")
     lines.append("    ]")
@@ -1901,21 +1911,44 @@ def generate_fastapi_code(
     lines.append("        )")
     lines.append("")
 
+    # A single snapshot -- not five separate live iterations of TASKS
+    # below -- for two reasons. First, thread safety: this endpoint is a
+    # plain synchronous `def`, run in Starlette's own threadpool, while a
+    # background task's own eventual completion (_run_background_task) or
+    # a concurrent submission's own admission-controlled insert
+    # (_TASKS_ADMISSION_LOCK above) can mutate TASKS -- add or remove a
+    # key -- from a different thread/the event loop at the same moment.
+    # Iterating a dict directly while another thread changes its *size*
+    # raises "RuntimeError: dictionary changed size during iteration" in
+    # CPython; confirmed exploitable before this fix, with a real
+    # concurrent TASKS mutation racing a live `for ... in TASKS.items()`.
+    # list(TASKS.items()) itself never releases the GIL mid-conversion,
+    # so this one line is atomic with respect to any other thread.
+    # Second, consistency: five separate live passes over a *changing*
+    # TASKS could each see a different, still-changing state -- a task
+    # completing between the "completed_tasks" sum and "matching_items"
+    # below could make the two disagree about that exact task, even
+    # though this is one nominally-single response. A single snapshot up
+    # front means every count and every returned task below describes
+    # the identical instant.
+    lines.append("    tasks_snapshot = list(TASKS.items())")
+    lines.append("")
+
     lines.append("    completed_tasks = sum(")
     lines.append("        1")
-    lines.append("        for task in TASKS.values()")
+    lines.append("        for _, task in tasks_snapshot")
     lines.append("        if task.get('status') == 'completed'")
     lines.append("    )")
 
     lines.append("    failed_tasks = sum(")
     lines.append("        1")
-    lines.append("        for task in TASKS.values()")
+    lines.append("        for _, task in tasks_snapshot")
     lines.append("        if task.get('status') == 'failed'")
     lines.append("    )")
 
     lines.append("    processing_tasks = sum(")
     lines.append("        1")
-    lines.append("        for task in TASKS.values()")
+    lines.append("        for _, task in tasks_snapshot")
     lines.append("        if task.get('status') == 'processing'")
     lines.append("    )")
 
@@ -1930,7 +1963,7 @@ def generate_fastapi_code(
     # an undelivered webhook worth investigating or redelivering.
     lines.append("    webhook_delivery_failed_tasks = sum(")
     lines.append("        1")
-    lines.append("        for task in TASKS.values()")
+    lines.append("        for _, task in tasks_snapshot")
     lines.append("        if task.get('webhook', {}).get('delivered') is False")
     lines.append("    )")
 
@@ -1949,7 +1982,7 @@ def generate_fastapi_code(
     # exactly like every other filter here already does.
     lines.append("    matching_items = [")
     lines.append("        (task_id, task)")
-    lines.append("        for task_id, task in TASKS.items()")
+    lines.append("        for task_id, task in tasks_snapshot")
     lines.append("        if (status is None or task.get('status') == status)")
     lines.append("        and (")
     lines.append("            webhook_delivery_failed is None")
@@ -2012,9 +2045,14 @@ def generate_fastapi_code(
     lines.append("@app.delete('/tasks/completed')")
     lines.append("def delete_completed_tasks(_: None = Depends(verify_api_key)):")
 
+    # list(...) snapshot -- see list_tasks' own "tasks_snapshot" comment
+    # above for why a live TASKS.items() iteration here can raise
+    # "RuntimeError: dictionary changed size during iteration" the
+    # moment a concurrent submission/completion/eviction changes TASKS'
+    # own size mid-iteration.
     lines.append("    completed_task_ids = [")
     lines.append("        task_id")
-    lines.append("        for task_id, task in TASKS.items()")
+    lines.append("        for task_id, task in list(TASKS.items())")
     lines.append("        if task.get('status') == 'completed'")
     lines.append("    ]")
 
@@ -2030,9 +2068,11 @@ def generate_fastapi_code(
     lines.append("@app.delete('/tasks/failed')")
     lines.append("def delete_failed_tasks(_: None = Depends(verify_api_key)):")
 
+    # list(...) snapshot -- same "RuntimeError: dictionary changed size
+    # during iteration" reasoning as delete_completed_tasks just above.
     lines.append("    failed_task_ids = [")
     lines.append("        task_id")
-    lines.append("        for task_id, task in TASKS.items()")
+    lines.append("        for task_id, task in list(TASKS.items())")
     lines.append("        if task.get('status') == 'failed'")
     lines.append("    ]")
 
@@ -2078,21 +2118,28 @@ def generate_fastapi_code(
     # different format would otherwise have had to duplicate (and could
     # drift from) the exact same three sum()s.
     lines.append("def _task_status_counts():")
+    # A single snapshot, not three separate live iterations -- the same
+    # "RuntimeError: dictionary changed size during iteration" this
+    # function is otherwise exposed to (see list_tasks' own
+    # "tasks_snapshot" comment above), plus the identical "three
+    # separate passes over a *changing* TASKS could disagree with each
+    # other" consistency concern.
+    lines.append("    tasks_snapshot = list(TASKS.values())")
     lines.append("    processing = sum(")
     lines.append("        1")
-    lines.append("        for task in TASKS.values()")
+    lines.append("        for task in tasks_snapshot")
     lines.append("        if task.get('status') == 'processing'")
     lines.append("    )")
 
     lines.append("    completed = sum(")
     lines.append("        1")
-    lines.append("        for task in TASKS.values()")
+    lines.append("        for task in tasks_snapshot")
     lines.append("        if task.get('status') == 'completed'")
     lines.append("    )")
 
     lines.append("    failed = sum(")
     lines.append("        1")
-    lines.append("        for task in TASKS.values()")
+    lines.append("        for task in tasks_snapshot")
     lines.append("        if task.get('status') == 'failed'")
     lines.append("    )")
 

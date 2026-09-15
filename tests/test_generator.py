@@ -3653,6 +3653,83 @@ def test_list_tasks_supports_status_filter_and_pagination(monkeypatch):
     assert invalid_limit.status_code == 422
 
 
+def test_task_dict_iterations_survive_concurrent_mutation(monkeypatch):
+    """GET /tasks, DELETE /tasks/completed, DELETE /tasks/failed, and
+    _task_status_counts (shared by GET /metrics/GET /metrics/prometheus)
+    each iterate TASKS directly -- all four are plain synchronous `def`s,
+    run in Starlette's own threadpool, while a background task's own
+    eventual completion or a concurrent submission's own admission-
+    controlled insert (_TASKS_ADMISSION_LOCK) can add or remove a TASKS
+    key from a different thread/the event loop at the same moment.
+    Confirmed exploitable before this fix: iterating a dict directly
+    while another thread changes its own size raises "RuntimeError:
+    dictionary changed size during iteration" in CPython -- a real,
+    reproducible crash under concurrent read+write task traffic (a
+    dashboard polling GET /tasks or /metrics while background tasks are
+    actively being submitted or completing), not a silent one. Fixed by
+    snapshotting via list(...) before iterating, the standard "safe to
+    iterate even if another thread mutates the dict mid-loop" idiom.
+    """
+    import threading
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "tasks_snapshot = list(TASKS.items())" in code
+    assert "tasks_snapshot = list(TASKS.values())" in code
+    assert "for task_id, task in list(TASKS.items())" in code
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["TASKS"] = {
+        str(i): {"status": "completed", "created_at": 0.0} for i in range(50)
+    }
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    errors = []
+
+    def mutator():
+        for i in range(500):
+            key = f"mut{i}"
+            namespace["TASKS"][key] = {"status": "processing", "created_at": 0.0}
+            namespace["TASKS"].pop(key, None)
+
+    def reader():
+        for _ in range(150):
+            try:
+                assert client.get("/tasks", headers=headers).status_code == 200
+                assert (
+                    client.delete("/tasks/completed", headers=headers).status_code
+                    == 200
+                )
+                assert (
+                    client.delete("/tasks/failed", headers=headers).status_code == 200
+                )
+                assert client.get("/metrics", headers=headers).status_code == 200
+                namespace["TASKS"]["seed"] = {
+                    "status": "completed", "created_at": 0.0,
+                }
+            except RuntimeError as e:
+                errors.append(str(e))
+
+    threads = (
+        [threading.Thread(target=mutator) for _ in range(3)]
+        + [threading.Thread(target=reader) for _ in range(3)]
+    )
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+
+
 def test_list_tasks_filters_by_webhook_delivery_failed(monkeypatch):
     """Confirmed missing before this feature: a caller who'd learned from
     GET /metrics that some automatic webhook deliveries had failed had no
