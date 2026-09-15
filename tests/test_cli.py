@@ -22222,6 +22222,48 @@ def test_status_command_prints_disabled_for_no_dashboard_rate_limit(tmp_path, fa
     assert "dashboard rate limit: disabled" in proc.stdout
 
 
+def test_status_command_prints_the_dashboard_max_request_body_bytes(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "healthy", "service": "notebook-to-api",
+            "compiled_app_present": False,
+        }),
+        _json_response(200, {
+            "status": "success",
+            "allowed_origins": [],
+            "dashboard_rate_limit_per_minute": None,
+            "dashboard_max_request_body_bytes": 10485760,
+            "max_upload_bytes": 10485760,
+            "max_batch_upload_files": 50,
+            "max_notebooks": 0,
+            "max_notebook_versions": 20,
+            "max_tag_length": 40,
+            "max_tags_per_notebook": 20,
+            "max_description_length": 500,
+            "max_deploy_history_entries": 50,
+            "max_compile_history_entries": 50,
+            "deploy_subprocess_timeout_seconds": 600,
+            "url_import_timeout_seconds": 30,
+            "stale_upload_temp_file_seconds": 3600,
+            "notebook_sort_keys": ["name", "size", "uploaded_at"],
+            "notebook_sort_orders": ["asc", "desc"],
+            "compiling_python_version": "3.12",
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["status", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "dashboard max request body: 10485760 bytes" in proc.stdout
+
+
 def test_status_command_prints_allowed_origins(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

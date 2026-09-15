@@ -16290,11 +16290,28 @@ def get_config():
     -- already gives for that app's own NOTEBOOK_API_JSON_LOGS, had no
     way to ask that short of the same direct environment access this
     endpoint's own docstring already says a client shouldn't need.
+
+    "dashboard_max_request_body_bytes" (added alongside this same
+    docstring's original feature, not a separate change) is
+    dashboard_max_request_body_bytes's (backend/dashboard.py) own reading
+    of NOTEBOOK_API_DASHBOARD_MAX_REQUEST_BYTES -- already independently
+    configurable since this dashboard's own _enforce_dashboard_max_request_body_bytes
+    middleware was added, but never itself surfaced through this
+    endpoint: a caller wanting to check a JSON body's own size against
+    this dashboard's real configured ceiling before sending it (rather
+    than discovering it's too large only after paying the cost of a
+    round trip that ends in 413), or an operator confirming the value
+    they configured actually took effect, had no way to ask that short
+    of the same direct environment access this endpoint's own docstring
+    already says a client shouldn't need -- the identical gap
+    "max_upload_bytes" just below already closes for POST /api/upload's
+    own, separate multipart size limit.
     """
 
     from backend.dashboard import (
         allowed_origins,
         dashboard_json_logs_enabled,
+        dashboard_max_request_body_bytes,
         dashboard_rate_limit_per_minute,
     )
 
@@ -16303,6 +16320,7 @@ def get_config():
         "allowed_origins": allowed_origins(),
         "dashboard_rate_limit_per_minute": dashboard_rate_limit_per_minute() or None,
         "dashboard_json_logs_enabled": dashboard_json_logs_enabled(),
+        "dashboard_max_request_body_bytes": dashboard_max_request_body_bytes(),
         "max_upload_bytes": MAX_UPLOAD_BYTES,
         "max_batch_upload_files": MAX_BATCH_UPLOAD_FILES,
         "max_notebooks": MAX_NOTEBOOKS,

@@ -27757,6 +27757,28 @@ def test_get_config_reflects_a_configured_dashboard_json_logs(monkeypatch):
     assert resp.json()["dashboard_json_logs_enabled"] is True
 
 
+def test_get_config_reports_the_default_dashboard_max_request_body_bytes(monkeypatch):
+
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_MAX_REQUEST_BYTES", raising=False)
+
+    resp = client.get("/api/config")
+
+    assert resp.status_code == 200
+    assert resp.json()["dashboard_max_request_body_bytes"] == 10 * 1024 * 1024
+
+
+def test_get_config_reflects_a_configured_dashboard_max_request_body_bytes(
+    monkeypatch,
+):
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_MAX_REQUEST_BYTES", "2048")
+
+    resp = client.get("/api/config")
+
+    assert resp.status_code == 200
+    assert resp.json()["dashboard_max_request_body_bytes"] == 2048
+
+
 def test_get_config_reports_the_compiling_python_version():
 
     resp = client.get("/api/config")

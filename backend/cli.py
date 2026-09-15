@@ -7443,6 +7443,10 @@ def _dispatch_core_command(args):
                 "  dashboard rate limit: "
                 f"{f'{dashboard_rate_limit} requests/minute per client' if dashboard_rate_limit else 'disabled'}"
             )
+            print(
+                "  dashboard max request body: "
+                f"{config.get('dashboard_max_request_body_bytes')} bytes"
+            )
             print(f"\nCompiling Python version: {config.get('compiling_python_version')}")
 
     elif args.command == "metrics":
