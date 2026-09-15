@@ -340,6 +340,75 @@ def test_rate_limit_dependency_injects_response_to_set_headers():
     assert "'X-RateLimit-Reset': str(reset_at)," in code
 
 
+def test_enforce_rate_limit_is_atomic_under_concurrent_threads(monkeypatch):
+    """verify_api_key is a plain synchronous `def`, not `async def` --
+    FastAPI runs a synchronous dependency in Starlette's own threadpool,
+    not on the single asyncio event loop, so two concurrent requests
+    carrying the *same* API key can genuinely run _enforce_rate_limit on
+    two different worker threads at once. Confirmed exploitable before
+    this fix: with no lock around its own get-then-increment-then-store
+    sequence, 20 real concurrent threads (with an artificially widened
+    race window, simulating realistic thread-scheduling under load)
+    against RATE_LIMIT_PER_MINUTE=5 all went through -- a classic lost-
+    update race where every thread reads the same starting count before
+    any of them writes back their own increment -- and the final stored
+    count was 1, not 20. A threading.Lock around the whole read-modify-
+    write makes it atomic across threads (an asyncio.Lock would not:
+    that only ever protects against other *coroutines* sharing one event
+    loop, not concurrent OS threads).
+    """
+    import threading
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "import threading" in code
+    assert "_RATE_LIMIT_LOCK = threading.Lock()" in code
+    assert "with _RATE_LIMIT_LOCK:" in code
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["RATE_LIMIT_PER_MINUTE"] = 5
+
+    class _SlowDict(dict):
+        """Widens the real race window artificially -- without this, the
+        real get-then-store sequence is short enough that the race,
+        while still present, is rare in a quick test run.
+        """
+        def get(self, key, default=None):
+            value = super().get(key, default)
+            import time as _time
+            _time.sleep(0.01)
+            return value
+
+    namespace["_RATE_LIMIT_WINDOWS"] = _SlowDict()
+
+    class _FakeResponse:
+        def __init__(self):
+            self.headers = {}
+
+    outcomes = []
+
+    def worker():
+        try:
+            namespace["_enforce_rate_limit"]("testkey", _FakeResponse())
+            outcomes.append("allowed")
+        except Exception:
+            outcomes.append("blocked")
+
+    threads = [threading.Thread(target=worker) for _ in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert outcomes.count("allowed") == 5
+    assert outcomes.count("blocked") == 15
+    assert namespace["_RATE_LIMIT_WINDOWS"]["testkey"][1] == 20
+
+
 def test_generated_app_configures_cors_middleware_with_a_permissive_default():
     """Before this, the generated app had no CORS configuration at all --
     a browser-based frontend, the single most common way to actually
@@ -1119,6 +1188,27 @@ def test_notebook_function_named_rate_limit_windows_is_rejected():
     ]
 
     with pytest.raises(ReservedFunctionNameError, match="_RATE_LIMIT_WINDOWS"):
+        generate_fastapi_code(functions)
+
+
+def test_notebook_function_named_rate_limit_lock_is_rejected():
+    """_RATE_LIMIT_LOCK -- the threading.Lock _enforce_rate_limit uses to
+    make its own read-modify-write of _RATE_LIMIT_WINDOWS atomic across
+    concurrent worker threads -- is read by name from inside that same
+    function, resolved at call time. A notebook function of this exact
+    name would rebind it to a function object at module-execution time;
+    the very next request under a nonzero RATE_LIMIT_PER_MINUTE would
+    then fail with a bare 500 the moment `with _RATE_LIMIT_LOCK:` tried
+    to use a function object as a context manager -- the identical
+    "one bad name breaks a subsystem every endpoint depends on" exposure
+    _RATE_LIMIT_WINDOWS' own entry above already guards against.
+    """
+
+    functions = [
+        {"name": "_RATE_LIMIT_LOCK", "args": [], "return_type": "dict"}
+    ]
+
+    with pytest.raises(ReservedFunctionNameError, match="_RATE_LIMIT_LOCK"):
         generate_fastapi_code(functions)
 
 

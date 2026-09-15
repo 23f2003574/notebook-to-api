@@ -111,7 +111,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # removed from _enforce_rate_limit's own name instead of the call
     # site.
     "_enforce_rate_limit", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_WINDOW_SECONDS",
-    "_RATE_LIMIT_WINDOWS",
+    "_RATE_LIMIT_WINDOWS", "_RATE_LIMIT_LOCK",
     "verify_api_key", "custom_openapi",
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
     "validate_auth", "service_info", "service_config", "metrics", "uptime",
@@ -938,6 +938,7 @@ def generate_fastapi_code(
     lines.append("import urllib.error")
     lines.append("import socket")
     lines.append("import ipaddress")
+    lines.append("import threading")
     lines.append("from urllib.parse import urlparse")
     lines.append("from datetime import datetime")
     lines.append("import time")
@@ -1460,6 +1461,28 @@ def generate_fastapi_code(
     )
     lines.append("RATE_LIMIT_WINDOW_SECONDS = 60")
     lines.append("_RATE_LIMIT_WINDOWS = {}")
+    # verify_api_key (below) is a plain synchronous `def`, not `async
+    # def` -- FastAPI runs a synchronous dependency in Starlette's own
+    # threadpool (run_in_threadpool), not on the single asyncio event
+    # loop, so two concurrent requests carrying the *same* API key can
+    # genuinely run _enforce_rate_limit on two different worker threads
+    # at once. Without a lock, the read-modify-write below
+    # (get-then-increment-then-store) is a classic non-atomic
+    # check-then-act race: both threads can read the same starting
+    # `count`, each increment their own local copy, and whichever writes
+    # last simply overwrites the other's update -- a lost update.
+    # Confirmed exploitable before this: 20 concurrent requests against a
+    # real generated app with RATE_LIMIT_PER_MINUTE=5 all went through
+    # (none ever saw the true, already-incremented count), and
+    # _RATE_LIMIT_WINDOWS' own final stored count was 1, not 20 -- the
+    # exact silent failure of the one control whose entire purpose is
+    # enforcing a hard cap, and precisely the scenario (a concurrent
+    # burst, whether legitimate traffic or an actual abuse attempt) a
+    # rate limiter exists to withstand. A plain threading.Lock (not an
+    # asyncio.Lock, which only ever protects against other *coroutines*
+    # on the same event loop, not concurrent OS threads) makes the whole
+    # read-modify-write atomic across threads.
+    lines.append("_RATE_LIMIT_LOCK = threading.Lock()")
     lines.append("")
     lines.append("def _enforce_rate_limit(api_key, response):")
     lines.append("    # RATE_LIMIT_PER_MINUTE <= 0 (the default) means rate")
@@ -1469,16 +1492,20 @@ def generate_fastapi_code(
     lines.append("    if RATE_LIMIT_PER_MINUTE <= 0:")
     lines.append("        return")
     lines.append("    now = time.time()")
-    lines.append("    window_start, count = _RATE_LIMIT_WINDOWS.get(api_key, (now, 0))")
-    lines.append("    # Fixed window, not sliding: once RATE_LIMIT_WINDOW_SECONDS")
-    lines.append("    # has elapsed since this key's window opened, it resets to a")
-    lines.append("    # fresh window rather than decaying the count gradually --")
-    lines.append("    # the same lazy, no-background-thread eviction style")
-    lines.append("    # _evict_expired_tasks above already uses for TASKS.")
-    lines.append("    if now - window_start >= RATE_LIMIT_WINDOW_SECONDS:")
-    lines.append("        window_start, count = now, 0")
-    lines.append("    count += 1")
-    lines.append("    _RATE_LIMIT_WINDOWS[api_key] = (window_start, count)")
+    lines.append("    with _RATE_LIMIT_LOCK:")
+    lines.append(
+        "        window_start, count = "
+        "_RATE_LIMIT_WINDOWS.get(api_key, (now, 0))"
+    )
+    lines.append("        # Fixed window, not sliding: once RATE_LIMIT_WINDOW_SECONDS")
+    lines.append("        # has elapsed since this key's window opened, it resets to a")
+    lines.append("        # fresh window rather than decaying the count gradually --")
+    lines.append("        # the same lazy, no-background-thread eviction style")
+    lines.append("        # _evict_expired_tasks above already uses for TASKS.")
+    lines.append("        if now - window_start >= RATE_LIMIT_WINDOW_SECONDS:")
+    lines.append("            window_start, count = now, 0")
+    lines.append("        count += 1")
+    lines.append("        _RATE_LIMIT_WINDOWS[api_key] = (window_start, count)")
     lines.append("    reset_at = int(window_start + RATE_LIMIT_WINDOW_SECONDS)")
     lines.append("    remaining = max(0, RATE_LIMIT_PER_MINUTE - count)")
     lines.append("    # Set on every rate-limited request, not just a 429 -- the")
