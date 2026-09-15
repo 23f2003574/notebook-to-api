@@ -441,6 +441,24 @@ def readme_content(
     way to learn this capability exists either, short of reading
     api_generator.py's own source directly.
 
+    A fourth, identical-class documentation bug: the "deliberately do
+    **not**" list below -- built specifically by this docstring's own
+    first fix above to be the authoritative, split-out answer to "which
+    built-in routes need no X-API-Key" -- never named `GET /` at all,
+    even though it's generated (api_generator.py, "# Public
+    infrastructure endpoints") as a plain `def root():` with no
+    `Depends(verify_api_key)` parameter, the identical unauthenticated
+    shape as every other route already in this same list, and "root" is
+    itself grouped alongside "health_check"/"readiness_check"/
+    "auth_status"/"auth_info" in RESERVED_INFRASTRUCTURE_NAMES
+    (api_generator.py). An operator reading only this file -- again, the
+    one artifact this tool ships specifically so nobody has to read
+    api_generator.py's own source for exactly this question -- had no
+    way to tell `/` apart from a real notebook-defined `POST /{{name}}`
+    endpoint (every one of which genuinely does require a key), the same
+    "no way to know" failure this docstring's own first fix already
+    exists to prevent.
+
     `functions` is the same list generate_fastapi_code (api_generator.py)
     itself compiles into endpoints -- each already carrying "name".
     `background_overrides` is _extract_background_overrides's own result
@@ -511,7 +529,7 @@ So do these built-in ones: `/auth/validate`, `/tasks`, and every other \
 
 These built-in ones deliberately do **not** -- so a load balancer, a \
 Kubernetes liveness/readiness probe, or a Prometheus scraper can reach \
-them with no credential of its own: `/health`, `/ready`, `/info`, \
+them with no credential of its own: `/`, `/health`, `/ready`, `/info`, \
 `/config`, `/metrics`, `/metrics/prometheus`, `/uptime`, \
 `/auth/status`, `/auth/info`.
 

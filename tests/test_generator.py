@@ -6113,6 +6113,29 @@ def test_readme_content_lists_the_retry_route_as_requiring_an_api_key():
     assert "`/tasks/{task_id}/retry`" in content
 
 
+def test_readme_content_lists_the_root_route_as_not_requiring_an_api_key():
+    """The explicit "does NOT require an X-API-Key" list -- built
+    specifically by this function's own first documentation-bug fix to
+    be the authoritative, split-out answer to exactly this question --
+    never named `GET /` at all, even though it's generated
+    (api_generator.py, "# Public infrastructure endpoints") as a plain
+    `def root():` with no Depends(verify_api_key), the identical
+    unauthenticated shape as every other route already in this list, and
+    "root" is itself grouped alongside "health_check"/"readiness_check"/
+    "auth_status"/"auth_info" in RESERVED_INFRASTRUCTURE_NAMES
+    (api_generator.py). Checked as the precise substring adjacent to
+    "/health" in that specific list, not a bare "/" anywhere in the
+    content -- a single "/" character would otherwise trivially match
+    inside any of the many other route paths this file already mentions
+    (e.g. "/tasks/{task_id}").
+    """
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content()
+
+    assert "`/`, `/health`, `/ready`, `/info`" in content
+
+
 def test_readme_content_does_not_mark_a_synchronous_function_as_background():
     from backend.generator.docker_generator import readme_content
 
