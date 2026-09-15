@@ -2721,7 +2721,34 @@ def generate_fastapi_code(
     # every retry (and the time.sleep between them) stays off this app's
     # single event loop, the identical reason a single attempt already
     # never blocked it.
+    #
+    # `attempt > 0` re-checks _is_unsafe_webhook_host on every retry, not
+    # just the one check already made above before this loop starts.
+    # Confirmed exploitable before this: that single check only ever
+    # protected the *first* connection attempt -- WEBHOOK_MAX_RETRIES
+    # additional ones can each follow an exponential-backoff/Retry-After
+    # time.sleep of up to 30 seconds (capped below), a real window for a
+    # DNS record a caller fully controls (their own callback_url's own
+    # domain) to start resolving somewhere unsafe between one retry and
+    # the next -- the exact "DNS rebinding" scenario this function's own
+    # comment already names as the reason redelivery/retry re-checks at
+    # all, just not yet applied *within* one already-in-progress retry
+    # loop, only across separate top-level calls to this function
+    # (the original completion, a later manual redeliver, a retried
+    # task's own eventual completion). Skipped on the very first
+    # iteration (`attempt == 0`) since that one is already covered by the
+    # check immediately above, with no sleep in between to matter.
     lines.append("        while True:")
+    lines.append("            if attempt > 0 and _is_unsafe_webhook_host(callback_url):")
+    lines.append("                return {")
+    lines.append("                    'delivered': False,")
+    lines.append("                    'attempts': attempt + 1,")
+    lines.append("                    'status_code': None,")
+    lines.append(
+        "                    'error': 'callback_url resolves to a "
+        "non-public address; refusing to deliver',"
+    )
+    lines.append("                }")
     lines.append("            try:")
     lines.append("                request = urllib.request.Request(")
     lines.append("                    callback_url,")

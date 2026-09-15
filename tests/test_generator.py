@@ -2172,6 +2172,88 @@ def test_task_record_reports_webhook_attempts_after_retry_then_success(monkeypat
     assert webhook["status_code"] == 200
 
 
+def test_deliver_task_webhook_re_checks_host_safety_before_each_retry(monkeypatch):
+    """_is_unsafe_webhook_host was previously only ever checked once,
+    immediately before the retry loop starts -- confirmed exploitable
+    before this fix: a caller-controlled DNS record (the callback_url's
+    own domain) that resolves safely for that one check but starts
+    resolving somewhere unsafe by the time a *later* retry's own
+    urlopen call independently re-resolves it (classic DNS rebinding,
+    across the exponential-backoff/Retry-After sleep between attempts)
+    was never caught -- only a *separate*, later top-level call to this
+    same function (a manual redeliver, or a retried task's own eventual
+    completion) ever re-checked at all, not a retry within one
+    already-in-progress call's own loop.
+
+    Simulated here by making _is_unsafe_webhook_host itself return
+    False for the pre-loop check and the first delivery attempt, then
+    True from the second attempt onward -- the same shape a live DNS
+    rebinding attack produces (the *same* callback_url resolving safely,
+    then unsafely, at two different times) -- while urlopen's own first
+    call fails with a retryable network error, forcing exactly the
+    retry this check must catch. Confirmed urlopen is never reached a
+    second time.
+    """
+    import urllib.request
+
+    monkeypatch.setenv("NOTEBOOK_API_WEBHOOK_MAX_RETRIES", "2")
+
+    functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].process_data = lambda: "ok"
+
+    host_check_calls = []
+
+    def fake_is_unsafe_webhook_host(url):
+        host_check_calls.append(url)
+        # Two checks happen before the retry loop's own first real
+        # attempt: the endpoint's own submission-time check, then
+        # _deliver_task_webhook's own pre-loop check. The third call is
+        # attempt > 0's own re-check, right before what would otherwise
+        # be the retry's own urlopen call -- this is the one this fix
+        # adds, and the one this test means to catch.
+        return len(host_check_calls) >= 3
+
+    namespace["_is_unsafe_webhook_host"] = fake_is_unsafe_webhook_host
+
+    urlopen_calls = []
+
+    def flaky_urlopen(request, timeout=None):
+        urlopen_calls.append(request.full_url)
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", flaky_urlopen)
+    monkeypatch.setattr("time.sleep", lambda *a, **k: None)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    submit_response = client.post(
+        "/process_data",
+        json={},
+        params={"callback_url": "https://example.test/hook"},
+        headers=headers,
+    )
+    task_id = submit_response.json()["task_id"]
+
+    webhook = namespace["TASKS"][task_id]["webhook"]
+    assert webhook["delivered"] is False
+    assert "non-public address" in webhook["error"]
+    # Exactly one real network attempt: the first, allowed through by
+    # the fake's own first (safe) verdict; the retry that would have
+    # followed the URLError is blocked before ever reaching urlopen
+    # again.
+    assert len(urlopen_calls) == 1
+    assert len(host_check_calls) == 3
+
+
 def test_task_record_omits_webhook_field_when_no_callback_url_given(monkeypatch):
     """The overwhelmingly common case (no callback_url) must gain no new
     field at all -- "webhook" only appears on a task record when a
