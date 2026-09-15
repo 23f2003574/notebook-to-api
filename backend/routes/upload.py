@@ -5645,11 +5645,11 @@ def find_duplicate_notebooks(
 
     if limit is not None:
 
-        if limit < 0:
+        if limit <= 0:
 
             raise HTTPException(
                 status_code=400,
-                detail="limit must be a non-negative integer"
+                detail="limit must be a positive integer"
             )
 
         duplicate_groups = duplicate_groups[:limit]

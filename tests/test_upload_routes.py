@@ -5603,6 +5603,27 @@ def test_find_duplicate_notebooks_rejects_a_negative_limit():
     assert resp.status_code == 400
 
 
+def test_find_duplicate_notebooks_rejects_a_zero_limit():
+    """Confirmed missing before this fix: this endpoint's own docstring
+    already claims "limit"/"offset" close the same gap "the same way GET
+    /api/notebooks already rejects either" -- but unlike GET
+    /api/notebooks, GET /api/functions, and GET
+    /api/notebooks/search-content (all of which reject limit=0 with a
+    400 "limit must be a positive integer"), this endpoint's own check
+    only rejected a *negative* limit, silently accepting 0 and returning
+    an empty result with status: "success" instead -- a caller building
+    ?limit= generically across these near-identical endpoints (their own
+    query params are deliberately parallel) got a silent empty result
+    here alone instead of the same clean, actionable 400 every sibling
+    gives.
+    """
+
+    resp = client.get("/api/notebooks/duplicates", params={"limit": 0})
+
+    assert resp.status_code == 400
+    assert "limit must be a positive integer" in resp.json()["detail"]
+
+
 def test_find_duplicate_notebooks_scopes_to_a_tag():
 
     client.delete("/api/notebooks?confirm=true")
