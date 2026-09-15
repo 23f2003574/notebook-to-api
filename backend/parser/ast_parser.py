@@ -891,8 +891,42 @@ def generate_example_payload(args):
             payload[arg_name] = []
             continue
 
-        if arg.get("default") is not None:
-            payload[arg_name] = arg["default"]
+        # has_default (not "default" is not None) decides whether this
+        # arg has a real, declared default at all -- an arg's own real
+        # default can itself be None (any `Optional[X] = None`
+        # parameter, the single most common real-world default value),
+        # which the old `arg.get("default") is not None` check mistook
+        # for "no default at all". Confirmed exploitable:
+        # `def greet(name: Optional[str] = None)` produced an example
+        # payload of {"name": ""}, not the author's own real
+        # {"name": None} -- and this exact payload is what generate_
+        # curl_commands/generate_postman_collection (backend/
+        # inspector.py) and the CLI's own `app-call` (backend/cli.py)
+        # actually send by default, so a notebook function branching on
+        # `if name is None` vs. `if not name` silently exercised the
+        # wrong code path.
+        #
+        # A `None` default for a container-shaped type (list/dict/tuple/
+        # set -- the same four collection keys _EXAMPLE_TYPE_DEFAULTS
+        # already maps to an empty instance of their own type) is the
+        # one deliberate exception: `scores: Optional[List[float]] =
+        # None` still shows the type's own empty-collection placeholder,
+        # not the literal `None`, since a caller trying this example
+        # out gets a far more representative demo of "this field is a
+        # list" from `[]` than from `null` -- and, unlike a scalar
+        # `Optional[str] = None`, sending the type placeholder instead
+        # of the real default here doesn't risk exercising a materially
+        # different code path: `if scores:`/`if scores is not None:`/
+        # `len(scores)` all treat `None` and `[]` interchangeably for
+        # the overwhelmingly common "was anything given" check a
+        # collection parameter's own None-guard already is.
+        default = arg.get("default")
+        default_is_none_for_a_container_type = (
+            default is None and arg_type in ("list", "dict", "tuple", "set")
+        )
+
+        if arg.get("has_default") and not default_is_none_for_a_container_type:
+            payload[arg_name] = default
         else:
             payload[arg_name] = _EXAMPLE_TYPE_DEFAULTS.get(
                 arg_type,

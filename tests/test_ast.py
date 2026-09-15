@@ -945,10 +945,75 @@ def test_generate_example_payload_defaults_to_a_list_for_an_optional_list_param(
     assert payload == {"scores": []}
 
 
+def test_generate_example_payload_preserves_a_real_none_default_for_a_scalar():
+    """Confirmed exploitable before this fix: generate_example_payload
+    checked `arg.get("default") is not None` to decide whether an arg
+    had a real, declared default -- but the default itself can be None
+    (any `Optional[X] = None` parameter, the single most common real-
+    world default value), which that check mistook for "no default at
+    all" and silently replaced with a generic type-based placeholder
+    instead. `def greet(name: Optional[str] = None)` produced an example
+    payload of {"name": ""}, not the author's own real {"name": None} --
+    and this exact payload is what generate_curl_commands/generate_
+    postman_collection (backend/inspector.py) and the CLI's own
+    `app-call` (backend/cli.py) actually send by default, so a notebook
+    function branching on `if name is None` vs. `if not name` silently
+    exercised the wrong code path.
+    """
+
+    payload = generate_example_payload(
+        [{
+            "name": "name", "type": "Optional[str]", "default": None,
+            "has_default": True,
+        }]
+    )
+
+    assert payload == {"name": None}
+
+
+def test_generate_example_payload_end_to_end_preserves_a_real_none_default():
+
+    code = (
+        "from typing import Optional\n\n"
+        "def greet(name: Optional[str] = None, age: int = 5) -> str:\n"
+        "    return name or 'anon'\n"
+    )
+
+    funcs = extract_functions_from_code(code)
+
+    assert generate_example_payload(funcs[0]["args"]) == {
+        "name": None, "age": 5,
+    }
+
+
+def test_generate_example_payload_still_shows_a_container_placeholder_for_a_none_default():
+    """The one deliberate exception to preserving a real None default:
+    a container-shaped type (list/dict/tuple/set) still shows its own
+    empty-collection placeholder, not the literal None, matching
+    test_generate_example_payload_defaults_to_a_list_for_an_optional_list_param
+    above (the identical field, just with an explicit `= None` this
+    time rather than no default at all) -- unlike a scalar
+    `Optional[str] = None`, showing `[]` instead of `None` here doesn't
+    risk exercising a different code path: `if scores:`/
+    `if scores is not None:`/`len(scores)` all treat the two
+    interchangeably for the "was anything given" check a collection
+    parameter's own None-guard already is.
+    """
+
+    payload = generate_example_payload(
+        [{
+            "name": "scores", "type": "Optional[List[float]]",
+            "default": None, "has_default": True,
+        }]
+    )
+
+    assert payload == {"scores": []}
+
+
 def test_generate_example_payload_uses_an_explicit_default_over_the_type_default():
 
     payload = generate_example_payload(
-        [{"name": "count", "type": "int", "default": 5}]
+        [{"name": "count", "type": "int", "default": 5, "has_default": True}]
     )
 
     assert payload == {"count": 5}
@@ -1142,7 +1207,7 @@ def test_generate_example_payload_uses_a_real_value_for_bytes():
 def test_generate_example_payload_still_prefers_an_explicit_default_for_bytes():
 
     payload = generate_example_payload(
-        [{"name": "data", "type": "bytes", "default": "hello"}]
+        [{"name": "data", "type": "bytes", "default": "hello", "has_default": True}]
     )
 
     assert payload == {"data": "hello"}
@@ -1156,7 +1221,10 @@ def test_generate_example_response_uses_a_real_value_for_bytes():
 def test_generate_example_payload_still_prefers_an_explicit_default_for_these_types():
 
     payload = generate_example_payload(
-        [{"name": "event_date", "type": "date", "default": "2030-06-15"}]
+        [{
+            "name": "event_date", "type": "date", "default": "2030-06-15",
+            "has_default": True,
+        }]
     )
 
     assert payload == {"event_date": "2030-06-15"}
