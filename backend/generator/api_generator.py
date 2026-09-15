@@ -1706,6 +1706,70 @@ def generate_fastapi_code(
     lines.append("        if _example is not None:")
     lines.append("            _model_schema['example'] = _example")
     lines.append("")
+    # The identical get_openapi() stripping above, for the *other* place
+    # every generated endpoint's own example ever lives -- a synchronous
+    # endpoint's own responses={200: {'content': {'application/json':
+    # {'example': ...}}}, ...} kwarg (see sync_responses/task_responses
+    # below), passed straight to @app.{method}(...) rather than through
+    # a Pydantic model's own json_schema_extra at all. Confirmed
+    # exploitable the identical way: `def maybe_get(x: int): return None`
+    # (any function with no return annotation, or one that can genuinely
+    # return None, an extremely common real-world shape) has its own
+    # generated source correctly carrying {'result': None} as this
+    # response's example -- but the served schema's own paths/
+    # '/maybe_get'/post/responses/'200'/content/'application/json'/
+    # example came back as {}, the single key's own None value stripped
+    # until nothing was left at all. Every route FastAPI itself
+    # constructs already keeps the exact, unmodified `responses=` dict
+    # this project's own code passed it, unaffected by get_openapi()'s
+    # own rebuild -- accessible here as route.responses -- so each
+    # status code's own real example is restored from there instead of
+    # trusting whatever get_openapi() reconstructed, the identical
+    # "the framework already has this right on the route object itself,
+    # so read it back from there rather than recomputing or trusting the
+    # schema builder's own rebuild" approach the model-schema restoration
+    # just above takes.
+    lines.append("    for _route in app.routes:")
+    lines.append("        _route_responses = getattr(_route, 'responses', None)")
+    lines.append("        if not _route_responses:")
+    lines.append("            continue")
+    lines.append(
+        "        _path_item = openapi_schema.get('paths', {}).get(_route.path, {})"
+    )
+    lines.append("        for _method in getattr(_route, 'methods', None) or ():")
+    lines.append("            _operation = _path_item.get(_method.lower())")
+    lines.append("            if not _operation:")
+    lines.append("                continue")
+    lines.append(
+        "            for _status_code, _response_spec in _route_responses.items():"
+    )
+    lines.append(
+        "                _original_content = ("
+    )
+    lines.append(
+        "                    (_response_spec.get('content') or {})"
+    )
+    lines.append(
+        "                    .get('application/json', {})"
+    )
+    lines.append("                )")
+    lines.append("                if 'example' not in _original_content:")
+    lines.append("                    continue")
+    lines.append(
+        "                _served_response = ("
+    )
+    lines.append(
+        "                    _operation.get('responses', {}).get(str(_status_code))"
+    )
+    lines.append("                )")
+    lines.append("                if _served_response is None:")
+    lines.append("                    continue")
+    lines.append(
+        "                _served_response.setdefault("
+        "'content', {}).setdefault('application/json', {})["
+        "'example'] = _original_content['example']"
+    )
+    lines.append("")
     lines.append("    app.openapi_schema = openapi_schema")
     lines.append("    return app.openapi_schema")
     lines.append("")

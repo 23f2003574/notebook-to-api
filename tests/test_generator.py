@@ -268,6 +268,86 @@ def test_custom_openapi_restores_a_none_valued_example_field_get_openapi_drops(
     }
 
 
+def test_custom_openapi_restores_a_none_valued_response_example_get_openapi_drops(
+    monkeypatch,
+):
+    """The identical get_openapi() stripping the test above fixes for a
+    request model's own example, for the *other* place every generated
+    endpoint's own example ever lives -- a synchronous endpoint's own
+    responses={200: {...}} kwarg, passed straight to @app.post(...)
+    rather than through a Pydantic model's own json_schema_extra at all.
+
+    Confirmed exploitable: `def maybe_get(x: int): return None` (any
+    function with no return annotation, or one that can genuinely return
+    None -- an extremely common real-world shape) has its own generated
+    source correctly carrying {"result": None} as this response's
+    example (generate_example_response, backend/parser/ast_parser.py),
+    but the served schema's own paths/'/maybe_get'/post/responses/'200'/
+    content/'application/json'/example came back as {} -- the single
+    key's own None value stripped until nothing was left at all.
+    """
+
+    functions = [{"name": "maybe_get", "args": [], "return_type": None}]
+
+    code = generate_fastapi_code(functions)
+
+    assert "for _route in app.routes:" in code
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].maybe_get = lambda: None
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    schema = client.get("/openapi.json").json()
+
+    response_200 = schema["paths"]["/maybe_get"]["post"]["responses"]["200"]
+    assert response_200["content"]["application/json"]["example"] == {
+        "result": None
+    }
+
+
+def test_custom_openapi_response_example_restoration_does_not_disturb_other_status_codes(
+    monkeypatch,
+):
+    """The restoration loop must only ever fill in what get_openapi()
+    itself built for a given status code, never invent or duplicate
+    entries across the other responses (401/429/500) an ordinary
+    endpoint already carries.
+    """
+
+    functions = [{
+        "name": "add", "args": [], "return_type": "int",
+        "example_response": {"result": 0},
+    }]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].add = lambda: 0
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    schema = client.get("/openapi.json").json()
+
+    responses = schema["paths"]["/add"]["post"]["responses"]
+    assert responses["200"]["content"]["application/json"]["example"] == {
+        "result": 0
+    }
+    assert responses["401"]["content"]["application/json"]["example"] == {
+        "detail": "Invalid API key"
+    }
+    assert (
+        "Rate limit exceeded"
+        in responses["429"]["content"]["application/json"]["example"]["detail"]
+    )
+
+
 def test_generate_fastapi_code_defaults_to_docs_enabled():
     """docs_url/redoc_url/openapi_url must default to their own normal
     FastAPI paths -- NOTEBOOK_API_DISABLE_DOCS defaults to "false", so an
