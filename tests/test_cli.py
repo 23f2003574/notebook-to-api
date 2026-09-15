@@ -7002,6 +7002,299 @@ def test_download_command_reports_a_clean_error_when_the_dashboard_is_unreachabl
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_generated_list_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "generated" in proc.stdout
+
+
+def test_generated_list_command_prints_compiled_files(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "generated_files": ["app.py", "requirements.txt"],
+            "file_details": [
+                {"filename": "app.py", "size_bytes": 1234, "modified_at": "2024-01-01T00:00:00+00:00"},
+                {"filename": "requirements.txt", "size_bytes": 42, "modified_at": "2024-01-01T00:00:00+00:00"},
+            ],
+            "compiled_at": "2024-01-01T00:00:00+00:00",
+            "compiled_version_id": None,
+            "source_notebook_filename": "nb.ipynb",
+            "source_notebook_exists": True,
+            "generated_files_modified_since_compile": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["generated", "list", "--dashboard-url", dashboard_url], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "app.py: 1234 bytes" in proc.stdout
+    assert "requirements.txt: 42 bytes" in proc.stdout
+    assert "Compiled from: nb.ipynb (still exists)" in proc.stdout
+    assert handler.requests == ["/api/generated"]
+
+
+def test_generated_list_command_reports_nothing_compiled(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "generated_files": [],
+            "file_details": [],
+            "compiled_at": None,
+            "compiled_version_id": None,
+            "source_notebook_filename": None,
+            "source_notebook_exists": False,
+            "generated_files_modified_since_compile": None,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["generated", "list", "--dashboard-url", dashboard_url], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"Nothing compiled yet on {dashboard_url}." in proc.stdout
+
+
+def test_generated_list_command_checksums_flag_sends_the_query_param_and_prints_hashes(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "generated_files": ["app.py"],
+            "file_details": [
+                {"filename": "app.py", "size_bytes": 1234, "modified_at": "2024-01-01T00:00:00+00:00", "sha256": "abc123"},
+            ],
+            "bundle_sha256": "def456",
+            "compiled_at": "2024-01-01T00:00:00+00:00",
+            "compiled_version_id": None,
+            "source_notebook_filename": None,
+            "source_notebook_exists": False,
+            "generated_files_modified_since_compile": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "generated", "list", "--dashboard-url", dashboard_url,
+            "--checksums",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "sha256:abc123" in proc.stdout
+    assert "bundle sha256: def456" in proc.stdout
+    assert handler.requests == ["/api/generated?checksums=true"]
+
+
+def test_generated_list_command_json_flag_emits_a_machine_readable_result(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "generated_files": ["app.py"],
+        "file_details": [
+            {"filename": "app.py", "size_bytes": 1234, "modified_at": "2024-01-01T00:00:00+00:00"},
+        ],
+        "compiled_at": "2024-01-01T00:00:00+00:00",
+        "compiled_version_id": None,
+        "source_notebook_filename": None,
+        "source_notebook_exists": False,
+        "generated_files_modified_since_compile": False,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["generated", "list", "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_generated_show_command_prints_raw_file_content(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "app.py",
+            "content": "from fastapi import FastAPI\napp = FastAPI()\n",
+            "sha256": "abc123",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["generated", "show", "app.py", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout == "from fastapi import FastAPI\napp = FastAPI()\n"
+    assert handler.requests == ["/api/generated/app.py"]
+
+
+def test_generated_show_command_json_flag_emits_a_machine_readable_result(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "filename": "app.py", "content": "x = 1\n",
+        "sha256": "abc123",
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["generated", "show", "app.py", "--dashboard-url", dashboard_url, "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_generated_show_command_reports_a_clean_error_for_a_missing_file(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "Generated file not found. Run /api/compile first."})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["generated", "show", "missing.py", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Generated file not found")
+
+
+def test_generated_delete_command_reports_success_with_yes_flag(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "generated_dir": "/tmp/generated",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["generated", "delete", "--dashboard-url", dashboard_url, "--yes"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"Deleted compiled app on {dashboard_url}." in proc.stdout
+    assert handler.requests == ["/api/generated"]
+
+
+def test_generated_delete_command_aborts_without_yes_when_declined(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = []
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli",
+            "generated", "delete", "--dashboard-url", dashboard_url,
+        ],
+        cwd=str(workdir),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        capture_output=True,
+        text=True,
+        input="n\n",
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Aborted." in proc.stdout
+    assert handler.requests == []
+
+
+def test_generated_delete_command_json_flag_emits_a_machine_readable_result(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "generated_dir": "/tmp/generated"}
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["generated", "delete", "--dashboard-url", dashboard_url, "--yes", "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_generated_delete_command_reports_a_clean_error_when_nothing_compiled(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(404, {"detail": "No compiled app found. Run /api/compile first."})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["generated", "delete", "--dashboard-url", dashboard_url, "--yes"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No compiled app found")
+
+
 def test_export_notebooks_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

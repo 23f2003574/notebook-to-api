@@ -355,7 +355,7 @@ _CORE_COMMANDS = frozenset({
     "export-curl", "export-postman", "serve", "watch", "deploy", "diff", "upload", "import-notebooks", "import-url",
     "list", "info", "info-batch",
     "search-functions", "search-content", "find-duplicates", "resolve-duplicates", "storage",
-    "download", "export-notebooks", "delete", "delete-batch", "rename", "copy",
+    "download", "export-notebooks", "generated", "delete", "delete-batch", "rename", "copy",
     "copy-batch", "copy-many", "rename-many", "tags", "prune-versions", "prune-temp-files", "description", "source-url", "deploy-history",
     "clear-deploy-history", "compile-history", "clear-compile-history",
     "remote-compile", "remote-inspect", "remote-build",
@@ -3200,6 +3200,117 @@ def _dispatch_core_command(args):
             )
             if sha256:
                 print(f"  sha256: {sha256}")
+    elif args.command == "generated":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        if args.generated_command == "list":
+
+            params = {"checksums": True} if args.checksums else {}
+
+            try:
+                response = httpx.get(
+                    f"{dashboard_url}/api/generated",
+                    params=params,
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+
+                file_details = data.get("file_details", [])
+
+                if not file_details:
+                    print(f"Nothing compiled yet on {dashboard_url}.")
+                else:
+                    for entry in file_details:
+                        line = f"{entry['filename']}: {entry['size_bytes']} bytes"
+                        if "sha256" in entry:
+                            line += f"  sha256:{entry['sha256']}"
+                        print(line)
+
+                    if data.get("bundle_sha256"):
+                        print(f"\nbundle sha256: {data['bundle_sha256']}")
+
+                source_notebook_filename = data.get("source_notebook_filename")
+                if source_notebook_filename:
+                    exists = data.get("source_notebook_exists")
+                    print(
+                        f"\nCompiled from: {source_notebook_filename} "
+                        f"({'still exists' if exists else 'no longer exists'})"
+                    )
+
+        elif args.generated_command == "show":
+
+            try:
+                response = httpx.get(
+                    f"{dashboard_url}/api/generated/{args.filename}",
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                print(data.get("content", ""), end="")
+
+        elif args.generated_command == "delete":
+
+            if not args.yes:
+                answer = input(
+                    f"Delete the compiled app on {dashboard_url}? [y/N] "
+                )
+                if answer.strip().lower() not in ("y", "yes"):
+                    print("Aborted.")
+                    return
+
+            try:
+                response = httpx.delete(
+                    f"{dashboard_url}/api/generated",
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
+
+            if response.status_code >= 400:
+
+                raise RuntimeError(
+                    f"Dashboard rejected the request ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+
+            data = response.json()
+
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                print(f"Deleted compiled app on {dashboard_url}.")
+
     elif args.command == "export-notebooks":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -9889,6 +10000,105 @@ def main():
             "({\"status\", \"filename\", \"path\", \"size_bytes\", "
             "\"sha256\"}) instead of a human-readable summary, for "
             "scripting/automation."
+        )
+    )
+
+    # generated command (list/preview/reset the *compiled output* sitting
+    # in GENERATED_DIR on a running dashboard instance -- distinct from
+    # `download`/`export-notebooks` above, both of which only ever touch
+    # *uploaded source* notebooks. GET /api/generated, GET
+    # /api/generated/{filename:path}, and DELETE /api/generated
+    # (routes/upload.py) have had no CLI coverage at all until now: an
+    # operator wanting to see what's currently compiled after a page
+    # refresh, preview one compiled file's raw content without fetching
+    # and unzipping the whole GET /api/download bundle just to read it,
+    # or reclaim disk space from an orphaned compile (the notebook that
+    # produced it already deleted -- see DELETE /api/notebooks/{filename}'s
+    # own "was_currently_compiled" flag) had no way to do any of this
+    # short of shelling directly onto the dashboard's own filesystem.)
+    generated_parser = subparsers.add_parser(
+        "generated",
+        help="List, preview, or reset the compiled output on a running dashboard instance."
+    )
+    generated_subparsers = generated_parser.add_subparsers(
+        dest="generated_command", required=True
+    )
+
+    generated_list_parser = generated_subparsers.add_parser(
+        "list", help="List the files currently compiled, via GET /api/generated."
+    )
+    _add_dashboard_url_and_timeout_arguments(generated_list_parser)
+    generated_list_parser.add_argument(
+        "--checksums",
+        action="store_true",
+        help=(
+            "Also compute and print each file's own sha256 (and an "
+            "overall bundle_sha256), via GET /api/generated's own "
+            "?checksums=true -- off by default, since hashing every "
+            "compiled file is real work most callers of a plain listing "
+            "don't need."
+        )
+    )
+    generated_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response instead of a "
+            "human-readable listing, for scripting/automation."
+        )
+    )
+
+    generated_show_parser = generated_subparsers.add_parser(
+        "show",
+        help=(
+            "Print one compiled file's raw content, via GET "
+            "/api/generated/{filename}."
+        )
+    )
+    generated_show_parser.add_argument(
+        "filename",
+        help=(
+            "Compiled file to preview (e.g. \"app.py\", "
+            "\"requirements.txt\", \"runtime/notebook_module.py\"), as "
+            "reported by `generated list`."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(generated_show_parser)
+    generated_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"filename\", \"content\", \"sha256\"}) "
+            "instead of printing the raw file content, for "
+            "scripting/automation."
+        )
+    )
+
+    generated_delete_parser = generated_subparsers.add_parser(
+        "delete",
+        help=(
+            "Remove the compiled app and everything in GENERATED_DIR, "
+            "via DELETE /api/generated -- resets the dashboard back to "
+            "\"nothing compiled yet\"."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(generated_delete_parser)
+    generated_delete_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the interactive confirmation prompt."
+    )
+    generated_delete_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response "
+            "({\"status\", \"generated_dir\"}) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 
