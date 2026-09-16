@@ -2571,6 +2571,18 @@ def _dispatch_core_command(args):
                         f"(overwritten: {result.get('overwritten')}"
                         f"{versions_suffix})"
                     )
+
+                    restored_tags = result.get("restored_tags")
+                    if restored_tags:
+                        print(f"  tags restored: {', '.join(restored_tags)}")
+
+                    restored_description = result.get("restored_description")
+                    if restored_description:
+                        print(f"  description restored: {restored_description}")
+
+                    restored_source_url = result.get("restored_source_url")
+                    if restored_source_url:
+                        print(f"  source url restored: {restored_source_url}")
                 else:
                     print(f"Failed '{result.get('filename')}': {result.get('detail')}")
 

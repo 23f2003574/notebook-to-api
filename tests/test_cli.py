@@ -4496,6 +4496,51 @@ def test_import_notebooks_command_reports_restored_version_count(tmp_path, fake_
     assert "Imported 'b.ipynb' (overwritten: False)" in proc.stdout
 
 
+def test_import_notebooks_command_reports_restored_tags_description_and_source_url(
+    tmp_path, fake_dashboard
+):
+    """POST /api/notebooks/import already returns "restored_tags"/
+    "restored_description"/"restored_source_url" per entry -- confirmed
+    missing before this fix: the CLI's own human-readable output never
+    printed any of them, silently defeating the point of a
+    human-readable mode for a caller restoring a tagged/described
+    archive without --json.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {
+                    "status": "success", "filename": "a.ipynb", "path": "/srv/a.ipynb",
+                    "overwritten": False,
+                    "restored_tags": ["prod", "v2"],
+                    "restored_description": "trains a model",
+                    "restored_source_url": "https://example.com/a.ipynb",
+                },
+            ],
+            "succeeded_count": 1,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    zip_path = workdir / "bundle.zip"
+    _write_zip(zip_path, {"a.ipynb": b"{}"})
+
+    proc = _run_cli(
+        ["import-notebooks", str(zip_path), "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "tags restored: prod, v2" in proc.stdout
+    assert "description restored: trains a model" in proc.stdout
+    assert "source url restored: https://example.com/a.ipynb" in proc.stdout
+
+
 def test_import_notebooks_command_passes_the_overwrite_flag_through(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
