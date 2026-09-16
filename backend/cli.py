@@ -352,7 +352,7 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 _CORE_COMMANDS = frozenset({
     "doctor",
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
-    "export-curl", "export-postman", "serve", "watch", "deploy", "diff", "upload", "import-notebooks", "import-url",
+    "export-curl", "export-postman", "serve", "watch", "deploy", "diff", "upload", "import-notebooks", "import-url", "import-url-many",
     "list", "info", "info-batch",
     "search-functions", "search-content", "find-duplicates", "resolve-duplicates", "storage",
     "download", "export-notebooks", "generated", "delete", "delete-batch", "rename", "copy",
@@ -2556,6 +2556,67 @@ def _dispatch_core_command(args):
             print(f"  path: {data.get('path')}")
             print(f"  overwritten: {data.get('overwritten')}")
             print(f"  sha256: {data.get('sha256')}")
+    elif args.command == "import-url-many":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        entries = [{"url": url, "overwrite": args.overwrite} for url in args.url]
+
+        if args.tags:
+            for entry in entries:
+                entry["tags"] = args.tags
+
+        if args.description is not None:
+            for entry in entries:
+                entry["description"] = args.description
+
+        if args.headers:
+            headers = _parse_import_url_headers(args.headers)
+            for entry in entries:
+                entry["headers"] = headers
+
+        body = {"entries": entries}
+        if args.dry_run:
+            body["dry_run"] = True
+
+        try:
+            response = httpx.post(
+                f"{dashboard_url}/api/notebooks/import-url-batch",
+                json=body,
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            verb = "Would import" if data.get("dry_run") else "Imported"
+
+            for result in data.get("results", []):
+
+                if result["status"] == "success":
+                    print(f"{verb} '{result['filename']}' from {result['url']}")
+                else:
+                    print(f"Failed to import {result['url']}: {result['detail']}")
+
+            print(
+                f"\n{data.get('succeeded_count', 0)} succeeded, "
+                f"{data.get('failed_count', 0)} failed"
+            )
     elif args.command == "list":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -9283,6 +9344,105 @@ def main():
             "\"filename\", \"path\", \"overwritten\", \"sha256\", "
             "\"dry_run\", \"source_url\"}) instead of a human-readable "
             "summary, for scripting/automation."
+        )
+    )
+
+    # import-url-many command (fetch and upload several different
+    # notebooks at once, each from its own URL, via POST
+    # /api/notebooks/import-url-batch -- the "several different sources,
+    # each its own independent destination" shape `copy-many`/
+    # `rename-many` already give POST /api/notebooks/copy-batch/
+    # rename-batch, applied here to `import-url` instead)
+    import_url_many_parser = subparsers.add_parser(
+        "import-url-many",
+        help=(
+            "Fetch and upload several different notebooks at once, each "
+            "from its own URL, via POST /api/notebooks/import-url-batch."
+        )
+    )
+    import_url_many_parser.add_argument(
+        "url", nargs="+",
+        help=(
+            "One or more http(s) URLs to fetch and upload -- each saved "
+            "under a filename derived from its own URL's own last path "
+            "segment, the same default `import-url`'s own omitted "
+            "--filename already falls back to. A per-entry --filename "
+            "override isn't offered here; run `import-url` once for an "
+            "entry that needs one."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(import_url_many_parser)
+    import_url_many_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Replace an existing notebook of the same name for any entry "
+            "in this batch, mirroring POST "
+            "/api/notebooks/import-url-batch's own per-entry "
+            "\"overwrite\": true -- applies uniformly to every URL given "
+            "here, the same uniform-value convention `copy-many`'s own "
+            "--overwrite already applies across its own several entries."
+        )
+    )
+    import_url_many_parser.add_argument(
+        "--tags",
+        help=(
+            "Comma-separated tags applied uniformly to every notebook "
+            "imported in this batch, via POST "
+            "/api/notebooks/import-url-batch's own per-entry \"tags\" "
+            "field -- the endpoint itself supports a different \"tags\" "
+            "per entry, but this applies one uniform value to every URL "
+            "given here instead, the same uniform-value convention "
+            "`copy-many`'s own --tags already applies across its own "
+            "several entries. Tag each entry differently by running "
+            "`import-url` once per URL instead."
+        )
+    )
+    import_url_many_parser.add_argument(
+        "--description",
+        default=None,
+        help=(
+            "Description applied uniformly to every notebook imported in "
+            "this batch, via POST /api/notebooks/import-url-batch's own "
+            "per-entry \"description\" field. See --tags above for why "
+            "this is one uniform value rather than a per-entry one."
+        )
+    )
+    import_url_many_parser.add_argument(
+        "--header",
+        action="append",
+        dest="headers",
+        metavar="NAME:VALUE",
+        help=(
+            "An HTTP header sent with every URL's own fetch in this "
+            "batch, as NAME:VALUE -- mirroring `import-url`'s own "
+            "--header, applied uniformly to every entry here (e.g. a "
+            "shared Authorization token for a batch of URLs from the "
+            "same private host). Repeat to send more than one; only ever "
+            "sent to each URL's own original host, exactly like "
+            "`import-url`'s own identical --header."
+        )
+    )
+    import_url_many_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report what this batch would do -- without saving anything "
+            "-- via POST /api/notebooks/import-url-batch's own "
+            "\"dry_run\" body field."
+        )
+    )
+    import_url_many_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"dry_run\", \"results\": [{\"url\", \"filename\", "
+            "\"source_url\", \"overwritten\", \"sha256\", \"status\"}, "
+            "...], \"succeeded_count\", \"failed_count\"}) instead of a "
+            "human-readable summary, for scripting/automation."
         )
     )
 

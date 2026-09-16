@@ -2850,6 +2850,239 @@ async def import_notebook_from_url(data: dict):
     return result
 
 
+@router.post("/notebooks/import-url-batch")
+async def import_notebook_urls_batch(data: dict):
+    """Fetch and upload several *different* notebooks, each from its own
+    URL, in one call -- the "several different sources, each its own
+    independent destination" shape POST /api/notebooks/copy-batch's own
+    docstring already names and closes for POST
+    /api/notebooks/{filename}/copy, applied here to POST
+    /api/notebooks/import-url instead.
+
+    Before this, seeding a dashboard from several external notebooks at
+    once (e.g. a team's list of starter-template URLs, or re-importing a
+    batch of notebooks pulled from an internal artifact server after a
+    migration) meant one POST /api/notebooks/import-url call per URL,
+    with no way to submit the whole list in a single request -- exactly
+    the gap POST /api/upload/batch already closed for a caller-supplied
+    multipart upload, and POST /api/notebooks/import already closed for a
+    .zip archive's own bundled entries, just never for a set of remote
+    URLs this server has to fetch itself.
+
+    Takes "entries", a list of objects each shaped exactly like POST
+    /api/notebooks/import-url's own request body -- "url" (required,
+    non-empty string), and optional per-entry "filename"/"overwrite"/
+    "tags"/"description"/"expected_sha256"/"headers", every one validated
+    and applied the identical way that endpoint's own single-entry
+    version already does (see its own docstring for what each field
+    means and how "headers" is scoped to its own entry's URL origin
+    across a redirect). "dry_run" (optional, default false, at the
+    top level, applying to every entry alike -- the same "one flag
+    covers the whole batch" convention POST /api/notebooks/copy-batch's
+    own "dry_run" already follows) still fetches every entry's URL and
+    runs every validity/collision check against it, without ever writing
+    a notebook to UPLOAD_DIR or applying that entry's own "tags"/
+    "description"/source-url sidecar.
+
+    Bounded by the same MAX_BATCH_UPLOAD_FILES _validate_batch_entry_count
+    already enforces for every other list-taking batch endpoint in this
+    file -- a caller-supplied "entries" list can name far more URLs than
+    a single multipart request practically would, and without a cap this
+    would fetch and validate an unbounded number of remote notebooks from
+    one small JSON body.
+
+    Each entry is fetched and saved independently, via the identical
+    _download_url_for_import -> _save_uploaded_notebook sequence a
+    standalone POST /api/notebooks/import-url call already goes through,
+    so a notebook imported this way is indistinguishable on disk from one
+    imported individually. One bad entry -- an unreachable or malformed
+    URL, a same-name collision without that entry's own "overwrite":
+    true, a mismatched "expected_sha256", or a malformed field -- is
+    reported as its own {"url", "filename": null, "status": "error",
+    "detail"} result rather than aborting the rest of the batch, the
+    identical "one bad entry doesn't abort the batch" contract every
+    other batch endpoint in this file already establishes. The response
+    is always 200 -- the batch request itself was handled, even if every
+    entry in it failed -- with "succeeded_count"/"failed_count"
+    summarizing "results" the same way every other batch endpoint here
+    already does.
+
+    A successfully-imported entry's own result reports "filename" (the
+    name it was actually saved as), "source_url" (where the fetch
+    actually landed, after any redirect), "overwritten", and "sha256" --
+    the same fields a standalone POST /api/notebooks/import-url call's
+    own response already carries, just one result per entry instead of a
+    single top-level response.
+    """
+
+    entries = data.get("entries")
+
+    if not isinstance(entries, list) or not entries:
+
+        raise HTTPException(
+            status_code=400,
+            detail="entries must be a non-empty list of objects"
+        )
+
+    _validate_batch_entry_count(entries)
+
+    for entry in entries:
+
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("url"), str)
+            or not entry.get("url")
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="each entry must be an object with a non-empty string 'url'"
+            )
+
+    dry_run = bool(data.get("dry_run", False))
+
+    results = []
+    succeeded_count = 0
+    failed_count = 0
+
+    for entry in entries:
+
+        url = entry["url"]
+
+        try:
+
+            explicit_filename = entry.get("filename")
+
+            if explicit_filename is not None and not isinstance(explicit_filename, str):
+                raise HTTPException(
+                    status_code=400,
+                    detail="filename must be a string"
+                )
+
+            overwrite = bool(entry.get("overwrite", False))
+
+            expected_sha256 = entry.get("expected_sha256")
+
+            if expected_sha256 is not None and not isinstance(expected_sha256, str):
+                raise HTTPException(
+                    status_code=400,
+                    detail="expected_sha256 must be a string"
+                )
+
+            request_headers = entry.get("headers")
+
+            if request_headers is not None:
+
+                if not isinstance(request_headers, dict) or not all(
+                    isinstance(name, str) and isinstance(value, str)
+                    for name, value in request_headers.items()
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "headers must be an object of string header "
+                            "names to string values"
+                        )
+                    )
+
+                if len(request_headers) > _MAX_IMPORT_URL_HEADERS:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "headers must not contain more than "
+                            f"{_MAX_IMPORT_URL_HEADERS} entries"
+                        )
+                    )
+
+                for name, value in request_headers.items():
+
+                    if (
+                        len(name) > _MAX_IMPORT_URL_HEADER_LENGTH
+                        or len(value) > _MAX_IMPORT_URL_HEADER_LENGTH
+                    ):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                "each header name/value must not exceed "
+                                f"{_MAX_IMPORT_URL_HEADER_LENGTH} characters"
+                            )
+                        )
+
+            tags = entry.get("tags")
+
+            if tags is not None and not isinstance(tags, str):
+                raise HTTPException(
+                    status_code=400,
+                    detail="tags must be a string"
+                )
+
+            normalized_tags = _parse_and_validate_tags_query_param(tags)
+
+            description = entry.get("description")
+
+            normalized_description = (
+                _validate_and_normalize_description(description)
+                if description is not None else None
+            )
+
+            filename = _derive_import_url_filename(url, explicit_filename)
+
+            if not filename.endswith(".ipynb"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="filename must end with .ipynb"
+                )
+
+            final_url, content_bytes = await _download_url_for_import(
+                url, headers=request_headers
+            )
+
+            upload_file = UploadFile(
+                file=io.BytesIO(content_bytes), filename=filename
+            )
+
+            entry_result = await _save_uploaded_notebook(
+                upload_file, overwrite, dry_run=dry_run,
+                expected_sha256=expected_sha256,
+            )
+
+            if not dry_run:
+                _write_notebook_source_url(entry_result["filename"], final_url)
+
+            if normalized_tags is not None and not dry_run:
+                _write_notebook_tags(entry_result["filename"], normalized_tags)
+
+            if normalized_description is not None and not dry_run:
+                _write_notebook_description(entry_result["filename"], normalized_description)
+
+            results.append({
+                "url": url,
+                "filename": entry_result["filename"],
+                "source_url": final_url,
+                "overwritten": entry_result["overwritten"],
+                "sha256": entry_result["sha256"],
+                "status": "success",
+            })
+            succeeded_count += 1
+
+        except HTTPException as exc:
+
+            results.append({
+                "url": url,
+                "filename": None,
+                "status": "error",
+                "detail": exc.detail,
+            })
+            failed_count += 1
+
+    return {
+        "status": "success",
+        "dry_run": dry_run,
+        "results": results,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
+    }
+
+
 def _currently_compiled_notebook_metadata():
     """(resolved path, content sha256, compiled_at, compiled_version_id)
     of the notebook that produced the app currently in GENERATED_DIR, if

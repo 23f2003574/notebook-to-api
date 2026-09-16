@@ -4223,6 +4223,195 @@ def test_import_url_command_reports_a_clean_error_when_the_dashboard_is_unreacha
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_import_url_many_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "import-url-many" in proc.stdout
+
+
+def test_import_url_many_command_reports_success(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "dry_run": False,
+            "results": [
+                {
+                    "url": "https://example.com/a.ipynb", "filename": "a.ipynb",
+                    "source_url": "https://example.com/a.ipynb",
+                    "overwritten": False, "sha256": "a" * 64, "status": "success",
+                },
+                {
+                    "url": "https://example.com/b.ipynb", "filename": "b.ipynb",
+                    "source_url": "https://example.com/b.ipynb",
+                    "overwritten": False, "sha256": "b" * 64, "status": "success",
+                },
+            ],
+            "succeeded_count": 2,
+            "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "import-url-many",
+            "https://example.com/a.ipynb", "https://example.com/b.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Imported 'a.ipynb' from https://example.com/a.ipynb" in proc.stdout
+    assert "Imported 'b.ipynb' from https://example.com/b.ipynb" in proc.stdout
+    assert "2 succeeded, 0 failed" in proc.stdout
+    assert handler.requests == ["/api/notebooks/import-url-batch"]
+
+    body = json.loads(handler.bodies[0])
+    assert body == {
+        "entries": [
+            {"url": "https://example.com/a.ipynb", "overwrite": False},
+            {"url": "https://example.com/b.ipynb", "overwrite": False},
+        ]
+    }
+
+
+def test_import_url_many_command_passes_uniform_fields_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": True,
+            "results": [
+                {
+                    "url": "https://example.com/a.ipynb", "filename": "a.ipynb",
+                    "source_url": "https://example.com/a.ipynb",
+                    "overwritten": False, "sha256": "a" * 64, "status": "success",
+                },
+            ],
+            "succeeded_count": 1, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "import-url-many", "https://example.com/a.ipynb",
+            "--dashboard-url", dashboard_url,
+            "--overwrite",
+            "--tags", "a,b",
+            "--description", "seeded",
+            "--header", "Authorization: Bearer tok",
+            "--dry-run",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would import 'a.ipynb'" in proc.stdout
+
+    body = json.loads(handler.bodies[0])
+    assert body == {
+        "entries": [
+            {
+                "url": "https://example.com/a.ipynb",
+                "overwrite": True,
+                "tags": "a,b",
+                "description": "seeded",
+                "headers": {"Authorization": "Bearer tok"},
+            },
+        ],
+        "dry_run": True,
+    }
+
+
+def test_import_url_many_command_reports_a_failed_entry(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": False,
+            "results": [
+                {
+                    "url": "https://example.com/collide.ipynb", "filename": None,
+                    "status": "error", "detail": "A notebook with this filename already exists",
+                },
+            ],
+            "succeeded_count": 0, "failed_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "import-url-many", "https://example.com/collide.ipynb",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (
+        "Failed to import https://example.com/collide.ipynb: "
+        "A notebook with this filename already exists" in proc.stdout
+    )
+    assert "0 succeeded, 1 failed" in proc.stdout
+
+
+def test_import_url_many_command_json_flag_emits_the_dashboards_own_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "dry_run": False,
+        "results": [], "succeeded_count": 0, "failed_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "import-url-many", "https://example.com/a.ipynb",
+            "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
+def test_import_url_many_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "import-url-many", "https://example.com/a.ipynb",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def _write_zip(path, entries):
     """Write a local .zip archive at `path` from {entry_name: content_bytes}."""
 

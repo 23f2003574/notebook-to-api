@@ -3430,6 +3430,167 @@ def test_import_url_requires_overwrite_to_replace_an_existing_notebook(
     assert resp.json()["overwritten"] is True
 
 
+def test_import_url_batch_fetches_and_saves_several_notebooks(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    resp = client.post(
+        "/api/notebooks/import-url-batch",
+        json={
+            "entries": [
+                {"url": f"{base_url}/batch_a.ipynb"},
+                {"url": f"{base_url}/batch_b.ipynb"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["dry_run"] is False
+    assert body["succeeded_count"] == 2
+    assert body["failed_count"] == 0
+    assert [r["filename"] for r in body["results"]] == ["batch_a.ipynb", "batch_b.ipynb"]
+    assert all(r["status"] == "success" for r in body["results"])
+    assert all(r["source_url"] == r["url"] for r in body["results"])
+
+    assert (Path(UPLOAD_DIR) / "batch_a.ipynb").read_bytes() == handler.content
+    assert (Path(UPLOAD_DIR) / "batch_b.ipynb").read_bytes() == handler.content
+
+
+def test_import_url_batch_isolates_a_bad_entry_without_aborting_the_rest(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+    """The identical "one bad entry doesn't abort the batch" contract
+    every other batch endpoint in this file already establishes -- here,
+    a same-name collision without that entry's own "overwrite": true.
+    """
+
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": ("batch_collide.ipynb", io.BytesIO(handler.content), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/notebooks/import-url-batch",
+        json={
+            "entries": [
+                {"url": f"{base_url}/batch_collide.ipynb"},
+                {"url": f"{base_url}/batch_ok.ipynb"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+
+    collide_result, ok_result = body["results"]
+    assert collide_result["status"] == "error"
+    assert collide_result["filename"] is None
+    assert ok_result["status"] == "success"
+    assert ok_result["filename"] == "batch_ok.ipynb"
+
+    assert (Path(UPLOAD_DIR) / "batch_ok.ipynb").read_bytes() == handler.content
+
+
+def test_import_url_batch_dry_run_does_not_write_anything(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    resp = client.post(
+        "/api/notebooks/import-url-batch",
+        json={
+            "entries": [{"url": f"{base_url}/batch_dry_run.ipynb"}],
+            "dry_run": True,
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["results"][0]["status"] == "success"
+    assert body["results"][0]["filename"] == "batch_dry_run.ipynb"
+
+    assert not (Path(UPLOAD_DIR) / "batch_dry_run.ipynb").exists()
+    assert not _source_url_sidecar_path("batch_dry_run.ipynb").exists()
+
+
+def test_import_url_batch_applies_tags_and_overwrite_per_entry(
+    notebook_url_server, _bypass_import_url_ssrf_guard
+):
+    base_url, handler = notebook_url_server
+    handler.content = _notebook_bytes("def f(): return 1\n")
+
+    resp = client.post(
+        "/api/notebooks/import-url-batch",
+        json={
+            "entries": [
+                {
+                    "url": f"{base_url}/batch_tagged.ipynb",
+                    "tags": "prod, seeded",
+                    "description": "seeded from a batch import",
+                },
+            ]
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["results"][0]["status"] == "success"
+
+    info = client.get("/api/notebooks/batch_tagged.ipynb/info").json()
+    assert sorted(info["tags"]) == ["prod", "seeded"]
+    assert info["description"] == "seeded from a batch import"
+    assert info["source_url"] == f"{base_url}/batch_tagged.ipynb"
+
+
+def test_import_url_batch_rejects_an_empty_entries_list():
+
+    resp = client.post(
+        "/api/notebooks/import-url-batch",
+        json={"entries": []},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_import_url_batch_rejects_an_entry_without_a_url():
+
+    resp = client.post(
+        "/api/notebooks/import-url-batch",
+        json={"entries": [{"filename": "no_url.ipynb"}]},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_import_url_batch_rejects_more_entries_than_the_configured_maximum(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(upload_module, "MAX_BATCH_UPLOAD_FILES", 1)
+
+    resp = client.post(
+        "/api/notebooks/import-url-batch",
+        json={
+            "entries": [
+                {"url": "https://example.com/a.ipynb"},
+                {"url": "https://example.com/b.ipynb"},
+            ]
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "at most 1" in resp.json()["detail"]
+
+
 def test_upload_lock_for_returns_the_same_lock_for_the_same_filename():
     """_upload_lock_for must hand back the *same* Lock instance for the
     same filename across separate calls (separate requests, in practice)
