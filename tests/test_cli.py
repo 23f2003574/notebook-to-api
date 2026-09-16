@@ -5330,6 +5330,8 @@ def test_info_command_prints_a_notebooks_metadata(fake_dashboard):
         "modified_at": "2026-01-01T00:00:00+00:00",
         "currently_compiled": False,
         "tags": ["production", "v2"],
+        "description": "adds two numbers",
+        "sha256": "a" * 64,
     }
     handler.responses = [_json_response(200, body)]
 
@@ -5340,8 +5342,33 @@ def test_info_command_prints_a_notebooks_metadata(fake_dashboard):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "add.ipynb  (123 bytes)" in proc.stdout
     assert "tags: production, v2" in proc.stdout
+    assert "description: adds two numbers" in proc.stdout
+    assert f"sha256: {'a' * 64}" in proc.stdout
     assert "currently compiled: False" in proc.stdout
     assert handler.requests == ["/api/notebooks/add.ipynb/info"]
+
+
+def test_info_command_omits_description_line_when_absent(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "filename": "add.ipynb",
+        "size_bytes": 123,
+        "modified_at": "2026-01-01T00:00:00+00:00",
+        "currently_compiled": False,
+        "tags": [],
+        "description": None,
+        "sha256": "a" * 64,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["info", "add.ipynb", "--dashboard-url", dashboard_url], cwd=Path.cwd()
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "description" not in proc.stdout
 
 
 def test_info_command_prints_source_url_when_present(fake_dashboard):
@@ -5355,6 +5382,7 @@ def test_info_command_prints_source_url_when_present(fake_dashboard):
         "currently_compiled": False,
         "tags": [],
         "source_url": "https://example.com/notebooks/add.ipynb",
+        "sha256": "a" * 64,
     }
     handler.responses = [_json_response(200, body)]
 
@@ -5377,6 +5405,7 @@ def test_info_command_omits_source_url_line_when_absent(fake_dashboard):
         "currently_compiled": False,
         "tags": [],
         "source_url": None,
+        "sha256": "a" * 64,
     }
     handler.responses = [_json_response(200, body)]
 
@@ -5398,6 +5427,7 @@ def test_info_command_reports_no_tags(fake_dashboard):
         "modified_at": "2026-01-01T00:00:00+00:00",
         "currently_compiled": False,
         "tags": [],
+        "sha256": "a" * 64,
     }
     handler.responses = [_json_response(200, body)]
 
@@ -5421,6 +5451,8 @@ def test_info_command_reports_currently_compiled_fields(fake_dashboard):
         "tags": [],
         "notebook_changed_since_compile": False,
         "compiled_at": "2026-01-01T00:05:00+00:00",
+        "compiled_version_id": "v1_20260101000000.ipynb",
+        "sha256": "a" * 64,
     }
     handler.responses = [_json_response(200, body)]
 
@@ -5430,8 +5462,36 @@ def test_info_command_reports_currently_compiled_fields(fake_dashboard):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "currently compiled: True" in proc.stdout
+    assert "compiled from version: v1_20260101000000.ipynb" in proc.stdout
     assert "compiled at: 2026-01-01T00:05:00+00:00" in proc.stdout
     assert "changed since compile: False" in proc.stdout
+
+
+def test_info_command_omits_compiled_from_version_when_not_version_pinned(
+    fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "filename": "add.ipynb",
+        "size_bytes": 123,
+        "modified_at": "2026-01-01T00:00:00+00:00",
+        "currently_compiled": True,
+        "tags": [],
+        "notebook_changed_since_compile": False,
+        "compiled_at": "2026-01-01T00:05:00+00:00",
+        "compiled_version_id": None,
+        "sha256": "a" * 64,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["info", "add.ipynb", "--dashboard-url", dashboard_url], cwd=Path.cwd()
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "compiled from version" not in proc.stdout
 
 
 def test_info_command_json_flag_emits_the_dashboards_own_response(fake_dashboard):
@@ -5502,11 +5562,13 @@ def test_info_batch_command_prints_each_notebooks_metadata(fake_dashboard):
                 "status": "success", "filename": "a.ipynb", "size_bytes": 100,
                 "modified_at": "2026-01-01T00:00:00+00:00",
                 "currently_compiled": False, "tags": ["scratch"],
+                "sha256": "a" * 64,
             },
             {
                 "status": "success", "filename": "b.ipynb", "size_bytes": 200,
                 "modified_at": "2026-01-01T00:00:00+00:00",
                 "currently_compiled": False, "tags": [],
+                "sha256": "b" * 64,
             },
         ],
         "succeeded_count": 2,
@@ -5520,8 +5582,12 @@ def test_info_batch_command_prints_each_notebooks_metadata(fake_dashboard):
     )
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "a.ipynb  (100 bytes) tags: scratch" in proc.stdout
-    assert "b.ipynb  (200 bytes) tags: (none)" in proc.stdout
+    assert "a.ipynb  (100 bytes)" in proc.stdout
+    assert "tags: scratch" in proc.stdout
+    assert f"sha256: {'a' * 64}" in proc.stdout
+    assert "b.ipynb  (200 bytes)" in proc.stdout
+    assert "tags: (none)" in proc.stdout
+    assert f"sha256: {'b' * 64}" in proc.stdout
     assert "2 succeeded, 0 failed" in proc.stdout
     assert handler.requests == ["/api/notebooks/info-batch"]
     assert json.loads(handler.bodies[0]) == {"filenames": ["a.ipynb", "b.ipynb"]}
@@ -5537,6 +5603,7 @@ def test_info_batch_command_reports_a_partial_failure(fake_dashboard):
                 "status": "success", "filename": "a.ipynb", "size_bytes": 100,
                 "modified_at": "2026-01-01T00:00:00+00:00",
                 "currently_compiled": False, "tags": [],
+                "sha256": "a" * 64,
             },
             {
                 "status": "error", "filename": "missing.ipynb",
@@ -5557,6 +5624,86 @@ def test_info_batch_command_reports_a_partial_failure(fake_dashboard):
     assert "a.ipynb  (100 bytes)" in proc.stdout
     assert "Failed 'missing.ipynb': Notebook file not found" in proc.stdout
     assert "1 succeeded, 1 failed" in proc.stdout
+
+
+def test_info_batch_command_prints_the_same_fields_a_standalone_info_call_would(
+    fake_dashboard
+):
+    """`info-batch`'s own docstring already says each result is "the
+    exact entry GET /api/notebooks/{filename}/info already returns" --
+    this confirms the CLI's own human-readable rendering of that result
+    actually shows the same fields `info` itself does (description,
+    source_url, sha256, compiled_version_id), not just filename/size/tags.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "results": [
+            {
+                "status": "success", "filename": "a.ipynb", "size_bytes": 100,
+                "modified_at": "2026-01-01T00:00:00+00:00",
+                "currently_compiled": True, "tags": ["prod"],
+                "description": "trains a model",
+                "source_url": "https://example.com/a.ipynb",
+                "sha256": "a" * 64,
+                "compiled_version_id": "v1_20260101000000.ipynb",
+                "notebook_changed_since_compile": False,
+                "compiled_at": "2026-01-01T00:05:00+00:00",
+            },
+        ],
+        "succeeded_count": 1,
+        "failed_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["info-batch", "a.ipynb", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "description: trains a model" in proc.stdout
+    assert "source url: https://example.com/a.ipynb" in proc.stdout
+    assert f"sha256: {'a' * 64}" in proc.stdout
+    assert "compiled from version: v1_20260101000000.ipynb" in proc.stdout
+    assert "compiled at: 2026-01-01T00:05:00+00:00" in proc.stdout
+    assert "changed since compile: False" in proc.stdout
+
+
+def test_info_batch_command_separates_multiple_entries_with_a_blank_line(
+    fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "results": [
+            {
+                "status": "success", "filename": "a.ipynb", "size_bytes": 100,
+                "modified_at": "2026-01-01T00:00:00+00:00",
+                "currently_compiled": False, "tags": [], "sha256": "a" * 64,
+            },
+            {
+                "status": "success", "filename": "b.ipynb", "size_bytes": 200,
+                "modified_at": "2026-01-01T00:00:00+00:00",
+                "currently_compiled": False, "tags": [], "sha256": "b" * 64,
+            },
+        ],
+        "succeeded_count": 2,
+        "failed_count": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["info-batch", "a.ipynb", "b.ipynb", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    a_block_end = proc.stdout.index(f"sha256: {'a' * 64}")
+    b_block_start = proc.stdout.index("b.ipynb  (200 bytes)")
+    assert "\n\n" in proc.stdout[a_block_end:b_block_start]
 
 
 def test_info_batch_command_json_flag_emits_the_dashboards_own_response(fake_dashboard):

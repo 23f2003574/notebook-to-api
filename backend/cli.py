@@ -1012,6 +1012,51 @@ def _matched_notebooks_summary(data, args, shown_count):
     return f"{notebook_count} notebook(s) matched."
 
 
+def _print_notebook_info(data):
+    """Human-readable rendering of one notebook's own metadata -- the
+    exact fields GET /api/notebooks/{filename}/info and POST
+    /api/notebooks/info-batch's own per-entry "results" both already
+    return (see _notebook_metadata_entry, backend/routes/upload.py) --
+    shared by `info` and `info-batch` below so info-batch's own
+    per-entry output can never drift from what a standalone `info` call
+    already prints for the identical notebook, the same "shared
+    formatter" reasoning _matched_notebooks_summary above already
+    follows for `search-functions`/`search-content`.
+
+    "description" and "source url" are each only printed when present,
+    the same "omit rather than print an empty/null line" convention
+    `info`'s own source-url handling already established; "sha256" is
+    always printed, since GET /api/notebooks/{filename}/info's own
+    docstring already notes it's unconditional here (unlike GET
+    /api/notebooks' opt-in "checksums") -- both endpoints backing this
+    helper hash unconditionally for the identical reason.
+    """
+    print(f"{data['filename']}  ({data['size_bytes']} bytes)")
+    print(f"  modified: {data['modified_at']}")
+    print(f"  tags: {', '.join(data['tags']) if data['tags'] else '(none)'}")
+
+    if data.get("description"):
+        print(f"  description: {data['description']}")
+
+    if data.get("source_url"):
+        print(f"  source url: {data['source_url']}")
+
+    print(f"  sha256: {data['sha256']}")
+
+    print(f"  currently compiled: {data['currently_compiled']}")
+
+    if data["currently_compiled"]:
+
+        if data.get("compiled_version_id"):
+            print(f"  compiled from version: {data['compiled_version_id']}")
+
+        print(f"  compiled at: {data.get('compiled_at')}")
+        print(
+            "  changed since compile: "
+            f"{data.get('notebook_changed_since_compile')}"
+        )
+
+
 def _extract_dashboard_error_detail(response):
     """The most useful message extractable from a non-2xx `response` from
     any of this file's own dashboard-facing commands (upload, list,
@@ -2747,21 +2792,7 @@ def _dispatch_core_command(args):
         if args.json_output:
             print(json.dumps(data, indent=2))
         else:
-            print(f"{data['filename']}  ({data['size_bytes']} bytes)")
-            print(f"  modified: {data['modified_at']}")
-            print(f"  tags: {', '.join(data['tags']) if data['tags'] else '(none)'}")
-
-            if data.get("source_url"):
-                print(f"  source url: {data['source_url']}")
-
-            print(f"  currently compiled: {data['currently_compiled']}")
-
-            if data['currently_compiled']:
-                print(f"  compiled at: {data.get('compiled_at')}")
-                print(
-                    "  changed since compile: "
-                    f"{data.get('notebook_changed_since_compile')}"
-                )
+            _print_notebook_info(data)
     elif args.command == "info-batch":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -2791,16 +2822,17 @@ def _dispatch_core_command(args):
             print(json.dumps(data, indent=2))
         else:
 
-            for result in data.get("results", []):
+            results = data.get("results", [])
+
+            for i, result in enumerate(results):
 
                 if result["status"] == "success":
-                    tags = result.get("tags") or []
-                    print(
-                        f"{result['filename']}  ({result['size_bytes']} bytes) "
-                        f"tags: {', '.join(tags) if tags else '(none)'}"
-                    )
+                    _print_notebook_info(result)
                 else:
                     print(f"Failed '{result['filename']}': {result['detail']}")
+
+                if i < len(results) - 1:
+                    print()
 
             print(
                 f"\n{data.get('succeeded_count', 0)} succeeded, "
