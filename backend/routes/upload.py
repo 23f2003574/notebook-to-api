@@ -15830,7 +15830,7 @@ def list_generated_files_endpoint(checksums: bool = False):
 
 
 @router.delete("/generated")
-def delete_generated_app():
+def delete_generated_app(dry_run: bool = False):
     """Remove GENERATED_DIR and everything compiled into it, resetting the
     dashboard's compiled-app state back to "nothing compiled yet".
 
@@ -15860,6 +15860,18 @@ def delete_generated_app():
     gone, a cached import of it in a long-running dashboard process no
     longer corresponds to anything on disk at all, not just a stale
     version of it.
+
+    "dry_run" (optional, default false) reports "file_count",
+    "total_size_bytes", and the same "source_notebook_filename" GET
+    /api/generated already reports, without actually removing
+    GENERATED_DIR or evicting anything from sys.modules -- the identical
+    preview DELETE /api/notebooks/{filename}, DELETE
+    /api/notebooks/{filename}/versions, and every other destructive
+    delete/prune endpoint in this file already offers before a caller
+    commits to the real thing, extended here to the one endpoint in that
+    set that had no way to see what "everything compiled into it" (whole
+    files, real disk space) actually amounted to before wiping it
+    irreversibly.
     """
 
     generated_path = Path(GENERATED_DIR)
@@ -15870,7 +15882,9 @@ def delete_generated_app():
     # racing this on another thread could be left writing into a
     # directory this request is simultaneously deleting out from under
     # it, or this could delete a directory a concurrent compile just
-    # finished writing to.
+    # finished writing to. Held for "dry_run" too, so its own preview
+    # numbers can't be invalidated by a compile racing in between the
+    # read and the response.
     with COMPILE_LOCK:
 
         if not (generated_path / "app.py").is_file():
@@ -15879,6 +15893,38 @@ def delete_generated_app():
                 status_code=404,
                 detail="No compiled app found. Run /api/compile first."
             )
+
+        generated_files = list_generated_files(GENERATED_DIR)
+
+        file_count = len(generated_files)
+        total_size_bytes = sum(
+            (generated_path / relative_name).stat().st_size
+            for relative_name in generated_files
+        )
+
+        compiled_path, _, _, _ = _currently_compiled_notebook_metadata()
+
+        source_notebook_filename = None
+
+        if compiled_path is not None:
+
+            try:
+                source_notebook_filename = str(
+                    compiled_path.relative_to(Path(UPLOAD_DIR).resolve())
+                )
+            except ValueError:
+                source_notebook_filename = None
+
+        if dry_run:
+
+            return {
+                "status": "success",
+                "dry_run": True,
+                "generated_dir": str(generated_path),
+                "file_count": file_count,
+                "total_size_bytes": total_size_bytes,
+                "source_notebook_filename": source_notebook_filename,
+            }
 
         try:
             package_name = package_name_for_output_dir(GENERATED_DIR)
@@ -15897,7 +15943,11 @@ def delete_generated_app():
 
     return {
         "status": "success",
+        "dry_run": False,
         "generated_dir": str(generated_path),
+        "file_count": file_count,
+        "total_size_bytes": total_size_bytes,
+        "source_notebook_filename": source_notebook_filename,
     }
 
 

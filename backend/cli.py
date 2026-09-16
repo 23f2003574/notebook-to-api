@@ -3281,7 +3281,7 @@ def _dispatch_core_command(args):
 
         elif args.generated_command == "delete":
 
-            if not args.yes:
+            if not args.dry_run and not args.yes:
                 answer = input(
                     f"Delete the compiled app on {dashboard_url}? [y/N] "
                 )
@@ -3289,9 +3289,12 @@ def _dispatch_core_command(args):
                     print("Aborted.")
                     return
 
+            params = {"dry_run": "true"} if args.dry_run else {}
+
             try:
                 response = httpx.delete(
                     f"{dashboard_url}/api/generated",
+                    params=params,
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -3308,6 +3311,12 @@ def _dispatch_core_command(args):
 
             if args.json_output:
                 print(json.dumps(data, indent=2))
+            elif data.get("dry_run"):
+                print(
+                    f"Would delete the compiled app on {dashboard_url} "
+                    f"({data.get('file_count', 0)} file(s), "
+                    f"{data.get('total_size_bytes', 0)} bytes)."
+                )
             else:
                 print(f"Deleted compiled app on {dashboard_url}.")
 
@@ -10105,13 +10114,27 @@ def main():
         help="Skip the interactive confirmation prompt."
     )
     generated_delete_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Report how many files and how many bytes would be removed, "
+            "via DELETE /api/generated's own \"dry_run\" query param, "
+            "without actually deleting GENERATED_DIR -- the same preview "
+            "`delete`/`delete-batch` already offer for uploaded notebooks. "
+            "Skips the confirmation prompt --yes would otherwise require, "
+            "since nothing irreversible happens."
+        )
+    )
+    generated_delete_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response "
-            "({\"status\", \"generated_dir\"}) instead of a "
-            "human-readable summary, for scripting/automation."
+            "({\"status\", \"generated_dir\", \"file_count\", "
+            "\"total_size_bytes\", \"source_notebook_filename\"}) instead "
+            "of a human-readable summary, for scripting/automation."
         )
     )
 

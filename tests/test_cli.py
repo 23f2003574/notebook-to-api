@@ -7295,6 +7295,66 @@ def test_generated_delete_command_reports_a_clean_error_when_nothing_compiled(
     _assert_clean_cli_error(proc, "No compiled app found")
 
 
+def test_generated_delete_command_dry_run_reports_a_preview_without_prompting(
+    tmp_path, fake_dashboard
+):
+    """--dry-run skips the interactive confirmation prompt entirely (no
+    "y/N" input needed, unlike the plain `delete`), the same way it does
+    for `delete`'s own --dry-run -- and passes the dashboard's own
+    "dry_run" query param through to DELETE /api/generated.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": True,
+            "generated_dir": "/tmp/generated",
+            "file_count": 7, "total_size_bytes": 4096,
+            "source_notebook_filename": "example.ipynb",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["generated", "delete", "--dashboard-url", dashboard_url, "--dry-run"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (
+        f"Would delete the compiled app on {dashboard_url} "
+        "(7 file(s), 4096 bytes)." in proc.stdout
+    )
+    assert handler.requests == ["/api/generated?dry_run=true"]
+
+
+def test_generated_delete_command_dry_run_json_flag_emits_a_machine_readable_result(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "dry_run": True,
+        "generated_dir": "/tmp/generated",
+        "file_count": 3, "total_size_bytes": 512,
+        "source_notebook_filename": "example.ipynb",
+    }
+    handler.responses = [_json_response(200, body)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["generated", "delete", "--dashboard-url", dashboard_url, "--dry-run", "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == body
+
+
 def test_export_notebooks_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())

@@ -27198,6 +27198,97 @@ def test_delete_generated_app_evicts_the_compiled_app_from_the_module_cache():
     os.remove(Path(UPLOAD_DIR) / filename)
 
 
+def test_delete_generated_app_dry_run_reports_what_would_be_removed_without_removing_it(
+    tmp_path, monkeypatch
+):
+    """"dry_run" previews the exact same "file_count"/"total_size_bytes"/
+    "source_notebook_filename" a real delete would act on, without
+    touching GENERATED_DIR at all -- the same preview every other
+    destructive delete/prune endpoint in this file already offers (e.g.
+    DELETE /api/notebooks/{filename}'s own "dry_run"), extended here to
+    the one endpoint that previously had none.
+    """
+
+    from backend.routes import upload as upload_module
+
+    custom_dir = tmp_path / "generated_delete_dry_run_test"
+    monkeypatch.setattr(upload_module, "GENERATED_DIR", str(custom_dir))
+
+    filename = "delete_generated_app_dry_run_test.ipynb"
+    _compile_a_notebook(filename)
+
+    list_resp = client.get("/api/generated")
+    assert list_resp.status_code == 200
+    expected_files = list_resp.json()["generated_files"]
+    expected_size = sum(
+        (custom_dir / relative_name).stat().st_size
+        for relative_name in expected_files
+    )
+
+    resp = client.delete("/api/generated", params={"dry_run": "true"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["dry_run"] is True
+    assert body["generated_dir"] == str(custom_dir)
+    assert body["file_count"] == len(expected_files)
+    assert body["total_size_bytes"] == expected_size
+    assert body["source_notebook_filename"] == filename
+
+    # Nothing was actually removed.
+    assert custom_dir.is_dir()
+    assert (custom_dir / "app.py").is_file()
+
+    second_list_resp = client.get("/api/generated")
+    assert second_list_resp.status_code == 200
+    assert second_list_resp.json()["generated_files"] == expected_files
+
+    os.remove(Path(UPLOAD_DIR) / filename)
+
+
+def test_delete_generated_app_dry_run_still_404s_when_nothing_compiled_yet(monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    monkeypatch.setattr(
+        upload_module, "GENERATED_DIR", "generated_delete_dry_run_test_missing_dir"
+    )
+
+    resp = client.delete("/api/generated", params={"dry_run": "true"})
+
+    assert resp.status_code == 404
+
+
+def test_delete_generated_app_dry_run_does_not_evict_the_module_cache():
+
+    import sys
+
+    from backend.routes import upload as upload_module
+
+    filename = "delete_generated_app_dry_run_evict_test.ipynb"
+    _compile_a_notebook(filename)
+
+    export_resp = client.post("/api/export-openapi", json={"format": "json"})
+    assert export_resp.status_code == 200
+
+    package_name = upload_module.package_name_for_output_dir(
+        upload_module.GENERATED_DIR
+    )
+    assert package_name in sys.modules
+
+    dry_run_resp = client.delete("/api/generated", params={"dry_run": "true"})
+    assert dry_run_resp.status_code == 200
+    assert dry_run_resp.json()["dry_run"] is True
+
+    assert package_name in sys.modules
+
+    delete_resp = client.delete("/api/generated")
+    assert delete_resp.status_code == 200
+
+    os.remove(Path(UPLOAD_DIR) / filename)
+
+
 def test_get_generated_file_returns_404_when_nothing_compiled_yet(monkeypatch):
 
     from backend.routes import upload as upload_module
