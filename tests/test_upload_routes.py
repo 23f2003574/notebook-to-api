@@ -20637,6 +20637,38 @@ def test_validate_all_sha256_narrows_to_the_matching_notebook():
     assert body["pass_count"] == 0
 
 
+def test_validate_all_checksums_pairs_each_result_with_its_sha256():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+    client.post(
+        "/api/upload",
+        files={"file": ("validate_all_checksums.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get("/api/validate-all", params={"checksums": "true"})
+
+    assert resp.status_code == 200
+    result = resp.json()["results"][0]
+    assert result["sha256"] == hashlib.sha256(content).hexdigest()
+
+
+def test_validate_all_omits_sha256_without_checksums():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+    client.post(
+        "/api/upload",
+        files={"file": ("validate_all_no_checksums.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get("/api/validate-all")
+
+    assert "sha256" not in resp.json()["results"][0]
+
+
 def test_validate_all_sha256_matching_no_notebook_yields_no_results():
 
     client.delete("/api/notebooks?confirm=true")

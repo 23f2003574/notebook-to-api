@@ -11992,7 +11992,7 @@ def validate_all_notebooks(
     strict: bool = False, tag: str = None, sha256: str = None,
     modified_after: str = None, modified_before: str = None,
     limit: int = None, offset: int = 0,
-    format: str = "json",
+    format: str = "json", checksums: bool = False,
 ):
     """Run the identical pass/warn/fail check POST /api/validate already
     performs for one notebook, across every notebook already uploaded to
@@ -12094,6 +12094,17 @@ def validate_all_notebooks(
     which would otherwise repeat "filename"/"status" across rows for no
     benefit here. An unrecognized
     "format" is rejected with 400 before a single notebook is even read.
+
+    "checksums" (optional, default false) additionally pairs each
+    "results" entry with its own "sha256" -- the identical opt-in GET
+    /api/notebooks, GET /api/functions, and GET
+    /api/notebooks/search-content already provide, reusing "sha256"'s
+    own filter hash when both are given rather than hashing twice. A CI
+    caller whose scan turns up several failing/warning notebooks had no
+    way to tell which were byte-identical (e.g. to feed the duplicates
+    into GET /api/notebooks/duplicates?sha256=) without a separate GET
+    /api/notebooks?checksums=true round trip per result. CSV export
+    gains a matching "sha256" column only when "checksums" is given.
     """
 
     if format not in ("json", "csv"):
@@ -12144,7 +12155,9 @@ def validate_all_notebooks(
         if tag and tag not in _read_notebook_tags(entry.name):
             continue
 
-        if sha256 and hash_notebook_file(entry) != sha256:
+        entry_sha256 = hash_notebook_file(entry) if (sha256 or checksums) else None
+
+        if sha256 and entry_sha256 != sha256:
             continue
 
         if modified_after_dt is not None or modified_before_dt is not None:
@@ -12165,7 +12178,7 @@ def validate_all_notebooks(
 
         except MALFORMED_NOTEBOOK_ERRORS as e:
 
-            results.append({
+            malformed_result = {
                 "filename": entry.name,
                 "status": "fail",
                 "reserved_name_conflicts": [],
@@ -12173,7 +12186,10 @@ def validate_all_notebooks(
                 "duplicate_functions": [],
                 "requirements_conflict": None,
                 "detail": f"Uploaded file is not a valid Jupyter notebook: {e}",
-            })
+            }
+            if checksums:
+                malformed_result["sha256"] = entry_sha256
+            results.append(malformed_result)
             fail_count += 1
             continue
 
@@ -12228,7 +12244,7 @@ def validate_all_notebooks(
             status = "pass"
             pass_count += 1
 
-        results.append({
+        result = {
             "filename": entry.name,
             "status": status,
             "reserved_name_conflicts": reserved_name_conflicts,
@@ -12236,7 +12252,10 @@ def validate_all_notebooks(
             "duplicate_functions": duplicate_functions,
             "requirements_conflict": requirements_conflict,
             "detail": None,
-        })
+        }
+        if checksums:
+            result["sha256"] = entry_sha256
+        results.append(result)
 
     result_count = len(results)
 
@@ -12249,15 +12268,18 @@ def validate_all_notebooks(
         buffer = io.StringIO()
         writer = csv.writer(buffer)
 
-        writer.writerow([
+        header = [
             "filename", "status", "reserved_name_conflicts",
             "skipped_functions", "duplicate_functions",
             "requirements_conflict", "detail",
-        ])
+        ]
+        if checksums:
+            header.append("sha256")
+        writer.writerow(header)
 
         for entry in paginated_results:
 
-            writer.writerow([
+            row = [
                 entry["filename"],
                 entry["status"],
                 "; ".join(entry["reserved_name_conflicts"]),
@@ -12268,7 +12290,11 @@ def validate_all_notebooks(
                 "; ".join(entry["duplicate_functions"]),
                 entry["requirements_conflict"] or "",
                 entry["detail"] or "",
-            ])
+            ]
+            if checksums:
+                row.append(entry["sha256"])
+
+            writer.writerow(row)
 
         return StreamingResponse(
             iter([buffer.getvalue()]),

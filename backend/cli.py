@@ -5092,6 +5092,8 @@ def _dispatch_core_command(args):
             params["limit"] = args.limit
         if args.format == "csv":
             params["format"] = "csv"
+        if args.checksums:
+            params["checksums"] = "true"
 
         try:
             response = httpx.get(
@@ -5132,7 +5134,10 @@ def _dispatch_core_command(args):
                 for result in results:
 
                     marker = {"pass": "✓", "warn": "⚠", "fail": "✗"}[result["status"]]
-                    print(f"{marker} {result['filename']}: {result['status']}")
+                    checksum_suffix = (
+                        f"  sha256:{result['sha256']}" if args.checksums else ""
+                    )
+                    print(f"{marker} {result['filename']}: {result['status']}{checksum_suffix}")
 
                     if result.get("detail"):
                         print(f"    {result['detail']}")
@@ -12026,6 +12031,18 @@ def main():
             "Skip this many results before --limit is applied, via GET "
             "/api/validate-all's own ?offset= query param, for paging "
             "past the first --limit."
+        )
+    )
+    validate_all_parser.add_argument(
+        "--checksums",
+        action="store_true",
+        help=(
+            "Pair each result with its own sha256, via GET "
+            "/api/validate-all's own ?checksums=true -- the same "
+            "opt-in `list`/`search-functions`/`search-content` already "
+            "provide, letting a caller with several failing/warning "
+            "notebooks tell which are byte-identical without a "
+            "separate `list --checksums` round trip per result."
         )
     )
     validate_all_parser.add_argument(

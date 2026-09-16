@@ -13845,6 +13845,35 @@ def test_validate_all_command_sends_sha256_and_modified_after_and_before_query_p
     }
 
 
+def test_validate_all_command_checksums_sends_query_param_and_prints_sha256(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {"filename": "a.ipynb", "status": "pass", "sha256": "a" * 64},
+            ],
+            "pass_count": 1, "warn_count": 0, "fail_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["validate-all", "--checksums", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"sha256:{'a' * 64}" in proc.stdout
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query["checksums"] == ["true"]
+
+
 def test_validate_all_command_exits_1_on_warnings_without_failing(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
