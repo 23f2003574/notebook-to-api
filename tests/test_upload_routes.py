@@ -25184,6 +25184,24 @@ def test_deploy_history_rejects_a_negative_limit(tmp_path, monkeypatch):
     assert resp.status_code == 400
 
 
+def test_deploy_history_rejects_a_zero_limit(tmp_path, monkeypatch):
+    """Confirmed missing before this fix: unlike GET /api/notebooks, GET
+    /api/functions, and GET /api/notebooks/duplicates (all of which
+    reject limit=0 with a 400 "limit must be a positive integer"), this
+    endpoint's own check only rejected a *negative* limit, silently
+    accepting 0 and returning an empty "entries" list with status:
+    "success" instead -- indistinguishable from "this dashboard genuinely
+    has no deploy history yet".
+    """
+
+    _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
+
+    resp = client.get("/api/deploy/history", params={"limit": 0})
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "limit must be a positive integer"
+
+
 def test_deploy_history_respects_offset(tmp_path, monkeypatch):
 
     _seed_deploy_history_for_filtering(tmp_path, monkeypatch)
@@ -26270,6 +26288,21 @@ def test_compile_history_rejects_a_negative_limit(tmp_path, monkeypatch):
     resp = client.get("/api/compile/history", params={"limit": -1})
 
     assert resp.status_code == 400
+
+
+def test_compile_history_rejects_a_zero_limit(tmp_path, monkeypatch):
+    """The identical gap test_deploy_history_rejects_a_zero_limit closes
+    for GET /api/deploy/history -- this endpoint's own check had the
+    exact same bug, only rejecting a *negative* limit and silently
+    accepting 0 as an empty, "success"-shaped result.
+    """
+
+    _seed_compile_history_for_filtering(tmp_path, monkeypatch)
+
+    resp = client.get("/api/compile/history", params={"limit": 0})
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "limit must be a positive integer"
 
 
 def test_compile_history_respects_offset(tmp_path, monkeypatch):

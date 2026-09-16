@@ -14855,8 +14855,11 @@ def deploy_history_endpoint(
     already seen. "limit" caps how many of the (already-offset) entries
     are returned, same "most recent first" ordering, without needing
     MAX_DEPLOY_HISTORY_ENTRIES raised or lowered just to change how many a
-    single call gets back. A negative "offset" is rejected with 400, the
-    same way a negative "limit" already is below.
+    single call gets back. A non-positive "limit" -- zero included, not
+    just negative -- is rejected with 400 "limit must be a positive
+    integer", the identical "limit" validation GET /api/notebooks, GET
+    /api/functions, and every other paginated listing endpoint in this
+    file already apply; a negative "offset" is rejected with 400 too.
 
     Deliberately read-only: this dashboard's deploy history is a record
     of what already happened, not something a caller edits or replays
@@ -14958,11 +14961,11 @@ def deploy_history_endpoint(
 
     if limit is not None:
 
-        if limit < 0:
+        if limit <= 0:
 
             raise HTTPException(
                 status_code=400,
-                detail="limit must be a non-negative integer"
+                detail="limit must be a positive integer"
             )
 
         entries = entries[:limit]
@@ -15336,8 +15339,10 @@ def compile_history_endpoint(
     still most-recent-first, before "limit" is applied, the same
     "next page" gap GET /api/deploy/history's own "offset" already closes;
     "limit" applies after that, on the same most-recent-first ordering. A
-    negative "offset" is rejected with 400, the same way a negative
-    "limit" already is below.
+    non-positive "limit" -- zero included, not just negative -- is
+    rejected with 400 "limit must be a positive integer", the identical
+    "limit" validation GET /api/deploy/history's own "limit" already
+    applies; a negative "offset" is rejected with 400 too.
 
     "source_notebook_sha256" matches exactly against each entry's own
     "source_notebook_sha256" -- the exact notebook *content* compiled,
@@ -15457,11 +15462,11 @@ def compile_history_endpoint(
 
     if limit is not None:
 
-        if limit < 0:
+        if limit <= 0:
 
             raise HTTPException(
                 status_code=400,
-                detail="limit must be a non-negative integer"
+                detail="limit must be a positive integer"
             )
 
         entries = entries[:limit]
