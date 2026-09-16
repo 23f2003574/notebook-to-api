@@ -25,8 +25,11 @@ from backend.compiler import (
     NOTEBOOK_TO_API_VERSION,
     compile_notebook,
     compiling_python_version,
+    _extract_explicit_requirements,
     _filter_functions_by_name,
 )
+from backend.parser.ast_parser import is_parseable_python
+from backend.parser.notebook_parser import extract_code_cells, load_notebook
 # Import inspector for analysis
 from backend.inspector import (
     DEFAULT_DEV_API_KEY,
@@ -1847,8 +1850,32 @@ def _dispatch_core_command(args):
                 name for name in reserved_name_conflicts if name in kept_names
             ]
 
-        has_blocking_issues = bool(reserved_name_conflicts) or (
-            args.strict and (bool(skipped_functions) or bool(duplicate_functions))
+        # A conflicting "# notebook-to-api: requires" directive (see
+        # _extract_explicit_requirements, backend/compiler.py) always
+        # fails a real `compile` -- pip refuses two requirements for the
+        # same package -- but inspect_notebook_data's own report above
+        # never checks for it, so this command's own "would this
+        # notebook compile cleanly" verdict previously always reported
+        # "pass" for a notebook guaranteed to fail its very next
+        # `compile`/`deploy`. Always blocking, the same unconditional
+        # (not --strict-gated) treatment reserved_name_conflicts already
+        # gets, since this is a hard compile failure, not a soft footgun
+        # like a skipped/duplicate function.
+        code_cells = [
+            cell for cell in extract_code_cells(load_notebook(args.notebook))
+            if is_parseable_python(cell)
+        ]
+
+        try:
+            _extract_explicit_requirements(code_cells)
+            requirements_conflict = None
+        except ValueError as e:
+            requirements_conflict = str(e)
+
+        has_blocking_issues = (
+            bool(reserved_name_conflicts)
+            or requirements_conflict is not None
+            or (args.strict and (bool(skipped_functions) or bool(duplicate_functions)))
         )
         has_warnings = (
             bool(skipped_functions) or bool(duplicate_functions)
@@ -1869,6 +1896,7 @@ def _dispatch_core_command(args):
                     "reserved_name_conflicts": reserved_name_conflicts,
                     "skipped_functions": skipped_functions,
                     "duplicate_functions": duplicate_functions,
+                    "requirements_conflict": requirements_conflict,
                 },
                 indent=2,
             ))
@@ -1879,6 +1907,10 @@ def _dispatch_core_command(args):
                 print("\n✗ Reserved name conflicts (compilation will fail):")
                 for name in reserved_name_conflicts:
                     print(f"  - {name}")
+
+            if requirements_conflict:
+                print("\n✗ Conflicting requirements directive (compilation will fail):")
+                print(f"  - {requirements_conflict}")
 
             if duplicate_functions:
                 marker = "✗" if args.strict else "⚠"
@@ -4979,6 +5011,7 @@ def _dispatch_core_command(args):
         reserved_name_conflicts = data.get("reserved_name_conflicts", [])
         skipped_functions = data.get("skipped_functions", [])
         duplicate_functions = data.get("duplicate_functions", [])
+        requirements_conflict = data.get("requirements_conflict")
 
         if args.json_output:
             print(json.dumps(data, indent=2))
@@ -4993,6 +5026,10 @@ def _dispatch_core_command(args):
                 print("\n✗ Reserved name conflicts (compilation will fail):")
                 for name in reserved_name_conflicts:
                     print(f"  - {name}")
+
+            if requirements_conflict:
+                print("\n✗ Conflicting requirements directive (compilation will fail):")
+                print(f"  - {requirements_conflict}")
 
             if duplicate_functions:
                 marker = "✗" if args.strict else "⚠"
@@ -5084,6 +5121,9 @@ def _dispatch_core_command(args):
 
                     for name in result.get("reserved_name_conflicts", []):
                         print(f"    reserved name conflict: {name}")
+
+                    if result.get("requirements_conflict"):
+                        print(f"    requirements conflict: {result['requirements_conflict']}")
 
                     for name in result.get("duplicate_functions", []):
                         print(f"    duplicate function: {name}")

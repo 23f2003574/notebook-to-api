@@ -19894,6 +19894,7 @@ def test_validate_reports_pass_for_a_clean_notebook():
         "reserved_name_conflicts": [],
         "skipped_functions": [],
         "duplicate_functions": [],
+        "requirements_conflict": None,
     }
 
 
@@ -20131,6 +20132,84 @@ def test_validate_only_including_the_conflicting_function_still_reports_fail():
     assert body["reserved_name_conflicts"] == ["health_check"]
 
 
+def test_validate_reports_fail_for_a_conflicting_requires_directive():
+    """Confirmed missing before this fix: _extract_explicit_requirements
+    (backend/compiler.py) already raises for two conflicting
+    "# notebook-to-api: requires" directives naming the same package --
+    POST /api/compile and POST /api/requirements-preview already surface
+    this as a 400, but this endpoint's own "would this notebook compile
+    cleanly" check never called it at all, always reporting "pass" for a
+    notebook guaranteed to fail its very next real compile.
+    """
+
+    content = _notebook_bytes(
+        "# notebook-to-api: requires numpy==1.24.0\n"
+        "def f():\n    return 1\n\n"
+        "# notebook-to-api: requires numpy==1.26.0\n"
+        "def g():\n    return 2\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "validate_requirements_conflict.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/validate",
+        json={"notebook_path": "validate_requirements_conflict.ipynb"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "fail"
+    assert body["reserved_name_conflicts"] == []
+    assert "numpy" in body["requirements_conflict"]
+    assert "Conflicting" in body["requirements_conflict"]
+
+
+def test_validate_requirements_conflict_is_not_gated_by_strict():
+    """Always blocking, the same unconditional (not --strict-gated)
+    treatment "reserved_name_conflicts" already gets -- a requirements
+    conflict is a hard compile failure, not a soft footgun like a
+    skipped/duplicate function that only fails under "strict".
+    """
+
+    content = _notebook_bytes(
+        "# notebook-to-api: requires numpy==1.24.0\n"
+        "def f():\n    return 1\n\n"
+        "# notebook-to-api: requires numpy==1.26.0\n"
+        "def g():\n    return 2\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "validate_requirements_conflict_no_strict.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/validate",
+        json={
+            "notebook_path": "validate_requirements_conflict_no_strict.ipynb",
+            "strict": False,
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "fail"
+
+
 def test_validate_rejects_only_and_exclude_together():
 
     content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
@@ -20351,14 +20430,14 @@ def test_validate_all_csv_format_returns_a_csv_response():
     rows = resp.text.strip().split("\r\n")
     assert rows[0] == (
         "filename,status,reserved_name_conflicts,skipped_functions,"
-        "duplicate_functions,detail"
+        "duplicate_functions,requirements_conflict,detail"
     )
 
     by_filename = {row.split(",", 1)[0]: row for row in rows[1:]}
 
-    assert by_filename["validate_all_csv_pass.ipynb"] == "validate_all_csv_pass.ipynb,pass,,,,"
+    assert by_filename["validate_all_csv_pass.ipynb"] == "validate_all_csv_pass.ipynb,pass,,,,,"
     assert by_filename["validate_all_csv_fail.ipynb"] == (
-        "validate_all_csv_fail.ipynb,fail,health_check,,,"
+        "validate_all_csv_fail.ipynb,fail,health_check,,,,"
     )
     assert "unsupported: " in by_filename["validate_all_csv_warn.ipynb"]
     assert by_filename["validate_all_csv_warn.ipynb"].startswith(
@@ -20633,6 +20712,45 @@ def test_validate_all_strict_turns_duplicate_functions_into_a_failure():
     )
     assert result["status"] == "fail"
     assert result["duplicate_functions"] == ["add"]
+
+
+def test_validate_all_reports_fail_for_a_conflicting_requires_directive():
+    """The identical gap test_validate_reports_fail_for_a_conflicting_requires_directive
+    closes for POST /api/validate -- this endpoint's own per-notebook
+    check had the exact same blind spot.
+    """
+
+    client.delete("/api/notebooks?confirm=true")
+
+    conflict_content = _notebook_bytes(
+        "# notebook-to-api: requires numpy==1.24.0\n"
+        "def f():\n    return 1\n\n"
+        "# notebook-to-api: requires numpy==1.26.0\n"
+        "def g():\n    return 2\n"
+    )
+
+    resp = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "validate_all_requirements_conflict.ipynb",
+                io.BytesIO(conflict_content),
+                "application/json",
+            )
+        },
+    )
+    assert resp.status_code == 200
+
+    resp = client.get("/api/validate-all")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    result = next(
+        r for r in body["results"]
+        if r["filename"] == "validate_all_requirements_conflict.ipynb"
+    )
+    assert result["status"] == "fail"
+    assert "numpy" in result["requirements_conflict"]
 
 
 def test_validate_all_reports_a_malformed_notebook_as_fail_instead_of_skipping_it():

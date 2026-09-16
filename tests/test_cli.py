@@ -12480,6 +12480,33 @@ def test_validate_command_only_including_the_conflicting_function_still_fails(tm
     assert "health_check" in proc.stdout
 
 
+def test_validate_command_fails_on_a_conflicting_requires_directive(tmp_path):
+    """Confirmed missing before this fix: inspect_notebook_data's own
+    report never checked for a conflicting "# notebook-to-api: requires"
+    directive, so this command's own "would this notebook compile
+    cleanly" verdict always reported "pass" for a notebook guaranteed to
+    fail its very next `compile`.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "# notebook-to-api: requires numpy==1.24.0\n"
+        "def f():\n    return 1\n\n"
+        "# notebook-to-api: requires numpy==1.26.0\n"
+        "def g():\n    return 2\n",
+    )
+
+    proc = _run_cli(["validate", str(notebook_path)], cwd=workdir)
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "Conflicting requirements directive" in proc.stdout
+    assert "numpy" in proc.stdout
+    assert "Validation failed." in proc.stdout
+
+
 def test_validate_command_json_flag_emits_a_machine_readable_status(tmp_path):
 
     workdir = tmp_path / "workdir"
@@ -13486,6 +13513,44 @@ def test_remote_validate_command_fails_on_a_reserved_name_conflict(
     assert "Validation failed." in proc.stdout
 
 
+def test_remote_validate_command_prints_a_requirements_conflict(
+    tmp_path, fake_dashboard
+):
+    """The dashboard's own POST /api/validate now reports
+    "requirements_conflict" -- confirms this command's own human-readable
+    output actually surfaces it, not just the "status"/exit-code it was
+    already driving before this fix.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "fail",
+            "notebook": "nb.ipynb",
+            "reserved_name_conflicts": [],
+            "skipped_functions": [],
+            "duplicate_functions": [],
+            "requirements_conflict": (
+                "Conflicting '# notebook-to-api: requires' directives for "
+                "'numpy': 'numpy==1.24.0' and 'numpy==1.26.0'"
+            ),
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-validate", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "Conflicting requirements directive" in proc.stdout
+    assert "numpy" in proc.stdout
+    assert "Validation failed." in proc.stdout
+
+
 def test_remote_validate_command_sends_only_and_exclude_body_fields(
     tmp_path, fake_dashboard
 ):
@@ -13742,6 +13807,42 @@ def test_validate_all_command_exits_2_on_a_failure_and_passes_strict_through(
     assert "✗ bad.ipynb: fail" in proc.stdout
     assert "reserved name conflict: health_check" in proc.stdout
     assert handler.requests == ["/api/validate-all?strict=true&offset=0"]
+
+
+def test_validate_all_command_prints_a_requirements_conflict(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {
+                    "filename": "bad.ipynb", "status": "fail",
+                    "reserved_name_conflicts": [], "skipped_functions": [],
+                    "duplicate_functions": [],
+                    "requirements_conflict": (
+                        "Conflicting '# notebook-to-api: requires' "
+                        "directives for 'numpy'"
+                    ),
+                    "detail": None,
+                },
+            ],
+            "pass_count": 0,
+            "warn_count": 0,
+            "fail_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["validate-all", "--dashboard-url", dashboard_url], cwd=workdir
+    )
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "✗ bad.ipynb: fail" in proc.stdout
+    assert "requirements conflict: Conflicting" in proc.stdout
 
 
 def test_validate_all_command_reports_no_notebooks(tmp_path, fake_dashboard):

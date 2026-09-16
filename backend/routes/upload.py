@@ -11766,6 +11766,20 @@ def validate_notebook_endpoint(
     through as "pass" alongside a real compile-time failure like a
     reserved-name conflict.
 
+    "requirements_conflict" (null when there's no conflict) contributes
+    to "status" the same unconditional way "reserved_name_conflicts"
+    does -- always "fail", never gated by "strict" -- via
+    _extract_explicit_requirements (backend/compiler.py), which raises
+    when two different "# notebook-to-api: requires" directives name the
+    same package (e.g. "requires numpy==1.24.0" and "requires
+    numpy==1.26.0" in different cells): pip refuses two requirements for
+    the same package, so a notebook with this conflict is guaranteed to
+    fail the very next real compile. POST /api/compile and POST
+    /api/requirements-preview already surface this as a 400; this
+    endpoint's own "would this notebook compile cleanly" promise
+    previously didn't hold for it at all, always reporting "pass" for a
+    notebook that would actually never compile.
+
     "expected_sha256" (optional), see _verify_expected_notebook_sha256
     above, rejects the request with 400 before validating anything if the
     resolved content ("notebook_path"'s current content, or "version_id"'s
@@ -11820,7 +11834,7 @@ def validate_notebook_endpoint(
 
     try:
 
-        load_notebook(str(full_path))
+        notebook = load_notebook(str(full_path))
 
     except MALFORMED_NOTEBOOK_ERRORS as e:
 
@@ -11865,8 +11879,39 @@ def validate_notebook_endpoint(
             name for name in reserved_name_conflicts if name in kept_names
         ]
 
-    has_blocking_issues = bool(reserved_name_conflicts) or (
-        strict and (bool(skipped_functions) or bool(duplicate_functions))
+    # A conflicting "# notebook-to-api: requires" directive (see
+    # _extract_explicit_requirements, backend/compiler.py) always fails a
+    # real compile -- POST /api/compile, POST /api/requirements-preview,
+    # and every other endpoint that actually calls
+    # _extract_explicit_requirements already surface this as a 400 -- but
+    # this endpoint's own "would this notebook compile cleanly" check
+    # never called it at all, so a notebook with two conflicting
+    # "requires" directives always reported "status": "pass" here despite
+    # being guaranteed to fail the very next POST /api/compile or
+    # POST /api/deploy. Reported as "requirements_conflict" (the caught
+    # ValueError's own message, null when there's no conflict) rather
+    # than a 400: the notebook itself failing this specific check is
+    # exactly the kind of expected, valid outcome this endpoint's own
+    # docstring already says a reserved-name conflict is, not a server
+    # error. Always blocking (not gated by "strict", the same way
+    # "reserved_name_conflicts" isn't) -- a requirements conflict is a
+    # hard compile failure, not a soft footgun like a skipped/duplicate
+    # function.
+    code_cells = [
+        cell for cell in extract_code_cells(notebook)
+        if is_parseable_python(cell)
+    ]
+
+    try:
+        _extract_explicit_requirements(code_cells)
+        requirements_conflict = None
+    except ValueError as e:
+        requirements_conflict = str(e)
+
+    has_blocking_issues = (
+        bool(reserved_name_conflicts)
+        or requirements_conflict is not None
+        or (strict and (bool(skipped_functions) or bool(duplicate_functions)))
     )
     has_warnings = (
         bool(skipped_functions) or bool(duplicate_functions)
@@ -11886,6 +11931,7 @@ def validate_notebook_endpoint(
         "reserved_name_conflicts": reserved_name_conflicts,
         "skipped_functions": skipped_functions,
         "duplicate_functions": duplicate_functions,
+        "requirements_conflict": requirements_conflict,
     }
 
 
@@ -11986,14 +12032,15 @@ def validate_all_notebooks(
     already-paginated "results" the "json" response would return, so
     "strict"/"tag"/"limit"/"offset" compose with "format" identically.
     Column order is "filename,status,reserved_name_conflicts,
-    skipped_functions,duplicate_functions,detail" -- one row per notebook
-    (not one per conflict/skipped/duplicate function): each of
-    "reserved_name_conflicts"/"duplicate_functions" is every name joined
-    with "; ", and "skipped_functions" is every "<name>: <reason>" joined
-    the same way, so a notebook with several of any of them still fits in
-    a single row instead of the "duplicates"/"functions" CSVs' own
-    one-row-per-leaf-entry convention, which would otherwise repeat
-    "filename"/"status" across rows for no benefit here. An unrecognized
+    skipped_functions,duplicate_functions,requirements_conflict,detail"
+    -- one row per notebook (not one per conflict/skipped/duplicate
+    function): each of "reserved_name_conflicts"/"duplicate_functions"
+    is every name joined with "; ", and "skipped_functions" is every
+    "<name>: <reason>" joined the same way, so a notebook with several of
+    any of them still fits in a single row instead of the
+    "duplicates"/"functions" CSVs' own one-row-per-leaf-entry convention,
+    which would otherwise repeat "filename"/"status" across rows for no
+    benefit here. An unrecognized
     "format" is rejected with 400 before a single notebook is even read.
     """
 
@@ -12062,7 +12109,7 @@ def validate_all_notebooks(
 
         try:
 
-            load_notebook(str(entry))
+            notebook = load_notebook(str(entry))
 
         except MALFORMED_NOTEBOOK_ERRORS as e:
 
@@ -12072,6 +12119,7 @@ def validate_all_notebooks(
                 "reserved_name_conflicts": [],
                 "skipped_functions": [],
                 "duplicate_functions": [],
+                "requirements_conflict": None,
                 "detail": f"Uploaded file is not a valid Jupyter notebook: {e}",
             })
             fail_count += 1
@@ -12093,8 +12141,26 @@ def validate_all_notebooks(
         skipped_functions = inspection["skipped_functions"]
         duplicate_functions = inspection["duplicate_functions"]
 
-        has_blocking_issues = bool(reserved_name_conflicts) or (
-            strict and (bool(skipped_functions) or bool(duplicate_functions))
+        # See POST /api/validate's own identical check (and its
+        # docstring's own "requirements_conflict" paragraph) for why this
+        # is here at all -- a conflicting "# notebook-to-api: requires"
+        # directive always fails a real compile, but was never checked by
+        # this endpoint's own pass/warn/fail verdict before this.
+        code_cells = [
+            cell for cell in extract_code_cells(notebook)
+            if is_parseable_python(cell)
+        ]
+
+        try:
+            _extract_explicit_requirements(code_cells)
+            requirements_conflict = None
+        except ValueError as e:
+            requirements_conflict = str(e)
+
+        has_blocking_issues = (
+            bool(reserved_name_conflicts)
+            or requirements_conflict is not None
+            or (strict and (bool(skipped_functions) or bool(duplicate_functions)))
         )
         has_warnings = (
             bool(skipped_functions) or bool(duplicate_functions)
@@ -12116,6 +12182,7 @@ def validate_all_notebooks(
             "reserved_name_conflicts": reserved_name_conflicts,
             "skipped_functions": skipped_functions,
             "duplicate_functions": duplicate_functions,
+            "requirements_conflict": requirements_conflict,
             "detail": None,
         })
 
@@ -12132,7 +12199,8 @@ def validate_all_notebooks(
 
         writer.writerow([
             "filename", "status", "reserved_name_conflicts",
-            "skipped_functions", "duplicate_functions", "detail",
+            "skipped_functions", "duplicate_functions",
+            "requirements_conflict", "detail",
         ])
 
         for entry in paginated_results:
@@ -12146,6 +12214,7 @@ def validate_all_notebooks(
                     for skipped in entry["skipped_functions"]
                 ),
                 "; ".join(entry["duplicate_functions"]),
+                entry["requirements_conflict"] or "",
                 entry["detail"] or "",
             ])
 
