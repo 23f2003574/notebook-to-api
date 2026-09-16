@@ -14265,6 +14265,33 @@ def test_requirements_preview_command_reports_a_clean_error_for_a_missing_notebo
     _assert_clean_cli_error(proc, "Notebook file not found")
 
 
+def test_requirements_preview_command_passes_expected_sha256_through(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebook": "nb.ipynb",
+            "requirements": [], "explicit_requirements": [], "excluded_imports": [],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "requirements-preview", "nb.ipynb", "--expected-sha256", "a" * 64,
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0])["expected_sha256"] == "a" * 64
+
+
 def test_requirements_preview_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
     tmp_path,
 ):
@@ -14955,6 +14982,36 @@ def test_curl_preview_command_passes_only_and_exclude_through(tmp_path, fake_das
         "only": None,
         "exclude": ["subtract", "divide"],
     }
+
+
+def test_curl_preview_command_passes_expected_sha256_through(tmp_path, fake_dashboard):
+    """Confirmed missing before this fix: POST /api/curl-preview never
+    called _verify_expected_notebook_sha256, unlike POST /api/compile/
+    inspect/validate -- and the CLI's own `curl-preview` had no flag for
+    it either.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebook": "nb.ipynb",
+            "commands": ["curl -X POST http://localhost:8000/add"],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "curl-preview", "nb.ipynb", "--dashboard-url", dashboard_url,
+            "--expected-sha256", "a" * 64,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0])["expected_sha256"] == "a" * 64
 
 
 def test_curl_preview_command_passes_the_callback_url_flag_through(tmp_path, fake_dashboard):

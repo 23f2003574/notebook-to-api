@@ -12391,6 +12391,13 @@ def requirements_preview_endpoint(data: dict):
     "explicit_requirements", never a subset of "requirements": these are
     import names deliberately kept *out* of it. Empty for a notebook with
     no such directive at all.
+
+    "expected_sha256" (optional), see _verify_expected_notebook_sha256
+    above, rejects the request with 400 before previewing anything if
+    the resolved content ("notebook_path"'s current content, or
+    "version_id"'s snapshot when given) doesn't match -- the same
+    concurrent-overwrite guard POST /api/compile/POST /api/validate
+    already give a caller previewing by name alone.
     """
 
     notebook_path = data.get("notebook_path")
@@ -12403,8 +12410,18 @@ def requirements_preview_endpoint(data: dict):
         )
 
     version_id = data.get("version_id")
+    expected_sha256 = data.get("expected_sha256")
+
+    if expected_sha256 is not None and not isinstance(expected_sha256, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="expected_sha256 must be a string"
+        )
 
     full_path = _resolve_preview_content_path(notebook_path, version_id)
+
+    _verify_expected_notebook_sha256(full_path, expected_sha256)
 
     try:
 
@@ -12535,6 +12552,14 @@ def app_preview_endpoint(data: dict):
     only = data.get("only")
     exclude = data.get("exclude")
     version_id = data.get("version_id")
+    expected_sha256 = data.get("expected_sha256")
+
+    if expected_sha256 is not None and not isinstance(expected_sha256, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="expected_sha256 must be a string"
+        )
 
     for field_name, field_value in (("only", only), ("exclude", exclude)):
 
@@ -12555,6 +12580,8 @@ def app_preview_endpoint(data: dict):
         )
 
     full_path = _resolve_preview_content_path(notebook_path, version_id)
+
+    _verify_expected_notebook_sha256(full_path, expected_sha256)
 
     try:
 
@@ -12697,6 +12724,14 @@ def readme_preview_endpoint(data: dict):
     only = data.get("only")
     exclude = data.get("exclude")
     version_id = data.get("version_id")
+    expected_sha256 = data.get("expected_sha256")
+
+    if expected_sha256 is not None and not isinstance(expected_sha256, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="expected_sha256 must be a string"
+        )
 
     for field_name, field_value in (("only", only), ("exclude", exclude)):
 
@@ -12717,6 +12752,8 @@ def readme_preview_endpoint(data: dict):
         )
 
     full_path = _resolve_preview_content_path(notebook_path, version_id)
+
+    _verify_expected_notebook_sha256(full_path, expected_sha256)
 
     try:
 
@@ -12884,6 +12921,14 @@ def curl_preview_endpoint(data: dict):
     only = data.get("only")
     exclude = data.get("exclude")
     callback_url = data.get("callback_url")
+    expected_sha256 = data.get("expected_sha256")
+
+    if expected_sha256 is not None and not isinstance(expected_sha256, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="expected_sha256 must be a string"
+        )
 
     if callback_url is not None and not isinstance(callback_url, str):
 
@@ -12911,6 +12956,8 @@ def curl_preview_endpoint(data: dict):
         )
 
     full_path = _resolve_preview_content_path(notebook_path, version_id)
+
+    _verify_expected_notebook_sha256(full_path, expected_sha256)
 
     try:
 
@@ -13016,6 +13063,14 @@ def postman_preview_endpoint(data: dict):
     only = data.get("only")
     exclude = data.get("exclude")
     callback_url = data.get("callback_url")
+    expected_sha256 = data.get("expected_sha256")
+
+    if expected_sha256 is not None and not isinstance(expected_sha256, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="expected_sha256 must be a string"
+        )
 
     for field_name, field_value in (("only", only), ("exclude", exclude)):
 
@@ -13043,6 +13098,8 @@ def postman_preview_endpoint(data: dict):
         )
 
     full_path = _resolve_preview_content_path(notebook_path, version_id)
+
+    _verify_expected_notebook_sha256(full_path, expected_sha256)
 
     try:
 
@@ -13522,7 +13579,18 @@ def openapi_preview_endpoint(data: dict):
             detail="format must be 'json' or 'yaml'"
         )
 
+    expected_sha256 = data.get("expected_sha256")
+
+    if expected_sha256 is not None and not isinstance(expected_sha256, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="expected_sha256 must be a string"
+        )
+
     full_path = _resolve_preview_content_path(notebook_path, version_id)
+
+    _verify_expected_notebook_sha256(full_path, expected_sha256)
 
     # Unique per call -- never GENERATED_DIR's own package_name -- so this
     # can never collide with (or evict) whatever this long-running

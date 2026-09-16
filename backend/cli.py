@@ -5189,6 +5189,8 @@ def _dispatch_core_command(args):
         requirements_preview_body = {"notebook_path": args.filename}
         if args.version_id:
             requirements_preview_body["version_id"] = args.version_id
+        if args.expected_sha256:
+            requirements_preview_body["expected_sha256"] = args.expected_sha256
 
         try:
             response = httpx.post(
@@ -5247,6 +5249,8 @@ def _dispatch_core_command(args):
         }
         if args.version_id:
             app_preview_body["version_id"] = args.version_id
+        if args.expected_sha256:
+            app_preview_body["expected_sha256"] = args.expected_sha256
 
         try:
             response = httpx.post(
@@ -5296,6 +5300,8 @@ def _dispatch_core_command(args):
         }
         if args.version_id:
             readme_preview_body["version_id"] = args.version_id
+        if args.expected_sha256:
+            readme_preview_body["expected_sha256"] = args.expected_sha256
 
         try:
             response = httpx.post(
@@ -5346,6 +5352,8 @@ def _dispatch_core_command(args):
         }
         if args.version_id:
             openapi_preview_body["version_id"] = args.version_id
+        if args.expected_sha256:
+            openapi_preview_body["expected_sha256"] = args.expected_sha256
 
         try:
             response = httpx.post(
@@ -5403,6 +5411,8 @@ def _dispatch_core_command(args):
             curl_preview_body["version_id"] = args.version_id
         if args.callback_url:
             curl_preview_body["callback_url"] = args.callback_url
+        if args.expected_sha256:
+            curl_preview_body["expected_sha256"] = args.expected_sha256
 
         try:
             response = httpx.post(
@@ -5461,6 +5471,8 @@ def _dispatch_core_command(args):
             postman_preview_body["version_id"] = args.version_id
         if args.callback_url:
             postman_preview_body["callback_url"] = args.callback_url
+        if args.expected_sha256:
+            postman_preview_body["expected_sha256"] = args.expected_sha256
 
         try:
             response = httpx.post(
@@ -12097,6 +12109,20 @@ def main():
     _add_dashboard_url_and_timeout_arguments(requirements_preview_parser)
     _add_version_id_argument(requirements_preview_parser, "POST /api/requirements-preview")
     requirements_preview_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "Reject the preview with an error unless the resolved "
+            "content's own hash matches this value, via POST "
+            "/api/requirements-preview's own \"expected_sha256\" body "
+            "field -- guards against a concurrent overwrite landing "
+            "between listing this notebook's own sha256 and previewing "
+            "it by name."
+        )
+    )
+    requirements_preview_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -12127,6 +12153,20 @@ def main():
     _add_dashboard_url_and_timeout_arguments(app_preview_parser)
     _add_function_selection_arguments(app_preview_parser)
     _add_version_id_argument(app_preview_parser, "POST /api/app-preview")
+    app_preview_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "Reject the preview with an error unless the resolved "
+            "content's own hash matches this value, via POST "
+            "/api/app-preview's own \"expected_sha256\" body field -- "
+            "guards against a concurrent overwrite landing between "
+            "listing this notebook's own sha256 and previewing it by "
+            "name."
+        )
+    )
     app_preview_parser.add_argument(
         "--json",
         action="store_true",
@@ -12159,6 +12199,20 @@ def main():
     _add_dashboard_url_and_timeout_arguments(readme_preview_parser)
     _add_function_selection_arguments(readme_preview_parser)
     _add_version_id_argument(readme_preview_parser, "POST /api/readme-preview")
+    readme_preview_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "Reject the preview with an error unless the resolved "
+            "content's own hash matches this value, via POST "
+            "/api/readme-preview's own \"expected_sha256\" body field -- "
+            "guards against a concurrent overwrite landing between "
+            "listing this notebook's own sha256 and previewing it by "
+            "name."
+        )
+    )
     readme_preview_parser.add_argument(
         "--json",
         action="store_true",
@@ -12214,6 +12268,20 @@ def main():
     _add_function_selection_arguments(curl_preview_parser)
     _add_version_id_argument(curl_preview_parser, "POST /api/curl-preview")
     _add_callback_url_argument(curl_preview_parser)
+    curl_preview_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "Reject the preview with an error unless the resolved "
+            "content's own hash matches this value, via POST "
+            "/api/curl-preview's own \"expected_sha256\" body field -- "
+            "guards against a concurrent overwrite landing between "
+            "listing this notebook's own sha256 and previewing it by "
+            "name."
+        )
+    )
     curl_preview_parser.add_argument(
         "--json",
         action="store_true",
@@ -12278,6 +12346,20 @@ def main():
     _add_function_selection_arguments(postman_preview_parser)
     _add_version_id_argument(postman_preview_parser, "POST /api/postman-preview")
     _add_callback_url_argument(postman_preview_parser)
+    postman_preview_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "Reject the preview with an error unless the resolved "
+            "content's own hash matches this value, via POST "
+            "/api/postman-preview's own \"expected_sha256\" body field "
+            "-- guards against a concurrent overwrite landing between "
+            "listing this notebook's own sha256 and previewing it by "
+            "name."
+        )
+    )
     postman_preview_parser.add_argument(
         "--json",
         action="store_true",
@@ -12481,6 +12563,20 @@ def main():
             "\"format\" body field -- the identical \"json\"/\"yaml\" "
             "choice `export-openapi`/`remote-export-openapi` already "
             "offer for a real compile's schema. Default: json."
+        )
+    )
+    openapi_preview_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "Reject the preview with an error unless the resolved "
+            "content's own hash matches this value, via POST "
+            "/api/openapi-preview's own \"expected_sha256\" body field "
+            "-- guards against a concurrent overwrite landing between "
+            "listing this notebook's own sha256 and previewing it by "
+            "name."
         )
     )
     openapi_preview_parser.add_argument(

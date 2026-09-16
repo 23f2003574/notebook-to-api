@@ -21371,6 +21371,26 @@ def test_requirements_preview_returns_404_for_an_unknown_version_id():
     assert resp.status_code == 404
 
 
+def test_requirements_preview_with_mismatched_expected_sha256_is_rejected():
+    """Confirmed missing before this fix: _verify_expected_notebook_sha256
+    already guards POST /api/compile/inspect/validate against a
+    concurrent overwrite landing between a caller noting a notebook's
+    own sha256 and acting on it by name alone -- this endpoint never
+    called it.
+    """
+
+    filename = "requirements_preview_expected_sha256_mismatch.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.post(
+        "/api/requirements-preview",
+        json={"notebook_path": filename, "expected_sha256": "0" * 64},
+    )
+
+    assert resp.status_code == 400
+    assert "expected_sha256" in resp.json()["detail"]
+
+
 def test_app_preview_matches_what_an_actual_compile_writes():
 
     content = _notebook_bytes(
@@ -21792,6 +21812,20 @@ def test_app_preview_returns_404_for_an_unknown_version_id():
     assert resp.status_code == 404
 
 
+def test_app_preview_with_mismatched_expected_sha256_is_rejected():
+
+    filename = "app_preview_expected_sha256_mismatch.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.post(
+        "/api/app-preview",
+        json={"notebook_path": filename, "expected_sha256": "0" * 64},
+    )
+
+    assert resp.status_code == 400
+    assert "expected_sha256" in resp.json()["detail"]
+
+
 def test_openapi_preview_matches_what_an_actual_compile_and_export_produces():
 
     content = _notebook_bytes(
@@ -22173,6 +22207,20 @@ def test_openapi_preview_returns_404_for_an_unknown_version_id():
     assert resp.status_code == 404
 
 
+def test_openapi_preview_with_mismatched_expected_sha256_is_rejected():
+
+    filename = "openapi_preview_expected_sha256_mismatch.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.post(
+        "/api/openapi-preview",
+        json={"notebook_path": filename, "expected_sha256": "0" * 64},
+    )
+
+    assert resp.status_code == 400
+    assert "expected_sha256" in resp.json()["detail"]
+
+
 def test_readme_preview_matches_what_an_actual_compile_writes():
 
     content = _notebook_bytes(
@@ -22534,6 +22582,20 @@ def test_readme_preview_returns_404_for_an_unknown_version_id():
     )
 
     assert resp.status_code == 404
+
+
+def test_readme_preview_with_mismatched_expected_sha256_is_rejected():
+
+    filename = "readme_preview_expected_sha256_mismatch.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.post(
+        "/api/readme-preview",
+        json={"notebook_path": filename, "expected_sha256": "0" * 64},
+    )
+
+    assert resp.status_code == 400
+    assert "expected_sha256" in resp.json()["detail"]
 
 
 def test_curl_preview_returns_one_command_per_function():
@@ -23229,6 +23291,34 @@ def test_curl_preview_returns_404_for_an_unknown_version_id():
     )
 
     assert resp.status_code == 404
+
+
+def test_curl_preview_with_mismatched_expected_sha256_is_rejected():
+
+    filename = "curl_preview_expected_sha256_mismatch.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.post(
+        "/api/curl-preview",
+        json={"notebook_path": filename, "expected_sha256": "0" * 64},
+    )
+
+    assert resp.status_code == 400
+    assert "expected_sha256" in resp.json()["detail"]
+
+
+def test_postman_preview_with_mismatched_expected_sha256_is_rejected():
+
+    filename = "postman_preview_expected_sha256_mismatch.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.post(
+        "/api/postman-preview",
+        json={"notebook_path": filename, "expected_sha256": "0" * 64},
+    )
+
+    assert resp.status_code == 400
+    assert "expected_sha256" in resp.json()["detail"]
 
 
 def test_dockerfile_preview_requires_no_notebook_and_needs_no_body():
