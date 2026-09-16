@@ -1,5 +1,6 @@
 import ast
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -270,6 +271,43 @@ def test_generate_python_sdk_sends_api_key_header(tmp_path):
 
     assert '"X-API-Key": self.api_key' in source
     assert "notebook-to-api-dev-key" in source
+
+
+def test_generate_python_sdk_client_reads_the_notebook_api_key_env_var(
+    tmp_path, monkeypatch
+):
+    """The generated constructor's own `api_key or os.getenv('NOTEBOOK_API_KEY',
+    ...)` falls back to this env var when no `api_key` is passed
+    explicitly -- letting a caller run the generated client against a
+    dashboard whose NOTEBOOK_API_KEY was changed from its default without
+    hardcoding the new key in source. An explicit `api_key` still takes
+    precedence over the env var, exactly like passing an explicit value
+    to any other `x or os.getenv(...)` fallback would.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    fake_requests = types.ModuleType("requests")
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(output_path.read_text(encoding="utf-8"), str(output_path), "exec"), namespace)
+
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "env-configured-key")
+
+    env_client = namespace["NotebookAPIClient"]("http://localhost:8000")
+    assert env_client.api_key == "env-configured-key"
+
+    explicit_client = namespace["NotebookAPIClient"](
+        "http://localhost:8000", api_key="explicit-key"
+    )
+    assert explicit_client.api_key == "explicit-key"
 
 
 def test_generate_python_sdk_constructor_accepts_a_configurable_timeout(tmp_path):
@@ -2464,6 +2502,98 @@ def test_generate_typescript_sdk_sends_api_key_header(tmp_path):
 
     assert '"X-API-Key": this.apiKey' in source
     assert "notebook-to-api-dev-key" in source
+
+
+def test_generate_typescript_sdk_falls_back_to_the_notebook_api_key_env_var(tmp_path):
+    """Confirmed missing before this fix: generate_python_sdk's own
+    constructor already reads `api_key or os.getenv('NOTEBOOK_API_KEY', ...)`
+    -- letting a Python caller run the generated client against a
+    dashboard whose NOTEBOOK_API_KEY was changed from its default without
+    hardcoding the new key in source -- but the TypeScript constructor
+    only ever fell back to the literal "notebook-to-api-dev-key",
+    silently dropping process.env.NOTEBOOK_API_KEY even though this file
+    already targets Node (see verifyWebhookSignature's own node:crypto
+    import above), where process.env is exactly as available as
+    os.getenv is in the Python client.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert (
+        'this.apiKey = options.apiKey ?? process.env.NOTEBOOK_API_KEY ?? '
+        '"notebook-to-api-dev-key";'
+        in source
+    )
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_client_reads_the_notebook_api_key_env_var(tmp_path):
+    """Runtime confirmation (not just a source-text check) that the
+    generated client actually reads process.env.NOTEBOOK_API_KEY when no
+    explicit `apiKey` option is given, and that an explicit `apiKey`
+    still takes precedence over the env var -- matching
+    test_generate_python_sdk_client_reads_the_notebook_api_key_env_var's
+    own precedence contract, applied here to the TypeScript client's
+    identical fallback.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        globalThis.fetch = async (url, opts) => {{
+          globalThis.__calls.push(opts.headers["X-API-Key"]);
+          return {{ ok: true, json: async () => ({{}}) }};
+        }};
+        globalThis.__calls = [];
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+
+        // No explicit apiKey -- falls back to process.env.NOTEBOOK_API_KEY.
+        const envClient = new NotebookAPIClient("http://localhost:8000");
+        await envClient.train_model({{}});
+
+        // Explicit apiKey still wins over the env var.
+        const explicitClient = new NotebookAPIClient(
+            "http://localhost:8000", {{ apiKey: "explicit-key" }}
+        );
+        await explicitClient.train_model({{}});
+
+        console.log(JSON.stringify(globalThis.__calls));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={**os.environ, "NOTEBOOK_API_KEY": "env-configured-key"},
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    calls = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert calls == ["env-configured-key", "explicit-key"]
 
 
 def test_generate_typescript_sdk_background_submission_sends_an_idempotency_key(

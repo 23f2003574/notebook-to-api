@@ -2003,9 +2003,17 @@ def generate_typescript_sdk(
     lines.append('    this.baseUrl = baseUrl.replace(/\\/+$/, "");')
     # Generated endpoints require the same X-API-Key header the generated
     # app itself defaults to (see NOTEBOOK_API_KEY in api_generator.py) so
-    # the client works out of the box locally, matching the Python client.
+    # the client works out of the box locally -- the Python client's own
+    # identical `api_key or os.getenv('NOTEBOOK_API_KEY', ...)` fallback
+    # already reads this same env var when no api_key is passed
+    # explicitly, but this constructor previously only ever fell back to
+    # the hardcoded literal, silently dropping process.env.NOTEBOOK_API_KEY
+    # even though this file already targets Node (see the node:crypto
+    # import verifyWebhookSignature above uses), where process.env is
+    # exactly as safe to read as os.getenv is in the Python client.
     lines.append(
-        '    this.apiKey = options.apiKey ?? "notebook-to-api-dev-key";'
+        "    this.apiKey = options.apiKey ?? "
+        'process.env.NOTEBOOK_API_KEY ?? "notebook-to-api-dev-key";'
     )
     # fetch() has no default timeout of its own -- a call with no signal
     # can hang indefinitely on a server that accepts the connection but
