@@ -16699,6 +16699,17 @@ def get_config():
     giving up, short of the same direct environment access this
     endpoint exists to avoid.
 
+    "deploy_smoke_test_timeout_seconds" closes the identical gap for
+    POST /api/deploy's own "smoke_test": true -- independently
+    configurable via NOTEBOOK_API_DEPLOY_SMOKE_TEST_TIMEOUT_SECONDS (see
+    DEPLOY_SMOKE_TEST_TIMEOUT_SECONDS' own comment above) the same way
+    its sibling "deploy_subprocess_timeout_seconds" already is, but
+    never actually surfaced here -- a caller opting into "smoke_test"
+    had no way to know how long this dashboard itself is willing to
+    poll the throwaway container's own health check before giving up,
+    short of the same direct environment access this endpoint exists to
+    avoid.
+
     Deliberately omits UPLOAD_DIR and GENERATED_DIR: those are absolute
     (or process-relative) filesystem paths on the compiling server, the
     same category of information GET /api/health's own docstring already
@@ -16893,6 +16904,7 @@ def get_config():
         "max_deploy_history_entries": MAX_DEPLOY_HISTORY_ENTRIES,
         "max_compile_history_entries": MAX_COMPILE_HISTORY_ENTRIES,
         "deploy_subprocess_timeout_seconds": DEPLOY_SUBPROCESS_TIMEOUT_SECONDS,
+        "deploy_smoke_test_timeout_seconds": DEPLOY_SMOKE_TEST_TIMEOUT_SECONDS,
         "url_import_timeout_seconds": URL_IMPORT_TIMEOUT_SECONDS,
         "stale_upload_temp_file_seconds": STALE_UPLOAD_TEMP_FILE_SECONDS,
         "notebook_sort_keys": sorted(_NOTEBOOK_SORT_KEYS),

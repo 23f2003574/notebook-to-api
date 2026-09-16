@@ -22965,6 +22965,47 @@ def test_status_command_prints_url_import_timeout(tmp_path, fake_dashboard):
     assert "URL import timeout: 30s" in proc.stdout
 
 
+def test_status_command_prints_deploy_smoke_test_timeout(tmp_path, fake_dashboard):
+    """GET /api/config already returns "deploy_smoke_test_timeout_seconds"
+    -- confirms `status` actually prints it, the same way it already
+    prints its sibling "deploy_subprocess_timeout_seconds".
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "healthy", "service": "notebook-to-api",
+            "compiled_app_present": False,
+        }),
+        _json_response(200, {
+            "status": "success",
+            "max_upload_bytes": 10485760,
+            "max_batch_upload_files": 50,
+            "max_notebook_versions": 20,
+            "max_tag_length": 40,
+            "max_tags_per_notebook": 20,
+            "max_description_length": 500,
+            "max_deploy_history_entries": 50,
+            "max_compile_history_entries": 50,
+            "deploy_subprocess_timeout_seconds": 600,
+            "deploy_smoke_test_timeout_seconds": 30,
+            "url_import_timeout_seconds": 30,
+            "notebook_sort_keys": ["name", "size", "uploaded_at"],
+            "notebook_sort_orders": ["asc", "desc"],
+            "allowed_origins": [],
+            "compiling_python_version": "3.12",
+        }),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["status", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "deploy smoke test timeout: 30s" in proc.stdout
+
+
 def test_status_command_prints_stale_upload_temp_file_threshold(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

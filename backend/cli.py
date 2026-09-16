@@ -7723,6 +7723,7 @@ def _dispatch_core_command(args):
             print(f"  max deploy history entries: {config.get('max_deploy_history_entries')}")
             print(f"  max compile history entries: {config.get('max_compile_history_entries')}")
             print(f"  deploy subprocess timeout: {config.get('deploy_subprocess_timeout_seconds')}s")
+            print(f"  deploy smoke test timeout: {config.get('deploy_smoke_test_timeout_seconds')}s")
             print(f"  URL import timeout: {config.get('url_import_timeout_seconds')}s")
             print(f"  stale upload temp file threshold: {config.get('stale_upload_temp_file_seconds')}s")
             print(f"  notebook sort keys: {', '.join(config.get('notebook_sort_keys', []))}")

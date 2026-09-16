@@ -28473,6 +28473,7 @@ def test_get_config_reports_the_configured_limits():
     assert isinstance(body["max_deploy_history_entries"], int)
     assert isinstance(body["max_compile_history_entries"], int)
     assert isinstance(body["deploy_subprocess_timeout_seconds"], int)
+    assert isinstance(body["deploy_smoke_test_timeout_seconds"], float)
     assert isinstance(body["max_source_url_length"], int)
     assert isinstance(body["max_search_regex_length"], int)
 
