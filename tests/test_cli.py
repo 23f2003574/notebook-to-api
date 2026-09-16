@@ -14239,6 +14239,8 @@ def test_curl_preview_command_prints_the_commands(tmp_path, fake_dashboard):
         "host": "localhost",
         "port": 8000,
         "api_key": "notebook-to-api-dev-key",
+        "only": None,
+        "exclude": None,
     }
 
 
@@ -14270,6 +14272,8 @@ def test_curl_preview_command_passes_host_port_and_api_key_through(
         "host": "api.example.com",
         "port": 9000,
         "api_key": "mykey123",
+        "only": None,
+        "exclude": None,
     }
 
 
@@ -14301,7 +14305,46 @@ def test_curl_preview_command_passes_the_version_id_flag_through(tmp_path, fake_
         "host": "localhost",
         "port": 8000,
         "api_key": "notebook-to-api-dev-key",
+        "only": None,
+        "exclude": None,
         "version_id": "v1.ipynb",
+    }
+
+
+def test_curl_preview_command_passes_only_and_exclude_through(tmp_path, fake_dashboard):
+    """Mirrors `postman-preview`'s own --only/--exclude wiring -- POST
+    /api/curl-preview already validates and applies "only"/"exclude" the
+    identical way POST /api/postman-preview does, but the CLI's own
+    `curl-preview` command previously never offered the flags at all.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebook": "nb.ipynb",
+            "commands": ["curl -X POST http://localhost:8000/add"],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "curl-preview", "nb.ipynb", "--dashboard-url", dashboard_url,
+            "--exclude", "subtract, divide",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb",
+        "host": "localhost",
+        "port": 8000,
+        "api_key": "notebook-to-api-dev-key",
+        "only": None,
+        "exclude": ["subtract", "divide"],
     }
 
 
@@ -14332,6 +14375,8 @@ def test_curl_preview_command_passes_the_callback_url_flag_through(tmp_path, fak
         "host": "localhost",
         "port": 8000,
         "api_key": "notebook-to-api-dev-key",
+        "only": None,
+        "exclude": None,
         "callback_url": "https://example.com/hook",
     }
 

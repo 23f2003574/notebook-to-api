@@ -5228,11 +5228,16 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        only = _parse_comma_separated_names(args.only)
+        exclude = _parse_comma_separated_names(args.exclude)
+
         curl_preview_body = {
             "notebook_path": args.filename,
             "host": args.host,
             "port": args.port,
             "api_key": args.api_key,
+            "only": only,
+            "exclude": exclude,
         }
         if args.version_id:
             curl_preview_body["version_id"] = args.version_id
@@ -11913,6 +11918,7 @@ def main():
             "NOTEBOOK_API_KEY if it's been changed."
         )
     )
+    _add_function_selection_arguments(curl_preview_parser)
     _add_version_id_argument(curl_preview_parser, "POST /api/curl-preview")
     _add_callback_url_argument(curl_preview_parser)
     curl_preview_parser.add_argument(
