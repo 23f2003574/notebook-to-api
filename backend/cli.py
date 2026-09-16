@@ -5337,6 +5337,7 @@ def _dispatch_core_command(args):
             "notebook_path": args.filename,
             "only": only,
             "exclude": exclude,
+            "format": args.format,
         }
         if args.version_id:
             openapi_preview_body["version_id"] = args.version_id
@@ -5370,7 +5371,10 @@ def _dispatch_core_command(args):
                 f"OpenAPI schema preview for {target} on {dashboard_url} "
                 f"(package '{data.get('package_name')}'):\n"
             )
-            print(json.dumps(data.get("schema", {}), indent=2))
+            if data.get("format") == "yaml":
+                print(data.get("content", ""))
+            else:
+                print(json.dumps(data.get("schema", {}), indent=2))
 
     elif args.command == "curl-preview":
         # See `upload` above for why this is imported here rather than at
@@ -12452,14 +12456,25 @@ def main():
     _add_function_selection_arguments(openapi_preview_parser)
     _add_version_id_argument(openapi_preview_parser, "POST /api/openapi-preview")
     openapi_preview_parser.add_argument(
+        "--format",
+        choices=["json", "yaml"],
+        default="json",
+        help=(
+            "Preview format, via POST /api/openapi-preview's own "
+            "\"format\" body field -- the identical \"json\"/\"yaml\" "
+            "choice `export-openapi`/`remote-export-openapi` already "
+            "offer for a real compile's schema. Default: json."
+        )
+    )
+    openapi_preview_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help=(
             "Emit the dashboard's own JSON response ({\"status\", "
-            "\"notebook\", \"version_id\", \"package_name\", "
-            "\"schema\"}) instead of a human-readable preview, for "
-            "scripting/automation."
+            "\"notebook\", \"version_id\", \"package_name\", \"format\", "
+            "\"schema\"/\"content\"}) instead of a human-readable "
+            "preview, for scripting/automation."
         )
     )
 

@@ -14613,6 +14613,7 @@ def test_openapi_preview_command_prints_the_computed_schema(tmp_path, fake_dashb
     assert handler.requests == ["/api/openapi-preview"]
     assert json.loads(handler.bodies[0]) == {
         "notebook_path": "nb.ipynb", "only": None, "exclude": None,
+        "format": "json",
     }
 
 
@@ -14642,6 +14643,7 @@ def test_openapi_preview_command_passes_only_and_exclude(tmp_path, fake_dashboar
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads(handler.bodies[0]) == {
         "notebook_path": "nb.ipynb", "only": ["add", "subtract"], "exclude": None,
+        "format": "json",
     }
 
 
@@ -14673,7 +14675,46 @@ def test_openapi_preview_command_passes_the_version_id_flag_through(tmp_path, fa
     assert "'nb.ipynb' version 'v1.ipynb'" in proc.stdout
     assert json.loads(handler.bodies[0]) == {
         "notebook_path": "nb.ipynb", "only": None, "exclude": None,
+        "format": "json",
         "version_id": "v1.ipynb",
+    }
+
+
+def test_openapi_preview_command_format_yaml_prints_the_raw_content(
+    tmp_path, fake_dashboard
+):
+    """POST /api/openapi-preview's own new "format" field lets a caller
+    preview the YAML rendering the same way POST /api/export-openapi's
+    own identical field already does for a real compile.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebook": "nb.ipynb",
+            "package_name": "generated",
+            "format": "yaml",
+            "content": "openapi: 3.1.0\npaths:\n  /add:\n    post: {}\n",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "openapi-preview", "nb.ipynb", "--format", "yaml",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "openapi: 3.1.0" in proc.stdout
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "only": None, "exclude": None,
+        "format": "yaml",
     }
 
 

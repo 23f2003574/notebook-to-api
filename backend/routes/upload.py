@@ -13441,6 +13441,19 @@ def openapi_preview_endpoint(data: dict):
     400 POST /api/compile itself would raise for the same notebook, and
     "version_id" previews the schema for one of "notebook_path"'s own
     previously snapshotted versions instead of its current content.
+
+    "format" (optional, default "json") returns "content" (a YAML
+    rendering, via _to_yaml, backend/exporters/openapi_exporter.py)
+    instead of "schema" -- the identical "json"/"yaml" choice POST
+    /api/export-openapi's own "format" already offers for a real
+    compile's schema, closing the one gap left between this preview and
+    its own real-compile counterpart: every other field this endpoint
+    already mirrors from POST /api/export-openapi, but a caller wanting
+    to preview the YAML rendering (e.g. to diff against a checked-in
+    openapi.yaml, or feed straight into a YAML-based OpenAPI tool)
+    previously had no way to get it without compiling for real. An
+    unrecognized "format" is rejected with 400, the identical message
+    POST /api/export-openapi's own check already gives.
     """
 
     notebook_path = data.get("notebook_path")
@@ -13472,6 +13485,15 @@ def openapi_preview_endpoint(data: dict):
         raise HTTPException(
             status_code=400,
             detail="only and exclude can't both be given -- choose one."
+        )
+
+    export_format = data.get("format", "json")
+
+    if export_format not in ("json", "yaml"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="format must be 'json' or 'yaml'"
         )
 
     full_path = _resolve_preview_content_path(notebook_path, version_id)
@@ -13597,13 +13619,21 @@ def openapi_preview_endpoint(data: dict):
             _evict_compiled_app_from_module_cache(temp_package_name)
             sys.path.remove(temp_root)
 
-    return {
+    response = {
         "status": "success",
         "notebook": notebook_path,
         "version_id": version_id,
         "package_name": package_name,
-        "schema": schema,
+        "format": export_format,
     }
+
+    if export_format == "json":
+        response["schema"] = schema
+    else:
+        from backend.exporters.openapi_exporter import _to_yaml
+        response["content"] = _to_yaml(schema)
+
+    return response
 
 
 @router.post("/compile")

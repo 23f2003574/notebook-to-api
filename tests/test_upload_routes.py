@@ -21803,6 +21803,57 @@ def test_openapi_preview_matches_what_an_actual_compile_and_export_produces():
     )
 
 
+def test_openapi_preview_format_yaml_returns_content_not_schema():
+    """POST /api/openapi-preview's own new "format" field mirrors POST
+    /api/export-openapi's own identical "json"/"yaml" choice -- a
+    caller previewing the YAML rendering previously had no way to get
+    it without compiling for real.
+    """
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "openapi_preview_yaml.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/openapi-preview",
+        json={"notebook_path": "openapi_preview_yaml.ipynb", "format": "yaml"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["format"] == "yaml"
+    assert "schema" not in body
+    assert "openapi:" in body["content"]
+    assert "/add:" in body["content"]
+
+
+def test_openapi_preview_rejects_an_unknown_format():
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+    client.post(
+        "/api/upload",
+        files={"file": ("openapi_preview_bad_format.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/openapi-preview",
+        json={"notebook_path": "openapi_preview_bad_format.ipynb", "format": "xml"},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_openapi_preview_matches_an_actual_compile_with_a_background_override_directive():
     """"regenerate_token" contains "generate" (a LONG_RUNNING_KEYWORDS
     match) -- without this endpoint honoring "# notebook-to-api: sync"
