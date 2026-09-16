@@ -2904,6 +2904,8 @@ def _dispatch_core_command(args):
             params["limit"] = args.limit
         if args.format == "csv":
             params["format"] = "csv"
+        if args.checksums:
+            params["checksums"] = "true"
 
         try:
             response = httpx.get(
@@ -2944,7 +2946,8 @@ def _dispatch_core_command(args):
                     function_names = ", ".join(
                         func["name"] for func in match["functions"]
                     )
-                    print(f"{match['filename']}: {function_names}")
+                    suffix = f"  [sha256:{match['sha256']}]" if args.checksums else ""
+                    print(f"{match['filename']}: {function_names}{suffix}")
 
                 print(f"\n{_matched_notebooks_summary(data, args, len(matches))}")
     elif args.command == "search-content":
@@ -2969,6 +2972,8 @@ def _dispatch_core_command(args):
             params["limit"] = args.limit
         if args.format == "csv":
             params["format"] = "csv"
+        if args.checksums:
+            params["checksums"] = "true"
 
         try:
             response = httpx.get(
@@ -3006,7 +3011,8 @@ def _dispatch_core_command(args):
                 print(f"No notebooks have a code cell matching '{args.search}'.")
             else:
                 for match in matches:
-                    print(f"{match['filename']}:")
+                    suffix = f"  [sha256:{match['sha256']}]" if args.checksums else ""
+                    print(f"{match['filename']}:{suffix}")
                     for cell_match in match["matches"]:
                         print(f"  [{cell_match['cell_index']}] {cell_match['snippet']}")
 
@@ -9833,6 +9839,18 @@ def main():
             "response isn't JSON at all."
         )
     )
+    search_functions_parser.add_argument(
+        "--checksums",
+        action="store_true",
+        help=(
+            "Pair each matching notebook with its own sha256, via GET "
+            "/api/functions' own ?checksums=true -- the same opt-in "
+            "`list`'s own --checksums already provides, letting a "
+            "caller with several differently-named matches tell which "
+            "are byte-identical without a separate `list --checksums` "
+            "round trip per match."
+        )
+    )
     _add_dashboard_url_and_timeout_arguments(search_functions_parser)
     search_functions_parser.add_argument(
         "--json",
@@ -9952,6 +9970,15 @@ def main():
             "--sha256/--modified-after/--modified-before/--regex/"
             "--limit/--offset above still applies; --json is ignored "
             "under --format csv, since the response isn't JSON at all."
+        )
+    )
+    search_content_parser.add_argument(
+        "--checksums",
+        action="store_true",
+        help=(
+            "Pair each matching notebook with its own sha256, via GET "
+            "/api/notebooks/search-content's own ?checksums=true -- the "
+            "same opt-in `search-functions --checksums` just gained."
         )
     )
     _add_dashboard_url_and_timeout_arguments(search_content_parser)

@@ -4561,6 +4561,7 @@ def search_functions(
     search: str = None, tag: str = None, sha256: str = None,
     modified_after: str = None, modified_before: str = None, regex: bool = False,
     limit: int = None, offset: int = 0, format: str = "json",
+    checksums: bool = False,
 ):
     """Find which uploaded notebooks define a function whose name
     contains `search` (case-insensitive), across every notebook in
@@ -4684,6 +4685,20 @@ def search_functions(
     separator every other CSV export in this file already uses for a
     list-valued field. An unrecognized "format" is rejected with 400
     before a single notebook is even read.
+
+    "checksums" (optional, default false) additionally pairs each
+    "matches" entry with its own "sha256" -- the same
+    hash_notebook_file already computed here for "sha256"'s own filter
+    (or freshly, when only "checksums" is given), the identical opt-in
+    GET /api/notebooks' own "checksums" already provides. A caller who
+    found several differently-named matches for the same function name
+    (e.g. to feed the byte-identical ones into GET
+    /api/notebooks/duplicates?sha256= or DELETE /api/notebooks/versions
+    ?sha256=) previously had to issue a separate GET /api/notebooks
+    ?checksums=true round trip per match just to learn which were
+    duplicates of each other. CSV export gains a matching "sha256"
+    column only when "checksums" is given, so a plain `format=csv`
+    request's own column set is unchanged from before this existed.
     """
 
     if format not in ("json", "csv"):
@@ -4747,7 +4762,9 @@ def search_functions(
         if tag and tag not in _read_notebook_tags(entry.name):
             continue
 
-        if sha256 and hash_notebook_file(entry) != sha256:
+        entry_sha256 = hash_notebook_file(entry) if (sha256 or checksums) else None
+
+        if sha256 and entry_sha256 != sha256:
             continue
 
         if modified_after_dt is not None or modified_before_dt is not None:
@@ -4783,10 +4800,16 @@ def search_functions(
             ]
 
         if matching_functions:
-            matches.append({
+
+            match_entry = {
                 "filename": entry.name,
                 "functions": matching_functions,
-            })
+            }
+
+            if checksums:
+                match_entry["sha256"] = entry_sha256
+
+            matches.append(match_entry)
 
     notebook_count = len(matches)
 
@@ -4799,9 +4822,10 @@ def search_functions(
         buffer = io.StringIO()
         writer = csv.writer(buffer)
 
-        writer.writerow([
-            "filename", "function_name", "args", "return_type", "is_async",
-        ])
+        header = ["filename", "function_name", "args", "return_type", "is_async"]
+        if checksums:
+            header.append("sha256")
+        writer.writerow(header)
 
         for match in paginated_matches:
 
@@ -4812,13 +4836,17 @@ def search_functions(
                     for arg in func.get("args", [])
                 )
 
-                writer.writerow([
+                row = [
                     match["filename"],
                     func["name"],
                     args,
                     func.get("return_type") or "",
                     func.get("is_async", False),
-                ])
+                ]
+                if checksums:
+                    row.append(match["sha256"])
+
+                writer.writerow(row)
 
         return StreamingResponse(
             iter([buffer.getvalue()]),
@@ -6187,6 +6215,7 @@ def search_notebook_content(
     search: str = None, tag: str = None, sha256: str = None,
     modified_after: str = None, modified_before: str = None, regex: bool = False,
     limit: int = None, offset: int = 0, format: str = "json",
+    checksums: bool = False,
 ):
     """Find every uploaded notebook with a code cell whose raw source
     contains `search` (case-insensitive), across the whole catalog at
@@ -6288,6 +6317,14 @@ def search_notebook_content(
     matching function. Column order is "filename,cell_index,snippet". An
     unrecognized "format" is rejected with 400 before a single notebook
     is even read.
+
+    "checksums" (optional, default false) additionally pairs each
+    "matches" entry with its own "sha256", the identical opt-in GET
+    /api/notebooks' own "checksums" and GET /api/functions' own
+    identical new "checksums" already provide -- reused from "sha256"'s
+    own filter check when that's also given, rather than hashing the
+    same notebook twice. CSV export gains a matching "sha256" column
+    only when "checksums" is given.
     """
 
     if format not in ("json", "csv"):
@@ -6351,7 +6388,9 @@ def search_notebook_content(
         if tag and tag not in _read_notebook_tags(entry.name):
             continue
 
-        if sha256 and hash_notebook_file(entry) != sha256:
+        entry_sha256 = hash_notebook_file(entry) if (sha256 or checksums) else None
+
+        if sha256 and entry_sha256 != sha256:
             continue
 
         if modified_after_dt is not None or modified_before_dt is not None:
@@ -6411,10 +6450,16 @@ def search_notebook_content(
             })
 
         if cell_matches:
-            matches.append({
+
+            match_entry = {
                 "filename": entry.name,
                 "matches": cell_matches,
-            })
+            }
+
+            if checksums:
+                match_entry["sha256"] = entry_sha256
+
+            matches.append(match_entry)
 
     notebook_count = len(matches)
 
@@ -6427,17 +6472,24 @@ def search_notebook_content(
         buffer = io.StringIO()
         writer = csv.writer(buffer)
 
-        writer.writerow(["filename", "cell_index", "snippet"])
+        header = ["filename", "cell_index", "snippet"]
+        if checksums:
+            header.append("sha256")
+        writer.writerow(header)
 
         for match in paginated_matches:
 
             for cell_match in match["matches"]:
 
-                writer.writerow([
+                row = [
                     match["filename"],
                     cell_match["cell_index"],
                     cell_match["snippet"],
-                ])
+                ]
+                if checksums:
+                    row.append(match["sha256"])
+
+                writer.writerow(row)
 
         return StreamingResponse(
             iter([buffer.getvalue()]),

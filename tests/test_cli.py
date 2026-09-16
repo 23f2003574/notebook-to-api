@@ -5845,6 +5845,30 @@ def test_search_functions_command_sends_tag_query_param(fake_dashboard):
     assert handler.requests == ["/api/functions?search=train&offset=0&tag=prod"]
 
 
+def test_search_functions_command_checksums_sends_query_param_and_prints_sha256(
+    fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "search": "train",
+        "matches": [
+            {"filename": "a.ipynb", "functions": [{"name": "train_model"}], "sha256": "a" * 64},
+        ],
+        "notebook_count": 1,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["search-functions", "train", "--checksums", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"sha256:{'a' * 64}" in proc.stdout
+    assert handler.requests == ["/api/functions?search=train&offset=0&checksums=true"]
+
+
 def test_search_functions_command_sends_sha256_query_param(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
@@ -6123,6 +6147,39 @@ def test_search_content_command_sends_tag_query_param(fake_dashboard):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert handler.requests == ["/api/notebooks/search-content?search=read_csv&offset=0&tag=prod"]
+
+
+def test_search_content_command_checksums_sends_query_param_and_prints_sha256(
+    fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "search": "read_csv",
+        "matches": [
+            {
+                "filename": "a.ipynb",
+                "matches": [{"cell_index": 0, "snippet": "read_csv(x)"}],
+                "sha256": "a" * 64,
+            },
+        ],
+        "notebook_count": 1,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        [
+            "search-content", "read_csv", "--checksums",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"sha256:{'a' * 64}" in proc.stdout
+    assert handler.requests == [
+        "/api/notebooks/search-content?search=read_csv&offset=0&checksums=true"
+    ]
 
 
 def test_search_content_command_sends_sha256_query_param(fake_dashboard):

@@ -6465,6 +6465,39 @@ def test_search_notebook_content_finds_notebooks_with_a_matching_cell():
     assert "read_csv" in cell_match["snippet"]
 
 
+def test_search_notebook_content_checksums_pairs_each_match_with_its_sha256():
+
+    content = _notebook_bytes("def f():\n    return 'read_csv marker'\n")
+    client.post(
+        "/api/upload",
+        files={"file": ("search_content_checksums.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={"search": "read_csv", "checksums": "true"},
+    )
+
+    assert resp.status_code == 200
+    match = resp.json()["matches"][0]
+    assert match["sha256"] == hashlib.sha256(content).hexdigest()
+
+
+def test_search_notebook_content_omits_sha256_without_checksums():
+
+    content = _notebook_bytes("def f():\n    return 'read_csv marker'\n")
+    client.post(
+        "/api/upload",
+        files={"file": ("search_content_no_checksums.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get(
+        "/api/notebooks/search-content", params={"search": "read_csv"}
+    )
+
+    assert "sha256" not in resp.json()["matches"][0]
+
+
 def test_search_notebook_content_filters_by_tag():
 
     client.delete("/api/notebooks?confirm=true")
@@ -12077,6 +12110,38 @@ def test_search_functions_finds_notebooks_with_a_matching_function_name():
     assert body["notebook_count"] == 1
     assert body["matches"][0]["filename"] == "search_functions_a.ipynb"
     assert [f["name"] for f in body["matches"][0]["functions"]] == ["train_model"]
+
+
+def test_search_functions_checksums_pairs_each_match_with_its_sha256():
+
+    content = _notebook_bytes(
+        "def train_model(epochs: int) -> str:\n    return 'done'\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("search_functions_checksums.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get(
+        "/api/functions?search=train_model&checksums=true"
+    )
+
+    assert resp.status_code == 200
+    match = resp.json()["matches"][0]
+    assert match["sha256"] == hashlib.sha256(content).hexdigest()
+
+
+def test_search_functions_omits_sha256_without_checksums():
+
+    content = _notebook_bytes("def train_model():\n    return 1\n")
+    client.post(
+        "/api/upload",
+        files={"file": ("search_functions_no_checksums.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.get("/api/functions?search=train_model")
+
+    assert "sha256" not in resp.json()["matches"][0]
 
 
 def test_search_functions_filters_by_tag():
