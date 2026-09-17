@@ -11818,6 +11818,34 @@ def inspect_notebook_endpoint(
     "expected_sha256" (optional), see _verify_expected_notebook_sha256
     above, rejects the request with 400 before inspecting anything if the
     notebook's current content doesn't match.
+
+    "only"/"exclude" (each an optional list of function names, validated
+    and composed the identical way POST /api/validate's own already are)
+    restrict "functions", "endpoints", "reserved_name_conflicts", and
+    "functions_without_docstrings" to whichever functions
+    _filter_functions_by_name (backend/compiler.py) -- the exact function
+    POST /api/compile itself calls -- would actually leave compiled.
+    Every other endpoint in this file that previews a would-be compile
+    (POST /api/validate, every artifact-preview endpoint, POST
+    /api/compile itself) already accepts "only"/"exclude" so its own
+    preview reflects a restricted compile rather than an unrestricted
+    one; this was the one "preview what compiling will do" endpoint left
+    out, so `POST /api/compile {"only": [...]}` and `POST /api/inspect
+    {"notebook_path": ...}` against the identical notebook disagreed
+    about how many endpoints the notebook actually produces, with no way
+    to preview the restricted count without compiling for real first. An
+    unrecognized name in "only"/"exclude" is rejected with 400, the same
+    "fail loudly on a typo'd name" behavior a real compile already has;
+    "only" and "exclude" both given is rejected with 400 too, before a
+    single notebook is even read. "dependencies", "apt_packages",
+    "generated_files", "skipped_functions", "private_functions",
+    "excluded_imports", and "duplicate_functions" are deliberately left
+    untouched -- they describe the notebook's own content and directives,
+    not which functions end up with an endpoint, the identical
+    "notebook-level fact, not endpoint-level" reasoning
+    print_compile_summary's own identical "only"/"exclude" handling
+    (backend/inspector.py) already follows for the CLI's own `compile`/
+    `serve` output.
     """
 
     notebook_path = data.get(
@@ -11831,6 +11859,8 @@ def inspect_notebook_endpoint(
             detail="notebook_path is required"
         )
 
+    only = data.get("only")
+    exclude = data.get("exclude")
     expected_sha256 = data.get("expected_sha256")
 
     if expected_sha256 is not None and not isinstance(expected_sha256, str):
@@ -11838,6 +11868,24 @@ def inspect_notebook_endpoint(
         raise HTTPException(
             status_code=400,
             detail="expected_sha256 must be a string"
+        )
+
+    for field_name, field_value in (("only", only), ("exclude", exclude)):
+
+        if field_value is not None and (
+            not isinstance(field_value, list)
+            or not all(isinstance(item, str) for item in field_value)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name} must be a list of strings"
+            )
+
+    if only and exclude:
+
+        raise HTTPException(
+            status_code=400,
+            detail="only and exclude can't both be given -- choose one."
         )
 
     full_path = resolve_upload_path(notebook_path)
@@ -11898,17 +11946,47 @@ def inspect_notebook_endpoint(
                 GENERATED_DIR
             )
 
-        return {
-            "status": "success",
-            **inspection
-        }
-
     except Exception as e:
 
         raise HTTPException(
             status_code=500,
             detail=f"Inspection error: {str(e)}"
         )
+
+    if only or exclude:
+
+        try:
+
+            kept_names = {
+                func["name"]
+                for func in _filter_functions_by_name(inspection["functions"], only, exclude)
+            }
+
+        except ValueError as e:
+
+            raise HTTPException(
+                status_code=400,
+                detail=str(e)
+            )
+
+        inspection["functions"] = [
+            func for func in inspection["functions"] if func["name"] in kept_names
+        ]
+        inspection["endpoints"] = [
+            endpoint for endpoint in inspection["endpoints"]
+            if endpoint["path"].lstrip("/") in kept_names
+        ]
+        inspection["reserved_name_conflicts"] = [
+            name for name in inspection["reserved_name_conflicts"] if name in kept_names
+        ]
+        inspection["functions_without_docstrings"] = [
+            name for name in inspection["functions_without_docstrings"] if name in kept_names
+        ]
+
+    return {
+        "status": "success",
+        **inspection
+    }
 
 
 def _resolve_preview_content_path(notebook_path, version_id=None):

@@ -4909,6 +4909,16 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
+        only = _parse_comma_separated_names(args.only)
+        exclude = _parse_comma_separated_names(args.exclude)
+
+        if (only or exclude) and args.version_id:
+            raise RuntimeError(
+                "--only/--exclude are not supported together with "
+                "--version-id -- GET .../versions/{version_id}/inspect "
+                "has no equivalent filter."
+            )
+
         try:
             if args.version_id:
                 params = {}
@@ -4924,6 +4934,10 @@ def _dispatch_core_command(args):
                 inspect_body = {"notebook_path": args.filename}
                 if args.expected_sha256:
                     inspect_body["expected_sha256"] = args.expected_sha256
+                if only:
+                    inspect_body["only"] = only
+                if exclude:
+                    inspect_body["exclude"] = exclude
                 response = httpx.post(
                     f"{dashboard_url}/api/inspect",
                     json=inspect_body,
@@ -12010,6 +12024,7 @@ def main():
             "of the same name, under --version-id)."
         )
     )
+    _add_function_selection_arguments(remote_inspect_parser)
     _add_dashboard_url_and_timeout_arguments(remote_inspect_parser)
     remote_inspect_parser.add_argument(
         "--json",
