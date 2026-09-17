@@ -1,0 +1,79 @@
+from .worker_registry import (
+    WorkerMetadata,
+    WorkerNode,
+    WorkerRegistry,
+    get_worker_registry,
+)
+from .worker_discovery import (
+    DiscoveryRecord,
+    HeartbeatStatus,
+    WorkerDiscoveryService,
+    get_worker_discovery_service,
+)
+from .job_dispatcher import (
+    DispatchRequest,
+    DispatchResult,
+    DistributedJobDispatcher,
+    get_job_dispatcher,
+)
+from .task_serializer import (
+    SerializationMetadata,
+    SerializedTask,
+    TaskSerializationEngine,
+    get_task_serialization_engine,
+)
+from .execution_coordinator import (
+    ExecutionSession,
+    ExecutionState,
+    ExecutionCoordinator,
+    get_execution_coordinator,
+)
+from .worker_health import (
+    HealthReport,
+    HealthStatus,
+    WorkerHealthManager,
+    get_worker_health_manager,
+)
+from .distributed_scheduler import (
+    SchedulingDecision,
+    SchedulingPlan,
+    DistributedScheduler,
+    get_distributed_scheduler,
+)
+from .auto_scaling import (
+    ScalingDecision,
+    ScalingPolicy,
+    AutoScalingEngine,
+    get_auto_scaling_engine,
+)
+from .fault_tolerance import (
+    FailureEvent,
+    RecoveryPlan,
+    FaultToleranceManager,
+    get_fault_tolerance_manager,
+)
+from .cluster_analytics import (
+    ClusterMetrics,
+    ClusterTrend,
+    ClusterAnalyticsService,
+    get_cluster_analytics_service,
+)
+from .dashboard import (
+    ClusterDashboardAPI,
+    get_cluster_dashboard_api,
+)
+from .export_service import (
+    ClusterExport,
+    ExportManifest,
+    ClusterExportService,
+    get_cluster_export_service,
+)
+from .bootstrap import (
+    ClusterBootstrapError,
+    ClusterBootstrapValidationResult,
+    ClusterNotInitializedError,
+    DistributedExecutionBootstrap,
+    UnknownServiceError,
+    bootstrap_cluster_subsystem,
+    get_cluster_bootstrap,
+)

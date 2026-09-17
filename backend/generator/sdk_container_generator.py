@@ -1,0 +1,382 @@
+from textwrap import dedent
+
+
+class SDKContainerGenerator:
+
+    def generate_dockerfile(
+        self,
+        package_name: str
+    ):
+
+        return dedent(
+            f"""
+            FROM python:3.12-slim
+
+            WORKDIR /app
+
+            COPY . .
+
+            RUN pip install -r requirements.txt
+
+            CMD ["python"]
+            """
+        )
+
+    def generate_dockerignore(
+        self
+    ):
+
+        return dedent(
+            """
+            __pycache__/
+
+            *.pyc
+
+            .venv/
+
+            dist/
+
+            build/
+            """
+        )
+
+    def generate_docker_compose(
+        self,
+        package_name: str
+    ):
+
+        return dedent(
+            f"""
+            version: "3.9"
+
+            services:
+
+              {package_name}:
+
+                build: .
+
+                container_name:
+                  {package_name}
+
+                restart:
+                  unless-stopped
+            """
+        )
+
+    def generate_env_file(
+        self
+    ):
+
+        return dedent(
+            """
+            API_URL=http://localhost
+
+            LOG_LEVEL=INFO
+            """
+        )
+
+    def generate_kubernetes_deployment(
+        self,
+        package_name: str
+    ):
+
+        return dedent(
+            f"""
+            apiVersion: apps/v1
+
+            kind: Deployment
+
+            metadata:
+
+              name:
+                {package_name}
+
+            spec:
+
+              replicas: 1
+
+              selector:
+
+                matchLabels:
+
+                  app:
+                    {package_name}
+
+              template:
+
+                metadata:
+
+                  labels:
+
+                    app:
+                      {package_name}
+
+                spec:
+
+                  containers:
+
+                  - name:
+                      {package_name}
+
+                    image:
+                      {package_name}:latest
+
+                    ports:
+
+                    - containerPort: 8000
+            """
+        )
+
+    def generate_kubernetes_service(
+        self,
+        package_name: str
+    ):
+
+        return dedent(
+            f"""
+            apiVersion: v1
+
+            kind: Service
+
+            metadata:
+
+              name:
+                {package_name}
+
+            spec:
+
+              selector:
+
+                app:
+                  {package_name}
+
+              ports:
+
+              - port: 80
+
+                targetPort: 8000
+
+              type: ClusterIP
+            """
+        )
+
+    def generate_github_actions(
+        self
+    ):
+
+        return dedent(
+            """
+            name: SDK Release
+
+            on:
+
+              push:
+
+                branches:
+
+                  - main
+
+            jobs:
+
+              build:
+
+                runs-on:
+                  ubuntu-latest
+
+                steps:
+
+                - uses:
+                    actions/checkout@v4
+
+                - uses:
+                    actions/setup-python@v5
+
+                  with:
+
+                    python-version:
+                      "3.12"
+
+                - run:
+                    pip install -r requirements.txt
+
+                - run:
+                    pytest
+            """
+        )
+
+    def generate_release_workflow(
+        self
+    ):
+
+        return dedent(
+            """
+            name: Release
+
+            on:
+
+              workflow_dispatch:
+
+            jobs:
+
+              publish:
+
+                runs-on:
+                  ubuntu-latest
+
+                steps:
+
+                - uses:
+                    actions/checkout@v4
+
+                - run:
+                    echo "Publishing SDK"
+            """
+        )
+
+    def generate_helm_chart(
+        self,
+        package_name: str
+    ):
+
+        return dedent(
+            f"""
+            apiVersion: v2
+
+            name:
+              {package_name}
+
+            version:
+              1.0.0
+
+            appVersion:
+              1.0.0
+            """
+        )
+
+    def generate_helm_values(
+        self
+    ):
+
+        return dedent(
+            """
+            replicaCount: 1
+
+            image:
+
+              repository:
+                sdk-image
+
+              tag:
+                latest
+
+            service:
+
+              type:
+                ClusterIP
+
+              port:
+                80
+            """
+        )
+
+    def generate_terraform_main(
+        self,
+        package_name: str
+    ):
+
+        return dedent(
+            f"""
+            terraform {{
+
+              required_version =
+                ">= 1.0"
+            }}
+
+            resource "null_resource" "{package_name}" {{}}
+            """
+        )
+
+    def generate_terraform_variables(
+        self
+    ):
+
+        return dedent(
+            """
+            variable "environment" {
+
+              type =
+                string
+
+              default =
+                "development"
+            }
+            """
+        )
+
+    def generate_terraform_outputs(
+        self
+    ):
+
+        return dedent(
+            """
+            output "environment" {
+
+              value =
+                var.environment
+            }
+            """
+        )
+
+    def generate_aws_deployment(
+        self,
+        package_name: str
+    ):
+
+        return dedent(
+            f"""
+            service:
+              {package_name}
+
+            region:
+              us-east-1
+
+            runtime:
+              container
+            """
+        )
+
+    def generate_azure_deployment(
+        self,
+        package_name: str
+    ):
+
+        return dedent(
+            f"""
+            resource_group:
+              {package_name}
+
+            location:
+              eastus
+
+            runtime:
+              container
+            """
+        )
+
+    def generate_gcp_deployment(
+        self,
+        package_name: str
+    ):
+
+        return dedent(
+            f"""
+            project:
+              {package_name}
+
+            region:
+              us-central1
+
+            runtime:
+              container
+            """
+        )

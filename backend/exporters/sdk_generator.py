@@ -1,0 +1,2622 @@
+import ast
+import json
+import re
+from pathlib import Path
+
+from backend.parser.ast_parser import _matching_bracket_content
+
+
+# Client methods generate_python_sdk/generate_typescript_sdk always emit
+# themselves -- get_task/wait_for_task (task polling) and
+# list_tasks/delete_task/delete_completed_tasks/delete_failed_tasks (task
+# management) -- independent of _build_method_names' per-path loop below.
+# Unlike the built-in server-side routes these call (RESERVED_INFRASTRUCTURE_
+# NAMES in api_generator.py), the *client* method names below have no
+# equivalent guard stopping a notebook function from being named exactly
+# one of them: "wait_for_task" or "list_tasks" compiles into the server
+# fine (it isn't a reserved identifier there), but would silently shadow
+# this exact hardcoded client method at class-body evaluation time --
+# confirmed: a notebook exposing a `wait_for_task` endpoint produced two
+# `def wait_for_task(...)` methods, with the second (the notebook's own,
+# taking a `payload: dict`) overwriting the real polling helper, breaking
+# every *other* background endpoint's *_and_wait companion, which calls
+# self.wait_for_task(...) internally.
+PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
+    "get_task", "wait_for_task", "list_tasks", "delete_task",
+    "delete_completed_tasks", "delete_failed_tasks", "redeliver_task_webhook",
+    "retry_task", "cleanup_tasks", "reset_tasks",
+    "health", "ready", "info", "config", "metrics", "metrics_prometheus",
+    "uptime", "auth_status", "auth_info", "auth_validate",
+    # Confirmed exploitable: base_url/api_key/timeout are the client's
+    # own __init__-set *instance attributes* (self.base_url, self.api_key,
+    # self.timeout -- every other method here reads them for exactly
+    # that reason), not just names an unrelated method happened to share.
+    # A notebook path sanitizing to one of these (e.g. "/base_url")
+    # compiled into a same-named client *method* fine -- but an instance
+    # attribute set in __init__ shadows a class-level method of the same
+    # name on attribute lookup, so `self.base_url` from then on resolves
+    # to the string, not the method: calling client.base_url(...) fails
+    # with "'str' object is not callable", and nothing about the method
+    # definition itself signals why.
+    "base_url", "api_key", "timeout", "max_retries", "backoff_factor",
+})
+
+# Same hazard as PYTHON_RESERVED_CLIENT_METHOD_NAMES above, for the
+# TypeScript client's own hardcoded method names -- method names aren't
+# case-converted from the notebook function/path they came from (see
+# _method_name_from_path below), so a notebook function named e.g.
+# "waitForTask" would collide with this client's own waitForTask exactly
+# the same way "wait_for_task" collides with the Python client's.
+TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES = frozenset({
+    "getTask", "waitForTask", "listTasks", "deleteTask",
+    "deleteCompletedTasks", "deleteFailedTasks", "redeliverTaskWebhook",
+    "retryTask", "cleanupTasks", "resetTasks",
+    "health", "ready", "info", "config", "metrics", "metricsPrometheus",
+    "uptime", "authStatus", "authInfo", "authValidate",
+    # Same hazard as PYTHON_RESERVED_CLIENT_METHOD_NAMES's base_url/
+    # api_key/timeout above: baseUrl/apiKey/timeoutMs are this client's
+    # own private instance fields (this.baseUrl, this.apiKey,
+    # this.timeoutMs), and a class can't declare a field and a method
+    # under the same identifier -- "Duplicate identifier" at TypeScript
+    # compile time, not just a same-named method colliding.
+    "baseUrl", "apiKey", "timeoutMs", "maxRetries", "backoffFactor",
+    # "request" was, confirmed, already missing here even before this
+    # retry/backoff addition: `private async request(path, payload)` is
+    # this client's own hardcoded POST helper every per-function endpoint
+    # routes through, but nothing stopped a notebook path sanitizing to
+    # "request" (e.g. "/request") from generating a same-named *public*
+    # method -- a duplicate identifier, "Duplicate identifier" at
+    # TypeScript compile time, the exact hazard this whole reserved-name
+    # set otherwise exists to prevent. requestWithRetry/retryDelayMs/sleep
+    # are this same retry addition's own new private helpers, reserved for
+    # the identical reason.
+    "request", "requestWithRetry", "retryDelayMs", "sleep",
+})
+
+
+def _method_name_from_path(path: str) -> str:
+    """Convert an API path into a valid Python identifier.
+
+    Notebook-derived endpoints are always single-segment (e.g.
+    '/train_model'), but a real compiled app also exposes built-in
+    multi-segment paths such as '/tasks/cleanup' and '/tasks/reset'. A
+    naive `lstrip('/').replace('-', '_')` leaves the '/' in place, which
+    produces an invalid method definition like `def tasks/cleanup(...)`.
+    Replacing every run of non-identifier characters (slashes, hyphens,
+    path-parameter braces) with a single underscore keeps names readable
+    and always syntactically valid.
+    """
+    name = re.sub(r"[^0-9a-zA-Z_]+", "_", path.strip("/")).strip("_")
+
+    if not name:
+        name = "root"
+    elif name[0].isdigit():
+        name = f"_{name}"
+
+    return name
+
+
+def _pascal_case(name):
+    """PascalCase identifier for `name` (a method name from
+    _build_method_names, e.g. "train_model" or "tasks_cleanup_2") -- used
+    by generate_typescript_sdk to build each function's own uniquely-named
+    {Pascal}Request/{Pascal}Response TypeScript interfaces below, instead
+    of the bare Record<string, unknown>/any every method's own payload/
+    return type used to be typed as regardless of what the notebook
+    function actually expects or returns.
+    """
+    return "".join(part[:1].upper() + part[1:] for part in name.split("_") if part)
+
+
+# Bare TypeScript equivalents for a Python annotation this tool has no
+# other way to learn the real shape of -- see
+# _python_type_to_typescript below for what these back.
+_PYTHON_SCALAR_TO_TS = {
+    "int": "number", "float": "number", "complex": "number",
+    "str": "string", "bool": "boolean", "bytes": "string",
+    "None": "null", "NoneType": "null",
+    "Any": "unknown", "object": "unknown", "dict": "Record<string, unknown>",
+}
+
+
+def _bracket_inner(type_str, open_bracket_index):
+    """The content strictly between the "[" at `open_bracket_index` and
+    its own matching "]" in `type_str`, respecting nested brackets (so
+    "List[Dict[str, int]]"'s outer brackets correctly capture the whole
+    "Dict[str, int]" inner segment, not just up to its first "]").
+    """
+    depth = 0
+
+    for index in range(open_bracket_index, len(type_str)):
+
+        if type_str[index] == "[":
+            depth += 1
+        elif type_str[index] == "]":
+            depth -= 1
+            if depth == 0:
+                return type_str[open_bracket_index + 1:index]
+
+    return type_str[open_bracket_index + 1:]
+
+
+def _split_top_level(text, separator=","):
+    """Split `text` on `separator`, ignoring one that's nested inside a
+    "[...]" -- e.g. splitting "str, Dict[str, int]" on "," must yield
+    ["str", "Dict[str, int]"], not a spurious three-way split on the
+    comma that's actually part of the nested Dict's own arguments.
+    """
+    parts = []
+    depth = 0
+    current = []
+
+    for char in text:
+
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+
+        if char == separator and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+
+    parts.append("".join(current))
+
+    return [part.strip() for part in parts]
+
+
+def _as_typescript_array_element(ts_type):
+    """`ts_type` wrapped as a TypeScript array element type -- parenthesized
+    when it's itself a union ("number | null"), since "number | null[]"
+    parses as "number | (null[])" in TypeScript, not the intended
+    "(number | null)[]".
+    """
+    return f"({ts_type})[]" if " | " in ts_type else f"{ts_type}[]"
+
+
+def _literal_annotation_values(type_str):
+    """Real Python values inside a `Literal[...]` annotation (e.g.
+    (1, 2) for "Literal[1, 2]"), or None if any of them isn't a literal
+    expression at all -- e.g. an Enum member like `Literal[Color.RED]`,
+    valid per PEP 586 but not something ast.literal_eval can parse.
+
+    Reuses _matching_bracket_content (backend/parser/ast_parser.py) --
+    the same quote-aware bracket-matching literal_values there already
+    relies on -- rather than this module's own, much simpler
+    _bracket_inner/_split_top_level, so a Literal value containing its
+    own embedded comma or bracket (e.g. "Literal['a,b', 'c]d']", a real
+    interval-notation or CSV-shaped value) is parsed correctly here too,
+    instead of exposing a second, independently-drifting copy of the
+    exact bug class already fixed once for ast_parser.py's own
+    generate_example_payload/generate_example_response.
+
+    Returns None (rather than literal_values' own best-effort single-
+    value fallback for the Enum-member case) when any value isn't a
+    literal expression: that fallback is safe for literal_values' own
+    purpose -- backing a human-readable example payload, where a
+    plausible-looking guess is better than nothing -- but not here. A
+    standalone generated SDK client has no import for the notebook's own
+    Enum class at all, so silently guessing at its first member and
+    emitting that guess as a real type annotation/union member would be
+    actively wrong, not just imprecise, and would raise a real NameError
+    the moment the generated client module is loaded if emitted as bare
+    source text.
+    """
+    inner = _matching_bracket_content(type_str[len("Literal["):])
+
+    try:
+        return ast.literal_eval(f"({inner},)")
+    except (ValueError, SyntaxError):
+        return None
+
+
+def _typescript_literal_value(value):
+    """`value` (one element of _literal_annotation_values' own result)
+    rendered as a TypeScript literal-type member -- e.g. a real,
+    double-quoted TS string literal for a Python str, "true"/"false" for
+    a Python bool (checked before the general numeric fallback below,
+    since bool is itself an int subclass and Python's own str(True) is
+    "True", not TypeScript's lowercase "true"), "null" for None, and a
+    plain numeric literal (int/float share the identical textual form in
+    both languages) for anything else.
+    """
+    if isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    return repr(value)
+
+
+def _python_type_to_typescript(type_str):
+    """The closest TypeScript type for `type_str` (a raw, `ast.unparse`d
+    Python annotation, e.g. "int", "List[str]", "Optional[int]" -- the
+    same shape arg["type"]/return_type already carry throughout this
+    codebase), or "unknown" for anything not recognized below.
+
+    Before this, every generated TypeScript method's own payload
+    parameter and return value were typed as a bare Record<string,
+    unknown>/any regardless of what the notebook function actually
+    expects or returns -- throwing away the single biggest practical
+    advantage of generating a *TypeScript* client over a plain JS one
+    (compile-time type checking, IDE autocomplete) for every field of
+    every function this tool compiles.
+
+    Deliberately bounded, not a general Python-type-system-to-TypeScript
+    translator: an unrecognized name (a notebook-defined class/Enum,
+    a typing construct not handled below) falls back to "unknown" --
+    always a valid, safe TypeScript type, just not a specific one --
+    rather than guessing at a type this tool has no real way to know
+    from a bare annotation string alone. The identical "bounded, falls
+    back to something safely generic rather than guessing" contract
+    normalize_type_annotation (backend/parser/ast_parser.py) already
+    follows for a related but distinct purpose (simplifying an
+    annotation for an example value, not translating it to another
+    language's type system).
+
+    `Literal[...]` (e.g. a "status: Literal['draft', 'published']"
+    parameter -- an extremely common categorical/enum-like shape for a
+    real API) maps to a genuine TS string/number/boolean-literal union
+    ('"draft" | "published"'), via _literal_annotation_values, rather
+    than falling all the way through to the generic "unknown" every
+    other unrecognized construct gets -- the same loss of precision this
+    function's own docstring already calls out "the single biggest
+    practical advantage" of generating a typed client over an untyped
+    one for. Falls back to "unknown" only for a Literal naming an Enum
+    member (see _literal_annotation_values' own docstring for why that
+    one case can't be resolved from a bare annotation string alone).
+    """
+    if not type_str:
+        return "unknown"
+
+    type_str = type_str.strip()
+
+    # A top-level PEP 604 union (e.g. "List[int] | None" or "int | str")
+    # must be split before any of the checks below -- checked first, not
+    # last, so a union whose own left-hand side happens to start with one
+    # of those prefixes isn't mistaken for a bare List[.../Dict[.../
+    # Optional[.../etc and returned with its own "| ..." half silently
+    # discarded. Confirmed exploitable with this check last (what this
+    # used to do): "List[int] | None" -- an entirely ordinary "optional
+    # list" annotation -- mapped to the bare "number[]", not
+    # "number[] | null", since the List[ branch below matched and
+    # returned first, never even seeing the trailing "| None" was there
+    # at all. Mirrors normalize_type_annotation's own identical "|"-
+    # before-prefix-checks ordering (backend/parser/ast_parser.py), which
+    # already gets this right for its own, different purpose. Not a top-
+    # level union (a "|" nested inside a generic's own arguments, e.g.
+    # "Dict[str, int | float]") splits into a single part here --
+    # _split_top_level's own bracket-depth tracking already keeps that
+    # case out of this branch, falling through to the checks below
+    # exactly as before.
+    if "|" in type_str:
+        parts = _split_top_level(type_str, "|")
+        if len(parts) > 1:
+            mapped = [_python_type_to_typescript(part) for part in parts]
+            return " | ".join(dict.fromkeys(mapped))
+
+    if type_str.startswith("Literal["):
+        values = _literal_annotation_values(type_str)
+        if values is None:
+            return "unknown"
+        return " | ".join(
+            dict.fromkeys(_typescript_literal_value(value) for value in values)
+        )
+
+    if type_str in _PYTHON_SCALAR_TO_TS:
+        return _PYTHON_SCALAR_TO_TS[type_str]
+
+    for prefix in ("List[", "list[", "Set[", "set[", "FrozenSet[", "frozenset["):
+        if type_str.startswith(prefix):
+            inner = _bracket_inner(type_str, len(prefix) - 1)
+            return _as_typescript_array_element(_python_type_to_typescript(inner))
+
+    for prefix in ("Tuple[", "tuple["):
+        if type_str.startswith(prefix):
+            return "unknown[]"
+
+    for prefix in ("Dict[", "dict["):
+        if type_str.startswith(prefix):
+            inner = _bracket_inner(type_str, len(prefix) - 1)
+            parts = _split_top_level(inner)
+            value_type = (
+                _python_type_to_typescript(parts[1]) if len(parts) == 2 else "unknown"
+            )
+            return f"Record<string, {value_type}>"
+
+    if type_str.startswith("Optional["):
+        inner = _bracket_inner(type_str, len("Optional") )
+        return f"{_python_type_to_typescript(inner)} | null"
+
+    if type_str.startswith("Union["):
+        inner = _bracket_inner(type_str, len("Union"))
+        mapped = [_python_type_to_typescript(part) for part in _split_top_level(inner)]
+        return " | ".join(dict.fromkeys(mapped))
+
+    if type_str.startswith("Annotated["):
+        inner = _bracket_inner(type_str, len("Annotated") )
+        first_arg = _split_top_level(inner)[0]
+        return _python_type_to_typescript(first_arg)
+
+    return "unknown"
+
+
+_JSON_SCHEMA_TYPE_TO_TS = {
+    "integer": "number", "number": "number", "string": "string",
+    "boolean": "boolean", "null": "null",
+}
+
+
+def _json_schema_type_to_typescript(prop_schema):
+    """The closest TypeScript type for `prop_schema` (one property's own
+    JSON-schema object from an OpenAPI request body model, e.g.
+    {"type": "integer"} or {"anyOf": [{"type": "string"}, {"type":
+    "null"}]} for an Optional[str] field) -- used to type each generated
+    method's own {Pascal}Request interface fields (see
+    _typescript_request_interface below) directly from the exact schema
+    Pydantic itself validates a real request against, rather than
+    re-deriving it from a raw Python annotation string a second time
+    (which _python_type_to_typescript above does instead, for the
+    response side, where no such schema exists at all -- see
+    generate_fastapi_code's own "x-notebook-to-api-return-type").
+
+    "enum" (e.g. {"enum": ["draft", "published"], "type": "string"} --
+    exactly what Pydantic itself generates for a `Literal["draft",
+    "published"]` field) maps to a real string/number/boolean/null
+    literal union, the identical _typescript_literal_value rendering
+    _python_type_to_typescript's own Literal[...] handling above already
+    uses -- reused here rather than reimplemented a second time, since
+    a JSON-schema "enum" value is already the same kind of plain Python
+    object (str/int/float/bool/None) _literal_annotation_values there
+    produces. Before this, a request-body field backed by a Literal
+    collapsed to its own bare base "type" (a plain "string" here) --
+    checked before "type" below since "enum" narrows a base type rather
+    than replacing it, the same precedence real JSON Schema/OpenAPI
+    tooling already gives it.
+
+    "const" (e.g. {"const": "only", "type": "string"}) is Pydantic's own
+    *separate* keyword for the identical narrowing "enum" gives, just for
+    a single-value Literal (a `Literal["only"]` field, or the "only" side
+    of an `Optional[Literal["only"]]`'s own "anyOf") -- confirmed via a
+    real Pydantic schema, not assumed: Pydantic emits "const", never a
+    one-element "enum", for that case. Missed by "enum" above alone (a
+    plain `dict.get("enum")` sees nothing there at all), which is exactly
+    why this checks for it separately rather than assuming a one-element
+    "enum" list covers it.
+
+    A `Dict[str, X]` field's own "type": "object" also carries an
+    "additionalProperties" sub-schema for X (e.g. {"type": "object",
+    "additionalProperties": {"type": "integer"}} for `Dict[str, int]`,
+    confirmed via a real Pydantic schema) -- recursed into here rather
+    than discarded, so `Dict[str, int]` types as `Record<string,
+    number>`, not the value-erasing `Record<string, unknown>` a bare
+    `dict.get("type")` lookup alone would produce for every Dict field
+    regardless of its own value type.
+
+    A fixed-length, heterogeneous `Tuple[X, Y, ...]` field renders as
+    "type": "array" with its own "prefixItems" (one sub-schema per
+    position) instead of "items" -- confirmed via a real Pydantic schema:
+    `Tuple[int, str]` generates {"type": "array", "prefixItems":
+    [{"type": "integer"}, {"type": "string"}]}, no "items" key at all.
+    Missed by the plain array branch below (`prop_schema.get("items",
+    {})` sees nothing there and falls back to {}, i.e. "unknown"), which
+    collapsed every such field to `unknown[]` -- discarding both its
+    fixed length and each position's own type. Checked first here, since
+    "prefixItems" takes precedence over "items" as a tuple's own shape,
+    and rendered as a real TypeScript tuple type (`[number, string]`)
+    instead. A homogeneous, open-ended `Tuple[X, ...]` is unaffected --
+    confirmed via the same real schema: Pydantic renders that as a plain
+    "items" array like any other List, with no "prefixItems" at all.
+    """
+    if not isinstance(prop_schema, dict):
+        return "unknown"
+
+    if "anyOf" in prop_schema:
+        mapped = [
+            _json_schema_type_to_typescript(sub) for sub in prop_schema["anyOf"]
+        ]
+        return " | ".join(dict.fromkeys(mapped))
+
+    if "enum" in prop_schema:
+        return " | ".join(
+            dict.fromkeys(
+                _typescript_literal_value(value) for value in prop_schema["enum"]
+            )
+        )
+
+    if "const" in prop_schema:
+        return _typescript_literal_value(prop_schema["const"])
+
+    schema_type = prop_schema.get("type")
+
+    if schema_type == "array":
+        prefix_items = prop_schema.get("prefixItems")
+        if isinstance(prefix_items, list):
+            element_types = [
+                _json_schema_type_to_typescript(item) for item in prefix_items
+            ]
+            return f"[{', '.join(element_types)}]"
+        item_type = _json_schema_type_to_typescript(prop_schema.get("items", {}))
+        return _as_typescript_array_element(item_type)
+
+    if schema_type == "object":
+        value_schema = prop_schema.get("additionalProperties")
+        if isinstance(value_schema, dict):
+            return f"Record<string, {_json_schema_type_to_typescript(value_schema)}>"
+        return "Record<string, unknown>"
+
+    return _JSON_SCHEMA_TYPE_TO_TS.get(schema_type, "unknown")
+
+
+def _request_body_schema(openapi_schema, methods):
+    """The {"properties", "required"} JSON-schema object backing
+    `methods`'s own POST operation request body (see
+    _json_schema_type_to_typescript above), resolved from its own
+    "$ref" against `openapi_schema`'s "components"/"schemas" -- or None
+    if it has no request body, or an unrecognized/missing $ref (a
+    schema this tool didn't itself generate).
+    """
+    post = methods.get("post") or {}
+
+    ref = (
+        post.get("requestBody", {})
+        .get("content", {})
+        .get("application/json", {})
+        .get("schema", {})
+        .get("$ref")
+    )
+
+    if not ref:
+        return None
+
+    schema_name = ref.rsplit("/", 1)[-1]
+
+    return openapi_schema.get("components", {}).get("schemas", {}).get(schema_name)
+
+
+def _typescript_request_interface(interface_name, request_schema):
+    """TypeScript source lines for `interface_name`, one field per
+    property in `request_schema` (see _request_body_schema above),
+    typed via _json_schema_type_to_typescript. A property not in
+    `request_schema`'s own "required" list (the notebook function's own
+    parameter had a default) is marked optional ("?:") -- matching the
+    exact same "a field with a default isn't required in the JSON body"
+    contract the generated server side's own Pydantic model already
+    enforces.
+
+    Falls back to a single untyped index signature when `request_schema`
+    is None or carries no properties at all (a zero-parameter function,
+    whose real request model has no fields to type) -- an empty
+    TypeScript interface body is valid but pointless busywork for a
+    caller to look at.
+    """
+    lines = [f"export interface {interface_name} {{"]
+
+    properties = (request_schema or {}).get("properties") or {}
+    required = set((request_schema or {}).get("required") or [])
+
+    if not properties:
+        lines.append("  [key: string]: unknown;")
+    else:
+        for prop_name, prop_schema in properties.items():
+            optional = "" if prop_name in required else "?"
+            ts_type = _json_schema_type_to_typescript(prop_schema)
+            lines.append(f"  {prop_name}{optional}: {ts_type};")
+
+    lines.append("}")
+
+    return lines
+
+
+def _typescript_response_interface(interface_name, return_type):
+    """TypeScript source lines for a synchronous endpoint's own
+    {Pascal}Response interface -- {"result": ...}, exactly the shape its
+    own generated `return {"result": result}` (api_generator.py) always
+    sends, typed via _python_type_to_typescript's own mapping of
+    "x-notebook-to-api-return-type".
+    """
+    return [
+        f"export interface {interface_name} {{",
+        f"  result: {_python_type_to_typescript(return_type)};",
+        "}",
+    ]
+
+
+def _typescript_task_submission_interface(interface_name):
+    """TypeScript source lines for a background endpoint's own
+    {Pascal}Response interface -- {"task_id": ..., "status":
+    "processing"}, exactly the shape its own generated `return
+    {"task_id": task_id, "status": "processing"}` (api_generator.py)
+    always sends immediately (never the notebook function's own eventual
+    result -- see _typescript_task_result_interface below for that).
+    """
+    return [
+        f"export interface {interface_name} {{",
+        "  task_id: string;",
+        '  status: "processing";',
+        "}",
+    ]
+
+
+def _typescript_task_result_interface(interface_name, return_type):
+    """TypeScript source lines for a background endpoint's own
+    {Pascal}TaskResult interface -- the finished task record its own
+    *_and_wait companion (via waitForTask) eventually resolves to: either
+    {"status": "completed", "result": ...} or {"status": "failed",
+    "error": ...} (see _run_background_task, api_generator.py). Not a
+    strict discriminated union keyed on "status" -- both "result" and
+    "error" are simply optional, which is looser than the real either/or
+    contract but avoids the extra complexity of a literal-typed union
+    for a shape a caller is expected to branch on by checking
+    `.status === "completed"` at runtime regardless of how precisely
+    this interface types it.
+    """
+    return [
+        f"export interface {interface_name} {{",
+        "  task_id?: string;",
+        "  status: string;",
+        f"  result?: {_python_type_to_typescript(return_type)};",
+        "  error?: string;",
+        "}",
+    ]
+
+
+# Python annotations this codebase's own raw, `ast.unparse`d type
+# strings (arg["type"]/return_type) already use verbatim -- see
+# _python_type_to_safe_python_annotation below for why these pass
+# through unchanged while everything else doesn't.
+_PYTHON_SAFE_SCALARS = {
+    "int", "float", "str", "bool", "bytes", "complex", "None", "Any",
+}
+
+
+def _python_type_to_safe_python_annotation(type_str):
+    """The closest *safe* Python type annotation for `type_str` (a raw,
+    `ast.unparse`d Python annotation, e.g. "int", "List[str]",
+    "Optional[int]" -- the same shape arg["type"]/return_type already
+    carry throughout this codebase), or "Any" for anything not
+    recognized below.
+
+    Unlike _python_type_to_typescript's own identical-looking mapping
+    (which translates *into* TypeScript), the input here is already
+    valid Python syntax -- so this is closer to a validating pass-through
+    than a translation. That distinction matters for exactly one case:
+    a bare, unrecognized identifier (a notebook-defined class or Enum,
+    e.g. "Priority") *is* syntactically valid Python and would compile
+    fine as a literal type annotation -- but the standalone SDK client
+    file being generated here has no import for it at all, so writing it
+    through unchanged would raise a bare NameError the moment the
+    generated client module is loaded, not just a type-checker warning.
+    Falling back to "Any" instead -- always defined, always valid --
+    keeps the generated file importable regardless of what a notebook's
+    own return type annotation actually names, at the cost of losing
+    precision for exactly that one case. The identical "bounded, falls
+    back to something safely generic rather than guessing" contract
+    _python_type_to_typescript and normalize_type_annotation (backend/
+    parser/ast_parser.py) already follow for their own related purposes.
+    """
+    if not type_str:
+        return "Any"
+
+    type_str = type_str.strip()
+
+    # A top-level PEP 604 union (e.g. "List[int] | None" or "int | str")
+    # must be split before any of the checks below -- checked first, not
+    # last, so a union whose own left-hand side happens to start with one
+    # of those prefixes isn't mistaken for a bare List[.../Dict[.../
+    # Optional[.../etc and returned with its own "| ..." half silently
+    # discarded. Confirmed exploitable with this check last (what this
+    # used to do): "List[int] | None" -- an entirely ordinary "optional
+    # list" annotation -- mapped to the bare "List[int]", not
+    # "Optional[List[int]]", since the List[ branch below matched and
+    # returned first, never even seeing the trailing "| None" was there
+    # at all -- silently claiming a required field the real notebook
+    # function accepts omitting/None for. Mirrors normalize_type_
+    # annotation's own identical "|"-before-prefix-checks ordering
+    # (backend/parser/ast_parser.py), which already gets this right for
+    # its own, different purpose. Not a top-level union (a "|" nested
+    # inside a generic's own arguments, e.g. "Dict[str, int | float]")
+    # splits into a single part here -- _split_top_level's own bracket-
+    # depth tracking already keeps that case out of this branch, falling
+    # through to the checks below exactly as before.
+    if "|" in type_str:
+        parts = _split_top_level(type_str, "|")
+        if len(parts) > 1:
+            mapped = [
+                _python_type_to_safe_python_annotation(part) for part in parts
+            ]
+            return _join_python_union(mapped)
+
+    # A self-contained `Literal[...]` (every value a real literal, not an
+    # Enum member reference -- see _literal_annotation_values' own
+    # docstring) is already valid Python syntax exactly as given, so it
+    # passes through unchanged rather than being reconstructed value by
+    # value -- the module this is generated into always imports Literal
+    # from typing unconditionally (see generate_python_sdk), so nothing
+    # further needs adding for it to resolve. Falls back to "Any" for a
+    # Literal naming an Enum member, the identical reason a bare
+    # unrecognized identifier does below: the generated client has no
+    # import for the notebook's own Enum class to reference.
+    if type_str.startswith("Literal["):
+        return type_str if _literal_annotation_values(type_str) is not None else "Any"
+
+    if type_str in _PYTHON_SAFE_SCALARS:
+        return type_str
+
+    if type_str in ("dict", "Dict"):
+        return "Dict[str, Any]"
+
+    if type_str in ("list", "List"):
+        return "List[Any]"
+
+    for prefix in ("List[", "list[", "Set[", "set[", "FrozenSet[", "frozenset["):
+        if type_str.startswith(prefix):
+            inner = _bracket_inner(type_str, len(prefix) - 1)
+            return f"List[{_python_type_to_safe_python_annotation(inner)}]"
+
+    for prefix in ("Tuple[", "tuple["):
+        if type_str.startswith(prefix):
+            return "List[Any]"
+
+    for prefix in ("Dict[", "dict["):
+        if type_str.startswith(prefix):
+            inner = _bracket_inner(type_str, len(prefix) - 1)
+            parts = _split_top_level(inner)
+            value_type = (
+                _python_type_to_safe_python_annotation(parts[1])
+                if len(parts) == 2 else "Any"
+            )
+            return f"Dict[str, {value_type}]"
+
+    if type_str.startswith("Optional["):
+        inner = _bracket_inner(type_str, len("Optional"))
+        return f"Optional[{_python_type_to_safe_python_annotation(inner)}]"
+
+    if type_str.startswith("Union["):
+        inner = _bracket_inner(type_str, len("Union"))
+        mapped = [
+            _python_type_to_safe_python_annotation(part)
+            for part in _split_top_level(inner)
+        ]
+        return _join_python_union(mapped)
+
+    if type_str.startswith("Annotated["):
+        inner = _bracket_inner(type_str, len("Annotated"))
+        first_arg = _split_top_level(inner)[0]
+        return _python_type_to_safe_python_annotation(first_arg)
+
+    # An unrecognized bare identifier -- see this function's own
+    # docstring for why that must never pass through unchanged.
+    return "Any"
+
+
+def _join_python_union(mapped_types):
+    """Deduplicated Optional[T]/Union[...] source for `mapped_types` (each
+    already `_python_type_to_safe_python_annotation`-mapped) -- "None"
+    paired with exactly one other type collapses to Optional[T], matching
+    how a human would actually write that instead of Union[T, None].
+    """
+    deduped = list(dict.fromkeys(mapped_types))
+
+    if len(deduped) == 1:
+        return deduped[0]
+
+    if len(deduped) == 2 and "None" in deduped:
+        other = deduped[0] if deduped[1] == "None" else deduped[1]
+        return f"Optional[{other}]"
+
+    return f"Union[{', '.join(deduped)}]"
+
+
+_JSON_SCHEMA_TYPE_TO_PYTHON = {
+    "integer": "int", "number": "float", "string": "str", "boolean": "bool",
+    "null": "None",
+}
+
+
+def _json_schema_type_to_python(prop_schema):
+    """The closest Python type annotation for `prop_schema` (one
+    property's own JSON-schema object from an OpenAPI request body
+    model) -- the Python-client mirror of
+    _json_schema_type_to_typescript above; see its own docstring for why
+    this reads the real Pydantic-validated schema rather than
+    re-deriving a type from a raw annotation string.
+
+    "enum" (see _json_schema_type_to_typescript's own docstring for the
+    exact shape Pydantic generates for a Literal[...] field) maps to a
+    real Literal[...] annotation instead of collapsing to its own bare
+    base "type" (a plain "str" otherwise). Each value is rendered via
+    plain repr() -- unlike _typescript_literal_value's own bool/None
+    special-casing, a JSON-schema enum value is always one of
+    str/int/float/bool/None, and Python's own repr() of every one of
+    those (including True/False/None, already spelled exactly this way
+    in Python) is already valid Literal[...] member syntax with no
+    further translation needed.
+
+    "const" is Pydantic's own separate keyword for the identical
+    narrowing "enum" gives, just for a single-value Literal -- see
+    _json_schema_type_to_typescript's own docstring for why this needs
+    its own check rather than assuming a one-element "enum" covers it.
+
+    "prefixItems" (Pydantic's own shape for a fixed-length, heterogeneous
+    `Tuple[X, Y, ...]` field -- see _json_schema_type_to_typescript's own
+    docstring for the exact schema this generates) maps to a real
+    `Tuple[X, Y, ...]` annotation instead of the value- and length-erasing
+    `List[Any]` a bare `prop_schema.get("items", {})` lookup alone
+    produces for it (a fixed-tuple schema carries no "items" key at all).
+    """
+    if not isinstance(prop_schema, dict):
+        return "Any"
+
+    if "anyOf" in prop_schema:
+        mapped = [
+            _json_schema_type_to_python(sub) for sub in prop_schema["anyOf"]
+        ]
+        return _join_python_union(mapped)
+
+    if "enum" in prop_schema:
+        values = ", ".join(
+            dict.fromkeys(repr(value) for value in prop_schema["enum"])
+        )
+        return f"Literal[{values}]"
+
+    if "const" in prop_schema:
+        return f"Literal[{prop_schema['const']!r}]"
+
+    schema_type = prop_schema.get("type")
+
+    if schema_type == "array":
+        prefix_items = prop_schema.get("prefixItems")
+        if isinstance(prefix_items, list):
+            element_types = ", ".join(
+                _json_schema_type_to_python(item) for item in prefix_items
+            )
+            return f"Tuple[{element_types}]"
+        return f"List[{_json_schema_type_to_python(prop_schema.get('items', {}))}]"
+
+    if schema_type == "object":
+        value_schema = prop_schema.get("additionalProperties")
+        if isinstance(value_schema, dict):
+            return f"Dict[str, {_json_schema_type_to_python(value_schema)}]"
+        return "Dict[str, Any]"
+
+    return _JSON_SCHEMA_TYPE_TO_PYTHON.get(schema_type, "Any")
+
+
+def _python_typeddict_lines(class_name, required_fields, optional_fields):
+    """Python source lines defining `class_name` as a typing.TypedDict,
+    one field per entry in `required_fields`/`optional_fields` (each
+    {name: python_type_annotation}).
+
+    A TypedDict can't mark individual fields required/optional inline
+    the way a TypeScript interface's own "?:" can -- `total=` is a
+    whole-class setting. When both required and optional fields are
+    present, this splits into a required base class plus a `total=False`
+    subclass adding the optional ones, the standard, dependency-free
+    (works on Python 3.8+, no typing_extensions.NotRequired needed)
+    pattern for mixing the two in one TypedDict. When only one kind is
+    present, a single class is emitted directly instead -- the split's
+    entire purpose is representing a genuine mix, so it would just be
+    unnecessary indirection here.
+    """
+    if not required_fields and not optional_fields:
+        return [f"class {class_name}(TypedDict, total=False):", "    pass", ""]
+
+    if required_fields and optional_fields:
+        base_name = f"_{class_name}Base"
+        lines = [f"class {base_name}(TypedDict):"]
+        for name, ptype in required_fields.items():
+            lines.append(f"    {name}: {ptype}")
+        lines.append("")
+        lines.append(f"class {class_name}({base_name}, total=False):")
+        for name, ptype in optional_fields.items():
+            lines.append(f"    {name}: {ptype}")
+        lines.append("")
+        return lines
+
+    if required_fields:
+        lines = [f"class {class_name}(TypedDict):"]
+        for name, ptype in required_fields.items():
+            lines.append(f"    {name}: {ptype}")
+        lines.append("")
+        return lines
+
+    lines = [f"class {class_name}(TypedDict, total=False):"]
+    for name, ptype in optional_fields.items():
+        lines.append(f"    {name}: {ptype}")
+    lines.append("")
+    return lines
+
+
+def _python_request_typeddict_lines(class_name, request_schema):
+    """Python source lines for `class_name`, a TypedDict typing the exact
+    request body `request_schema` (see _request_body_schema above)
+    describes -- the Python-client mirror of
+    _typescript_request_interface above. A field not in
+    `request_schema`'s own "required" list (the notebook function's own
+    parameter had a default) is optional, matching the exact same "a
+    field with a default isn't required in the JSON body" contract the
+    generated server side's own Pydantic model already enforces.
+    """
+    properties = (request_schema or {}).get("properties") or {}
+    required = set((request_schema or {}).get("required") or [])
+
+    required_fields = {
+        name: _json_schema_type_to_python(prop)
+        for name, prop in properties.items() if name in required
+    }
+    optional_fields = {
+        name: _json_schema_type_to_python(prop)
+        for name, prop in properties.items() if name not in required
+    }
+
+    return _python_typeddict_lines(class_name, required_fields, optional_fields)
+
+
+def _is_background_path(methods):
+    """Whether `methods` (a path's {"post": {...}, ...} operations dict
+    from an OpenAPI schema this tool generated) is a background/task_id
+    endpoint, per the "x-notebook-to-api-async" marker
+    generate_fastapi_code already stamps onto its POST operation (see
+    api_generator.py) -- the same flag POST /api/compile's own
+    "endpoints" field and inspect_notebook_data's "endpoints" field
+    already key off of, reused here instead of re-deriving it from
+    LONG_RUNNING_KEYWORDS a third time.
+    """
+    return bool((methods.get("post") or {}).get("x-notebook-to-api-async"))
+
+
+def _build_wait_method_names(method_names, paths):
+    """A collision-free companion method name for each background path in
+    `method_names`, submitting the task and blocking until it finishes.
+
+    Before this, a background endpoint's generated method (e.g.
+    train_model) looked identical to a synchronous one: it returned
+    {"task_id": ..., "status": "processing"} immediately, with nothing in
+    the generated client actually connecting that to get_task/
+    wait_for_task -- a caller had to already know, from reading the
+    OpenAPI docs separately, which methods needed polling at all.
+
+    Derived from each path's own already-assigned method name with an
+    "_and_wait" suffix, disambiguated against every name already in use
+    (not just other "_and_wait" names) the same way _build_method_names
+    disambiguates the base names themselves: a real notebook function
+    could easily be named e.g. "train_model_and_wait" and collide with
+    the synthesized companion name for "/train_model".
+    """
+    used_names = set(method_names.values())
+    wait_method_names = {}
+
+    for path, methods in paths.items():
+
+        if not _is_background_path(methods):
+            continue
+
+        base_name = f"{method_names[path]}_and_wait"
+        candidate = base_name
+        suffix = 2
+
+        while candidate in used_names:
+            candidate = f"{base_name}_{suffix}"
+            suffix += 1
+
+        used_names.add(candidate)
+        wait_method_names[path] = candidate
+
+    return wait_method_names
+
+
+def _load_openapi_schema(openapi_path):
+    """Read and JSON-decode the OpenAPI schema at `openapi_path`.
+
+    Both generate_python_sdk and generate_typescript_sdk read their input
+    this same way, but previously did it inline as a bare `json.load(f)`
+    with no handling of its own: a caller pointing --openapi (or POST
+    /api/export-sdk) at a file that isn't valid JSON crashed with
+    json.JSONDecodeError's raw, low-level message ("Expecting value: line
+    1 column 1 (char 0)") -- no indication of *why*, even though the most
+    likely real-world cause is one this tool itself creates: POST
+    /api/export-openapi and the CLI's own `export-openapi --format yaml`
+    write a YAML file this function was never able to read, so a caller
+    who exported YAML and then pointed export-sdk at that exact file (a
+    completely reasonable thing to try, since both commands read/write
+    the same GENERATED_DIR by default) got a confusing crash instead of
+    being told export-sdk only reads JSON schemas.
+    """
+    with open(openapi_path, "r", encoding="utf-8") as f:
+        raw = f.read()
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        hint = (
+            " This looks like a YAML export (export-openapi --format "
+            "yaml) -- export-sdk only reads JSON schemas; re-export with "
+            "--format json (the default) first."
+            if Path(openapi_path).suffix.lower() in (".yaml", ".yml")
+            else ""
+        )
+        raise ValueError(
+            f"'{openapi_path}' is not a valid OpenAPI JSON schema: {exc}.{hint}"
+        ) from exc
+
+
+def _operation_description(methods):
+    """The description text FastAPI's OpenAPI schema already carries for
+    this path's POST operation -- generate_fastapi_code always sets one
+    (api_generator.py): either a notebook function's own docstring, when
+    it wrote one, or this tool's own auto-generated fallback sentence.
+    Before this, that text was read by nothing at all -- every generated
+    client method's docstring/JSDoc comment was pure hardcoded boilerplate
+    ("Call the `/path` endpoint with JSON payload.") with zero connection
+    to what the endpoint actually does, even though the schema being read
+    right here already carries real documentation for it.
+
+    Returns "" (not None) when absent, so callers can build doc text with
+    a plain truthiness check rather than an extra None check -- absent
+    only for an OpenAPI schema this tool didn't generate itself
+    (export-sdk accepts any --openapi file, not just one this tool
+    produced).
+    """
+    return ((methods.get("post") or {}).get("description") or "").strip()
+
+
+def _python_method_docstring(description, static_text):
+    """Combine `description` (see _operation_description) with a client
+    method's own static explanatory text into one docstring statement,
+    repr()'d rather than embedded as a hand-written triple-quoted literal
+    like this client's other, fully static docstrings (get_task,
+    wait_for_task, ...): description is arbitrary, notebook-author-
+    controlled text (or this tool's own auto-generated fallback, which
+    already includes each parameter's bare name) that can legitimately
+    contain a double quote, a triple-quote sequence, or a backslash --
+    embedding it directly into a \"\"\"...\"\"\" literal would let that
+    content close the docstring early and corrupt the rest of the
+    generated client into a SyntaxError, the exact hazard already fixed
+    for the compiled app itself (see e91b1fa).
+    """
+    doc = f"{description}\n\n{static_text}" if description else static_text
+    return repr(doc)
+
+
+def _jsdoc_lines(description, static_text_lines, indent="  "):
+    """Build a `/** ... */` JSDoc comment block's lines, combining
+    `description` (see _operation_description) with a method's own static
+    explanatory text (`static_text_lines`: already-wrapped lines with no
+    leading ` * ` prefix or `*/` terminator of their own).
+
+    Unlike Python's repr() for _python_method_docstring above, JS/TS block
+    comments have no escape mechanism at all: a literal "*/" anywhere
+    inside `description` would close the comment early, corrupting
+    whatever source follows it -- potentially even swallowing the method
+    signature the comment was meant to document. Neutralized by inserting
+    a space into any such sequence before it's ever embedded, the same
+    defensive substitution doc-comment generators for user-controlled
+    text commonly use, since there's no syntactically "safe" encoding of
+    an arbitrary string inside a JSDoc block the way repr() provides for
+    a Python string literal.
+    """
+    text_lines = []
+
+    if description:
+        text_lines.extend(description.replace("*/", "* /").split("\n"))
+        text_lines.append("")
+
+    text_lines.extend(static_text_lines)
+
+    lines = [f"{indent}/**"]
+
+    for line in text_lines:
+        safe_line = line.replace("*/", "* /")
+        lines.append(f"{indent} * {safe_line}".rstrip())
+
+    lines.append(f"{indent} */")
+
+    return lines
+
+
+def _build_method_names(paths, reserved_names=frozenset()):
+    """Map each POST path to a collision-free client method name.
+
+    Two different paths can sanitize to the same identifier -- e.g. a
+    notebook function literally named "tasks_cleanup" (path
+    "/tasks_cleanup") collides with the always-present built-in
+    "/tasks/cleanup" route, since both reduce to "tasks_cleanup" once
+    slashes become underscores. Confirmed before this fix: the second
+    `def`/method definition silently shadowed the first at class-body
+    evaluation time (Python) or produced a duplicate-method TypeScript
+    compile error, either way permanently hiding one endpoint from the
+    generated SDK with no error surfaced anywhere.
+
+    `reserved_names` (PYTHON_RESERVED_CLIENT_METHOD_NAMES or
+    TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES, passed in by
+    generate_python_sdk/generate_typescript_sdk) seeds the same
+    disambiguation for the client's own hardcoded methods (get_task,
+    wait_for_task, list_tasks, ...), which live outside this per-path
+    loop entirely and so can't be discovered by scanning `paths` alone --
+    without seeding, a path colliding with one of *those* names shadowed
+    them instead of being renamed the same way two colliding paths
+    already are.
+    """
+    used_names = set(reserved_names)
+    method_names = {}
+
+    for path, methods in paths.items():
+        if not methods.get("post"):
+            continue
+
+        base_name = _method_name_from_path(path)
+        candidate = base_name
+        suffix = 2
+
+        while candidate in used_names:
+            candidate = f"{base_name}_{suffix}"
+            suffix += 1
+
+        used_names.add(candidate)
+        method_names[path] = candidate
+
+    return method_names
+
+
+def generate_python_sdk(
+    openapi_path: str = "generated/openapi.json",
+    output_path: str = "generated/sdk/python_client.py",
+):
+    """Generate a minimal Python SDK client from a FastAPI OpenAPI schema.
+
+    The generated client contains a ``NotebookAPIClient`` class with a method for each
+    POST endpoint defined in the OpenAPI spec. Each method performs a ``requests.post``
+    call to the corresponding endpoint and returns ``response.json()``.
+
+    Long-running notebook functions (see LONG_RUNNING_KEYWORDS in
+    api_generator.py) don't return their result directly -- their endpoint
+    enqueues a background task and immediately returns
+    ``{"task_id": ..., "status": "processing"}``. Before get_task/
+    wait_for_task existed, a caller of the generated client had no way to
+    actually retrieve that result short of hand-writing their own polling
+    loop against GET /tasks/{task_id}, even though the client already
+    knows the base_url and api_key needed to do it.
+
+    Also always includes health/ready/info/metrics/uptime/auth_status/
+    auth_info/auth_validate -- every compiled app's own built-in GET
+    routes for liveness/readiness, service metadata, request metrics, and
+    auth configuration (see RESERVED_INFRASTRUCTURE_NAMES in
+    api_generator.py, which guarantees they exist and can never be
+    shadowed by a notebook function). Like get_task/list_tasks above,
+    these are hardcoded rather than derived from the OpenAPI paths loop
+    below, which only ever emits a method for a POST path.
+
+    Also always includes a module-level ``verify_webhook_signature``
+    function (not a method -- it needs no ``base_url``/``api_key``, only
+    the raw bytes of a *received* webhook request, its
+    ``X-Webhook-Signature`` header, and the shared
+    ``NOTEBOOK_API_WEBHOOK_SECRET``). Commits #1-#3 already gave a
+    ``?callback_url=`` receiver everything the *sending* side needs --
+    retrying delivery, a recorded ``TASKS[task_id]["webhook"]`` outcome,
+    and a curl/Postman demo of the option itself -- and
+    ``_deliver_task_webhook`` (api_generator.py) has signed every
+    delivered body with ``X-Webhook-Signature: sha256=<hmac>`` since
+    Commit #899324e, the same ``X-Hub-Signature-256`` contract GitHub/
+    Stripe webhooks use. But nothing on the *client* side ever helped a
+    receiver actually check that header -- confirming a webhook request
+    genuinely came from this compiled app (and wasn't sent by anyone who
+    merely guessed or leaked the callback URL) meant hand-rolling the
+    identical ``hmac.new(secret, body, "sha256").hexdigest()``
+    computation from scratch, with no reference implementation to copy
+    it from except reading ``_deliver_task_webhook``'s own generated
+    source. ``verify_webhook_signature`` is that reference
+    implementation, packaged the same way ``get_task``/``wait_for_task``
+    already package the polling side of the exact same feature.
+    """
+    # Load OpenAPI schema
+    schema = _load_openapi_schema(openapi_path)
+
+    paths = schema.get("paths", {})
+    method_names = _build_method_names(paths, PYTHON_RESERVED_CLIENT_METHOD_NAMES)
+    wait_method_names = _build_wait_method_names(method_names, paths)
+    # Prepare client code lines
+    lines = []
+    lines.append("import hmac")
+    lines.append("import os")
+    lines.append("import time")
+    lines.append("import uuid")
+    lines.append("import requests")
+    # Confirmed missing before this feature: every generated method's
+    # own payload parameter was typed as a bare dict, with no return
+    # annotation at all -- throwing away everything mypy/pyright/an IDE
+    # could otherwise tell a caller about a typo'd field name or a wrong
+    # type, the exact same gap Commit #7 already closed for the
+    # TypeScript client. Unconditionally imported (whether or not this
+    # particular schema ends up using all of them) rather than tracked
+    # precisely per-schema -- an unused import is harmless in a generated
+    # file nothing lints, and tracking it exactly would add real
+    # complexity for no functional benefit.
+    lines.append(
+        "from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, Union"
+    )
+    lines.append("")
+    lines.append("")
+    # Module-level, not a NotebookAPIClient method -- a webhook receiver
+    # verifying an inbound request has no client instance at all (no
+    # base_url/api_key/timeout it would ever need), only the raw request
+    # it just received and the shared secret. Mirrors, byte for byte, the
+    # signing half of this exact scheme: _deliver_task_webhook
+    # (api_generator.py) computes `hmac.new(WEBHOOK_SECRET.encode('utf-8'),
+    # body, 'sha256').hexdigest()` over the exact JSON body bytes it POSTs,
+    # and sends it as `X-Webhook-Signature: sha256=<hexdigest>`. Before
+    # this existed, a caller who opted into `?callback_url=` had a signed
+    # request landing on their own server with nothing on this SDK's own
+    # side to check it against -- they either trusted every inbound
+    # request unconditionally (defeating the entire point of signing it)
+    # or reimplemented this exact computation themselves, one HMAC
+    # footgun (comparing with `==` instead of `hmac.compare_digest`,
+    # signing the re-serialized/re-parsed JSON instead of the untouched
+    # raw bytes actually received) away from a broken or bypassable check.
+    lines.append("def verify_webhook_signature(")
+    lines.append("    payload_body: bytes, signature_header: str, secret: str")
+    lines.append(") -> bool:")
+    lines.append('    """Verify a task webhook delivered by a compiled app\'s own')
+    lines.append("    `_deliver_task_webhook` (see api_generator.py).")
+    lines.append("")
+    lines.append(
+        "    `payload_body` must be the exact, untouched raw bytes of the"
+    )
+    lines.append(
+        "    received request body -- re-serializing a parsed JSON object"
+    )
+    lines.append(
+        "    before verifying can reorder keys or change whitespace,"
+    )
+    lines.append(
+        "    producing a body that no longer matches what was actually"
+    )
+    lines.append(
+        "    signed, even though the payload itself is semantically"
+    )
+    lines.append("    unchanged.")
+    lines.append("")
+    lines.append(
+        "    `signature_header` is the received `X-Webhook-Signature`"
+    )
+    lines.append(
+        "    header value (e.g. `\"sha256=abcdef...\"`), and `secret` is"
+    )
+    lines.append(
+        "    this compiled app's own NOTEBOOK_API_WEBHOOK_SECRET."
+    )
+    lines.append("")
+    lines.append(
+        "    Returns False -- never raises -- for a missing, empty, or"
+    )
+    lines.append(
+        "    malformed header, the same \"this request can't be trusted\""
+    )
+    lines.append(
+        "    verdict as a present-but-wrong signature, so a receiver can"
+    )
+    lines.append(
+        '    always branch on the plain boolean result alone."""'
+    )
+    lines.append("    if not signature_header or \"=\" not in signature_header:")
+    lines.append("        return False")
+    lines.append(
+        "    algorithm, _, signature = signature_header.partition(\"=\")"
+    )
+    lines.append("    if algorithm != \"sha256\":")
+    lines.append("        return False")
+    lines.append(
+        "    expected_signature = hmac.new("
+    )
+    lines.append("        secret.encode(\"utf-8\"), payload_body, \"sha256\"")
+    lines.append("    ).hexdigest()")
+    lines.append(
+        "    return hmac.compare_digest(expected_signature, signature)"
+    )
+    lines.append("")
+    lines.append("")
+    # Every {Pascal}Request/{Pascal}Response/{Pascal}TaskResult TypedDict
+    # the per-path loop below builds is collected into typeddict_lines
+    # (kept separate from `lines`, the class body being built below) and
+    # spliced in at class_declaration_index, right before the class
+    # itself -- they must be defined *before* NotebookAPIClient, since a
+    # method's own `payload: TrainModelRequest` annotation is evaluated
+    # eagerly, at `def` time, when this module loads; the per-path loop
+    # that discovers what to generate for each one doesn't run until
+    # after the class declaration line below is already appended.
+    typeddict_lines = []
+    class_declaration_index = len(lines)
+    lines.append("class NotebookAPIClient:")
+    # Every non-2xx status a real deployment can return for reasons that
+    # have nothing to do with the caller's own request being wrong --
+    # NOTEBOOK_API_RATE_LIMIT_PER_MINUTE (429), or a rolling deploy/
+    # restart briefly returning 502/503/504. wait_for_task already treats
+    # exactly these as transient while polling; _request below extends
+    # the identical judgment to every *other* call this client makes.
+    lines.append("    _TRANSIENT_STATUS_CODES = (429, 502, 503, 504)")
+    lines.append("")
+    lines.append(
+        "    def __init__(self, base_url: str, api_key: str = None, "
+        "timeout: float = 30.0, max_retries: int = 3, "
+        "backoff_factor: float = 0.5):"
+    )
+    lines.append("        self.base_url = base_url.rstrip('/')")
+    lines.append("        # Generated endpoints require the same X-API-Key header the")
+    lines.append("        # generated app itself defaults to (see NOTEBOOK_API_KEY in")
+    lines.append("        # api_generator.py) so the client works out of the box locally.")
+    lines.append("        self.api_key = api_key or os.getenv(")
+    lines.append("            'NOTEBOOK_API_KEY', 'notebook-to-api-dev-key'")
+    lines.append("        )")
+    lines.append("        # requests has no default socket timeout of its own -- a call")
+    lines.append("        # with none set can hang indefinitely on a server that accepts")
+    lines.append("        # the connection but never responds (a stalled deploy target, a")
+    lines.append("        # network partition, ...), with nothing on the client side to")
+    lines.append("        # ever give up. wait_for_task's own `timeout` bounds its polling")
+    lines.append("        # *loop*, but each individual request it (and every other method")
+    lines.append("        # here) makes had no bound of its own until now.")
+    lines.append("        self.timeout = timeout")
+    # Confirmed missing before this: only wait_for_task's own polling loop
+    # ever retried a transient failure -- every other call this client
+    # makes (submitting a notebook function, list_tasks/delete_task/...,
+    # health/ready/info/config/metrics/uptime/auth_*) raised immediately
+    # on a single 429/502/503/504 or connection error, even though the
+    # generated server side already goes out of its way to report exactly
+    # when a caller should retry (X-RateLimit-Reset, Retry-After -- see
+    # _enforce_rate_limit in api_generator.py). max_retries=0 disables
+    # this entirely, preserving the previous immediate-raise behavior.
+    lines.append("        self.max_retries = max_retries")
+    lines.append("        self.backoff_factor = backoff_factor")
+    lines.append("")
+    lines.append("    def _retry_delay(self, response, attempt):")
+    lines.append(
+        '        """Seconds to wait before retrying: honors a 429\'s own '
+        "Retry-After"
+    )
+    lines.append(
+        "        header when present (the generated server always sends "
+        "one -- see"
+    )
+    lines.append(
+        "        _enforce_rate_limit in api_generator.py), else "
+        'exponential backoff."""'
+    )
+    lines.append("        if response is not None:")
+    lines.append('            retry_after = response.headers.get("Retry-After")')
+    lines.append("            if retry_after is not None:")
+    lines.append("                try:")
+    lines.append("                    return max(0.0, float(retry_after))")
+    lines.append("                except ValueError:")
+    lines.append("                    pass")
+    lines.append("        return self.backoff_factor * (2 ** attempt)")
+    lines.append("")
+    lines.append("    def _request(self, request_fn, parse_json: bool = True):")
+    lines.append(
+        '        """Run `request_fn` (a zero-argument callable making one '
+        'HTTP call --'
+    )
+    lines.append(
+        "        e.g. `lambda: requests.get(url, ...)` -- and returning "
+        "its raw"
+    )
+    lines.append(
+        "        response, before raise_for_status()), retrying it on a "
+        "transient"
+    )
+    lines.append(
+        "        failure (a _TRANSIENT_STATUS_CODES response, or a "
+        "connection-level"
+    )
+    lines.append(
+        "        error carrying no response at all) up to self.max_retries "
+        "times."
+    )
+    lines.append(
+        '        Any other failure (a genuine 401/404/...) still raises '
+        'immediately,'
+    )
+    lines.append(
+        "        exactly as before this existed. `parse_json=False` "
+        "(metrics_prometheus"
+    )
+    lines.append(
+        "        below -- Prometheus text exposition format, not JSON) "
+        'returns'
+    )
+    lines.append(
+        '        response.text instead of response.json()."""'
+    )
+    lines.append("        attempt = 0")
+    lines.append("        while True:")
+    lines.append("            try:")
+    lines.append("                response = request_fn()")
+    lines.append("                response.raise_for_status()")
+    lines.append("            except Exception as exc:")
+    lines.append("                response = getattr(exc, 'response', None)")
+    lines.append("                status_code = getattr(response, 'status_code', None)")
+    lines.append(
+        "                if attempt >= self.max_retries or ("
+    )
+    lines.append(
+        "                    response is not None and "
+        "status_code not in self._TRANSIENT_STATUS_CODES"
+    )
+    lines.append("                ):")
+    lines.append("                    raise")
+    lines.append("                time.sleep(self._retry_delay(response, attempt))")
+    lines.append("                attempt += 1")
+    lines.append("                continue")
+    lines.append("            return response.json() if parse_json else response.text")
+    lines.append("")
+    lines.append("    def get_task(self, task_id: str) -> dict:")
+    lines.append('        """Fetch the current status/result of a background task."""')
+    lines.append("        response = requests.get(")
+    lines.append(f'            f"{{self.base_url}}/tasks/{{task_id}}",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
+    lines.append("        )")
+    lines.append("        response.raise_for_status()")
+    lines.append("        return response.json()")
+    lines.append("")
+    lines.append(
+        "    def wait_for_task(self, task_id: str, poll_interval: float = 1.0, "
+        "timeout: float = 60.0) -> dict:"
+    )
+    lines.append(
+        '        """Poll get_task(task_id) until its status leaves '
+        '"processing", returning the finished task record. Raises '
+        'TimeoutError if `timeout` seconds pass first.'
+    )
+    lines.append("")
+    lines.append(
+        "        A transient failure while polling -- a network-level "
+        "error (no"
+    )
+    lines.append(
+        "        `response` at all), or a 429/502/503/504 response -- "
+        "exactly what"
+    )
+    lines.append(
+        "        NOTEBOOK_API_RATE_LIMIT_PER_MINUTE or a rolling deploy "
+        "would"
+    )
+    lines.append(
+        "        produce mid-poll -- is retried the same as an "
+        "ordinary still-"
+    )
+    lines.append(
+        '        processing task, rather than aborting the whole wait. '
+        "Any other"
+    )
+    lines.append(
+        "        error (a genuine 401/404/...) still raises immediately."
+    )
+    lines.append('        """')
+    lines.append("        deadline = time.time() + timeout")
+    # Only these -- not every non-2xx status -- are retried: each is
+    # specifically a "this will very likely succeed if you just ask
+    # again shortly" signal (rate limiting, an overloaded/restarting
+    # upstream), unlike e.g. 404/401/400 (asking again changes nothing).
+    lines.append("        _TRANSIENT_STATUS_CODES = (429, 502, 503, 504)")
+    lines.append("        while True:")
+    lines.append("            try:")
+    lines.append("                task = self.get_task(task_id)")
+    lines.append("            except Exception as exc:")
+    lines.append(
+        "                # get_task's own failure always comes from "
+        "requests.Response.raise_for_status()"
+    )
+    lines.append(
+        "                # (an HTTPError carrying the real response "
+        "on `.response`) or a connection-level"
+    )
+    lines.append(
+        "                # failure (ConnectionError/Timeout, which "
+        "carries no `.response` at all) -- either"
+    )
+    lines.append(
+        "                # way, `.response` (or its absence) is "
+        "enough to tell a transient failure from a"
+    )
+    lines.append(
+        "                # real one without needing to import/"
+        "reference requests.exceptions directly."
+    )
+    lines.append("                response = getattr(exc, 'response', None)")
+    lines.append("                status_code = getattr(response, 'status_code', None)")
+    lines.append(
+        "                if response is not None and status_code "
+        "not in _TRANSIENT_STATUS_CODES:"
+    )
+    lines.append("                    raise")
+    lines.append("                if time.time() >= deadline:")
+    lines.append("                    raise TimeoutError(")
+    lines.append(
+        '                        f"Task {task_id} did not complete within '
+        '{timeout} seconds"'
+    )
+    lines.append("                    ) from exc")
+    lines.append("                time.sleep(poll_interval)")
+    lines.append("                continue")
+    lines.append("            if task.get('status') != 'processing':")
+    lines.append("                return task")
+    lines.append("            if time.time() >= deadline:")
+    lines.append("                raise TimeoutError(")
+    lines.append(
+        '                    f"Task {task_id} did not complete within '
+        '{timeout} seconds"'
+    )
+    lines.append("                )")
+    lines.append("            time.sleep(poll_interval)")
+    lines.append("")
+    # list_tasks/delete_task/delete_completed_tasks/delete_failed_tasks are,
+    # like get_task/wait_for_task above, hardcoded rather than derived from
+    # the per-path loop below: every compiled app guarantees these exact
+    # routes (see RESERVED_INFRASTRUCTURE_NAMES in api_generator.py, which
+    # blocks a notebook function from ever redefining one of them), but
+    # that loop only emits a method for POST paths, so a caller who wanted
+    # to see what's still running, or clear out finished tasks, had no way
+    # to do it through the generated client at all -- only get_task, for a
+    # single already-known task_id. This is the same gap wait_for_task
+    # closed for polling a single task, now closed for the rest of a
+    # background task's lifecycle.
+    # status/limit/offset mirror the generated server's own GET /tasks
+    # query params (see list_tasks in api_generator.py) -- before this,
+    # the only way to filter to e.g. just the failed tasks, or page
+    # through a long-running deployment's history, was to bypass this
+    # client entirely and hit the raw HTTP endpoint by hand, since this
+    # method sent no query string at all no matter how it was called.
+    # Each omitted (the default) preserves list_tasks()'s previous
+    # behavior exactly: every task, unfiltered, first page.
+    #
+    # webhook_delivery_failed mirrors the server's own identically-named
+    # query param, added alongside redeliver_task_webhook's own client
+    # method above -- before this, a caller who'd already learned from
+    # metrics() that some automatic webhook deliveries had failed had no
+    # way to find out *which* tasks those were through this client at
+    # all, short of calling list_tasks() unfiltered and inspecting every
+    # task's own "webhook" field by hand. Composes with status/limit/
+    # offset exactly like the server's own filter does.
+    lines.append("    def list_tasks(")
+    lines.append(
+        "        self, status: str = None, limit: int = None, "
+        "offset: int = None,"
+    )
+    lines.append(
+        "        webhook_delivery_failed: bool = None,"
+    )
+    lines.append("    ) -> dict:")
+    lines.append(
+        '        """List background tasks, with a status-count summary.'
+    )
+    lines.append("")
+    lines.append(
+        "        status/limit/offset/webhook_delivery_failed mirror the "
+        "generated server's own GET /tasks"
+    )
+    lines.append(
+        '        query params -- each omitted (the default) returns '
+        "every task,"
+    )
+    lines.append('        unfiltered, first page."""')
+    lines.append("        params = {}")
+    lines.append("        if status is not None:")
+    lines.append('            params["status"] = status')
+    lines.append("        if limit is not None:")
+    lines.append('            params["limit"] = limit')
+    lines.append("        if offset is not None:")
+    lines.append('            params["offset"] = offset')
+    lines.append("        if webhook_delivery_failed is not None:")
+    lines.append(
+        '            params["webhook_delivery_failed"] = webhook_delivery_failed'
+    )
+    lines.append("        return self._request(lambda: requests.get(")
+    lines.append('            f"{self.base_url}/tasks",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            params=params,")
+    lines.append("            timeout=self.timeout,")
+    lines.append("        ))")
+    lines.append("")
+    lines.append("    def delete_task(self, task_id: str) -> dict:")
+    lines.append('        """Delete a single background task by id."""')
+    lines.append("        return self._request(lambda: requests.delete(")
+    lines.append('            f"{self.base_url}/tasks/{task_id}",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
+    lines.append("        ))")
+    lines.append("")
+    lines.append("    def delete_completed_tasks(self) -> dict:")
+    lines.append('        """Delete every task with status \'completed\'."""')
+    lines.append("        return self._request(lambda: requests.delete(")
+    lines.append('            f"{self.base_url}/tasks/completed",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
+    lines.append("        ))")
+    lines.append("")
+    lines.append("    def delete_failed_tasks(self) -> dict:")
+    lines.append('        """Delete every task with status \'failed\'."""')
+    lines.append("        return self._request(lambda: requests.delete(")
+    lines.append('            f"{self.base_url}/tasks/failed",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
+    lines.append("        ))")
+    lines.append("")
+    # Confirmed missing before this: the generated server side has let a
+    # caller manually retrigger a finished task's webhook delivery via
+    # POST /tasks/{task_id}/redeliver-webhook for several commits now (see
+    # redeliver_task_webhook in api_generator.py), and both generated
+    # clients already got a way to *verify* a delivered webhook's
+    # signature (verify_webhook_signature/verifyWebhookSignature) -- but
+    # neither client ever gained a method to actually *trigger* a
+    # redelivery. A caller whose webhook receiver was down long enough to
+    # exhaust every automatic retry, and who wants to recover the missed
+    # delivery without resubmitting the whole background task, had no way
+    # to do that through this client at all -- only by hand-building the
+    # exact same requests.post call delete_task above already demonstrates
+    # this client knows how to make.
+    lines.append("    def redeliver_task_webhook(self, task_id: str) -> dict:")
+    lines.append(
+        '        """Redeliver a completed/failed task\'s already-recorded '
+        "result/error to its own callback_url."
+    )
+    lines.append("")
+    lines.append(
+        "        Raises on a 404 (unknown task_id), 409 (task still "
+        "processing -- nothing"
+    )
+    lines.append(
+        "        recorded to redeliver yet), or 400 (task was never "
+        'submitted with a'
+    )
+    lines.append('        callback_url in the first place)."""')
+    lines.append("        return self._request(lambda: requests.post(")
+    lines.append(
+        '            f"{self.base_url}/tasks/{task_id}/redeliver-webhook",'
+    )
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
+    lines.append("        ))")
+    lines.append("")
+    # Confirmed missing before this the identical way redeliver_task_webhook
+    # above once was: the generated server side has let a caller actually
+    # re-execute a failed task's own underlying function (not merely
+    # resend its already-recorded outcome, which redeliver_task_webhook
+    # above already covers) via POST /tasks/{task_id}/retry for several
+    # commits now (see retry_task in api_generator.py), but neither
+    # generated client ever gained a method to call it -- a caller with
+    # code of their own had no way to retry a failed task without
+    # hand-building the exact same requests.post call
+    # redeliver_task_webhook above already demonstrates this client knows
+    # how to make.
+    lines.append("    def retry_task(self, task_id: str) -> dict:")
+    lines.append(
+        '        """Re-run a failed task\'s own underlying function with '
+        "its original"
+    )
+    lines.append("        inputs, under a brand-new task_id.")
+    lines.append("")
+    lines.append(
+        "        Raises on a 404 (unknown task_id) or 409 (task is not "
+        "'failed' --"
+    )
+    lines.append(
+        "        still processing, already completed, or has no "
+        "recorded inputs"
+    )
+    lines.append("        to retry it with).")
+    lines.append("")
+    lines.append(
+        '        Returns {"task_id": <new task_id>, "status": '
+        '"processing",'
+    )
+    lines.append('        "retried_from": task_id}. Poll get_task/wait_for_task on')
+    lines.append("        the *new* task_id for the retried outcome -- the original,")
+    lines.append('        failed task is left untouched."""')
+    lines.append("        return self._request(lambda: requests.post(")
+    lines.append(
+        '            f"{self.base_url}/tasks/{task_id}/retry",'
+    )
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
+    lines.append("        ))")
+    lines.append("")
+    # cleanup_tasks/reset_tasks mirror delete_completed_tasks/
+    # delete_failed_tasks above -- POST /tasks/cleanup and POST
+    # /tasks/reset (api_generator.py) already existed server-side with no
+    # client method of their own, the same "server-side capability
+    # exists, this generator was never updated to match" gap every other
+    # comment in this function already documents an instance of.
+    # cleanup_tasks is the single-request equivalent of calling
+    # delete_completed_tasks() then delete_failed_tasks() separately;
+    # reset_tasks is more drastic still -- it drops every task regardless
+    # of status, including one still processing.
+    lines.append("    def cleanup_tasks(self) -> dict:")
+    lines.append(
+        '        """Delete every task with status \'completed\' or '
+        "'failed' in a"
+    )
+    lines.append(
+        "        single request -- equivalent to calling "
+        "delete_completed_tasks()"
+    )
+    lines.append('        followed by delete_failed_tasks()."""')
+    lines.append("        return self._request(lambda: requests.post(")
+    lines.append('            f"{self.base_url}/tasks/cleanup",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
+    lines.append("        ))")
+    lines.append("")
+    lines.append("    def reset_tasks(self) -> dict:")
+    lines.append(
+        '        """Delete EVERY task this app is tracking, regardless '
+        "of status --"
+    )
+    lines.append(
+        "        including one still processing. Its eventual result "
+        "or error,"
+    )
+    lines.append("        once that background work finishes, is discarded rather")
+    lines.append('        than recorded anywhere."""')
+    lines.append("        return self._request(lambda: requests.post(")
+    lines.append('            f"{self.base_url}/tasks/reset",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
+    lines.append("        ))")
+    lines.append("")
+    # health/ready/info/config/metrics/uptime/auth_status/auth_info/
+    # auth_validate are, like get_task/list_tasks/... above, hardcoded
+    # rather than derived from the per-path loop below: every compiled app
+    # guarantees these exact GET routes too (see
+    # RESERVED_INFRASTRUCTURE_NAMES in api_generator.py, which blocks a
+    # notebook function from ever redefining any of them), but that loop
+    # only ever emits a method for POST paths. A caller wanting a
+    # liveness/readiness probe, service info, request metrics, or auth
+    # configuration through the generated client itself -- e.g. to back a
+    # monitoring dashboard, or confirm the client's own api_key will
+    # actually be accepted before calling a real notebook endpoint with
+    # it -- previously had no way to do that short of hand-writing the
+    # exact same requests.get call get_task already demonstrates this
+    # client knows how to make. "config" (GET /config, added alongside
+    # this same comment) closes the identical gap for the app's own
+    # actual runtime limits (MAX_REQUEST_BODY_BYTES, RATE_LIMIT_PER_MINUTE,
+    # ...) -- confirmed missing here even though the server-side endpoint
+    # itself already existed, the exact same class of drift
+    # RESERVED_INFRASTRUCTURE_NAMES above already guards the *server*
+    # side against, just never itself caught on this, the *client* side.
+    for infra_method_name, infra_path in (
+        ("health", "/health"),
+        ("ready", "/ready"),
+        ("info", "/info"),
+        ("config", "/config"),
+        ("metrics", "/metrics"),
+        ("uptime", "/uptime"),
+        ("auth_status", "/auth/status"),
+        ("auth_info", "/auth/info"),
+        ("auth_validate", "/auth/validate"),
+    ):
+        lines.append(f"    def {infra_method_name}(self) -> dict:")
+        lines.append(f'        """GET {infra_path}."""')
+        lines.append("        return self._request(lambda: requests.get(")
+        lines.append(f'            f"{{self.base_url}}{infra_path}",')
+        lines.append('            headers={"X-API-Key": self.api_key},')
+        lines.append("            timeout=self.timeout,")
+        lines.append("        ))")
+        lines.append("")
+    # metrics_prometheus is the one infra method left out of the loop
+    # above: GET /metrics/prometheus (api_generator.py's metrics_prometheus)
+    # returns Prometheus text exposition format, not JSON like every
+    # other infra route -- plugging it into that homogeneous loop as-is
+    # would generate a method that raises a JSON decode error on every
+    # real response. Confirmed missing before this: every other infra
+    # route above already got a client method specifically so a caller
+    # integrating via this generated client never has to hand-roll a raw
+    # HTTP call, but a caller building a monitoring/collector integration
+    # around this client had no way to reach this one -- the exact same
+    # "server-side route exists, client-side method was never added to
+    # match" drift class the loop above already closed for config/metrics/
+    # uptime/auth_*.
+    lines.append("    def metrics_prometheus(self) -> str:")
+    lines.append(
+        '        """GET /metrics/prometheus. Unlike every other infra '
+        "method"
+    )
+    lines.append(
+        "        above, this returns raw Prometheus text exposition "
+        'format --'
+    )
+    lines.append(
+        '        the exact text a scraper expects -- not a parsed dict."""'
+    )
+    lines.append("        return self._request(lambda: requests.get(")
+    lines.append('            f"{self.base_url}/metrics/prometheus",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
+    lines.append("        ), parse_json=False)")
+    lines.append("")
+    for path, method_name in method_names.items():
+        is_background = _is_background_path(paths[path])
+        description = _operation_description(paths[path])
+        pascal_name = _pascal_case(method_name)
+        request_class = f"{pascal_name}Request"
+        response_class = f"{pascal_name}Response"
+        return_type = (paths[path].get("post") or {}).get(
+            "x-notebook-to-api-return-type"
+        )
+
+        typeddict_lines.extend(
+            _python_request_typeddict_lines(
+                request_class, _request_body_schema(schema, paths[path])
+            )
+        )
+
+        if is_background:
+            typeddict_lines.extend(
+                _python_typeddict_lines(
+                    response_class,
+                    {"task_id": "str", "status": 'Literal["processing"]'},
+                    {},
+                )
+            )
+        else:
+            typeddict_lines.extend(
+                _python_typeddict_lines(
+                    response_class,
+                    {"result": _python_type_to_safe_python_annotation(return_type)},
+                    {},
+                )
+            )
+
+        # Determine parameter schema (simple request body expecting JSON)
+        # Confirmed missing before this feature: the generated server side
+        # has accepted an optional ?callback_url= on every background
+        # endpoint since it was added (POSTing the finished task's own
+        # result there instead of requiring the caller to poll
+        # get_task/wait_for_task), and the OpenAPI schema itself already
+        # documents it as a real query parameter on that operation -- but
+        # neither generated client ever gained any way to actually reach
+        # it, short of a caller bypassing this client entirely and
+        # building the raw HTTP request by hand. A synchronous endpoint's
+        # own method signature is left untouched -- callback_url is a
+        # background-only capability the generated server itself never
+        # even reads for one.
+        if is_background:
+            lines.append(
+                f"    def {method_name}(self, payload: {request_class}, "
+                f"callback_url: str = None) -> {response_class}:"
+            )
+        else:
+            lines.append(
+                f"    def {method_name}(self, payload: {request_class}) "
+                f"-> {response_class}:"
+            )
+        if is_background:
+            wait_name = wait_method_names[path]
+            static_doc = (
+                f"Enqueue the `{path}` background task with JSON payload.\n\n"
+                'Returns {"task_id": ..., "status": "processing"} '
+                "immediately -- not the real result. Call get_task(task_id)/"
+                "wait_for_task(task_id) yourself, or use "
+                f"{wait_name}(...) to submit and block until the real "
+                "result is ready in one call.\n\n"
+                "`callback_url`, if given, is POSTed the finished task's "
+                "own record ({\"task_id\", \"status\", \"result\"/"
+                "\"error\"}) once it completes or fails -- see the "
+                "generated server's own ?callback_url= for what it "
+                "actually delivers and when."
+            )
+        else:
+            static_doc = f"Call the `{path}` endpoint with JSON payload."
+        lines.append(
+            f"        {_python_method_docstring(description, static_doc)}"
+        )
+        if is_background:
+            # Generated once per call, outside the lambda below, and
+            # reused unchanged by every retry _request makes of it --
+            # never a fresh uuid per attempt. _request already retries a
+            # connection-level failure carrying no response at all (see
+            # its own docstring), the exact case where this call may have
+            # already reached the generated server and created a task
+            # before the failure happened; sending the same
+            # Idempotency-Key on the retry lets that server recognize the
+            # repeat and hand back the original task_id instead of
+            # enqueuing (and running) this notebook function a second
+            # time (see IDEMPOTENCY_KEYS in api_generator.py). A fresh
+            # uuid per attempt would defeat this entirely -- the server
+            # would see a different key every time and treat each retry
+            # as a brand new submission.
+            lines.append("        idempotency_key = str(uuid.uuid4())")
+        lines.append("        return self._request(lambda: requests.post(")
+        lines.append(f'            f"{{self.base_url}}{path}",')
+        lines.append(f'            json=payload,')
+        if is_background:
+            lines.append(
+                '            headers={"X-API-Key": self.api_key, '
+                '"Idempotency-Key": idempotency_key},'
+            )
+        else:
+            lines.append(f'            headers={{"X-API-Key": self.api_key}},')
+        lines.append(f'            timeout=self.timeout,')
+        if is_background:
+            lines.append(
+                "            params={'callback_url': callback_url} "
+                "if callback_url else None,"
+            )
+        lines.append("        ))")
+        lines.append("")
+
+        if is_background:
+            wait_name = wait_method_names[path]
+            task_result_class = f"{pascal_name}TaskResult"
+            typeddict_lines.extend(
+                _python_typeddict_lines(
+                    task_result_class,
+                    {},
+                    {
+                        "task_id": "str",
+                        "status": "str",
+                        "result": _python_type_to_safe_python_annotation(
+                            return_type
+                        ),
+                        "error": "str",
+                    },
+                )
+            )
+            lines.append(
+                f"    def {wait_name}(self, payload: {request_class}, "
+                "callback_url: str = None, "
+                "poll_interval: float = 1.0, timeout: float = 60.0) -> "
+                f"{task_result_class}:"
+            )
+            and_wait_static_doc = (
+                f"Submit `{path}` and block until the background task "
+                "finishes, returning its finished task record (see "
+                "wait_for_task)."
+            )
+            lines.append(
+                f"        {_python_method_docstring(description, and_wait_static_doc)}"
+            )
+            lines.append(
+                f"        submitted = self.{method_name}(payload, callback_url)"
+            )
+            lines.append(
+                "        return self.wait_for_task("
+                "submitted['task_id'], poll_interval, timeout)"
+            )
+            lines.append("")
+    # Splice every TypedDict collected above in just before the class
+    # itself -- see class_declaration_index's own docstring above for
+    # why they must land there, not simply appended to the end of the
+    # file.
+    lines[class_declaration_index:class_declaration_index] = (
+        typeddict_lines + [""]
+    )
+    # Write to file
+    output_file = Path(output_path)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    print(f"Python SDK generated at {output_path}")
+
+
+def generate_typescript_sdk(
+    openapi_path: str = "generated/openapi.json",
+    output_path: str = "generated/sdk/typescript_client.ts",
+):
+    """Generate a minimal TypeScript SDK client from a FastAPI OpenAPI schema.
+
+    Mirrors :func:`generate_python_sdk`: the generated client contains a
+    ``NotebookAPIClient`` class with a method for each POST endpoint defined
+    in the OpenAPI spec. Each method performs a ``fetch`` call to the
+    corresponding endpoint and returns the parsed JSON response.
+
+    Also mirrors generate_python_sdk's new module-level
+    ``verifyWebhookSignature`` -- see its own docstring there for the full
+    gap this closes (a ``?callback_url=`` receiver had no reference
+    implementation anywhere in this SDK for checking the
+    ``X-Webhook-Signature`` header ``_deliver_task_webhook``,
+    api_generator.py, already signs every delivered body with). Uses
+    Node's built-in ``node:crypto`` rather than hand-rolling HMAC-SHA256 --
+    unlike every other exported symbol in this file, a webhook *receiver*
+    is inherently server-side code (nothing running in a browser can bind
+    a listening HTTP endpoint for this app to deliver a webhook to), so
+    the Node-only import doesn't cost this client the browser
+    compatibility its ``fetch``-based methods otherwise keep.
+    """
+    # Load OpenAPI schema
+    schema = _load_openapi_schema(openapi_path)
+
+    paths = schema.get("paths", {})
+    method_names = _build_method_names(
+        paths, TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES
+    )
+    wait_method_names = _build_wait_method_names(method_names, paths)
+    # Prepare client code lines
+    lines = []
+    lines.append('import { createHmac, timingSafeEqual } from "node:crypto";')
+    lines.append("")
+    # Mirrors generate_python_sdk's own verify_webhook_signature -- see its
+    # docstring above for the full "why". `payloadBody` accepts either the
+    # raw string or Buffer of the received request body (Node's own http
+    # server APIs commonly hand back one or the other depending on how the
+    # body was read); passed straight through to createHmac's own .update,
+    # which accepts both without re-encoding.
+    lines.append("export function verifyWebhookSignature(")
+    lines.append("  payloadBody: string | Buffer,")
+    lines.append("  signatureHeader: string | null | undefined,")
+    lines.append("  secret: string")
+    lines.append("): boolean {")
+    lines.append("  if (!signatureHeader || !signatureHeader.includes(\"=\")) {")
+    lines.append("    return false;")
+    lines.append("  }")
+    lines.append("  const eqIndex = signatureHeader.indexOf(\"=\");")
+    lines.append("  const algorithm = signatureHeader.slice(0, eqIndex);")
+    lines.append("  const signature = signatureHeader.slice(eqIndex + 1);")
+    lines.append('  if (algorithm !== "sha256" || !signature) {')
+    lines.append("    return false;")
+    lines.append("  }")
+    lines.append(
+        '  const expectedSignature = createHmac("sha256", secret)'
+    )
+    lines.append("    .update(payloadBody)")
+    lines.append('    .digest("hex");')
+    # timingSafeEqual throws (rather than returning false) when the two
+    # buffers differ in length -- an attacker-controlled signatureHeader of
+    # the "wrong" length would otherwise crash a receiver's request
+    # handler instead of just failing verification, so the length check
+    # below must happen first.
+    lines.append(
+        "  const expectedBuffer = Buffer.from(expectedSignature, \"utf-8\");"
+    )
+    lines.append(
+        "  const receivedBuffer = Buffer.from(signature, \"utf-8\");"
+    )
+    lines.append(
+        "  if (expectedBuffer.length !== receivedBuffer.length) {"
+    )
+    lines.append("    return false;")
+    lines.append("  }")
+    lines.append(
+        "  return timingSafeEqual(expectedBuffer, receivedBuffer);"
+    )
+    lines.append("}")
+    lines.append("")
+    lines.append("export interface NotebookAPIClientOptions {")
+    lines.append("  apiKey?: string;")
+    lines.append("  timeoutMs?: number;")
+    lines.append("  maxRetries?: number;")
+    lines.append("  backoffFactor?: number;")
+    lines.append("}")
+    lines.append("")
+    lines.append("export class NotebookAPIClient {")
+    lines.append("  private baseUrl: string;")
+    lines.append("  private apiKey: string;")
+    lines.append("  private timeoutMs: number;")
+    lines.append("  private maxRetries: number;")
+    lines.append("  private backoffFactor: number;")
+    lines.append("  private static readonly TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);")
+    lines.append("")
+    lines.append(
+        "  constructor(baseUrl: string, options: NotebookAPIClientOptions = {}) {"
+    )
+    lines.append('    this.baseUrl = baseUrl.replace(/\\/+$/, "");')
+    # Generated endpoints require the same X-API-Key header the generated
+    # app itself defaults to (see NOTEBOOK_API_KEY in api_generator.py) so
+    # the client works out of the box locally -- the Python client's own
+    # identical `api_key or os.getenv('NOTEBOOK_API_KEY', ...)` fallback
+    # already reads this same env var when no api_key is passed
+    # explicitly, but this constructor previously only ever fell back to
+    # the hardcoded literal, silently dropping process.env.NOTEBOOK_API_KEY
+    # even though this file already targets Node (see the node:crypto
+    # import verifyWebhookSignature above uses), where process.env is
+    # exactly as safe to read as os.getenv is in the Python client.
+    lines.append(
+        "    this.apiKey = options.apiKey ?? "
+        'process.env.NOTEBOOK_API_KEY ?? "notebook-to-api-dev-key";'
+    )
+    # fetch() has no default timeout of its own -- a call with no signal
+    # can hang indefinitely on a server that accepts the connection but
+    # never responds (a stalled deploy target, a network partition, ...),
+    # with nothing on the client side to ever give up. waitForTask's own
+    # timeoutMs bounds its polling *loop*, but each individual request it
+    # (and every other method here) makes had no bound of its own until
+    # now -- matches the Python client's identical `timeout` addition.
+    lines.append("    this.timeoutMs = options.timeoutMs ?? 30000;")
+    # Confirmed missing before this: only waitForTask's own polling loop
+    # ever retried a transient failure -- every other call this client
+    # makes (a per-function POST, listTasks/deleteTask/..., health/ready/
+    # info/config/metrics/uptime/auth*) threw immediately on a single
+    # 429/502/503/504 or network error, even though the generated server
+    # side already reports exactly when a caller should retry
+    # (X-RateLimit-Reset, Retry-After -- see _enforce_rate_limit in
+    # api_generator.py). maxRetries: 0 disables this entirely, preserving
+    # the previous immediate-throw behavior -- matches the Python
+    # client's identical max_retries/backoff_factor addition.
+    lines.append("    this.maxRetries = options.maxRetries ?? 3;")
+    lines.append("    this.backoffFactor = options.backoffFactor ?? 0.5;")
+    lines.append("  }")
+    lines.append("")
+    lines.append(
+        "  private retryDelayMs(response: Response | null, "
+        "attempt: number): number {"
+    )
+    lines.append("    if (response && response.headers) {")
+    lines.append('      const retryAfter = response.headers.get("Retry-After");')
+    lines.append("      if (retryAfter !== null) {")
+    lines.append("        const seconds = Number(retryAfter);")
+    lines.append("        if (!Number.isNaN(seconds)) {")
+    lines.append("          return Math.max(0, seconds * 1000);")
+    lines.append("        }")
+    lines.append("      }")
+    lines.append("    }")
+    lines.append(
+        "    return this.backoffFactor * 1000 * Math.pow(2, attempt);"
+    )
+    lines.append("  }")
+    lines.append("")
+    lines.append(
+        "  private async requestWithRetry(path: string, "
+        "fn: () => Promise<Response>, parseJson: boolean = true): "
+        "Promise<any> {"
+    )
+    lines.append("    let attempt = 0;")
+    lines.append("    while (true) {")
+    lines.append("      let response: Response;")
+    lines.append("      try {")
+    lines.append("        response = await fn();")
+    lines.append("      } catch (err) {")
+    lines.append("        if (attempt >= this.maxRetries) {")
+    lines.append("          throw err;")
+    lines.append("        }")
+    lines.append(
+        "        await this.sleep(this.retryDelayMs(null, attempt));"
+    )
+    lines.append("        attempt++;")
+    lines.append("        continue;")
+    lines.append("      }")
+    lines.append("      if (!response.ok) {")
+    lines.append(
+        "        if ("
+    )
+    lines.append(
+        "          NotebookAPIClient.TRANSIENT_STATUSES.has(response.status) "
+        "&&"
+    )
+    lines.append("          attempt < this.maxRetries")
+    lines.append("        ) {")
+    lines.append(
+        "          await this.sleep(this.retryDelayMs(response, "
+        "attempt));"
+    )
+    lines.append("          attempt++;")
+    lines.append("          continue;")
+    lines.append("        }")
+    # `.status` attached to the thrown Error (not just embedded in its
+    # message) lets a caller distinguish e.g. a 401 from a 429 without
+    # regex-parsing the message string -- mirrors getTask's own identical
+    # `.status` attachment (added so waitForTask could tell a transient
+    # failure from a real one), extended here to the shared retry helper
+    # every generated method other than getTask/waitForTask routes
+    # through (waitForTask already has its own transient-retry loop
+    # around getTask -- see its own docstring above -- so neither is
+    # touched here, avoiding two independent retry loops nested inside
+    # one another).
+    lines.append(
+        "        const error: any = new Error(`Request to ${path} failed "
+        "with status ${response.status}`);"
+    )
+    lines.append("        error.status = response.status;")
+    lines.append("        throw error;")
+    lines.append("      }")
+    lines.append("      return parseJson ? response.json() : response.text();")
+    lines.append("    }")
+    lines.append("  }")
+    lines.append("")
+    lines.append(
+        "  private sleep(ms: number): Promise<void> {"
+    )
+    lines.append(
+        "    return new Promise((resolve) => setTimeout(resolve, ms));"
+    )
+    lines.append("  }")
+    lines.append("")
+    # `callbackUrl` (optional -- only ever passed by a background
+    # endpoint's own generated method below) becomes a "?callback_url="
+    # query param on the request URL, via URLSearchParams the same way
+    # listTasks already builds its own query string -- confirmed missing
+    # before this feature: the generated server side has accepted this
+    # exact query param on every background endpoint since it was added
+    # (POSTing the finished task's own result there instead of requiring
+    # the caller to poll getTask/waitForTask), and the OpenAPI schema
+    # itself already documents it as a real parameter on that operation,
+    # but neither generated client ever gained any way to actually reach
+    # it, short of a caller bypassing this client entirely and building
+    # the raw HTTP request by hand.
+    lines.append(
+        "  private async request(path: string, payload: unknown, "
+        "callbackUrl?: string): Promise<any> {"
+    )
+    lines.append("    let url = path;")
+    lines.append("    if (callbackUrl) {")
+    lines.append(
+        '      url = `${path}?${new URLSearchParams({ '
+        'callback_url: callbackUrl }).toString()}`;'
+    )
+    lines.append("    }")
+    # Generated once per call to this method, outside the `fn` closure
+    # below, and reused unchanged by every retry requestWithRetry makes
+    # of it -- never a fresh id per attempt. requestWithRetry already
+    # retries a connection-level failure carrying no response at all (see
+    # its own try/catch above), the exact case where this call may have
+    # already reached the generated server and created a task before the
+    # failure happened; sending the same Idempotency-Key on the retry
+    # lets that server recognize the repeat and hand back the original
+    # task_id instead of enqueuing (and running) this notebook function a
+    # second time (see IDEMPOTENCY_KEYS in api_generator.py). This
+    # `request` helper is only ever used for background/async endpoint
+    # submissions (see is_background's own call site above) -- a
+    # synchronous endpoint's own method calls requestWithRetry directly
+    # and needs no idempotency key, since its own generated server-side
+    # branch has no task state to deduplicate against in the first place.
+    lines.append(
+        "    const idempotencyKey = (typeof crypto !== "
+        '"undefined" && crypto.randomUUID) ? crypto.randomUUID() : '
+        '`${Date.now()}-${Math.random().toString(16).slice(2)}`;'
+    )
+    lines.append(
+        "    return this.requestWithRetry(url, () => fetch(`${this.baseUrl}${url}`, {"
+    )
+    lines.append('      method: "POST",')
+    lines.append("      headers: {")
+    lines.append('        "Content-Type": "application/json",')
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append('        "Idempotency-Key": idempotencyKey,')
+    lines.append("      },")
+    lines.append("      body: JSON.stringify(payload),")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }));")
+    lines.append("  }")
+    lines.append("")
+    lines.append("  async getTask(taskId: string): Promise<any> {")
+    lines.append(
+        "    const response = await fetch(`${this.baseUrl}/tasks/${taskId}`, {"
+    )
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    });")
+    lines.append("    if (!response.ok) {")
+    # `.status` attached to the thrown Error (not just embedded in its
+    # message) is what lets waitForTask below tell a transient failure
+    # (429/502/503/504) from a real one without re-parsing the message
+    # string it throws.
+    lines.append(
+        "      const error: any = new Error(`Request to /tasks/${taskId} "
+        "failed with status ${response.status}`);"
+    )
+    lines.append("      error.status = response.status;")
+    lines.append("      throw error;")
+    lines.append("    }")
+    lines.append("    return response.json();")
+    lines.append("  }")
+    lines.append("")
+    lines.append(
+        "  async waitForTask(taskId: string, options: { pollIntervalMs?: "
+        "number; timeoutMs?: number } = {}): Promise<any> {"
+    )
+    # A transient failure while polling -- a network-level error (fetch
+    # itself throwing, e.g. a connection reset, or AbortSignal.timeout
+    # firing on a single stalled request -- neither carries a `.status`
+    # at all), or a 429/502/503/504 response -- exactly what
+    # NOTEBOOK_API_RATE_LIMIT_PER_MINUTE or a rolling deploy would produce
+    # mid-poll -- is retried the same as an ordinary still-processing
+    # task, rather than aborting the whole wait outright. Any other error
+    # (a genuine 401/404/...) still throws immediately. Mirrors
+    # generate_python_sdk's identical wait_for_task fix.
+    lines.append("    const pollIntervalMs = options.pollIntervalMs ?? 1000;")
+    lines.append("    const timeoutMs = options.timeoutMs ?? 60000;")
+    lines.append("    const deadline = Date.now() + timeoutMs;")
+    lines.append("    const transientStatuses = new Set([429, 502, 503, 504]);")
+    lines.append("    while (true) {")
+    lines.append("      let task: any;")
+    lines.append("      try {")
+    lines.append("        task = await this.getTask(taskId);")
+    lines.append("      } catch (err: any) {")
+    lines.append(
+        "        if (err.status !== undefined && "
+        "!transientStatuses.has(err.status)) {"
+    )
+    lines.append("          throw err;")
+    lines.append("        }")
+    lines.append("        if (Date.now() >= deadline) {")
+    lines.append(
+        "          const timeoutError: any = new Error(`Task ${taskId} "
+        "did not complete within ${timeoutMs}ms`);"
+    )
+    # `.isTimeout` (not a dedicated Error subclass, matching this
+    # client's own existing "attach a field to a plain Error" convention
+    # -- see `.status` on the requestWithRetry/getTask error above)
+    # mirrors generate_python_sdk's identical wait_for_task, which
+    # already raises a distinct, separately-catchable TimeoutError here
+    # instead of the same plain Exception every other failure there
+    # raises. Confirmed missing before this: a TypeScript caller wanting
+    # to retry-with-backoff specifically on a timeout (rather than
+    # surfacing a real 404/401 immediately) had no field or type to
+    # branch on -- only a fragile `err.message.includes(...)` string
+    # match -- to tell "timed out waiting" apart from any other thrown
+    # error, even though the Python client already lets a caller write a
+    # clean `except TimeoutError:` for the identical situation.
+    lines.append("          timeoutError.isTimeout = true;")
+    lines.append("          throw timeoutError;")
+    lines.append("        }")
+    lines.append(
+        "        await new Promise((resolve) => setTimeout(resolve, "
+        "pollIntervalMs));"
+    )
+    lines.append("        continue;")
+    lines.append("      }")
+    lines.append('      if (task.status !== "processing") {')
+    lines.append("        return task;")
+    lines.append("      }")
+    lines.append("      if (Date.now() >= deadline) {")
+    lines.append(
+        "        const timeoutError: any = new Error(`Task ${taskId} did "
+        "not complete within ${timeoutMs}ms`);"
+    )
+    lines.append("        timeoutError.isTimeout = true;")
+    lines.append("        throw timeoutError;")
+    lines.append("      }")
+    lines.append(
+        "      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));"
+    )
+    lines.append("    }")
+    lines.append("  }")
+    lines.append("")
+    # Mirrors generate_python_sdk's list_tasks/delete_task/
+    # delete_completed_tasks/delete_failed_tasks: hardcoded rather than
+    # derived from the per-path loop below (which only emits a method for
+    # POST paths), since every compiled app guarantees these exact routes
+    # (see RESERVED_INFRASTRUCTURE_NAMES in api_generator.py). Closes the
+    # same gap for the rest of a background task's lifecycle that
+    # waitForTask already closed for polling a single known task.
+    # status/limit/offset mirror the generated server's own GET /tasks
+    # query params (see list_tasks in api_generator.py) -- same gap as
+    # generate_python_sdk's identical listTasks() addition: before this,
+    # this method sent no query string at all no matter how it was
+    # called, so filtering/paginating GET /tasks meant bypassing the
+    # generated client entirely. Every option left undefined (the
+    # default) preserves listTasks()'s previous behavior exactly.
+    # webhookDeliveryFailed mirrors the server's own identically-named
+    # (snake_case on the wire) webhook_delivery_failed query param, added
+    # alongside redeliverTaskWebhook's own client method above -- before
+    # this, a caller who'd already learned from metrics() that some
+    # automatic webhook deliveries had failed had no way to find out
+    # *which* tasks those were through this client at all, short of
+    # calling listTasks() unfiltered and inspecting every task's own
+    # "webhook" field by hand. Mirrors generate_python_sdk's identical
+    # list_tasks(webhook_delivery_failed=...) addition.
+    lines.append(
+        "  async listTasks(options: { status?: string; limit?: number; "
+        "offset?: number; webhookDeliveryFailed?: boolean } = {}): "
+        "Promise<any> {"
+    )
+    lines.append("    const params = new URLSearchParams();")
+    lines.append(
+        '    if (options.status !== undefined) params.set("status", '
+        "options.status);"
+    )
+    lines.append(
+        '    if (options.limit !== undefined) params.set("limit", '
+        "String(options.limit));"
+    )
+    lines.append(
+        '    if (options.offset !== undefined) params.set("offset", '
+        "String(options.offset));"
+    )
+    lines.append(
+        "    if (options.webhookDeliveryFailed !== undefined) "
+        'params.set("webhook_delivery_failed", '
+        "String(options.webhookDeliveryFailed));"
+    )
+    lines.append("    const query = params.toString();")
+    lines.append('    const path = `/tasks${query ? `?${query}` : ""}`;')
+    lines.append(
+        "    return this.requestWithRetry(path, () => fetch(`${this.baseUrl}${path}`, {"
+    )
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }));")
+    lines.append("  }")
+    lines.append("")
+    lines.append("  async deleteTask(taskId: string): Promise<any> {")
+    lines.append('    const path = `/tasks/${taskId}`;')
+    lines.append(
+        "    return this.requestWithRetry(path, () => fetch(`${this.baseUrl}${path}`, {"
+    )
+    lines.append('      method: "DELETE",')
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }));")
+    lines.append("  }")
+    lines.append("")
+    lines.append("  async deleteCompletedTasks(): Promise<any> {")
+    lines.append(
+        '    return this.requestWithRetry("/tasks/completed", () => '
+        "fetch(`${this.baseUrl}/tasks/completed`, {"
+    )
+    lines.append('      method: "DELETE",')
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }));")
+    lines.append("  }")
+    lines.append("")
+    lines.append("  async deleteFailedTasks(): Promise<any> {")
+    lines.append(
+        '    return this.requestWithRetry("/tasks/failed", () => '
+        "fetch(`${this.baseUrl}/tasks/failed`, {"
+    )
+    lines.append('      method: "DELETE",')
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }));")
+    lines.append("  }")
+    lines.append("")
+    # Mirrors generate_python_sdk's identical redeliver_task_webhook
+    # addition: the generated server side has let a caller manually
+    # retrigger a finished task's webhook delivery via POST
+    # /tasks/{task_id}/redeliver-webhook for several commits now, and this
+    # client already gained a way to *verify* a delivered webhook's
+    # signature (verifyWebhookSignature) -- but never a method to actually
+    # *trigger* a redelivery. Confirmed missing here even though the
+    # server-side route already existed.
+    lines.append("  async redeliverTaskWebhook(taskId: string): Promise<any> {")
+    lines.append('    const path = `/tasks/${taskId}/redeliver-webhook`;')
+    lines.append(
+        "    return this.requestWithRetry(path, () => fetch(`${this.baseUrl}${path}`, {"
+    )
+    lines.append('      method: "POST",')
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }));")
+    lines.append("  }")
+    lines.append("")
+    # Mirrors generate_python_sdk's identical retry_task addition: the
+    # generated server side has let a caller actually re-execute a failed
+    # task's own underlying function (not merely resend its already-
+    # recorded outcome, which redeliverTaskWebhook above already covers)
+    # via POST /tasks/{task_id}/retry for several commits now, but neither
+    # generated client ever gained a method to call it.
+    lines.append("  async retryTask(taskId: string): Promise<any> {")
+    lines.append('    const path = `/tasks/${taskId}/retry`;')
+    lines.append(
+        "    return this.requestWithRetry(path, () => fetch(`${this.baseUrl}${path}`, {"
+    )
+    lines.append('      method: "POST",')
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }));")
+    lines.append("  }")
+    lines.append("")
+    # cleanupTasks/resetTasks mirror deleteCompletedTasks/
+    # deleteFailedTasks above -- POST /tasks/cleanup and POST /tasks/reset
+    # (api_generator.py) already existed server-side with no client
+    # method of their own. cleanupTasks is the single-request equivalent
+    # of calling deleteCompletedTasks() then deleteFailedTasks()
+    # separately; resetTasks is more drastic still -- it drops every task
+    # regardless of status, including one still processing.
+    lines.append("  async cleanupTasks(): Promise<any> {")
+    lines.append(
+        '    return this.requestWithRetry("/tasks/cleanup", () => '
+        "fetch(`${this.baseUrl}/tasks/cleanup`, {"
+    )
+    lines.append('      method: "POST",')
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }));")
+    lines.append("  }")
+    lines.append("")
+    lines.append("  async resetTasks(): Promise<any> {")
+    lines.append(
+        '    return this.requestWithRetry("/tasks/reset", () => '
+        "fetch(`${this.baseUrl}/tasks/reset`, {"
+    )
+    lines.append('      method: "POST",')
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }));")
+    lines.append("  }")
+    lines.append("")
+    # Mirrors generate_python_sdk's health/ready/info/config/metrics/
+    # uptime/auth_status/auth_info/auth_validate above: hardcoded rather
+    # than derived from the per-path loop below (which only emits a
+    # method for POST paths), since every compiled app guarantees these
+    # exact GET routes (see RESERVED_INFRASTRUCTURE_NAMES in
+    # api_generator.py). "config" mirrors the identical gap just closed
+    # on the Python client -- GET /config already existed server-side but
+    # had no client method of its own here either.
+    for infra_method_name, infra_path in (
+        ("health", "/health"),
+        ("ready", "/ready"),
+        ("info", "/info"),
+        ("config", "/config"),
+        ("metrics", "/metrics"),
+        ("uptime", "/uptime"),
+        ("authStatus", "/auth/status"),
+        ("authInfo", "/auth/info"),
+        ("authValidate", "/auth/validate"),
+    ):
+        lines.append("")
+        lines.append(f"  async {infra_method_name}(): Promise<any> {{")
+        lines.append(
+            f'    return this.requestWithRetry("{infra_path}", () => '
+            f"fetch(`${{this.baseUrl}}{infra_path}`, {{"
+        )
+        lines.append("      headers: {")
+        lines.append('        "X-API-Key": this.apiKey,')
+        lines.append("      },")
+        lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+        lines.append("    }));")
+        lines.append("  }")
+    # metricsPrometheus is the one infra method left out of the loop
+    # above: GET /metrics/prometheus returns Prometheus text exposition
+    # format, not JSON like every other infra route -- plugging it into
+    # that homogeneous loop as-is would generate a method that throws a
+    # JSON parse error on every real response. Mirrors
+    # generate_python_sdk's identical metrics_prometheus fix, including
+    # the same reasoning: every other infra route above already got a
+    # client method specifically so a caller never has to hand-roll a raw
+    # fetch, but this one route had no client method of its own here
+    # either, until now.
+    lines.append("")
+    lines.append("  async metricsPrometheus(): Promise<string> {")
+    lines.append(
+        '    return this.requestWithRetry("/metrics/prometheus", () => '
+        "fetch(`${this.baseUrl}/metrics/prometheus`, {"
+    )
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }), false);")
+    lines.append("  }")
+    # Collected separately from `lines` (the class body being built
+    # above) and appended after the class closes, below -- TypeScript
+    # type declarations are hoisted within a module, so declaration
+    # order relative to the class doesn't matter, but keeping the class
+    # itself uninterrupted (rather than threading interface declarations
+    # in in between its own methods) keeps the class readable as one
+    # block, matching how NotebookAPIClientOptions is already declared
+    # once, up front, rather than repeated per-method.
+    interface_lines = []
+
+    for path, method_name in method_names.items():
+        is_background = _is_background_path(paths[path])
+        description = _operation_description(paths[path])
+        # Confirmed missing before this feature: every generated
+        # method's own payload parameter and return value were typed as
+        # a bare Record<string, unknown>/any regardless of what the
+        # notebook function actually expects or returns -- throwing away
+        # the single biggest practical reason to generate a *TypeScript*
+        # client over a plain JS one (compile-time type checking, IDE
+        # autocomplete) for every function this tool compiles. Request
+        # fields are typed straight from the real Pydantic-validated
+        # JSON schema (_json_schema_type_to_typescript); the response
+        # side has no such schema to read (api_generator.py's own
+        # declared 200 response is deliberately {}), so it's typed from
+        # "x-notebook-to-api-return-type" instead, an out-of-band
+        # extension field generate_fastapi_code stamps onto the OpenAPI
+        # operation for exactly this (see its own docstring).
+        pascal_name = _pascal_case(method_name)
+        request_interface = f"{pascal_name}Request"
+        response_interface = f"{pascal_name}Response"
+        return_type = (paths[path].get("post") or {}).get(
+            "x-notebook-to-api-return-type"
+        )
+
+        interface_lines.extend(
+            _typescript_request_interface(
+                request_interface, _request_body_schema(schema, paths[path])
+            )
+        )
+        interface_lines.append("")
+
+        if is_background:
+            interface_lines.extend(
+                _typescript_task_submission_interface(response_interface)
+            )
+        else:
+            interface_lines.extend(
+                _typescript_response_interface(response_interface, return_type)
+            )
+        interface_lines.append("")
+
+        lines.append("")
+        if is_background:
+            wait_name = wait_method_names[path]
+            static_text_lines = [
+                f"Enqueues `{path}` with JSON payload and returns",
+                '{ task_id, status: "processing" } immediately -- not the '
+                "real result.",
+                f"Call getTask(taskId)/waitForTask(taskId) yourself, or "
+                f"use {wait_name}(...)",
+                "to submit and wait for the real result in one call.",
+                "",
+                "`callbackUrl`, if given, is POSTed the finished task's own",
+                'record ({ task_id, status, result/error }) once it '
+                "completes or fails --",
+                "see the generated server's own ?callback_url= for what "
+                "it actually delivers and when.",
+            ]
+        else:
+            static_text_lines = [f"Calls the `{path}` endpoint with JSON payload."]
+        lines.extend(_jsdoc_lines(description, static_text_lines))
+        if is_background:
+            lines.append(
+                f"  async {method_name}(payload: {request_interface}, "
+                f"callbackUrl?: string): Promise<{response_interface}> {{"
+            )
+            lines.append(
+                f'    return this.request("{path}", payload, callbackUrl);'
+            )
+        else:
+            lines.append(
+                f"  async {method_name}(payload: {request_interface}): "
+                f"Promise<{response_interface}> {{"
+            )
+            lines.append(f'    return this.request("{path}", payload);')
+        lines.append("  }")
+
+        if is_background:
+            wait_name = wait_method_names[path]
+            task_result_interface = f"{pascal_name}TaskResult"
+            interface_lines.extend(
+                _typescript_task_result_interface(task_result_interface, return_type)
+            )
+            interface_lines.append("")
+            lines.append("")
+            and_wait_static_text_lines = [
+                f"Submits `{path}` and blocks until the background task "
+                "finishes, returning its finished task record (see "
+                "waitForTask).",
+            ]
+            lines.extend(_jsdoc_lines(description, and_wait_static_text_lines))
+            lines.append(
+                f"  async {wait_name}(payload: {request_interface}, "
+                "callbackUrl?: string, "
+                "options: { pollIntervalMs?: number; timeoutMs?: number } = "
+                f"{{}}): Promise<{task_result_interface}> {{"
+            )
+            lines.append(
+                f"    const submitted = await this.{method_name}(payload, callbackUrl);"
+            )
+            lines.append(
+                "    return this.waitForTask(submitted.task_id, options);"
+            )
+            lines.append("  }")
+    lines.append("}")
+    lines.append("")
+    lines.extend(interface_lines)
+    # Write to file
+    output_file = Path(output_path)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    print(f"TypeScript SDK generated at {output_path}")

@@ -1,0 +1,750 @@
+from pathlib import Path
+
+
+class SDKGenerator:
+    """
+    Generates SDK clients from analyzed notebook functions.
+    """
+
+    def __init__(self, output_dir: str):
+        self.output_dir = Path(output_dir)
+
+    def generate(
+        self,
+        functions,
+        language: str = "python"
+    ):
+        if language == "python":
+            return self._generate_python_sdk(functions)
+
+        raise ValueError(
+            f"Unsupported SDK language: {language}"
+        )
+
+    def _generate_python_sdk(
+        self,
+        functions
+    ):
+        sdk_dir = self.output_dir / "python_sdk"
+
+        sdk_dir.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+
+        models_file = sdk_dir / "models.py"
+
+        models_file.write_text(
+            self._build_models_file(functions)
+        )
+
+        exceptions_file = sdk_dir / "exceptions.py"
+
+        exceptions_file.write_text(
+            self._build_exceptions_file()
+        )
+
+        readme_file = sdk_dir / "README.md"
+
+        readme_file.write_text(
+            self._build_readme(functions)
+        )
+
+        init_file = sdk_dir / "__init__.py"
+
+        init_file.write_text(
+            "from .client import APIClient\n"
+            "from .models import *\n"
+            "from .exceptions import *\n"
+        )
+
+        client_file = sdk_dir / "client.py"
+
+        client_file.write_text(
+            self._build_client_template(functions)
+        )
+
+        return sdk_dir
+
+    def _build_client_template(
+        self,
+        functions
+    ):
+        methods = []
+
+        for func in functions:
+            func_name = func["name"]
+
+            response_model_name = (
+                "".join(
+                    part.capitalize()
+                    for part in func_name.split("_")
+                ) + "Response"
+            )
+
+            request_model_name = (
+                "".join(
+                    part.capitalize()
+                    for part in func_name.split("_")
+                ) + "Request"
+            )
+
+            method_signature = (
+                f"self, request: {request_model_name}"
+            )
+
+            methods.append(
+                f"""
+    def {func_name}(
+        {method_signature}
+    ) -> {response_model_name}:
+        payload = request.to_dict()
+
+        response = self._request(
+            "POST",
+            "/{func_name}",
+            json=payload
+        )
+
+        return {response_model_name}(**response)
+"""
+            )
+
+        generated_methods = "".join(methods)
+
+        infrastructure_methods = """
+    def health(self):
+        return self._request(
+            "GET",
+            "/health"
+        )
+
+    def ready(self):
+        return self._request(
+            "GET",
+            "/ready"
+        )
+
+    def info(self):
+        return self._request(
+            "GET",
+            "/info"
+        )
+
+    def metrics(self):
+        return self._request(
+            "GET",
+            "/metrics"
+        )
+
+    def uptime(self):
+        return self._request(
+            "GET",
+            "/uptime"
+        )
+
+    def list_tasks(self):
+        return self._request(
+            "GET",
+            "/tasks"
+        )
+
+    def get_task(
+        self,
+        task_id: str
+    ):
+        return self._request(
+            "GET",
+            f"/tasks/{task_id}"
+        )
+
+    def cleanup_tasks(self):
+        return self._request(
+            "POST",
+            "/tasks/cleanup"
+        )
+
+    def reset_tasks(self):
+        return self._request(
+            "POST",
+            "/tasks/reset"
+        )
+
+    def delete_task(
+        self,
+        task_id: str
+    ):
+        return self._request(
+            "DELETE",
+            f"/tasks/{task_id}"
+        )
+"""
+
+        return f'''
+import requests
+from typing import Any
+
+from .models import *
+from .exceptions import *
+
+
+class APIClient:
+    def __init__(
+        self,
+        base_url,
+        api_key=None,
+        timeout=30
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.timeout = timeout
+
+    def _headers(self):
+        headers = {{}}
+
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+
+        return headers
+
+    def _request(
+        self,
+        method,
+        endpoint,
+        **kwargs
+    ):
+        response = requests.request(
+            method=method,
+            url=f"{{self.base_url}}{{endpoint}}",
+            headers=self._headers(),
+            timeout=self.timeout,
+            **kwargs
+        )
+
+        if response.status_code == 401:
+            raise AuthenticationError(
+                response.text
+            )
+
+        if response.status_code == 404:
+            raise NotFoundError(
+                response.text
+            )
+
+        if response.status_code >= 500:
+            raise ServerError(
+                response.text
+            )
+
+        if response.status_code >= 400:
+            raise APIError(
+                response.text
+            )
+
+        if response.content:
+            return response.json()
+
+        return None
+
+{infrastructure_methods}
+
+{generated_methods}
+'''
+
+    def _build_models_file(
+        self,
+        functions
+    ):
+        lines = [
+            "from dataclasses import dataclass",
+            "from typing import Optional, Any, List, Dict",
+            "from .exceptions import ValidationError",
+            "",
+        ]
+
+        lines.extend([
+            "",
+            "def _serialize_value(value):",
+            "    if hasattr(value, 'to_dict'):",
+            "        return value.to_dict()",
+            "",
+            "    if isinstance(value, list):",
+            "        return [_serialize_value(v) for v in value]",
+            "",
+            "    if isinstance(value, dict):",
+            "        return {",
+            "            k: _serialize_value(v)",
+            "            for k, v in value.items()",
+            "        }",
+            "",
+            "    return value",
+            ""
+        ])
+
+        lines.extend([
+            "",
+            "def _validate_nested(value):",
+            "    if hasattr(value, '__post_init__'):",
+            "        value.__post_init__()",
+            "",
+            "    if isinstance(value, list):",
+            "        for item in value:",
+            "            _validate_nested(item)",
+            "",
+            "    if isinstance(value, dict):",
+            "        for item in value.values():",
+            "            _validate_nested(item)",
+            ""
+        ])
+
+        for func in functions:
+            func_name = func["name"]
+
+            request_model_name = (
+                "".join(
+                    part.capitalize()
+                    for part in func_name.split("_")
+                ) + "Request"
+            )
+
+            lines.extend([
+                "@dataclass",
+                f"class {request_model_name}:"
+            ])
+
+            args = func.get(
+                "args",
+                []
+            )
+
+            if not args:
+                lines.append("    pass")
+            else:
+                _MISSING = object()
+
+                TYPE_MAPPING = {
+                    "int": "int",
+                    "float": "float",
+                    "str": "str",
+                    "bool": "bool",
+                    "list": "list",
+                    "dict": "dict",
+                    "Optional[int]": "Optional[int]",
+                    "Optional[float]": "Optional[float]",
+                    "Optional[str]": "Optional[str]",
+                    "Optional[bool]": "Optional[bool]",
+                    "List[str]": "List[str]",
+                    "List[int]": "List[int]",
+                    "List[float]": "List[float]",
+                    "List[bool]": "List[bool]",
+                    "Dict[str, str]": "Dict[str, str]",
+                    "Dict[str, int]": "Dict[str, int]",
+                    "Dict[str, float]": "Dict[str, float]",
+                    "Dict[str, Any]": "Dict[str, Any]"
+                }
+
+                resolved = [
+                    (
+                        arg["name"],
+                        TYPE_MAPPING.get(
+                            arg.get("type", "Any"),
+                            arg.get("type", "Any")
+                        ),
+                        arg.get("default", _MISSING)
+                    )
+                    for arg in args
+                ]
+
+                constraints_map = {
+                    arg["name"]: arg.get("constraints", {})
+                    for arg in args
+                }
+                required_fields = [
+                    (name, ptype, default)
+                    for name, ptype, default in resolved
+                    if default is _MISSING
+                ]
+
+                defaulted_fields = [
+                    (name, ptype, default)
+                    for name, ptype, default in resolved
+                    if default is not _MISSING
+                ]
+
+                for name, ptype, _default in required_fields:
+                    lines.append(f"    {name}: {ptype}")
+
+                for name, ptype, default in defaulted_fields:
+                    lines.append(
+                        f"    {name}: {ptype} = {repr(default)}"
+                    )
+
+                typed_args = required_fields + defaulted_fields
+
+                required_validatable = [
+                    (name, ptype)
+                    for name, ptype, _default
+                    in typed_args
+                    if ptype != "Any"
+                    and not ptype.startswith("Optional")
+                    and not ptype.startswith("List[")
+                    and not ptype.startswith("Dict[")
+                ]
+
+                optional_validatable = [
+                    (name, ptype)
+                    for name, ptype, _default
+                    in typed_args
+                    if ptype.startswith("Optional")
+                ]
+
+                list_validatable = [
+                    (name, ptype)
+                    for name, ptype, _default
+                    in typed_args
+                    if ptype.startswith("List[")
+                ]
+
+                dict_validatable = [
+                    (name, ptype)
+                    for name, ptype, _default
+                    in typed_args
+                    if ptype.startswith("Dict[")
+                ]
+
+                lines.append("")
+                lines.append("    __sdk_schema__ = {")
+
+                for arg_name, python_type, _default in typed_args:
+                    constraints = constraints_map.get(arg_name, {})
+
+                    constraint_parts = []
+
+                    for key, value in constraints.items():
+                        constraint_parts.append(
+                            f'"{key}": {repr(value)}'
+                        )
+
+                    constraint_string = ", ".join(
+                        constraint_parts
+                    )
+
+                    lines.append(
+                        f'        "{arg_name}": {{'
+                        f'"type": "{python_type}"'
+                        + (
+                            f", {constraint_string}"
+                            if constraint_string
+                            else ""
+                        )
+                        + "},"
+                    )
+
+                lines.append("    }")
+                lines.append("")
+
+                lines.extend([
+                    "",
+                    "    def __post_init__(self):"
+                ])
+
+                primitive_types_check = {
+                    "int",
+                    "float",
+                    "str",
+                    "bool",
+                    "list",
+                    "dict",
+                    "Any"
+                }
+
+                nested_validatable = [
+                    (name, ptype)
+                    for name, ptype, _default in typed_args
+                    if (
+                        ptype not in primitive_types_check
+                        and not ptype.startswith("Optional")
+                        and not ptype.startswith("List[")
+                        and not ptype.startswith("Dict[")
+                    )
+                ]
+
+                has_validation = (
+                    required_validatable
+                    or optional_validatable
+                    or list_validatable
+                    or dict_validatable
+                    or nested_validatable
+                    or any(constraints_map.values())
+                )
+
+                if not has_validation:
+                    lines.append("        pass")
+                else:
+                    for arg_name, python_type in required_validatable:
+                        lines.append(
+                            f"        if not isinstance(self.{arg_name}, {python_type}):"
+                        )
+
+                        lines.append(
+                            f'            raise ValidationError("{arg_name} must be of type {python_type}")'
+                        )
+
+                    for arg_name, python_type in optional_validatable:
+                        inner_type = (
+                            python_type
+                            .replace("Optional[", "")
+                            .replace("]", "")
+                        )
+
+                        lines.append(
+                            f"        if self.{arg_name} is not None and not isinstance(self.{arg_name}, {inner_type}):"
+                        )
+
+                        lines.append(
+                            f'            raise ValidationError("{arg_name} must be Optional[{inner_type}]")'
+                        )
+
+                    for arg_name, python_type in list_validatable:
+                        inner_type = (
+                            python_type[len("List["):-1]
+                        )
+
+                        lines.append(
+                            f"        if not isinstance(self.{arg_name}, list):"
+                        )
+
+                        lines.append(
+                            f'            raise ValidationError("{arg_name} must be a list")'
+                        )
+
+                        lines.append(
+                            f"        for item in self.{arg_name}:"
+                        )
+
+                        lines.append(
+                            f"            if not isinstance(item, {inner_type}):"
+                        )
+
+                        lines.append(
+                            f'                raise ValidationError("{arg_name} contains invalid item type")'
+                        )
+
+                    for arg_name, python_type in dict_validatable:
+                        lines.append(
+                            f"        if not isinstance(self.{arg_name}, dict):"
+                        )
+
+                        lines.append(
+                            f'            raise ValidationError("{arg_name} must be a dict")'
+                        )
+
+                    primitive_types = {
+                        "int",
+                        "float",
+                        "str",
+                        "bool",
+                        "list",
+                        "dict",
+                        "Any"
+                    }
+
+                    for arg_name, python_type in [
+                        (name, ptype)
+                        for name, ptype, _default in typed_args
+                        if (
+                            ptype not in primitive_types
+                            and not ptype.startswith("Optional")
+                            and not ptype.startswith("List")
+                            and not ptype.startswith("Dict")
+                        )
+                    ]:
+                        lines.append(
+                            f"        if not hasattr(self.{arg_name}, 'to_dict'):"
+                        )
+
+                        lines.append(
+                            f'            raise ValidationError("{arg_name} must be a {python_type}")'
+                        )
+
+                        lines.append(
+                            f"        _validate_nested(self.{arg_name})"
+                        )
+
+                    for arg_name, _python_type, _default in typed_args:
+                        constraints = constraints_map.get(arg_name, {})
+
+                        min_value = constraints.get("min")
+
+                        if min_value is not None:
+                            lines.append(
+                                f"        if self.{arg_name} < {repr(min_value)}:"
+                            )
+
+                            lines.append(
+                                f'            raise ValidationError("{arg_name} must be >= {min_value}")'
+                            )
+
+                        max_value = constraints.get("max")
+
+                        if max_value is not None:
+                            lines.append(
+                                f"        if self.{arg_name} > {repr(max_value)}:"
+                            )
+
+                            lines.append(
+                                f'            raise ValidationError("{arg_name} must be <= {max_value}")'
+                            )
+
+                        min_length = constraints.get("min_length")
+
+                        if min_length is not None:
+                            lines.append(
+                                f"        if len(self.{arg_name}) < {min_length}:"
+                            )
+
+                            lines.append(
+                                f'            raise ValidationError("{arg_name} must contain at least {min_length} characters")'
+                            )
+
+                        max_length = constraints.get("max_length")
+
+                        if max_length is not None:
+                            lines.append(
+                                f"        if len(self.{arg_name}) > {max_length}:"
+                            )
+
+                            lines.append(
+                                f'            raise ValidationError("{arg_name} exceeds maximum length of {max_length}")'
+                            )
+
+                lines.extend([
+                    "",
+                    "    def to_dict(self):",
+                    "        return {"
+                ])
+
+                for arg in args:
+                    arg_name = arg["name"]
+
+                    lines.append(
+                        f'            "{arg_name}": _serialize_value(self.{arg_name}),'
+                    )
+
+                lines.extend([
+                    "        }",
+                    ""
+                ])
+
+            lines.append("")
+
+            response_model_name = (
+                "".join(
+                    part.capitalize()
+                    for part in func_name.split("_")
+                ) + "Response"
+            )
+
+            return_type = func.get(
+                "return_type",
+                "Any"
+            )
+
+            type_mapping = {
+                "int": "int",
+                "float": "float",
+                "str": "str",
+                "bool": "bool",
+                "list": "list",
+                "dict": "dict"
+            }
+
+            python_type = type_mapping.get(
+                return_type,
+                "Any"
+            )
+
+            lines.extend([
+                "@dataclass",
+                f"class {response_model_name}:",
+                f"    result: {python_type}",
+                ""
+            ])
+
+        return "\n".join(lines)
+
+    def _build_exceptions_file(self):
+        return """
+class APIError(Exception):
+    pass
+
+
+class ValidationError(APIError):
+    pass
+
+
+class AuthenticationError(APIError):
+    pass
+
+
+class NotFoundError(APIError):
+    pass
+
+
+class ServerError(APIError):
+    pass
+"""
+
+    def _build_readme(
+        self,
+        functions
+    ):
+        lines = [
+            "# Generated Python SDK",
+            "",
+            "## Installation",
+            "",
+            "```bash",
+            "pip install requests",
+            "```",
+            "",
+            "## Usage",
+            "",
+            "```python",
+            "from python_sdk import APIClient",
+            "",
+            "client = APIClient(",
+            "    base_url='http://localhost:8000',",
+            "    api_key='your-api-key'",
+            ")",
+            "```",
+            "",
+            "## Available Methods",
+            ""
+        ]
+
+        for func in functions:
+            lines.append(
+                f"- `client.{func['name']}(...)`"
+            )
+
+        lines.extend([
+            "",
+            "## Infrastructure Methods",
+            "",
+            "- `client.health()`",
+            "- `client.ready()`",
+            "- `client.info()`",
+            "- `client.metrics()`",
+            "- `client.uptime()`",
+            "",
+            "## Task Management",
+            "",
+            "- `client.list_tasks()`",
+            "- `client.get_task(task_id)`",
+            "- `client.cleanup_tasks()`",
+            "- `client.reset_tasks()`",
+            "- `client.delete_task(task_id)`",
+        ])
+
+        return "\n".join(lines)

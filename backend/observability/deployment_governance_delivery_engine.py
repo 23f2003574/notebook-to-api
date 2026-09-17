@@ -1,0 +1,688 @@
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Callable, Protocol, TYPE_CHECKING, runtime_checkable
+
+from .deployment_governance_metrics import (
+    GovernanceIntegrityMetricsService,
+)
+from .deployment_governance_delivery_policies import (
+    GovernanceIntegrityDeliveryPolicy,
+    GovernanceIntegrityDeliveryPolicyService,
+)
+from .deployment_governance_notification_channels import (
+    GovernanceIntegrityNotificationChannel,
+    GovernanceIntegrityNotificationChannelRepository,
+    GovernanceIntegrityNotificationChannelType,
+)
+from .deployment_governance_notification_dispatcher import (
+    GovernanceIntegrityNotificationDispatch,
+    GovernanceIntegrityNotificationDispatchRepository,
+)
+from .deployment_governance_notifications import (
+    GovernanceIntegrityNotification,
+    GovernanceIntegrityNotificationRepository,
+)
+from .deployment_governance_provider_capabilities import (
+    GovernanceIntegrityProviderCapabilities,
+    validate_delivery_policy_capabilities,
+)
+from .deployment_governance_provider_authentication import (
+    GovernanceIntegrityAuthenticationContext,
+    GovernanceIntegrityAuthenticationType,
+)
+from .deployment_governance_provider_health import (
+    GovernanceIntegrityProviderHealth,
+    GovernanceIntegrityProviderHealthStatus,
+)
+from .deployment_governance_provider_configuration import (
+    GovernanceIntegrityProviderConfiguration,
+)
+from .deployment_governance_provider_lifecycle import (
+    GovernanceIntegrityProviderState,
+)
+from .deployment_governance_provider_registry import (
+    GovernanceIntegrityProviderRegistry,
+)
+from .deployment_governance_provider_requests import (
+    GovernanceIntegrityProviderRequest,
+    GovernanceIntegrityProviderRequestService,
+)
+from .deployment_governance_provider_responses import (
+    GovernanceIntegrityProviderResponse,
+    GovernanceIntegrityProviderResponseService,
+)
+from .deployment_governance_retry_orchestrator import (
+    GovernanceIntegrityRetryOrchestrator,
+)
+
+from .deployment_governance_log_context import (
+    GovernanceLogContext,
+    GovernanceLogContextService,
+)
+
+if TYPE_CHECKING:
+    from .deployment_governance_delivery_scheduler import (
+        GovernanceIntegrityDeliveryScheduler,
+    )
+    from .deployment_governance_logging import (
+        GovernanceIntegrityLogger,
+    )
+
+
+class GovernanceIntegrityDeliveryStatus(
+    str,
+    Enum,
+):
+    """
+    Outcome of one attempt to deliver a queued dispatch through its
+    resolved provider.
+    """
+
+    SUCCESS = "success"
+
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class GovernanceIntegrityDeliveryResult:
+    """
+    The outcome of delivering one queued dispatch: either the
+    delivery succeeded, or the reason it did not.
+    """
+
+    dispatch_id: str
+
+    channel_name: str
+
+    status: GovernanceIntegrityDeliveryStatus
+
+    delivered_at: datetime
+
+    error: str | None
+
+    def __post_init__(self) -> None:
+        if not self.dispatch_id.strip():
+            raise ValueError(
+                "dispatch_id must not be empty"
+            )
+
+        if not self.channel_name.strip():
+            raise ValueError(
+                "channel_name must not be empty"
+            )
+
+        if self.delivered_at.tzinfo is None:
+            raise ValueError(
+                "delivered_at must be timezone-aware"
+            )
+
+        if self.status is GovernanceIntegrityDeliveryStatus.SUCCESS:
+            if self.error is not None:
+                raise ValueError(
+                    "error must not be set when status is SUCCESS"
+                )
+
+        else:
+            if self.error is None:
+                raise ValueError(
+                    "error must be set when status is FAILED"
+                )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "dispatch_id": self.dispatch_id,
+            "channel_name": self.channel_name,
+            "status": self.status.value,
+            "delivered_at": self.delivered_at.isoformat(),
+            "error": self.error,
+        }
+
+
+@runtime_checkable
+class GovernanceIntegrityNotificationProvider(Protocol):
+    """
+    A pluggable delivery mechanism for one notification channel type.
+    """
+
+    def deliver(
+        self,
+        request: GovernanceIntegrityProviderRequest,
+    ) -> GovernanceIntegrityProviderResponse:
+        """
+        Deliver one already-built provider request and return its raw
+        response.
+
+        The request pipeline resolves configuration, authentication,
+        and delivery policy, and builds the complete request through
+        build_request() before this is ever called: a provider never
+        assembles its own inputs. The response processing layer
+        normalizes the returned response afterward: a provider never
+        interprets its own response for success/failure. Raises on
+        failure to deliver at all (as opposed to a returned
+        error-status response). A stub provider that does not perform
+        external I/O simply returns a synthetic response, and may
+        ignore the request's values entirely.
+        """
+
+    def build_request(
+        self,
+        notification: GovernanceIntegrityNotification,
+        channel: GovernanceIntegrityNotificationChannel,
+        configuration: GovernanceIntegrityProviderConfiguration,
+        authentication: GovernanceIntegrityAuthenticationContext,
+        policy: GovernanceIntegrityDeliveryPolicy | None,
+    ) -> GovernanceIntegrityProviderRequest:
+        """
+        Build the request this provider expects for delivering one
+        notification through one channel.
+
+        configuration is this provider's typed runtime settings, or
+        an empty configuration if none have been stored.
+        authentication is the provider-ready authentication context
+        built from this provider's authentication type, resolved
+        configuration, and resolved secrets. policy is the channel's
+        configured delivery policy (retry, timeout, rate limit), or
+        None if no policy has been configured.
+        """
+
+    def capabilities(self) -> GovernanceIntegrityProviderCapabilities:
+        """
+        Return this provider's feature-support capabilities, used to
+        validate a channel's delivery policy before delivery.
+        """
+
+    def health_check(self) -> GovernanceIntegrityProviderHealth:
+        """
+        Return this provider's current operational health, checked
+        before delivery is attempted.
+        """
+
+    def authentication_type(self) -> GovernanceIntegrityAuthenticationType:
+        """
+        Return the authentication scheme this provider expects, used
+        to build its authentication context before delivery.
+        """
+
+
+def _build_stub_request(
+    notification: GovernanceIntegrityNotification,
+    channel: GovernanceIntegrityNotificationChannel,
+    authentication: GovernanceIntegrityAuthenticationContext,
+    policy: GovernanceIntegrityDeliveryPolicy | None,
+) -> GovernanceIntegrityProviderRequest:
+    """
+    Shared stub request builder for the local, no-external-I/O
+    built-in providers: merges authentication headers and derives
+    the timeout from the resolved delivery policy, defaulting to 30
+    seconds when none is configured.
+    """
+
+    headers = dict(authentication.headers)
+
+    headers.setdefault("Content-Type", "application/json")
+
+    return GovernanceIntegrityProviderRequest(
+        method="POST",
+        endpoint=channel.destination,
+        headers=headers,
+        body={
+            "notification_id": notification.notification_id,
+            "severity": notification.severity.value,
+            "message": notification.message,
+        },
+        timeout_seconds=(
+            policy.timeout_seconds if policy is not None else 30
+        ),
+    )
+
+
+def _build_stub_response() -> GovernanceIntegrityProviderResponse:
+    """
+    Shared stub response for the local, no-external-I/O built-in
+    providers: always a synthetic, immediate 200.
+    """
+
+    return GovernanceIntegrityProviderResponse(
+        status_code=200,
+        headers={},
+        body={"status": "ok"},
+        duration_ms=0,
+    )
+
+
+class EmailProvider:
+    """
+    Local stub email provider: performs no external I/O and always
+    succeeds. Ignores the built request.
+    """
+
+    def deliver(
+        self,
+        request: GovernanceIntegrityProviderRequest,
+    ) -> GovernanceIntegrityProviderResponse:
+        return _build_stub_response()
+
+    def build_request(
+        self,
+        notification: GovernanceIntegrityNotification,
+        channel: GovernanceIntegrityNotificationChannel,
+        configuration: GovernanceIntegrityProviderConfiguration,
+        authentication: GovernanceIntegrityAuthenticationContext,
+        policy: GovernanceIntegrityDeliveryPolicy | None,
+    ) -> GovernanceIntegrityProviderRequest:
+        return _build_stub_request(notification, channel, authentication, policy)
+
+    def capabilities(self) -> GovernanceIntegrityProviderCapabilities:
+        return GovernanceIntegrityProviderCapabilities(
+            supports_retry=True,
+            supports_timeout=True,
+            supports_rate_limit=True,
+            supports_attachments=True,
+            supports_markdown=False,
+        )
+
+    def health_check(self) -> GovernanceIntegrityProviderHealth:
+        return GovernanceIntegrityProviderHealth(
+            channel_type=GovernanceIntegrityNotificationChannelType.EMAIL,
+            status=GovernanceIntegrityProviderHealthStatus.HEALTHY,
+            checked_at=datetime.now(timezone.utc),
+            message=None,
+        )
+
+    def authentication_type(self) -> GovernanceIntegrityAuthenticationType:
+        return GovernanceIntegrityAuthenticationType.NONE
+
+
+class SlackProvider:
+    """
+    Local stub Slack provider: performs no external I/O and always
+    succeeds. Ignores the built request.
+    """
+
+    def deliver(
+        self,
+        request: GovernanceIntegrityProviderRequest,
+    ) -> GovernanceIntegrityProviderResponse:
+        return _build_stub_response()
+
+    def build_request(
+        self,
+        notification: GovernanceIntegrityNotification,
+        channel: GovernanceIntegrityNotificationChannel,
+        configuration: GovernanceIntegrityProviderConfiguration,
+        authentication: GovernanceIntegrityAuthenticationContext,
+        policy: GovernanceIntegrityDeliveryPolicy | None,
+    ) -> GovernanceIntegrityProviderRequest:
+        return _build_stub_request(notification, channel, authentication, policy)
+
+    def capabilities(self) -> GovernanceIntegrityProviderCapabilities:
+        return GovernanceIntegrityProviderCapabilities(
+            supports_retry=True,
+            supports_timeout=True,
+            supports_rate_limit=True,
+            supports_attachments=True,
+            supports_markdown=True,
+        )
+
+    def health_check(self) -> GovernanceIntegrityProviderHealth:
+        return GovernanceIntegrityProviderHealth(
+            channel_type=GovernanceIntegrityNotificationChannelType.SLACK,
+            status=GovernanceIntegrityProviderHealthStatus.HEALTHY,
+            checked_at=datetime.now(timezone.utc),
+            message=None,
+        )
+
+    def authentication_type(self) -> GovernanceIntegrityAuthenticationType:
+        return GovernanceIntegrityAuthenticationType.BEARER_TOKEN
+
+
+class WebhookProvider:
+    """
+    Local stub webhook provider: performs no external I/O and always
+    succeeds. Ignores the built request.
+    """
+
+    def deliver(
+        self,
+        request: GovernanceIntegrityProviderRequest,
+    ) -> GovernanceIntegrityProviderResponse:
+        return _build_stub_response()
+
+    def build_request(
+        self,
+        notification: GovernanceIntegrityNotification,
+        channel: GovernanceIntegrityNotificationChannel,
+        configuration: GovernanceIntegrityProviderConfiguration,
+        authentication: GovernanceIntegrityAuthenticationContext,
+        policy: GovernanceIntegrityDeliveryPolicy | None,
+    ) -> GovernanceIntegrityProviderRequest:
+        return _build_stub_request(notification, channel, authentication, policy)
+
+    def capabilities(self) -> GovernanceIntegrityProviderCapabilities:
+        return GovernanceIntegrityProviderCapabilities(
+            supports_retry=True,
+            supports_timeout=True,
+            supports_rate_limit=True,
+            supports_attachments=False,
+            supports_markdown=False,
+        )
+
+    def health_check(self) -> GovernanceIntegrityProviderHealth:
+        return GovernanceIntegrityProviderHealth(
+            channel_type=(
+                GovernanceIntegrityNotificationChannelType.WEBHOOK
+            ),
+            status=GovernanceIntegrityProviderHealthStatus.HEALTHY,
+            checked_at=datetime.now(timezone.utc),
+            message=None,
+        )
+
+    def authentication_type(self) -> GovernanceIntegrityAuthenticationType:
+        return GovernanceIntegrityAuthenticationType.API_KEY
+
+
+class GovernanceIntegrityDeliveryEngine:
+    """
+    Executes queued governance audit notification dispatches through
+    pluggable, per-channel-type providers.
+
+    Providers are local stubs in this commit: delivery never performs
+    external I/O.
+    """
+
+    def __init__(
+        self,
+        dispatch_repository: (
+            GovernanceIntegrityNotificationDispatchRepository
+        ),
+        notification_repository: (
+            GovernanceIntegrityNotificationRepository
+        ),
+        channel_repository: (
+            GovernanceIntegrityNotificationChannelRepository
+        ),
+        provider_registry: GovernanceIntegrityProviderRegistry,
+        policy_service: GovernanceIntegrityDeliveryPolicyService,
+        request_service: GovernanceIntegrityProviderRequestService,
+        response_service: GovernanceIntegrityProviderResponseService,
+        retry_orchestrator: GovernanceIntegrityRetryOrchestrator,
+        *,
+        scheduler: "GovernanceIntegrityDeliveryScheduler | None" = None,
+        clock: Callable[[], datetime] | None = None,
+        metrics_service: GovernanceIntegrityMetricsService | None = None,
+        logger: "GovernanceIntegrityLogger | None" = None,
+        context_service: (
+            "GovernanceLogContextService | None"
+        ) = None,
+    ) -> None:
+        self._dispatch_repository = dispatch_repository
+
+        self._notification_repository = notification_repository
+
+        self._channel_repository = channel_repository
+
+        self._provider_registry = provider_registry
+
+        self._policy_service = policy_service
+
+        self._request_service = request_service
+
+        self._response_service = response_service
+
+        self._retry_orchestrator = retry_orchestrator
+
+        self._scheduler = scheduler
+
+        self._clock = clock or (
+            lambda: datetime.now(timezone.utc)
+        )
+
+        self._metrics_service = metrics_service
+
+        self._logger = logger
+
+        self._context_service = context_service
+
+    def deliver(
+        self,
+        dispatch_id: str,
+    ) -> GovernanceIntegrityDeliveryResult:
+        """
+        Load one queued dispatch, resolve its notification, channel,
+        and provider, and attempt delivery.
+
+        Raises KeyError if the dispatch does not exist. Missing
+        notifications, missing channels, missing providers, and
+        provider delivery failures are all captured as a FAILED
+        result rather than raised.
+        """
+
+        dispatch = self._dispatch_repository.get(dispatch_id)
+
+        if dispatch is None:
+            raise KeyError(
+                f"notification dispatch '{dispatch_id}' was not found"
+            )
+
+        started_at = time.monotonic()
+
+        context_pushed = False
+
+        try:
+            try:
+                notification = self._notification_repository.get(
+                    dispatch.notification_id
+                )
+
+                if notification is None:
+                    raise LookupError(
+                        f"notification '{dispatch.notification_id}' "
+                        "was not found"
+                    )
+
+                channel = self._channel_repository.get(
+                    dispatch.channel_name
+                )
+
+                if channel is None:
+                    raise LookupError(
+                        f"notification channel '{dispatch.channel_name}' "
+                        "was not found"
+                    )
+
+                if self._context_service is not None:
+                    self._context_service.push(
+                        GovernanceLogContext(
+                            request_id=None,
+                            dispatch_id=dispatch.dispatch_id,
+                            provider=channel.channel_type.value,
+                            component="delivery_engine",
+                        )
+                    )
+
+                    context_pushed = True
+
+                metadata = self._provider_registry.metadata(
+                    channel.channel_type
+                )
+
+                if (
+                    metadata.state
+                    is GovernanceIntegrityProviderState.DISABLED
+                ):
+                    raise RuntimeError("Provider is disabled.")
+
+                provider = self._provider_registry.resolve(
+                    channel.channel_type
+                )
+
+                health = self._provider_registry.health(
+                    channel.channel_type
+                )
+
+                if (
+                    health.status
+                    is GovernanceIntegrityProviderHealthStatus.UNHEALTHY
+                ):
+                    raise RuntimeError(
+                        health.message
+                        or (
+                            "delivery provider for channel type "
+                            f"'{channel.channel_type.value}' is unhealthy"
+                        )
+                    )
+
+                try:
+                    policy = self._policy_service.resolve(channel.name)
+
+                except LookupError:
+                    policy = None
+
+                if policy is not None:
+                    capabilities = self._provider_registry.capabilities(
+                        channel.channel_type
+                    )
+
+                    validate_delivery_policy_capabilities(
+                        policy, capabilities
+                    )
+
+                request = self._request_service.build(
+                    notification, channel
+                )
+
+                response = provider.deliver(request)
+
+                outcome = self._response_service.process(response)
+
+                if not outcome.success:
+                    error_message = outcome.message or (
+                        "delivery failed with provider status "
+                        f"'{outcome.provider_status}'"
+                    )
+
+                    if policy is not None:
+                        decision = self._retry_orchestrator.evaluate(
+                            outcome, policy, 0
+                        )
+
+                        if decision.should_retry:
+                            error_message = (
+                                f"{error_message} (retry {decision.retry_attempt} "
+                                f"scheduled in {decision.delay_seconds}s)"
+                            )
+
+                            if self._logger is not None:
+                                self._logger.warning(
+                                    "delivery_engine",
+                                    "retry_scheduled",
+                                    dispatch_id=dispatch.dispatch_id,
+                                    retry_attempt=decision.retry_attempt,
+                                    delay_seconds=decision.delay_seconds,
+                                )
+
+                            if self._scheduler is not None:
+                                self._schedule_retry_best_effort(
+                                    dispatch.dispatch_id, decision
+                                )
+
+                    raise RuntimeError(error_message)
+
+            except Exception as exc:
+                if self._metrics_service is not None:
+                    self._metrics_service.record_failure(
+                        (time.monotonic() - started_at) * 1000.0
+                    )
+
+                if self._logger is not None:
+                    self._logger.exception(
+                        "delivery_engine",
+                        "delivery_failed",
+                        dispatch_id=dispatch.dispatch_id,
+                        channel_name=dispatch.channel_name,
+                    )
+
+                return GovernanceIntegrityDeliveryResult(
+                    dispatch_id=dispatch.dispatch_id,
+                    channel_name=dispatch.channel_name,
+                    status=GovernanceIntegrityDeliveryStatus.FAILED,
+                    delivered_at=self._clock(),
+                    error=str(exc),
+                )
+
+            if self._metrics_service is not None:
+                self._metrics_service.record_success(
+                    (time.monotonic() - started_at) * 1000.0
+                )
+
+            if self._logger is not None:
+                self._logger.info(
+                    "delivery_engine",
+                    "delivery_succeeded",
+                    dispatch_id=dispatch.dispatch_id,
+                    channel_name=dispatch.channel_name,
+                )
+
+            return GovernanceIntegrityDeliveryResult(
+                dispatch_id=dispatch.dispatch_id,
+                channel_name=dispatch.channel_name,
+                status=GovernanceIntegrityDeliveryStatus.SUCCESS,
+                delivered_at=self._clock(),
+                error=None,
+            )
+
+        finally:
+            if context_pushed:
+                self._context_service.pop()
+
+    def _schedule_retry_best_effort(
+        self,
+        dispatch_id: str,
+        decision,
+    ) -> None:
+        """
+        Delegate retry scheduling entirely to the scheduler. If this
+        dispatch was never scheduled through it (e.g. it was queued
+        directly by the notification dispatcher), scheduling is
+        skipped rather than failing the delivery attempt itself.
+        """
+
+        from uuid import UUID
+
+        try:
+            self._scheduler.schedule_retry(
+                UUID(dispatch_id),
+                attempt=decision.retry_attempt,
+                delay_seconds=decision.delay_seconds,
+            )
+
+        except (LookupError, ValueError):
+            pass
+
+    def deliver_all(
+        self,
+    ) -> tuple[
+        GovernanceIntegrityDeliveryResult,
+        ...
+    ]:
+        """
+        Deliver every currently queued dispatch, sequentially, oldest
+        first.
+        """
+
+        dispatches = sorted(
+            self._dispatch_repository.list(),
+            key=lambda dispatch: (
+                dispatch.created_at,
+                dispatch.dispatch_id,
+            ),
+        )
+
+        return tuple(
+            self.deliver(dispatch.dispatch_id)
+            for dispatch in dispatches
+        )

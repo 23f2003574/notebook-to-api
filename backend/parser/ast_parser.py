@@ -1,0 +1,1007 @@
+import ast
+import re
+
+
+# Matches a Google-style docstring section header introducing per-
+# parameter documentation -- see _parse_docstring_arg_descriptions below
+# for what this is for. "Parameters:" (with the trailing colon, unlike
+# NumPy's own underlined "Parameters\n----------" style, which this does
+# not attempt to parse) is accepted as a common variant seen in the wild
+# alongside Google's own "Args:"/"Arguments:".
+_ARG_SECTION_HEADER_PATTERN = re.compile(r"^(Args|Arguments|Parameters):$")
+
+# Matches one entry's own "name: description" or "name (type): description"
+# opening line within an Args:-style section, e.g. "x: The input value."
+# or "epochs (int): Number of training passes, defaults to 10." -- the
+# optional "(type)" is accepted but never used (the notebook function's
+# own real annotation, not free-text repeated in a docstring, is always
+# authoritative for the generated field's actual type).
+_ARG_ENTRY_PATTERN = re.compile(r"^([A-Za-z_]\w*)\s*(?:\([^)]*\))?\s*:\s*(.*)$")
+
+
+def _parse_docstring_arg_descriptions(docstring):
+    """{parameter_name: description} for every parameter documented in
+    `docstring`'s own Google-style "Args:"/"Arguments:"/"Parameters:"
+    section, or {} if `docstring` is empty or has no such section.
+
+    Before this, a notebook author's own per-parameter documentation --
+    already sitting right there in the function's docstring, exactly
+    where a human reading the notebook already looks -- was completely
+    discarded: extract_functions_from_code only ever kept the docstring
+    as one opaque whole-function blob (used for the endpoint's own
+    OpenAPI "description"), with nothing splitting out which sentence
+    described which parameter. generate_fastapi_code (api_generator.py)
+    had no choice but to fall back to a generic "Parameter 'x' of type
+    T" for every single field's own description, no matter how
+    thoroughly the notebook author had actually documented it.
+
+    Only Google-style is parsed (a single "Args:"-style header followed
+    by indented "name: description" entries) -- NumPy's underlined
+    "Parameters\\n----------" style and Sphinx's ":param x:" style are
+    deliberately not handled here, to keep this to one well-tested
+    convention rather than three partially-supported ones. A docstring
+    using either of those simply yields {} here, exactly as if it had no
+    per-parameter documentation at all -- the same graceful "nothing to
+    extract" fallback a docstring with no Args:-style section at all
+    already gets.
+
+    A description spanning multiple lines (a long sentence a human
+    wrapped across lines, each indented further than its own "name:"
+    line) is joined back into one description with single spaces, the
+    same normalization ast.get_docstring(clean=True) already applies to
+    the docstring as a whole.
+    """
+    if not docstring:
+        return {}
+
+    lines = docstring.splitlines()
+    descriptions = {}
+
+    in_section = False
+    section_indent = None
+    current_name = None
+    current_parts = []
+
+    def flush():
+        if current_name is not None:
+            text = " ".join(part for part in current_parts if part).strip()
+            if text:
+                descriptions[current_name] = text
+
+    for line in lines:
+        stripped = line.strip()
+
+        if not in_section:
+            if _ARG_SECTION_HEADER_PATTERN.match(stripped):
+                in_section = True
+                section_indent = None
+            continue
+
+        if not stripped:
+            # A blank line inside the section -- could just be spacing
+            # between entries (common when each is more than one
+            # sentence), so it doesn't end the section on its own; only
+            # an actual dedent (another section header, or the docstring
+            # simply ending back at a shallower indent) does that below.
+            continue
+
+        indent = len(line) - len(line.lstrip())
+
+        if section_indent is None:
+            section_indent = indent
+        elif indent < section_indent:
+            # Dedented back out of the Args:-style section entirely --
+            # e.g. a "Returns:" header at the same level "Args:" itself
+            # started at.
+            break
+
+        match = _ARG_ENTRY_PATTERN.match(stripped)
+
+        if indent == section_indent and match:
+            flush()
+            current_name = match.group(1)
+            current_parts = [match.group(2)]
+        elif current_name is not None:
+            # A continuation line, indented further than this entry's
+            # own "name:" line -- part of the same parameter's
+            # description, wrapped onto another line.
+            current_parts.append(stripped)
+
+    flush()
+
+    return descriptions
+
+
+# Matches a Google-style docstring section header introducing the
+# function's own return-value documentation -- see
+# _parse_docstring_return_description below for what this is for.
+_RETURN_SECTION_HEADER_PATTERN = re.compile(r"^(Returns|Return):$")
+
+
+def _parse_docstring_return_description(docstring):
+    """The notebook author's own free-text description of what a
+    function returns, from `docstring`'s own Google-style "Returns:"/
+    "Return:" section -- or None if `docstring` is empty or has no such
+    section.
+
+    The mirror image of _parse_docstring_arg_descriptions above, for the
+    identical reason: generate_fastapi_code (api_generator.py) had no
+    choice but to fall back to a generic "Returns {return_type}" for
+    every single endpoint's own OpenAPI response description, no matter
+    how thoroughly a notebook author had actually documented what the
+    function returns.
+
+    Unlike an Args:-style section (one "name: description" entry per
+    parameter), a Returns:-style section is just a single, possibly
+    multi-line, free-text description with no "name:" prefix of its own
+    -- so this simply joins every line in the section (from the line
+    right after the header, until a dedent back out of it) with single
+    spaces, the same "long sentence a human wrapped across lines"
+    normalization _parse_docstring_arg_descriptions already applies per
+    entry.
+
+    None (not "") for a docstring with no Returns:-style section at all,
+    or one whose own body is empty/all-whitespace -- the same "distinct
+    from an empty string" convention `docstring` and each parameter's own
+    "description" already follow, so the generator can tell "author
+    didn't document this" apart from "documented, but genuinely empty"
+    via a single falsy check either way.
+    """
+    if not docstring:
+        return None
+
+    lines = docstring.splitlines()
+
+    in_section = False
+    section_indent = None
+    parts = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        if not in_section:
+            if _RETURN_SECTION_HEADER_PATTERN.match(stripped):
+                in_section = True
+                section_indent = None
+            continue
+
+        if not stripped:
+            # A blank line inside the section -- could just be spacing
+            # before/after the description -- doesn't end it on its own,
+            # the same reasoning _parse_docstring_arg_descriptions
+            # already applies for its own per-entry blank lines.
+            continue
+
+        indent = len(line) - len(line.lstrip())
+
+        if section_indent is None:
+            section_indent = indent
+        elif indent < section_indent:
+            # Dedented back out of the Returns:-style section entirely
+            # -- e.g. a "Raises:" header at the same level "Returns:"
+            # itself started at.
+            break
+
+        parts.append(stripped)
+
+    text = " ".join(parts).strip()
+
+    return text or None
+
+
+def deduplicate_functions_by_name(functions):
+    """Collapse repeated function definitions, keeping the last one.
+
+    Notebooks are edited iteratively: a cell defining `def add(...)` is
+    commonly re-run later with a fixed/changed body under the same name.
+    If every extracted definition were kept, the generated FastAPI app
+    would register multiple routes for the identical path/method pair.
+    Route matching resolves to whichever was registered *first*, while the
+    OpenAPI schema (a dict keyed by path) reflects whichever was
+    registered *last* -- so the served behaviour and the documented
+    behaviour would silently diverge. Keeping only the last definition per
+    name matches what actually happens if the whole notebook were executed
+    top to bottom in a single kernel: the later `def` always wins.
+    """
+    deduped = {}
+
+    for func in functions:
+        deduped[func["name"]] = func
+
+    return list(deduped.values())
+
+
+def is_parseable_python(code):
+    """Return True if `code` is syntactically valid Python.
+
+    Used to drop cells whose content is still not valid Python after magic
+    stripping (e.g. the body of a `%%bash` cell magic) before they are
+    written into the generated runtime module, rather than shipping a
+    module that fails to import.
+    """
+    try:
+        ast.parse(code)
+        return True
+    except SyntaxError:
+        return False
+
+
+# Node types that introduce a new Python scope. A function defined inside
+# one of these (a class method, or a function nested inside another
+# function) is not callable as a free-standing module-level function, so it
+# must not be walked into when looking for API-exposable functions.
+_SCOPE_BOUNDARY_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+
+# Compound-statement fields that do NOT introduce a new scope (if/try/for/
+# while/with at module level), so definitions inside them are still
+# reachable as module-level functions and should be walked into.
+_TRANSPARENT_BODY_FIELDS = ("body", "orelse", "finalbody")
+
+
+def _iter_module_level_statements(nodes):
+    """Yield statements reachable at module scope, without descending into
+    function/class bodies (which define their own, unrelated scope)."""
+
+    for node in nodes:
+        yield node
+
+        if isinstance(node, _SCOPE_BOUNDARY_NODES):
+            continue
+
+        for field in _TRANSPARENT_BODY_FIELDS:
+            children = getattr(node, field, None)
+
+            if children:
+                yield from _iter_module_level_statements(children)
+
+        for handler in getattr(node, "handlers", []):
+            yield from _iter_module_level_statements(handler.body)
+
+
+def extract_functions_from_code(code):
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        # A cell can still contain unparseable content after magic-command
+        # stripping (e.g. the body of a `%%bash` cell magic). Skip it rather
+        # than failing the whole notebook compilation over one cell.
+        return []
+
+    functions = []
+
+    for node in _iter_module_level_statements(tree.body):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # A `*args`/`**kwargs` catch-all can't be represented as a
+            # fixed set of Pydantic request fields -- the generated
+            # endpoint would silently ignore whatever callers actually put
+            # there. Skip the whole function (same policy already applied
+            # to class methods/nested functions) rather than generating an
+            # endpoint that quietly drops part of its own signature.
+            if node.args.vararg or node.args.kwarg:
+                continue
+
+            args = []
+
+            # Positional-only params (those before a bare `/`, e.g.
+            # `def f(a, b, /, c)`) are extracted alongside regular
+            # positional params: both are passed positionally in the
+            # generated notebook_module.func(...) call, in the same
+            # left-to-right order they appear in `positional_params`, so
+            # merging them here preserves correct call ordering. Defaults
+            # apply to the trailing N of this *combined* list, exactly as
+            # for node.args.args alone.
+            positional_params = node.args.posonlyargs + node.args.args
+
+            defaults = node.args.defaults
+
+            default_offset = (
+                len(positional_params)
+                - len(defaults)
+            )
+
+            for idx, arg in enumerate(positional_params):
+                arg_info = {
+                    "name": arg.arg,
+                    "type": None,
+                    "default": None,
+                    "default_is_literal": True,
+                    "has_default": False,
+                    "kind": "positional"
+                }
+
+                if arg.annotation:
+                    arg_info["type"] = ast.unparse(arg.annotation)
+
+                default_index = idx - default_offset
+
+                if default_index >= 0:
+                    arg_info["has_default"] = True
+
+                    try:
+                        arg_info["default"] = ast.literal_eval(
+                            defaults[default_index]
+                        )
+                    except Exception:
+                        # Not a literal (e.g. a notebook-defined Enum
+                        # member like `Priority.HIGH`, or any other
+                        # expression) -- "default" holds its raw source
+                        # instead, and default_is_literal=False tells the
+                        # generator (see api_generator.py) to embed it as
+                        # a qualified code expression rather than
+                        # repr()-ing it into a Pydantic Field default,
+                        # which would silently turn it into the *string*
+                        # "Priority.HIGH" instead of the actual enum
+                        # member.
+                        arg_info["default_is_literal"] = False
+                        arg_info["default"] = ast.unparse(
+                            defaults[default_index]
+                        )
+
+                args.append(arg_info)
+
+            # Keyword-only args (those after a bare `*` or `*args`), e.g.
+            # `def train(data, *, epochs=10, lr=0.01)`. These live in a
+            # separate ast.arguments field and are paired positionally with
+            # kw_defaults, where a `None` entry means "no default" (the arg
+            # is required) rather than "default value None".
+            for idx, arg in enumerate(node.args.kwonlyargs):
+                arg_info = {
+                    "name": arg.arg,
+                    "type": None,
+                    "default": None,
+                    "default_is_literal": True,
+                    "has_default": False,
+                    "kind": "keyword_only"
+                }
+
+                if arg.annotation:
+                    arg_info["type"] = ast.unparse(arg.annotation)
+
+                default_node = node.args.kw_defaults[idx]
+
+                if default_node is not None:
+                    arg_info["has_default"] = True
+
+                    try:
+                        arg_info["default"] = ast.literal_eval(
+                            default_node
+                        )
+                    except Exception:
+                        # See the identical positional-arg branch above.
+                        arg_info["default_is_literal"] = False
+                        arg_info["default"] = ast.unparse(
+                            default_node
+                        )
+
+                args.append(arg_info)
+
+            return_type = None
+            if node.returns:
+                return_type = ast.unparse(node.returns)
+
+            # ast.get_docstring(clean=True) strips the docstring's own
+            # leading/trailing whitespace and dedents it (equivalent to
+            # inspect.cleandoc), the same normalization a caller would
+            # expect from reading it any other way. None when the function
+            # has no docstring at all, distinct from an empty string, so
+            # the generator (see api_generator.py) can tell "nothing to
+            # show" apart from "author wrote an empty docstring" and fall
+            # back to its own auto-generated description in both cases via
+            # a single falsy check.
+            docstring = ast.get_docstring(node, clean=True)
+
+            # Attaches each parameter's own Google-style "Args:"
+            # description (see _parse_docstring_arg_descriptions above),
+            # if the docstring documents it -- generate_fastapi_code
+            # (api_generator.py) prefers this over its own generic
+            # "Parameter 'x' of type T" fallback whenever present. None
+            # (not simply omitted) for a parameter the docstring doesn't
+            # mention, the same "distinct from an empty string/absent"
+            # convention `docstring` above already follows, so the
+            # generator can tell "author didn't document this one"
+            # apart from "documented, but with genuinely empty text"
+            # (which _parse_docstring_arg_descriptions already never
+            # produces -- an empty description is dropped, not kept as
+            # "") via a single falsy check either way.
+            arg_descriptions = _parse_docstring_arg_descriptions(docstring)
+
+            for arg_info in args:
+                arg_info["description"] = arg_descriptions.get(
+                    arg_info["name"]
+                )
+
+            # Attaches the function's own Google-style "Returns:"
+            # description (see _parse_docstring_return_description
+            # above), if the docstring documents one -- generate_fastapi_
+            # code (api_generator.py) prefers this over its own generic
+            # "Returns {return_type}" fallback whenever present. None
+            # (not simply omitted) for a docstring with no such section,
+            # the same "distinct from absent/empty" convention every
+            # other docstring-derived field here already follows.
+            return_description = _parse_docstring_return_description(docstring)
+
+            function_info = {
+                "name": node.name,
+                "args": args,
+                "return_type": return_type,
+                "is_async": isinstance(node, ast.AsyncFunctionDef),
+                "docstring": docstring,
+                "return_description": return_description,
+                "example_payload": generate_example_payload(args),
+                "example_response": generate_example_response(
+                    return_type
+                )
+            }
+
+            functions.append(function_info)
+
+    return functions
+
+
+def extract_skipped_functions_from_code(code):
+    """Function definitions in `code` that extract_functions_from_code
+    silently drops, paired with why: either a `*args`/`**kwargs` catch-all
+    (module-level, but not representable as a fixed set of Pydantic
+    request fields -- see extract_functions_from_code above), or a def
+    nested inside a class or another function (not reachable as a
+    standalone, callable module-level function at all).
+
+    Before this, a notebook author whose function didn't turn into an
+    endpoint had no way to find out why short of reading this parser's own
+    source: `inspect`/POST /api/inspect reported every module-level
+    function that *did* survive extraction, but never mentioned the ones
+    that didn't -- a `**kwargs`-taking function or a class method just
+    silently had no corresponding route, with nothing in the compiled
+    output or its preview to explain the gap.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+
+    module_level_ids = {
+        id(node)
+        for node in _iter_module_level_statements(tree.body)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    skipped = []
+
+    for node in ast.walk(tree):
+
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+
+        if id(node) in module_level_ids:
+
+            if node.args.vararg or node.args.kwarg:
+                skipped.append({
+                    "name": node.name,
+                    "reason": (
+                        "uses *args/**kwargs, which can't be represented "
+                        "as a fixed set of request fields"
+                    ),
+                })
+
+            continue
+
+        skipped.append({
+            "name": node.name,
+            "reason": (
+                "defined inside a class or nested function, so it isn't "
+                "callable as a standalone endpoint"
+            ),
+        })
+
+    return skipped
+
+
+def _string_literal_end(text, start):
+    """`text[start]` is a "'"/'"' that opens a quoted string -- returns
+    the index just past that string's own matching closing quote,
+    honoring a backslash-escaped quote character inside it (e.g. the
+    escaped "'" in "'it\\'s'" doesn't end the string early). Returns
+    `len(text)` for an unterminated string, rather than raising, the
+    same "shouldn't happen for a real ast.unparse'd annotation, fall
+    back gracefully" stance _matching_bracket_content already takes for
+    unbalanced brackets.
+
+    Shared by _matching_bracket_content/_first_top_level_segment below so
+    both skip straight over a quoted string's own content instead of
+    scanning "["/"]"/`separator` characters inside it -- a Literal string
+    value is free to contain any of those as perfectly ordinary text
+    (e.g. `Literal["(0,1]", "[0,1)"]", an interval-notation type real
+    stats/math APIs use, or `Literal["a,b"]`), and neither of them is
+    really there as bracket/separator syntax at all.
+    """
+    quote = text[start]
+    i = start + 1
+
+    while i < len(text):
+
+        if text[i] == "\\":
+            i += 2
+            continue
+
+        if text[i] == quote:
+            return i + 1
+
+        i += 1
+
+    return len(text)
+
+
+def _matching_bracket_content(text):
+    """`text` is everything after a generic wrapper's opening "[" (e.g.
+    the "List[int]]" left over from stripping "Optional[" off the front
+    of "Optional[List[int]]"). Returns the content up to (not including)
+    the "]" that actually matches that opening bracket, tracking bracket
+    depth so a nested generic inside it (the "List[int]" here) isn't
+    corrupted by also consuming *its own* closing bracket.
+
+    Without this, a blind ".replace(']', '')" -- what this used to do --
+    strips every closing bracket in the whole string, not just the one
+    belonging to the wrapper being peeled: "Optional[List[int]]" fell
+    apart into the mismatched "List[int" instead of "List[int]", which
+    then matched none of the List[/Dict[/Tuple[/Set[ checks below (nor
+    anything in the type_defaults maps in generate_example_payload/
+    generate_example_response), silently producing a `None` example for
+    a field that's actually a list.
+
+    Also skips over any quoted string's own content via
+    _string_literal_end -- confirmed exploitable before this: a Literal
+    string value containing an *unbalanced* "["/"]" of its own (e.g.
+    "(0,1]", a real interval-notation value) made the depth counter hit
+    0 mid-string, truncating the result before the real closing "]" --
+    `normalize_type_annotation("Optional[Literal['a]b', 'c']]")` returned
+    "Literal['a]b', 'c'" (missing its own closing "]") instead of the
+    real "Literal['a]b', 'c']".
+    """
+    depth = 1
+    i = 0
+
+    while i < len(text):
+
+        ch = text[i]
+
+        if ch in ("'", '"'):
+            i = _string_literal_end(text, i)
+            continue
+
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+
+            if depth == 0:
+                return text[:i]
+
+        i += 1
+
+    # Unbalanced input shouldn't happen for a real ast.unparse'd
+    # annotation -- fall back to the whole remainder rather than raising.
+    return text
+
+
+def _first_top_level_segment(text, separator):
+    """The portion of `text` up to (not including) the first occurrence
+    of `separator` that isn't nested inside a "[...]" pair or a quoted
+    string (via _string_literal_end, for the identical reason
+    _matching_bracket_content above skips one), e.g. for "List[int], str"
+    with separator "," this returns "List[int]" rather than splitting
+    inside List's own brackets, and for `Literal["a,b"], None` with
+    separator "," this returns `Literal["a,b"]` rather than splitting
+    inside the string value's own embedded comma. Returns all of `text`
+    unchanged if `separator` never occurs at bracket depth 0 outside a
+    string.
+    """
+    depth = 0
+    i = 0
+
+    while i < len(text):
+
+        ch = text[i]
+
+        if ch in ("'", '"'):
+            i = _string_literal_end(text, i)
+            continue
+
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+        elif ch == separator and depth == 0:
+            return text[:i]
+
+        i += 1
+
+    return text
+
+
+def normalize_type_annotation(arg_type):
+    if not arg_type:
+        return arg_type
+
+    arg_type = arg_type.strip()
+
+    if arg_type.startswith("Annotated["):
+        inner = _matching_bracket_content(arg_type[len("Annotated["):])
+        first_arg = _first_top_level_segment(inner, ",").strip()
+        return normalize_type_annotation(first_arg)
+
+    if arg_type.startswith("Optional["):
+        inner = _matching_bracket_content(arg_type[len("Optional["):])
+        return normalize_type_annotation(inner.strip())
+
+    if arg_type.startswith("Union["):
+        inner = _matching_bracket_content(arg_type[len("Union["):])
+        first_arg = _first_top_level_segment(inner, ",").strip()
+        return normalize_type_annotation(first_arg)
+
+    if "|" in arg_type:
+        # A top-level PEP 604 union (e.g. "int | str" or "List[int] |
+        # None") must be split before recursing -- but a "|" nested
+        # inside a generic's own arguments (e.g. "Dict[str, int | float]")
+        # is not a top-level union at all and must be left alone here, or
+        # this would incorrectly try to normalize the truncated
+        # "Dict[str, int " instead of falling through to the Dict[ check
+        # below.
+        first_arg = _first_top_level_segment(arg_type, "|").strip()
+
+        if first_arg != arg_type:
+            return normalize_type_annotation(first_arg)
+
+    if (
+        arg_type.startswith("List[")
+        or arg_type.startswith("list[")
+    ):
+        return "list"
+
+    if (
+        arg_type.startswith("Dict[")
+        or arg_type.startswith("dict[")
+    ):
+        return "dict"
+
+    if (
+        arg_type.startswith("Tuple[")
+        or arg_type.startswith("tuple[")
+    ):
+        return "tuple"
+
+    if (
+        arg_type.startswith("Set[")
+        or arg_type.startswith("set[")
+    ):
+        return "set"
+
+    return arg_type
+
+
+def _first_literal_value(arg_type):
+    """The first value inside a `Literal[...]` annotation's own brackets
+    (e.g. "a,b" for `Literal['a,b', 'c,d']`), parsed as a real Python
+    value via ast.literal_eval rather than blind string ops.
+
+    generate_example_payload/generate_example_response used to
+    independently hand-roll this via
+    ".replace('Literal[', '').rstrip(']').split(',')" -- confirmed
+    exploitable, not theoretical: for `def f(level: Literal['a,b',
+    'c,d'])`, that produced the example payload {"level": "'a"} --
+    neither of the two values the notebook author actually declared, a
+    comma-split fragment with a stray leftover quote character, since
+    the blind split lands inside the first value's own quoted string.
+    _matching_bracket_content alone (already used by
+    normalize_type_annotation to avoid the identical "blind string op
+    corrupts nested syntax" failure mode for List[.../Union[.../etc.)
+    isn't sufficient here either -- it (and _first_top_level_segment)
+    only track "[""/"]" depth, not quoting, so a "," embedded inside a
+    literal string value still looks like a top-level separator to
+    either of them.
+
+    Wrapping the whole bracket content in "(...,)" and handing it to
+    ast.literal_eval -- the same tool Python's own compiler uses to turn
+    literal syntax into a real value, rather than re-implementing
+    Python's string/number literal grammar by hand -- sidesteps that
+    entirely: it parses the bracket content as a real tuple literal
+    (quotes, embedded commas, escapes, numbers, bools, and all), and the
+    trailing "," makes a lone single-value Literal (e.g. `Literal['x']`)
+    parse as a valid one-element tuple too, rather than a parenthesized
+    expression.
+
+    Falls back to a best-effort split (only reached when
+    ast.literal_eval itself raises) for the one case it can't handle: a
+    Literal naming an Enum member (e.g. `Literal[Color.RED]`), valid per
+    PEP 586 but not a literal expression at all -- preserves this
+    function's own previous behavior for that case exactly, rather than
+    turning a working (if imprecise) example into a hard failure.
+    """
+    return literal_values(arg_type)[0]
+
+
+def literal_values(arg_type):
+    """Every value inside a `Literal[...]` annotation's own brackets, as
+    a tuple of real Python values -- the full declared value set, not
+    just _first_literal_value's own first one. Used where a caller needs
+    to reason about the *set* itself (e.g. classify_notebook_diff,
+    backend/inspector.py, telling a Literal whose allowed values only
+    grew or shrank apart from an unrelated type change entirely -- a
+    plain string-inequality check flags widening a Literal's own value
+    set as breaking just as readily as narrowing it, even though adding
+    a new allowed *request* value never rejects a request an existing
+    caller was already sending).
+
+    Same ast.literal_eval-on-"(...,)"  approach _first_literal_value
+    already uses for its own first value, applied to the whole bracket
+    content at once -- see that function's own docstring for why a blind
+    string split can't do this correctly. Falls back to a one-element
+    tuple of _first_literal_value's own best-effort single value (rather
+    than raising) for the same case it can't handle either: any one
+    value in the Literal naming an Enum member (e.g. `Literal[Color.RED,
+    "b"]`), valid per PEP 586 but not a literal expression -- the whole
+    tuple fails to parse in that case, not just that one member, since
+    ast.literal_eval either parses an expression completely or not at
+    all.
+    """
+    inner = _matching_bracket_content(arg_type[len("Literal["):])
+
+    try:
+        return ast.literal_eval(f"({inner},)")
+    except (ValueError, SyntaxError):
+        pass
+
+    first_segment = inner.split(",")[0].strip()
+
+    if (
+        first_segment.startswith('"') and first_segment.endswith('"')
+    ) or (
+        first_segment.startswith("'") and first_segment.endswith("'")
+    ):
+        first_segment = first_segment[1:-1]
+
+    return (first_segment,)
+
+
+# Shared by generate_example_payload/generate_example_response below --
+# previously two independently hand-maintained copies of the identical
+# dict, the exact "two things that must never drift apart but have no
+# mechanism stopping them" shape this project's own commit history keeps
+# finding and fixing elsewhere (e.g. GENERATED_APP_ENV_VARS,
+# api_generator.py). One of the two copies getting a type the other
+# didn't would have silently reintroduced the gap this dict's own
+# "date"/"datetime"/"time"/"UUID"/"Decimal" entries below exist to close,
+# just for whichever one of generate_example_payload/
+# generate_example_response happened to be the one left behind.
+#
+# "date"/"datetime"/"time"/"UUID"/"Decimal" (added here) previously fell
+# through every branch above to the plain `type_defaults.get(arg_type,
+# None)` fallback -- None -- even though every one of these is an
+# entirely ordinary parameter/return type for a real API (a schedule
+# date, an event timestamp, a record id, a price). Confirmed exploitable
+# against a real compiled app, not just generated source text: POSTing
+# the example_payload {"event_date": None} generate_curl_commands/
+# generate_postman_collection (backend/inspector.py, whose own
+# docstrings call the commands they generate "ready-to-paste (or
+# execute)") and a default `app-call` (backend/cli.py, which POSTs
+# example_payload whenever --data isn't given) would all actually send
+# for a `def f(event_date: date)` parameter got a real 422 back --
+# {"type": "date_type", "msg": "Input should be a valid date", "input":
+# null} -- from the compiled app's own real Pydantic validation. Every
+# value below is a real, Pydantic-v2-valid literal for its own type,
+# confirmed to round-trip through a real compiled endpoint successfully
+# rather than merely "look plausible."
+#
+# "bytes" (added here) fell through the same fallback to None for the
+# identical reason -- an entirely ordinary parameter/return type this
+# compiler already treats as first-class everywhere else (see
+# _python_type_to_safe_python_annotation/_python_type_to_typescript,
+# backend/exporters/sdk_generator.py, both of which already map it
+# alongside int/float/str/bool). Confirmed exploitable the same way:
+# `def f(data: bytes)`'s own generated Pydantic field rejects a JSON
+# `null` with a real 422 ({"type": "bytes_type", "msg": "Input should be
+# a valid bytes"}), the exact value None produced here. Pydantic v2
+# accepts (and utf-8 encodes) a plain JSON string for a `bytes` field --
+# confirmed against a real compiled endpoint -- so "" (the same "empty
+# but valid" convention "str"/"list"/"dict"/"tuple"/"set" above already
+# use) round-trips successfully as b"".
+_EXAMPLE_TYPE_DEFAULTS = {
+    "int": 0,
+    "float": 0.0,
+    "str": "",
+    "bool": False,
+    "bytes": "",
+    "list": [],
+    "dict": {},
+    "tuple": [],
+    "set": [],
+    "date": "2024-01-01",
+    "datetime": "2024-01-01T00:00:00",
+    "time": "12:00:00",
+    "UUID": "00000000-0000-0000-0000-000000000000",
+    "Decimal": 0,
+}
+
+
+def generate_example_response(return_type):
+    if not return_type:
+        return {
+            "result": None
+        }
+
+    return_type = normalize_type_annotation(
+        return_type
+    )
+
+    if return_type and return_type.startswith("Literal["):
+        return {
+            "result": _first_literal_value(return_type)
+        }
+
+    if return_type in (
+        "pd.DataFrame",
+        "DataFrame",
+        "pd.Series",
+        "Series",
+        "np.ndarray",
+        "ndarray"
+    ):
+        return {
+            "result": []
+        }
+
+    return {
+        "result": _EXAMPLE_TYPE_DEFAULTS.get(
+            return_type,
+            None
+        )
+    }
+
+
+def generate_example_payload(args):
+    payload = {}
+
+    for arg in args:
+        arg_name = arg.get("name")
+        arg_type = normalize_type_annotation(
+            arg.get("type")
+        )
+
+        if arg_type and arg_type.startswith("Literal["):
+            payload[arg_name] = _first_literal_value(arg_type)
+            continue
+
+        if arg_type in (
+            "pd.DataFrame",
+            "DataFrame"
+        ):
+            payload[arg_name] = []
+            continue
+
+        if arg_type in (
+            "np.ndarray",
+            "ndarray"
+        ):
+            payload[arg_name] = []
+            continue
+
+        if arg_type in (
+            "pd.Series",
+            "Series"
+        ):
+            payload[arg_name] = []
+            continue
+
+        # has_default (not "default" is not None) decides whether this
+        # arg has a real, declared default at all -- an arg's own real
+        # default can itself be None (any `Optional[X] = None`
+        # parameter, the single most common real-world default value),
+        # which the old `arg.get("default") is not None` check mistook
+        # for "no default at all". Confirmed exploitable:
+        # `def greet(name: Optional[str] = None)` produced an example
+        # payload of {"name": ""}, not the author's own real
+        # {"name": None} -- and this exact payload is what generate_
+        # curl_commands/generate_postman_collection (backend/
+        # inspector.py) and the CLI's own `app-call` (backend/cli.py)
+        # actually send by default, so a notebook function branching on
+        # `if name is None` vs. `if not name` silently exercised the
+        # wrong code path.
+        #
+        # A `None` default for a container-shaped type (list/dict/tuple/
+        # set -- the same four collection keys _EXAMPLE_TYPE_DEFAULTS
+        # already maps to an empty instance of their own type) is the
+        # one deliberate exception: `scores: Optional[List[float]] =
+        # None` still shows the type's own empty-collection placeholder,
+        # not the literal `None`, since a caller trying this example
+        # out gets a far more representative demo of "this field is a
+        # list" from `[]` than from `null` -- and, unlike a scalar
+        # `Optional[str] = None`, sending the type placeholder instead
+        # of the real default here doesn't risk exercising a materially
+        # different code path: `if scores:`/`if scores is not None:`/
+        # `len(scores)` all treat `None` and `[]` interchangeably for
+        # the overwhelmingly common "was anything given" check a
+        # collection parameter's own None-guard already is.
+        default = arg.get("default")
+        default_is_none_for_a_container_type = (
+            default is None and arg_type in ("list", "dict", "tuple", "set")
+        )
+
+        if arg.get("has_default") and not default_is_none_for_a_container_type:
+            payload[arg_name] = default
+        else:
+            payload[arg_name] = _EXAMPLE_TYPE_DEFAULTS.get(
+                arg_type,
+                None
+            )
+
+    return payload
+
+
+def extract_imports_from_code(code):
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return set()
+
+    imports = set()
+
+    # Map common Python import modules to their PyPI package names.
+    # Beyond sklearn/cv2/PIL/yaml simply being non-obvious (their import
+    # name doesn't match the installable package name at all), several of
+    # these are actively dangerous to leave unmapped, the same way an
+    # unmapped stdlib name like "asyncio" was before STANDARD_LIBS grew
+    # to cover it: PyPI hosts a real, unrelated, unofficial package under
+    # the bare import name itself, so `pip install <import name>`
+    # silently installs the *wrong* package instead of failing loudly --
+    # confirmed real, well-documented traps for "dotenv" (python-dotenv's
+    # import name), "jwt" (PyJWT's), "serial" (pyserial's), and "docx"
+    # (python-docx's), each with its own long history of developers
+    # reporting `ModuleNotFoundError`/broken behavior after installing
+    # the wrong same-named package by mistake.
+    pypi_mapping = {
+        "sklearn": "scikit-learn",
+        "cv2": "opencv-python",
+        "PIL": "Pillow",
+        "yaml": "PyYAML",
+        "dotenv": "python-dotenv",
+        "jwt": "PyJWT",
+        "serial": "pyserial",
+        "docx": "python-docx",
+    }
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                base_module = alias.name.split(".")[0]
+                imports.add(pypi_mapping.get(base_module, base_module))
+
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                base_module = node.module.split(".")[0]
+                imports.add(pypi_mapping.get(base_module, base_module))
+
+    return imports
+
+
+if __name__ == "__main__":
+    sample_code = """
+from typing import Optional, Union, Literal, Annotated
+
+def get_name() -> Optional[str]:
+    return "alice"
+
+def get_model() -> Literal["xgboost", "rf"]:
+    return "xgboost"
+
+def get_user_id() -> int | str:
+    return 1
+
+def get_score() -> Union[int, float]:
+    return 0
+"""
+
+    extracted = extract_functions_from_code(sample_code)
+    for func in extracted:
+        print("Function:", func)
+
+    imports = extract_imports_from_code(sample_code)
+    print("Imports:", imports)

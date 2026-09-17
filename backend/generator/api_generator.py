@@ -1,0 +1,3958 @@
+import ast
+import builtins
+import typing
+from pathlib import Path
+
+# Top-level names the generated app itself defines. A notebook function
+# sharing one of these names would be emitted as `def <name>(...)`,
+# rebinding the real one at module-load time -- most dangerously
+# "verify_api_key": every endpoint defined *after* such a collision gets
+# `Depends(verify_api_key)` resolved (at def-statement time) against the
+# notebook's own function instead of the real auth guard, silently
+# disabling API-key authentication for the rest of the app with no error
+# anywhere. Rejecting these outright avoids ever emitting that endpoint
+# ordering trap.
+RESERVED_INFRASTRUCTURE_NAMES = frozenset({
+    "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "START_TIME",
+    "GENERATED_AT", "PYTHON_VERSION", "NOTEBOOK_TO_API_VERSION", "ALLOWED_ORIGINS",
+    "PUBLIC_URL", "DISABLE_DOCS",
+    "MAX_REQUEST_BODY_BYTES", "MaxRequestBodySizeMiddleware",
+    "MAX_PENDING_TASKS", "WEBHOOK_TIMEOUT_SECONDS", "WEBHOOK_SECRET",
+    "WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_BACKOFF_SECONDS",
+    "TASK_EXECUTION_TIMEOUT_SECONDS",
+    # Read by name from inside _evict_expired_tasks' own body -- the
+    # identical "referenced by name inside a helper every background
+    # endpoint's own submission calls first" exposure already documented
+    # below for _evict_expired_tasks/_run_background_task themselves,
+    # just for a constant this one reads rather than the helper itself.
+    # A notebook function named "TASK_TTL_SECONDS" would silently disable
+    # every background task's own eviction from TASKS entirely (the
+    # shadowing function is never called by anything, so the comparison
+    # against it -- now a function object, not a number -- raises inside
+    # _evict_expired_tasks on its very next invocation).
+    "TASK_TTL_SECONDS",
+    # Read by name from inside _log_request_json's own body (below) --
+    # the identical "boolean constant read by name inside a helper that
+    # runs on every request" exposure TASK_TTL_SECONDS' own entry above
+    # already documents, just for the JSON access-log middleware instead
+    # of task eviction. A notebook function named "JSON_REQUEST_LOGS"
+    # wouldn't crash anything (unlike TASK_TTL_SECONDS' own comparison-
+    # against-a-function-object failure) -- `if JSON_REQUEST_LOGS:` would
+    # simply evaluate a function object's truthiness, which Python always
+    # treats as True, silently turning JSON request logging permanently
+    # on regardless of what NOTEBOOK_API_JSON_LOGS is actually set to, on
+    # every request this app ever serves.
+    "JSON_REQUEST_LOGS",
+    # Read AND written by name from inside _track_http_metrics' own body
+    # (below), which runs on literally every request this app serves,
+    # then read again by name from inside metrics()/metrics_prometheus'
+    # own bodies -- the identical "module-level dict maintained by a
+    # request-scoped middleware, then reported by GET /metrics/GET
+    # /metrics/prometheus" exposure TASKS' own entry above already
+    # carries for background-task bookkeeping, just for this app's own
+    # plain HTTP request counters instead. A notebook function named
+    # "_HTTP_METRICS" would rebind this to a function object at
+    # module-execution time; _track_http_metrics'
+    # `_HTTP_METRICS['total'] += 1` then raises "'function' object is
+    # not subscriptable" on the very next request this app serves --
+    # taking down *every* endpoint, not just one with any relation to
+    # the colliding name, the same "one bad name breaks a subsystem
+    # every request depends on" exposure _enforce_rate_limit's own entry
+    # above already documents for the rate limiter.
+    "_HTTP_METRICS",
+    # Read AND written by name from inside _run_background_task's own
+    # three webhook-delivery call sites and redeliver_task_webhook's own
+    # body (both below), then read again by name from inside metrics()/
+    # metrics_prometheus' own bodies -- the identical "module-level dict
+    # maintained by request-handling code, then reported by GET /metrics/
+    # GET /metrics/prometheus" exposure _HTTP_METRICS' own entry above
+    # already carries, just for webhook delivery/redelivery outcomes
+    # instead of plain HTTP request counts. A notebook function named
+    # "_WEBHOOK_METRICS" would rebind this to a function object at
+    # module-execution time; the very next automatic webhook delivery
+    # (completed, failed, or timed-out task alike) or manual redelivery
+    # then raises "'function' object is not subscriptable" the moment it
+    # tries to record its own outcome -- silently breaking webhook
+    # bookkeeping app-wide, not just for one endpoint related to the
+    # colliding name.
+    "_WEBHOOK_METRICS",
+    # Assigned this compile's own real content hash once, at module load
+    # (see write_generated_api's own caller), then read back verbatim by
+    # GET /info below -- a notebook function of this exact name would
+    # silently replace that string with a function object instead,
+    # confirmed to make GET /info's own "source_notebook_sha256" field
+    # come back as "{}" (jsonable_encoder's fallback for an otherwise-
+    # unserializable object) rather than the notebook's real hash, with
+    # no error anywhere to indicate the field is now meaningless.
+    "SOURCE_NOTEBOOK_SHA256",
+    "_deliver_task_webhook",
+    # Confirmed exploitable, the identical class of bug
+    # _evict_expired_tasks/_run_background_task below already guard
+    # against, just never itself caught for the rate-limiting subsystem:
+    # every one of these is referenced by name *inside* verify_api_key's
+    # own body (verify_api_key calls _enforce_rate_limit(x_api_key,
+    # response), which in turn reads RATE_LIMIT_PER_MINUTE/
+    # RATE_LIMIT_WINDOW_SECONDS/_RATE_LIMIT_WINDOWS), resolved at *call*
+    # time, not def time -- and verify_api_key runs via
+    # Depends(verify_api_key) on literally every endpoint this app
+    # exposes. Reproduced: a notebook exposing `_enforce_rate_limit(x:
+    # int) -> int` alongside an unrelated `add` compiled fine and
+    # silently overwrote the real rate limiter at module-execution time;
+    # with NOTEBOOK_API_RATE_LIMIT_PER_MINUTE set, every single request
+    # to `/add` -- an endpoint with nothing to do with the colliding
+    # name's own logic -- then failed with a bare 500, since
+    # verify_api_key's own call site still passes the real helper's
+    # (api_key, response) signature into what is now the notebook's own,
+    # incompatible one. The other three names in this same group
+    # (RATE_LIMIT_PER_MINUTE/RATE_LIMIT_WINDOW_SECONDS/
+    # _RATE_LIMIT_WINDOWS) are each read the identical way from inside
+    # that same now-shadowable helper -- the same "one bad name breaks a
+    # subsystem every endpoint depends on" exposure, just one level
+    # removed from _enforce_rate_limit's own name instead of the call
+    # site.
+    "_enforce_rate_limit", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_WINDOW_SECONDS",
+    "_RATE_LIMIT_WINDOWS", "_RATE_LIMIT_LOCK", "_TASKS_ADMISSION_LOCK",
+    "verify_api_key", "custom_openapi",
+    "root", "health_check", "readiness_check", "auth_status", "auth_info",
+    "validate_auth", "service_info", "service_config", "metrics", "uptime",
+    "metrics_prometheus", "_task_status_counts",
+    "get_task", "list_tasks", "delete_task", "cleanup_tasks",
+    "delete_completed_tasks", "delete_failed_tasks", "reset_tasks",
+    "redeliver_task_webhook", "retry_task",
+    "notebook_module",
+    # Confirmed exploitable: these two private helpers (both defined at
+    # module scope, like every other name above) were missing here, so a
+    # notebook function literally named "_evict_expired_tasks" or
+    # "_run_background_task" compiled fine and silently overwrote the
+    # real one at module-execution time -- Python has no protection
+    # against redefining a name, the later `def` always wins. Every
+    # *other* background endpoint's own submission still calls the exact
+    # same shadowed name (`_evict_expired_tasks()` before enqueuing a new
+    # task, `background_tasks.add_task(_run_background_task, ...)` to run
+    # one), so this didn't just break the notebook's own colliding
+    # endpoint -- it broke background task submission or execution
+    # *entirely*, app-wide. Reproduced: a notebook exposing both
+    # `_evict_expired_tasks(x: int) -> int` and an unrelated `train_model`
+    # crashed `POST /train_model` itself with "TypeError:
+    # _evict_expired_tasks() missing 1 required positional argument:
+    # 'req'", nothing to do with train_model's own logic at all.
+    "_evict_expired_tasks", "_run_background_task",
+    # Every name below is one of this file's own top-level `import`s --
+    # never previously reserved at all, on the (never actually verified)
+    # assumption that only names *this file itself defines* (a constant,
+    # a helper, an endpoint) were at risk. They aren't special: `import
+    # hmac` binds the name "hmac" in this exact module's own namespace
+    # the same way `TASKS = {}` binds "TASKS" -- a notebook function
+    # later defined with that same name rebinds it exactly the same way,
+    # and every *later* reference to it by name (inside a function body,
+    # resolved at call time) resolves to whatever it was rebound to.
+    # Confirmed exploitable, one at a time, against a real generated app
+    # -- not merely reasoned about -- since whether a given import is
+    # actually reachable this way depends entirely on where in the file
+    # it's used relative to where a notebook's own colliding function
+    # gets defined, which varies name to name:
+    #   - "hmac": verify_api_key's own hmac.compare_digest(...) call,
+    #     reached via Depends(verify_api_key) on literally every
+    #     endpoint -- a collision crashed a *different*, unrelated
+    #     endpoint with "'function' object has no attribute
+    #     'compare_digest'", the same class of "one bad name takes down
+    #     every endpoint" exposure _enforce_rate_limit's own entry above
+    #     already documents.
+    #   - "uuid"/"time": both read by name inside middleware that runs
+    #     on literally every response (_add_request_id_header's own
+    #     uuid.uuid4(), a process-time header's own time.perf_counter())
+    #     -- a collision broke even GET /health, an endpoint with no
+    #     relationship to the colliding name at all.
+    #   - "json": read by name inside _log_request_json (below), also
+    #     middleware run on literally every response once
+    #     NOTEBOOK_API_JSON_LOGS is enabled -- json.dumps({...}) against a
+    #     collision raises "'function' object has no attribute 'dumps'",
+    #     the identical "one bad name takes down every endpoint" exposure
+    #     "hmac"'s own entry above already documents. Also closes an
+    #     identical, narrower-blast-radius exposure that predates this
+    #     middleware entirely: _deliver_task_webhook's own json.dumps(
+    #     payload) (background-task webhook delivery) reads this exact
+    #     same module-global "json" by name too, at call time -- confirmed
+    #     never itself caught when this file's other imports were first
+    #     audited (the commit that added _deliver_task_webhook predates
+    #     the one that audited imports), the same "never itself audited
+    #     for what else in this file has grown the same shape since" gap
+    #     this project's own git history already names for the six
+    #     reserved infrastructure names and RESERVED_INFRASTRUCTURE_NAMES'
+    #     own top-level-import audit before it.
+    #   - "jsonable_encoder": called on *every* synchronous endpoint's
+    #     own return value before it's ever sent back -- a collision
+    #     turned an entirely successful `add(1, 2) -> 3` into a 500
+    #     ("'add' returned a value that is not JSON-serializable").
+    #   - "Depends": used as every notebook endpoint's own
+    #     `Depends(verify_api_key)` parameter default, evaluated at
+    #     *def* time -- a notebook function literally named "Depends",
+    #     compiled ahead of another in the same notebook, silently
+    #     replaced the real FastAPI dependency marker for every endpoint
+    #     defined afterward, breaking request handling with no relation
+    #     to either colliding function's own logic.
+    #   - "BackgroundTasks": the type annotation every background
+    #     endpoint's own `background_tasks: BackgroundTasks` parameter
+    #     declares -- a collision made FastAPI treat it as a plain query
+    #     parameter instead of its own request-scoped injection,
+    #     rejecting every call to that endpoint with a 422 demanding a
+    #     "background_tasks" query value no real caller would ever send.
+    #   - "HTTPException": raised throughout this file's own generated
+    #     validation code (a background endpoint's own callback_url
+    #     scheme check among others) -- a collision turned a caller's
+    #     own invalid input into an unhandled "HTTPException() got an
+    #     unexpected keyword argument 'status_code'" instead of the
+    #     clean 400 that input should have produced.
+    #   - "Optional": used in a background endpoint's own `callback_url:
+    #     Optional[str] = None` parameter annotation -- a collision here
+    #     was the most severe of all: it crashed *loading the generated
+    #     module itself* ("'function' object is not subscriptable"),
+    #     taking down the entire app before it could serve a single
+    #     request, not merely one endpoint.
+    #   - "get_openapi": called by custom_openapi() (itself cached and
+    #     invoked the first time anything requests the schema -- /docs,
+    #     /openapi.json, or a client introspecting it) -- a collision
+    #     broke the schema entirely with "get_openapi() got an
+    #     unexpected keyword argument 'title'".
+    #   - "urlparse": used to validate a background endpoint's own
+    #     callback_url scheme -- a collision turned that same validation
+    #     path into an unhandled 500 instead of a clean 400.
+    # Every other top-level import (os, sys, FastAPI, BaseModel,
+    # CORSMiddleware, GZipMiddleware, Field, Header, Query, Response,
+    # JSONResponse, anyio, datetime, functools, inspect, urllib) was
+    # individually tested the identical way and confirmed *not* reachable
+    # this way in practice -- each is only
+    # ever used at module-load time (a one-shot constructor call, a
+    # default argument value on an endpoint already defined earlier than
+    # any notebook function could be) rather than read back by name
+    # later, so a notebook function reusing one of those names is
+    # confirmed harmless today. Not reserving them is a deliberate,
+    # verified choice, not an oversight matching the ones above. "json" is
+    # no longer among them -- see its own bullet above.
+    "hmac", "uuid", "time", "json", "jsonable_encoder", "Depends", "BackgroundTasks",
+    "HTTPException", "Optional", "get_openapi", "urlparse",
+})
+
+
+class ReservedFunctionNameError(ValueError):
+    """A notebook function's name collides with an identifier the
+    generated app itself defines."""
+
+
+# Every public (non-underscore-prefixed) attribute/method
+# `pydantic.BaseModel` itself defines (Pydantic 2.13.4, this project's own
+# pinned version) -- distinct from RESERVED_INFRASTRUCTURE_NAMES above,
+# which guards a notebook *function's* own name against app.py's top-level
+# identifiers; this guards a notebook function *parameter's* own name
+# against the one auto-generated Pydantic request model (below) that
+# parameter's name becomes a field of.
+#
+# Confirmed exploitable at three distinct severities, not theoretical --
+# each verified against a real compile's own generated request model,
+# not just read from Pydantic's own source:
+#   - "model_config": the worst case, silent data corruption with no
+#     error anywhere. This file's own model-generation code (below)
+#     already reuses the identical name for its own unrelated purpose --
+#     setting the request model's own `json_schema_extra` example --
+#     emitting `model_config: str = Field(...)` (the notebook's own
+#     field) immediately followed by `model_config = {...}` (this file's
+#     own config assignment) in the same class body. The second
+#     assignment wins: Pydantic parses "model_config" as its own special
+#     ClassVar, not a declared field at all -- confirmed via a real
+#     compile, `ProcessRequest.model_fields` came back completely empty
+#     (the field vanished) and `ProcessRequest(model_config="real
+#     value").model_config` returned the *config dict*, not "real
+#     value" -- an existing caller's actual submitted request value is
+#     silently discarded and replaced with unrelated internal
+#     bookkeeping, and the notebook function itself receives that same
+#     config dict instead of its own real argument, with nothing
+#     anywhere raising an error.
+#   - "model_dump"/"model_dump_json"/"model_validate"/
+#     "model_validate_json"/"model_validate_strings": Pydantic itself
+#     refuses to define the class at all -- confirmed via a real
+#     compile, the generated app.py raised "ValueError: Field
+#     'model_dump' conflicts with member <function BaseModel.model_dump
+#     ...> of protected namespace 'model_dump'" the moment Python tried
+#     to import it, taking down the *entire* generated app before it
+#     could serve a single request, not merely the one endpoint that
+#     parameter belongs to.
+#   - Every other name below: Pydantic still builds the field
+#     successfully, but a real BaseModel attribute/method of the same
+#     name is now permanently shadowed by it -- confirmed via a real
+#     compile, Python itself warns "Field name ... shadows an attribute
+#     in parent 'BaseModel'" at class-definition time (on every single
+#     startup of the generated app), and calling that shadowed method on
+#     a real request instance (e.g. the Pydantic v1-era `.dict()`/
+#     `.json()`/`.copy()`/`.schema()` a caller migrating an older
+#     integration might still reach for out of habit) silently resolves
+#     to the field's own value instead, raising a confusing "'str'
+#     object is not callable" nowhere close to this file's own code.
+RESERVED_PYDANTIC_FIELD_NAMES = frozenset({
+    "construct", "copy", "dict", "from_orm", "json",
+    "model_computed_fields", "model_config", "model_construct",
+    "model_copy", "model_dump", "model_dump_json", "model_extra",
+    "model_fields", "model_fields_set", "model_json_schema",
+    "model_parametrized_name", "model_post_init", "model_rebuild",
+    "model_validate", "model_validate_json", "model_validate_strings",
+    "parse_file", "parse_obj", "parse_raw", "schema", "schema_json",
+    "update_forward_refs", "validate",
+})
+
+
+class ReservedParameterNameError(ValueError):
+    """A notebook function parameter's name collides with an attribute
+    or method `pydantic.BaseModel` itself defines -- see
+    RESERVED_PYDANTIC_FIELD_NAMES above for why this can't simply be
+    left for Pydantic's own validation (or worse, silent field
+    corruption) to catch at request time instead."""
+
+
+# Keywords indicating a function should be run as a background task
+LONG_RUNNING_KEYWORDS = [
+    "train",
+    "process",
+    "generate",
+    "embed",
+    "scrape",
+]
+
+
+def resolve_is_background(func_name, background_overrides=None):
+    """Whether `func_name` should compile into a background/task_id
+    endpoint rather than a synchronous one -- the single place every
+    caller in this codebase decides that, so none of them can drift from
+    each other or disagree about the same function.
+
+    `background_overrides` (optional) is _extract_background_overrides's
+    own {name: True/False} result (backend/compiler.py) -- a notebook
+    author's explicit "# notebook-to-api: background"/"# notebook-to-api:
+    sync" directive always wins when `func_name` has one, the same
+    "explicit directive beats an inferred guess" precedent this project's
+    other compile-time inferences (requires/apt-requires/exclude/private)
+    already establish. Falls back to LONG_RUNNING_KEYWORDS' own substring-
+    of-the-name heuristic otherwise, exactly as before this override
+    existed.
+    """
+    if background_overrides and func_name in background_overrides:
+        return background_overrides[func_name]
+
+    return any(kw in func_name.lower() for kw in LONG_RUNNING_KEYWORDS)
+
+# Every environment variable the generated app itself reads to configure a
+# runtime limit or credential -- one single source of truth codegen below
+# builds its own os.getenv(name, default) calls from (see
+# _generated_app_env_var_default), so GET /api/env-vars-preview
+# (routes/upload.py) can never drift from what a real compile's own
+# app.py would actually read, the same "can't drift from the real thing"
+# guarantee dockerfile_content/dockerignore_content (backend/generator/
+# docker_generator.py) already provide for their own artifact.
+GENERATED_APP_ENV_VARS = [
+    {
+        "name": "NOTEBOOK_API_KEY",
+        "default": "notebook-to-api-dev-key",
+        "description": (
+            "Comma-separated list of API keys accepted on the X-API-Key "
+            "header every generated endpoint requires (see "
+            "verify_api_key) -- a list, not a single value, so a key can "
+            "be rotated with zero downtime: add the new key alongside "
+            "the old one, restart, let clients switch over, then remove "
+            "the old key and restart again."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_ALLOWED_ORIGINS",
+        "default": "*",
+        "description": (
+            "Comma-separated list of origins allowed to call this API "
+            "from a browser (CORSMiddleware's own allow_origins). "
+            "Unset, every origin is allowed -- safe here since every "
+            "request is authenticated via X-API-Key, never a cookie."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_MAX_REQUEST_BYTES",
+        "default": str(10 * 1024 * 1024),
+        "description": (
+            "Maximum accepted request body size in bytes -- a request "
+            "declaring a larger Content-Length is rejected with 413 "
+            "before its body is even read."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_TASK_TTL_SECONDS",
+        "default": "3600",
+        "description": (
+            "How long a background task's own result stays in TASKS "
+            "after completing/failing before it's evicted."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_MAX_TASKS",
+        "default": "10000",
+        "description": (
+            "Maximum number of background tasks pending at once -- a "
+            "new one submitted while at this limit is rejected with 503 "
+            "until some already-tracked tasks are evicted."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS",
+        "default": "0",
+        "description": (
+            "Maximum seconds a single background task's own execution "
+            "may run before it's cancelled and marked 'failed' with a "
+            "timeout error. Without this, a hung or runaway notebook "
+            "function (an infinite loop, a network call with no timeout "
+            "of its own) ties up one of this process' limited worker "
+            "threads forever -- the same threadpool every *synchronous* "
+            "endpoint (including GET /health) also runs on, so enough "
+            "hung tasks eventually starve the entire app, not just "
+            "background ones. 0 (the default) disables this entirely, "
+            "preserving the previous unbounded-execution-time behavior."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE",
+        "default": "0",
+        "description": (
+            "Maximum requests a single API key may make per rolling "
+            "60-second window before being rejected with 429 (and a "
+            "Retry-After header). Every request against this key, "
+            "successful or not, also gets X-RateLimit-Limit/"
+            "-Remaining/-Reset response headers so a well-behaved "
+            "caller can back off before actually being throttled, not "
+            "just after. Tracked independently per configured key, so "
+            "one key being throttled never affects another. 0 (the "
+            "default) disables rate limiting entirely, preserving the "
+            "previous unbounded behavior."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_WEBHOOK_TIMEOUT_SECONDS",
+        "default": "5",
+        "description": (
+            "How long a background task's own optional ?callback_url= "
+            "webhook delivery may take before giving up. Purely "
+            "best-effort: the task's own status/result recorded in "
+            "TASKS is never affected by webhook delivery failing, "
+            "timing out, or being misconfigured -- this only bounds "
+            "how long that one delivery attempt can block the worker "
+            "thread running it."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_WEBHOOK_SECRET",
+        "default": "",
+        "description": (
+            "Shared secret used to sign a background task's own optional "
+            "?callback_url= webhook delivery with HMAC-SHA256, sent as "
+            "X-Webhook-Signature: sha256=<hex>, so the receiving endpoint "
+            "can verify a request actually came from this app and wasn't "
+            "tampered with in transit -- the same X-Hub-Signature-256 "
+            "contract GitHub/Stripe webhooks already use. Empty (the "
+            "default) sends the webhook unsigned, exactly as before this "
+            "existed."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_WEBHOOK_MAX_RETRIES",
+        "default": "0",
+        "description": (
+            "How many additional attempts a background task's own "
+            "optional ?callback_url= webhook delivery gets after an "
+            "initial attempt that fails with a network-level error "
+            "(connection refused, DNS failure, WEBHOOK_TIMEOUT_SECONDS "
+            "itself elapsing) or a 429/5xx response -- the exact same "
+            "class of failure a real receiving endpoint's own transient "
+            "restart/deploy/overload would produce. A 4xx response other "
+            "than 429 is never retried (the receiver deliberately "
+            "rejected this exact request; retrying an unchanged body "
+            "against it again would only ever fail the same way). Each "
+            "retry waits NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS, "
+            "doubling per attempt and capped at 30s, honoring a 429 "
+            "response's own Retry-After header when present instead of "
+            "guessing. 0 (the default) disables this entirely -- a "
+            "single best-effort attempt, exactly as before this existed. "
+            "Every attempt still only ever runs inside the worker thread "
+            "already backing this one delivery (see _run_background_task), "
+            "never the event loop, so retrying here can't block any other "
+            "request; a task's own recorded result in TASKS is still "
+            "never affected by webhook delivery failing after every "
+            "retry is exhausted."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS",
+        "default": "0.5",
+        "description": (
+            "Base delay, in seconds, between a background task's own "
+            "webhook delivery retries (see "
+            "NOTEBOOK_API_WEBHOOK_MAX_RETRIES) -- doubles each attempt "
+            "(0.5s, 1s, 2s, ... by default) up to a fixed 30s cap, unless "
+            "a 429 response's own Retry-After header names a longer wait. "
+            "Unused when NOTEBOOK_API_WEBHOOK_MAX_RETRIES is 0."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_PUBLIC_URL",
+        "default": "http://localhost:8000",
+        "description": (
+            "The base URL this deployment is actually reachable at, "
+            "reported as this app's own OpenAPI \"servers\" entry -- what "
+            "/docs' own Swagger UI \"Try it out\" defaults its request "
+            "URL to. Left at the default outside local development, "
+            "Swagger UI keeps sending \"Try it out\" requests to "
+            "http://localhost:8000 no matter where the app is actually "
+            "deployed, failing every one of them from a browser that "
+            "isn't itself on the same machine."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_DISABLE_DOCS",
+        "default": "false",
+        "description": (
+            "Set to \"true\" to disable this app's own interactive /docs "
+            "(Swagger UI), /redoc, and /openapi.json entirely (each "
+            "returns a plain 404) -- every request this app accepts is "
+            "already authenticated via X-API-Key, but the schema and "
+            "docs UI themselves were always served with no such "
+            "requirement, exposing every endpoint's name, parameters, "
+            "and example payloads to anyone who can merely reach the "
+            "deployment, not just anyone who could actually call it. "
+            "This dashboard's own POST /api/export-openapi/export-sdk "
+            "are unaffected either way: they call this app's own "
+            "openapi() method directly (in-process, at compile/export "
+            "time), never through the HTTP routes this setting disables."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_JSON_LOGS",
+        "default": "false",
+        "description": (
+            "Set to \"true\" to additionally emit one JSON-formatted "
+            "access-log line per request to stdout -- {\"timestamp\", "
+            "\"request_id\", \"method\", \"path\", \"status_code\", "
+            "\"duration_ms\"} -- alongside uvicorn's own default "
+            "plain-text access log, which this setting never disables or "
+            "replaces. \"request_id\"/\"duration_ms\" are read straight "
+            "back off the exact same X-Request-ID/X-Process-Time-Ms "
+            "response headers this app's own request-id/process-time "
+            "middleware already set on every response, so a value logged "
+            "here can never drift from what a caller correlating its own "
+            "logs against those headers already sees. Off by default -- "
+            "uvicorn's own access log already covers every existing "
+            "deployment's needs unchanged; a log-aggregation pipeline "
+            "(Datadog, CloudWatch Logs Insights, an ELK stack, ...) that "
+            "wants structured, machine-parseable per-request records "
+            "instead of grepping uvicorn's own free-text line opts in "
+            "here."
+        ),
+    },
+]
+
+
+def _generated_app_env_var_default(name):
+    """The default value GENERATED_APP_ENV_VARS declares for `name`,
+    embedded into the matching os.getenv(name, default) call generated
+    below -- see GENERATED_APP_ENV_VARS' own docstring for why codegen
+    reads it from there instead of repeating the literal a second time.
+    """
+    return next(
+        entry["default"] for entry in GENERATED_APP_ENV_VARS
+        if entry["name"] == name
+    )
+
+
+def _auth_and_rate_limit_error_responses():
+    """The {401, 429} OpenAPI response entries every generated notebook-
+    function endpoint can actually produce, regardless of what the
+    notebook function itself does -- verify_api_key/_enforce_rate_limit
+    (both above) run via Depends(verify_api_key) before the endpoint's
+    own body ever executes, for every one of them, sync or background.
+
+    Before this, a generated endpoint's own OpenAPI schema documented
+    only its 200 response and FastAPI's own automatically-added 422
+    (Pydantic validation error) -- FastAPI has no way to infer a plain
+    dependency function's own `raise HTTPException(...)` calls the way
+    it already does for 422, so 401 (an invalid/missing X-API-Key) and
+    429 (NOTEBOOK_API_RATE_LIMIT_PER_MINUTE exceeded) were completely
+    undocumented in the served schema, /docs, and any third-party tool
+    generating a client from it -- even though every single endpoint
+    already requires passing both checks before its own body ever runs.
+    The exact numeric limit/window for 429 is a runtime NOTEBOOK_API_*
+    env var this function has no way to know at compile time (see
+    GENERATED_APP_ENV_VARS), so its own description points at the
+    variable name instead of a number that could be wrong the moment an
+    operator overrides the default.
+    """
+    return {
+        401: {
+            "description": "Missing or invalid X-API-Key header.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid API key"}
+                }
+            },
+        },
+        429: {
+            "description": (
+                "Rate limit exceeded (see "
+                "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE)."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Rate limit exceeded: 60 requests per 60s "
+                            "per API key"
+                        )
+                    }
+                }
+            },
+        },
+    }
+
+
+def _call_arg_expr(arg):
+    """Render a single argument for the notebook_module.<fn>(...) call.
+
+    Keyword-only parameters (those after a bare `*`, e.g.
+    `def train(data, *, epochs=10)`) cannot be passed positionally, so
+    they must be forwarded as `name=req.name` rather than plain `req.name`.
+    """
+    if arg.get("kind") == "keyword_only":
+        return f"{arg['name']}=req.{arg['name']}"
+    return f"req.{arg['name']}"
+
+
+_TYPING_EXPORTS = frozenset(
+    name for name in dir(typing) if not name.startswith("_")
+)
+_BUILTIN_NAMES = frozenset(dir(builtins))
+
+
+class _AnnotationNameQualifier(ast.NodeTransformer):
+    """Rewrites bare names in a type-annotation AST so every name the
+    generated Pydantic model references is actually resolvable.
+
+    A name that belongs to `typing` (List, Dict, Optional, Union, ...) is
+    left alone but recorded so the caller can emit the matching
+    `from typing import ...` line. Any other name that isn't a Python
+    builtin is assumed to come from the notebook itself -- a class/Enum it
+    defines, or something it imported at module level -- since the
+    function using it as an annotation lives in that same module, the bare
+    name must already resolve there. It's rewritten to
+    `notebook_module.<name>` (the alias the generated app already imports
+    the notebook's runtime module under) instead of failing with a
+    NameError/PydanticUserError when the model class is built.
+    """
+
+    def __init__(self):
+        self.typing_names = set()
+
+    def visit_Name(self, node):
+        if node.id in _TYPING_EXPORTS:
+            self.typing_names.add(node.id)
+            return node
+
+        if node.id in _BUILTIN_NAMES:
+            return node
+
+        return ast.copy_location(
+            ast.Attribute(
+                value=ast.Name(id="notebook_module", ctx=ast.Load()),
+                attr=node.id,
+                ctx=node.ctx,
+            ),
+            node,
+        )
+
+
+def _build_model_names(functions):
+    """Map each function's name to a Pydantic request-model class name,
+    guaranteed unique even when two function names collide once reduced
+    to a class name (e.g. "get_data" and "Get_data" -- only the first
+    character was ever uppercased, so both produced the identical class
+    name "Get_dataRequest", and the second definition silently shadowed
+    the first's fields: whichever endpoint referenced that name ended up
+    validating requests against the *other* function's parameters).
+    """
+    used_names = set()
+    model_names = {}
+
+    for func in functions:
+        func_name = func["name"]
+        base_name = f"{func_name[0].upper()}{func_name[1:]}Request"
+        candidate = base_name
+        suffix = 2
+
+        while candidate in used_names:
+            candidate = f"{base_name}_{suffix}"
+            suffix += 1
+
+        used_names.add(candidate)
+        model_names[func_name] = candidate
+
+    return model_names
+
+
+def _resolve_annotation_source(type_str):
+    """Turn a raw `ast.unparse`d annotation string (as stored in
+    arg["type"] by the parser) into source the generated app can actually
+    evaluate, plus the set of `typing` names it needs imported.
+
+    Before this, arg["type"] was written into the generated Pydantic model
+    verbatim: `List[float]`, `Optional[str]`, `Dict[str, Any]`, or a
+    notebook-defined class/Enum name all produced a field annotation
+    referencing a name nothing in the generated file ever imports, which
+    breaks model construction (`PredictRequest.model_json_schema()` /
+    `model_rebuild()`) the first time FastAPI actually needs the schema --
+    i.e. on the very first request or /docs load, not at compile time.
+    """
+    if not type_str:
+        return "str", set()
+
+    try:
+        tree = ast.parse(type_str, mode="eval")
+    except SyntaxError:
+        return type_str, set()
+
+    qualifier = _AnnotationNameQualifier()
+    rewritten = qualifier.visit(tree)
+    ast.fix_missing_locations(rewritten)
+
+    return ast.unparse(rewritten), qualifier.typing_names
+
+
+def _annotation_has_own_field_description(type_str):
+    """Whether `type_str` (a raw `ast.unparse`d annotation, as stored in
+    arg["type"] by the parser -- the *original*, pre-
+    _resolve_annotation_source string, not its notebook_module-qualified
+    rewrite) is an `Annotated[T, ..., Field(..., description=...), ...]`
+    whose own metadata already carries a description.
+
+    generate_fastapi_code below always used to append its own
+    `description=repr(field_description)` to every field's `Field(...)`
+    call, unconditionally -- including a field whose annotation is
+    itself `Annotated[int, Field(gt=0, description="must be positive")]`,
+    a increasingly common way for a notebook author to document (and
+    constrain) a parameter directly on modern Pydantic v2. Confirmed
+    exploitable before this: Pydantic merges the `Annotated[...]`
+    metadata's own FieldInfo with the one assigned as the field's default
+    value, and the *assigned* one's "description" wins on conflict --
+    so the notebook author's own carefully-written "must be positive"
+    was silently replaced by the generic, auto-generated "Parameter 'x'
+    of type Annotated[int, Field(gt=0, description=...)]" in the actual
+    served OpenAPI schema and both generated SDK clients, with nothing
+    to indicate the author's own description had been discarded.
+    Skipping the generated description entirely whenever the annotation
+    already supplies its own leaves every other `Field(...)` argument
+    (gt, le, a default, ...) working exactly as before -- this only ever
+    suppresses the one field this codebase has no business overriding.
+    """
+    if not type_str:
+        return False
+
+    try:
+        tree = ast.parse(type_str, mode="eval").body
+    except SyntaxError:
+        return False
+
+    if not isinstance(tree, ast.Subscript):
+        return False
+
+    base = tree.value
+    base_name = (
+        base.id if isinstance(base, ast.Name)
+        else getattr(base, "attr", None)
+    )
+
+    if base_name != "Annotated":
+        return False
+
+    metadata_slice = tree.slice
+    metadata = (
+        metadata_slice.elts if isinstance(metadata_slice, ast.Tuple)
+        else [metadata_slice]
+    )
+
+    for item in metadata[1:]:
+
+        if not isinstance(item, ast.Call):
+            continue
+
+        func = item.func
+        func_name = (
+            func.id if isinstance(func, ast.Name)
+            else getattr(func, "attr", None)
+        )
+
+        if func_name != "Field":
+            continue
+
+        if any(kw.arg == "description" for kw in item.keywords):
+            return True
+
+    return False
+
+
+# Template for generating the FastAPI application source code
+def generate_fastapi_code(
+    functions, package_name="generated", source_notebook_sha256=None,
+    notebook_to_api_version="1.0.0", background_overrides=None,
+):
+    """Generate FastAPI app code for the given functions.
+
+    Each function is examined via resolve_is_background above: if its
+    name contains any of the LONG_RUNNING_KEYWORDS (or `background_overrides`
+    explicitly says so), an endpoint is created that enqueues the
+    function as a BackgroundTask and returns a task_id. Otherwise a
+    regular synchronous endpoint is generated.
+
+    `background_overrides` (optional) is _extract_background_overrides's
+    own result (backend/compiler.py) -- see resolve_is_background's own
+    docstring above for what it overrides and why.
+
+    package_name is the top-level package the generated app imports its
+    runtime module from (`<package_name>.runtime.notebook_module`). It
+    must match the basename of wherever this generated code actually gets
+    written -- see compiler.package_name_for_output_dir.
+
+    source_notebook_sha256 (optional) is baked into the generated app
+    itself as a fixed constant, returned by its own GET /info -- see that
+    endpoint's own "source_notebook_sha256" field below for why this
+    exists: a running deployed container had no way to self-report which
+    exact notebook content actually produced it, short of cross-
+    referencing this dashboard's own deploy/compile history externally
+    (assuming that history is even still available, and the caller
+    already knows which dashboard/tag to look under). None (the default,
+    used by any caller not passing it) means "unknown" -- GET /info
+    reports it as null, exactly as if this parameter didn't exist.
+
+    notebook_to_api_version (optional) is baked into the generated app
+    the identical way, as its own "generator_version" (GET /), "version"
+    (GET /info), and -- unlike those first two, this one was missed the
+    first time this parameter was added, and only caught afterward --
+    the FastAPI(...) app object's own `version=` kwarg itself, which
+    `custom_openapi` (below) passes straight through to
+    get_openapi(..., version=app.version, ...) as this app's own
+    OpenAPI "info.version". All three previously carried the identical
+    hardcoded "1.0.0" literal, completely unrelated to which actual
+    version of this tool compiled the app, the same "two independent,
+    inevitably-drifting hardcoded version literals" bug NOTEBOOK_TO_API_
+    VERSION (backend/compiler.py) was already introduced to deduplicate
+    for this dashboard's own GET /api/health and GET / -- just never
+    threaded through to the *generated* app's own three literals. Unlike
+    "generator_version"/"version" (informational JSON fields only), a
+    stale "info.version" is user-visible in every compiled app's own
+    /docs (Swagger UI) and gets baked directly into whatever POST
+    /api/export-openapi writes out (export_openapi_schema serializes
+    app.openapi() unchanged) -- the exact schema any external tooling
+    (an API catalog, a codegen tool other than this project's own
+    generate_python_sdk/generate_typescript_sdk, which never read
+    "info.version" themselves) would read "info.version" from.
+    compile_notebook_to_api (backend/compiler.py) always passes its own
+    NOTEBOOK_TO_API_VERSION here; the "1.0.0" default is only ever seen
+    by a caller of this function that doesn't (a direct unit test, most
+    commonly), preserving this function's previous literal exactly for
+    it rather than silently changing behavior no caller asked for.
+    """
+    colliding_names = sorted(
+        {func["name"] for func in functions} & RESERVED_INFRASTRUCTURE_NAMES
+    )
+    if colliding_names:
+        raise ReservedFunctionNameError(
+            "Notebook function name(s) "
+            f"{', '.join(colliding_names)} collide with identifiers the "
+            "generated app itself defines (auth, task management, or "
+            "infrastructure routes). Rename the function(s) in the "
+            "notebook and recompile."
+        )
+
+    # Checked here, before any of this function's own model/endpoint
+    # code is ever generated, for the identical "validate the notebook's
+    # own content before writing anything" reasoning the
+    # ReservedFunctionNameError check just above already established --
+    # a parameter name colliding with a real pydantic.BaseModel attribute
+    # is caught as this clean, actionable error instead of only
+    # surfacing later as Pydantic's own raw ValueError (a hard failure
+    # of the *entire* generated app) or, worse, the "model_config" case's
+    # silent field corruption with no error anywhere at all -- see
+    # RESERVED_PYDANTIC_FIELD_NAMES's own comment for both confirmed
+    # failure modes.
+    parameter_collisions = sorted(
+        (func["name"], arg["name"])
+        for func in functions
+        for arg in func.get("args", [])
+        if arg.get("name") in RESERVED_PYDANTIC_FIELD_NAMES
+    )
+    if parameter_collisions:
+        detail = ", ".join(
+            f"'{arg_name}' (in '{func_name}')"
+            for func_name, arg_name in parameter_collisions
+        )
+        raise ReservedParameterNameError(
+            f"Notebook function parameter(s) {detail} collide with an "
+            "attribute or method pydantic.BaseModel itself defines. "
+            "Rename the parameter(s) in the notebook and recompile."
+        )
+
+    # GET /tasks below always needs Optional[str] for its own `status`
+    # query param, regardless of whether any notebook function's own
+    # annotations need typing imports.
+    needed_typing_names = {"Optional"}
+    for func in functions:
+        for arg in func.get("args", []):
+            _, typing_names = _resolve_annotation_source(arg.get("type"))
+            needed_typing_names |= typing_names
+
+            if arg.get("has_default") and not arg.get(
+                "default_is_literal", True
+            ):
+                _, default_typing_names = _resolve_annotation_source(
+                    arg.get("default")
+                )
+                needed_typing_names |= default_typing_names
+
+    model_names = _build_model_names(functions)
+
+    lines = []
+    # Imports for the generated FastAPI app
+    lines.append(
+        "from fastapi import FastAPI, BackgroundTasks, Header, HTTPException, "
+        "Depends, Query, Response"
+    )
+    lines.append("from fastapi.middleware.cors import CORSMiddleware")
+    lines.append("from fastapi.middleware.gzip import GZipMiddleware")
+    lines.append("from fastapi.responses import JSONResponse")
+    lines.append("from fastapi.encoders import jsonable_encoder")
+    lines.append("import anyio.to_thread")
+    lines.append("import functools")
+    lines.append("import uuid")
+    lines.append("import os")
+    lines.append("import sys")
+    lines.append("import inspect")
+    lines.append("import hmac")
+    lines.append("import json")
+    lines.append("import urllib.request")
+    lines.append("import urllib.error")
+    lines.append("import socket")
+    lines.append("import ipaddress")
+    lines.append("import threading")
+    lines.append("from urllib.parse import urlparse")
+    lines.append("from datetime import datetime")
+    lines.append("import time")
+    lines.append("from pydantic import BaseModel, Field")
+    if needed_typing_names:
+        lines.append(f"from typing import {', '.join(sorted(needed_typing_names))}")
+    lines.append(f"import {package_name}.runtime.notebook_module as notebook_module")
+    lines.append("")
+    # Read before app = FastAPI(...) below (the servers= kwarg needs it
+    # at construction time) -- see GET /api/env-vars-preview's own
+    # NOTEBOOK_API_PUBLIC_URL entry for what this actually drives, and
+    # why leaving it at the default outside local development silently
+    # breaks Swagger UI's own "Try it out" for anyone not on the same
+    # machine as the deployment.
+    lines.append(
+        'PUBLIC_URL = os.getenv('
+        '"NOTEBOOK_API_PUBLIC_URL", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_PUBLIC_URL")}"'
+        ')'
+    )
+    # Also read before app = FastAPI(...) below -- docs_url/redoc_url/
+    # openapi_url are only ever honored at construction time; FastAPI has
+    # no supported way to toggle them afterward. Membership in a truthy
+    # set (not a bare bool(...) of the string, which -- confirmed --
+    # would treat NOTEBOOK_API_DISABLE_DOCS=false as truthy, since a
+    # non-empty string is always truthy in Python regardless of its own
+    # text) mirrors dashboard_reload()'s own identical "tolerate
+    # true/1/yes/on, case-insensitively" convention (backend/dashboard.py)
+    # for a hand-typed env var, just inverted: that one's falsy set turns
+    # a default-on behavior off, this truthy set turns a default-off
+    # behavior on.
+    lines.append(
+        'DISABLE_DOCS = os.getenv('
+        '"NOTEBOOK_API_DISABLE_DOCS", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_DISABLE_DOCS")}"'
+        ').strip().lower() in ("true", "1", "yes", "on")'
+    )
+    lines.append("")
+    lines.append(
+        'app = FastAPI('
+        'title="Notebook-to-API Generated Service", '
+        'description="Automatically generated from notebook analysis.", '
+        f'version={notebook_to_api_version!r}, '
+        'contact={"name": "Notebook-to-API"}, '
+        'license_info={"name": "MIT"}, '
+        'servers=[{"url": PUBLIC_URL, '
+        '"description": "This deployment"}], '
+        'docs_url=None if DISABLE_DOCS else "/docs", '
+        'redoc_url=None if DISABLE_DOCS else "/redoc", '
+        'openapi_url=None if DISABLE_DOCS else "/openapi.json"'
+        ')'
+    )
+    lines.append("")
+    lines.append("app.openapi_schema = None")
+    lines.append("")
+    # Every request this app accepts is authenticated via the X-API-Key
+    # header (see verify_api_key below), never a cookie, so -- unlike the
+    # dashboard API's own CORS setup in backend/dashboard.py, which has to
+    # restrict allow_origins to an explicit list precisely because it
+    # accepts credentialed (cookie-based) cross-origin requests --
+    # reflecting an arbitrary Origin here carries no cross-site credential
+    # risk. allow_credentials is explicitly False, which is also what
+    # makes a "*" default safe (browsers refuse "*" together with
+    # allow_credentials=True). Without this, the single most common way to
+    # actually consume a deployed generated API -- a browser-based
+    # frontend calling it directly -- was blocked by CORS with no way to
+    # fix it short of hand-editing this generated file. Configurable via
+    # NOTEBOOK_API_ALLOWED_ORIGINS (comma-separated) to lock this down for
+    # a real deployment instead.
+    lines.append(
+        'ALLOWED_ORIGINS = ['
+        'o.strip() for o in os.getenv('
+        '"NOTEBOOK_API_ALLOWED_ORIGINS", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_ALLOWED_ORIGINS")}"'
+        ').split(",") if o.strip()'
+        '] or ["*"]'
+    )
+    # Browsers only ever expose a small built-in safelist of *response*
+    # headers to cross-origin JS (Cache-Control, Content-Language,
+    # Content-Length, Content-Type, Expires, Last-Modified, Pragma) --
+    # everything else, X-RateLimit-Limit/-Remaining/-Reset and
+    # Retry-After (see _enforce_rate_limit above) included, is invisible
+    # to `fetch(...).headers.get(...)` cross-origin no matter what
+    # allow_origins/allow_headers above are set to, unless explicitly
+    # listed in expose_headers. Confirmed: response.headers.get(...) for
+    # any of these four returned null from cross-origin JS before this,
+    # even though the server sent them every time -- a browser-based
+    # frontend wanting to show "you're about to be rate limited" (the
+    # whole point of Commit #3 adding these) had no way to read them at
+    # all short of a same-origin request.
+    lines.append(
+        "app.add_middleware("
+        "CORSMiddleware, "
+        "allow_origins=ALLOWED_ORIGINS, "
+        "allow_credentials=False, "
+        "allow_methods=['*'], "
+        "allow_headers=['*'], "
+        "expose_headers=["
+        "'X-RateLimit-Limit', 'X-RateLimit-Remaining', "
+        "'X-RateLimit-Reset', 'Retry-After'"
+        "]"
+        ")"
+    )
+    lines.append("")
+    # Every endpoint below accepts an arbitrary JSON request body with no
+    # limit on its size -- unlike this very tool's own dashboard
+    # /api/upload, which has always capped uploads at MAX_UPLOAD_BYTES
+    # (see routes/upload.py) for exactly this reason. A deployed generated
+    # app has no equivalent: one oversized request can consume unbounded
+    # memory building the body before FastAPI/Pydantic ever gets a chance
+    # to validate or reject it. Rejecting outright on a declared
+    # Content-Length over the limit, before the body is read at all, is
+    # the same "reject before reading" approach MAX_UPLOAD_BYTES already
+    # uses. Matches the NOTEBOOK_API_* env-var convention this generated
+    # app's other limits (API_KEYS, TASK_TTL_SECONDS, ALLOWED_ORIGINS)
+    # already follow, defaulting to the same 10MB MAX_UPLOAD_BYTES already
+    # defaults to.
+    lines.append(
+        'MAX_REQUEST_BODY_BYTES = int(os.getenv('
+        '"NOTEBOOK_API_MAX_REQUEST_BYTES", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_MAX_REQUEST_BYTES")}"'
+        '))'
+    )
+    lines.append("")
+    lines.append("class MaxRequestBodySizeMiddleware:")
+    lines.append("    def __init__(self, app):")
+    lines.append("        self.app = app")
+    lines.append("")
+    lines.append("    async def __call__(self, scope, receive, send):")
+    lines.append("        if scope['type'] == 'http':")
+    lines.append("            for name, value in scope.get('headers') or []:")
+    lines.append("                if name != b'content-length':")
+    lines.append("                    continue")
+    lines.append("                try:")
+    lines.append("                    too_large = int(value) > MAX_REQUEST_BODY_BYTES")
+    lines.append("                except ValueError:")
+    lines.append("                    break")
+    lines.append("                if too_large:")
+    lines.append("                    response = JSONResponse(")
+    lines.append("                        {")
+    lines.append("                            'detail': (")
+    lines.append("                                'Request body exceeds the maximum allowed '")
+    lines.append("                                f'size of {MAX_REQUEST_BODY_BYTES} bytes'")
+    lines.append("                            )")
+    lines.append("                        },")
+    lines.append("                        status_code=413,")
+    lines.append("                    )")
+    lines.append("                    await response(scope, receive, send)")
+    lines.append("                    return")
+    lines.append("                break")
+    lines.append("        await self.app(scope, receive, send)")
+    lines.append("")
+    lines.append("app.add_middleware(MaxRequestBodySizeMiddleware)")
+    lines.append("")
+    # Registered last (see MaxRequestBodySizeMiddleware/CORSMiddleware
+    # above -- the same "middleware added last ends up outermost, since
+    # Starlette's own add_middleware inserts each new one at the *front*
+    # of its internal list and then wraps outward-in over that list in
+    # reverse" rule those already rely on) so these headers land on
+    # *every* response this app ever sends, including a 413 from
+    # MaxRequestBodySizeMiddleware or a 429/401 HTTPException -- not just
+    # the successful ones a handler-level fix would only ever reach.
+    # Baseline OWASP-recommended hardening with no functional downside
+    # (unlike CORS/rate limiting, nothing here can reject a legitimate
+    # request), so -- unlike NOTEBOOK_API_DISABLE_DOCS/ALLOWED_ORIGINS/
+    # RATE_LIMIT_PER_MINUTE above -- these are unconditional, not gated
+    # behind an env var an operator has to remember to set. Every
+    # response from this app is JSON (or, unless NOTEBOOK_API_DISABLE_DOCS
+    # is set, the /docs Swagger UI's own HTML), never content meant to be
+    # framed or MIME-sniffed by a browser: X-Content-Type-Options blocks a
+    # browser from ever guessing a response is something other than what
+    # Content-Type already says it is (relevant here since notebook-
+    # author-controlled strings -- docstrings, example payloads -- flow
+    # straight into response bodies), X-Frame-Options blocks embedding any
+    # response (including /docs itself) in a third-party <iframe>, and
+    # Referrer-Policy stops this deployment's own URL (which can itself
+    # carry sensitive path segments, e.g. a task_id) from leaking into the
+    # Referer header of a request /docs' own "Try it out" -- or any link a
+    # response body might contain -- makes to a different origin.
+    lines.append("@app.middleware('http')")
+    lines.append("async def _add_security_headers(request, call_next):")
+    lines.append("    response = await call_next(request)")
+    lines.append("    response.headers['X-Content-Type-Options'] = 'nosniff'")
+    lines.append("    response.headers['X-Frame-Options'] = 'DENY'")
+    lines.append("    response.headers['Referrer-Policy'] = 'no-referrer'")
+    lines.append("    return response")
+    lines.append("")
+    # Registered last -- see _add_security_headers' own comment above for
+    # why that makes this the outermost middleware -- so it compresses
+    # the truly final response body (headers/status already finalized by
+    # every layer above), rather than something an inner layer might
+    # still rewrite. GZipMiddleware only compresses when the client's own
+    # Accept-Encoding actually says it can decode gzip, so this changes
+    # nothing for a caller that doesn't ask for it; for one that does, a
+    # large JSON response (GET /tasks -- still up to 100 entries per page
+    # even after pagination, GET /openapi.json, a notebook function
+    # returning a large result) previously always went out uncompressed,
+    # a real bandwidth/latency cost on any deployment reached over a slow
+    # or metered link that this app had no way to avoid short of a
+    # reverse proxy in front of it doing the compression itself.
+    # Starlette's own default minimum_size (500 bytes) is left as-is --
+    # below that, gzip's own framing overhead can make a compressed
+    # response larger than the original.
+    lines.append("app.add_middleware(GZipMiddleware)")
+    lines.append("")
+    # Registered last -- see _add_security_headers' own comment above for
+    # why that makes this the outermost middleware -- so the timer spans
+    # every other layer too (rate limiting, gzip compression, the
+    # endpoint itself), reporting what a real client actually
+    # experienced, not just handler time. Before this, this app gave an
+    # operator no way to see per-request latency short of instrumenting
+    # it externally (a reverse proxy's own access log, an APM agent) --
+    # every other operational signal this app exposes (uptime, task
+    # counts, rate-limit state) was already free via GET /metrics or
+    # response headers, but response latency itself had no equivalent.
+    lines.append("@app.middleware('http')")
+    lines.append("async def _add_process_time_header(request, call_next):")
+    lines.append("    start_time = time.perf_counter()")
+    lines.append("    response = await call_next(request)")
+    lines.append(
+        "    response.headers['X-Process-Time-Ms'] = "
+        "f'{(time.perf_counter() - start_time) * 1000:.2f}'"
+    )
+    lines.append("    return response")
+    lines.append("")
+    # Registered last -- outermost, wrapping X-Process-Time-Ms above --
+    # so this request's own id is stamped even on a response one of the
+    # earlier layers short-circuits (a 429 from rate limiting, a 413 from
+    # MaxRequestBodySizeMiddleware). Honors a caller-supplied X-Request-ID
+    # (e.g. from an upstream gateway that already assigns one to
+    # correlate a single logical request across several downstream
+    # services) instead of always minting a fresh one, so a trace started
+    # upstream doesn't fork into two disconnected ids the moment it
+    # reaches this app; only generates a new uuid4 when the caller didn't
+    # send one at all. Before this, correlating "which request logged
+    # this error" between a caller's own logs and this app's -- e.g. to
+    # investigate a specific failed call reported after the fact, with no
+    # other identifying information -- had no shared id to search by at
+    # all.
+    lines.append("@app.middleware('http')")
+    lines.append("async def _add_request_id_header(request, call_next):")
+    lines.append(
+        "    request_id = request.headers.get('X-Request-ID') or "
+        "str(uuid.uuid4())"
+    )
+    lines.append("    response = await call_next(request)")
+    lines.append("    response.headers['X-Request-ID'] = request_id")
+    lines.append("    return response")
+    lines.append("")
+    # Registered last -- outermost, wrapping every other middleware above
+    # (see _add_request_id_header's own comment above for why "registered
+    # last" means outermost) -- so this reads back the *final*
+    # X-Request-ID/X-Process-Time-Ms headers _add_request_id_header/
+    # _add_process_time_header already set on every response, guaranteeing
+    # "request_id"/"duration_ms" below can never drift from what a caller
+    # correlating its own logs against those exact same headers already
+    # sees, rather than this middleware re-deriving either one itself.
+    #
+    # Before this, the only per-request record this app ever produced was
+    # uvicorn's own default access log line -- free-text ("INFO:
+    # 127.0.0.1:54321 - \"POST /add HTTP/1.1\" 200 OK"), with no
+    # request_id of its own and no duration -- the opposite of what a real
+    # log-aggregation pipeline needs to index and query on. Worse,
+    # grepping `docker logs` for one specific X-Request-ID a caller
+    # already got back in a response header -- the exact scenario
+    # _add_request_id_header's own docstring above names as the reason
+    # that header exists at all -- found nothing: this app never itself
+    # logged that id anywhere, only ever handed it back in a header the
+    # caller's own tooling would have to already be capturing on its own
+    # side to use.
+    #
+    # Off by default (NOTEBOOK_API_JSON_LOGS unset/"false") -- purely
+    # additive alongside uvicorn's own access log, never a disable or
+    # replacement of it, so an existing deployment that hasn't opted in
+    # sees byte-for-byte the same stdout output as before this existed.
+    # print(..., flush=True) rather than the stdlib logging module: this
+    # app configures no logging of its own anywhere else (uvicorn
+    # configures its own independently), and PYTHONUNBUFFERED=1 (see the
+    # generated Dockerfile) already exists specifically so a print() here
+    # reaches `docker logs`/a log-aggregation pipeline in real time, not
+    # sitting in a buffer.
+    lines.append(
+        'JSON_REQUEST_LOGS = os.getenv('
+        '"NOTEBOOK_API_JSON_LOGS", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_JSON_LOGS")}"'
+        ').strip().lower() in ("true", "1", "yes", "on")'
+    )
+    lines.append("@app.middleware('http')")
+    lines.append("async def _log_request_json(request, call_next):")
+    lines.append("    response = await call_next(request)")
+    lines.append("    if JSON_REQUEST_LOGS:")
+    lines.append("        print(json.dumps({")
+    lines.append("            'timestamp': time.time(),")
+    lines.append(
+        "            'request_id': response.headers.get('X-Request-ID'),"
+    )
+    lines.append("            'method': request.method,")
+    lines.append("            'path': request.url.path,")
+    lines.append("            'status_code': response.status_code,")
+    lines.append(
+        "            'duration_ms': float("
+        "response.headers.get('X-Process-Time-Ms', '0')),"
+    )
+    lines.append("        }), flush=True)")
+    lines.append("    return response")
+    lines.append("")
+    # GET /metrics/GET /metrics/prometheus below already report this
+    # app's own *background-task* throughput (via _task_status_counts,
+    # reading TASKS) -- but neither one has ever said anything about the
+    # app's own plain HTTP traffic: how many requests it's actually
+    # served, or how many of them ended in a client (4xx) or server
+    # (5xx) error. A Prometheus instance scraping GET /metrics/prometheus
+    # (or a human reading GET /metrics) could learn "3 tasks are
+    # currently processing" but never "this app has served 40,000
+    # requests today, 200 of them 5xx" -- the single most basic question
+    # a real Prometheus/Grafana setup asks of *any* HTTP service, with no
+    # earlier commit ever adding anywhere this app actually counted a
+    # request at all, background task or not.
+    #
+    # A plain module-level dict, like TASKS/_RATE_LIMIT_WINDOWS above --
+    # updated unconditionally on every request (not gated behind an env
+    # var the way NOTEBOOK_API_JSON_LOGS is) since incrementing a handful
+    # of int/float counters is the same negligible per-request cost
+    # _task_status_counts already treats TASKS bookkeeping as, not the
+    # real work (a subprocess, a disk write, a line printed to stdout)
+    # NOTEBOOK_API_JSON_LOGS' own docstring reasons an operator might
+    # actually want an opt-out for.
+    lines.append(
+        "_HTTP_METRICS = {"
+        "'total': 0, "
+        "'status_1xx': 0, 'status_2xx': 0, 'status_3xx': 0, "
+        "'status_4xx': 0, 'status_5xx': 0, "
+        "'duration_ms_sum': 0.0"
+        "}"
+    )
+    lines.append("")
+    # Registered last -- outermost, wrapping every other middleware above
+    # (see _add_request_id_header's own comment for why "registered last"
+    # means outermost) -- so this reads back the *final* status_code and
+    # X-Process-Time-Ms an earlier layer already set, including one that
+    # short-circuits the request entirely before it ever reaches a real
+    # endpoint (a 429 from rate limiting, a 413 from
+    # MaxRequestBodySizeMiddleware): those still count as a real request
+    # this app spent real time handling, the identical "still fires on a
+    # short-circuited response" guarantee _log_request_json's own
+    # docstring above already documents for JSON access logging, just
+    # applied to this counter instead. response.status_code // 100 turns
+    # 200/201/404/500/... into the exact same "status_class" bucket a
+    # human skimming a dashboard actually reasons in, rather than one
+    # label per distinct status code, which would fragment a single
+    # meaningful signal (2xx vs 4xx vs 5xx) across dozens of near-
+    # identical series for no operational benefit.
+    lines.append("@app.middleware('http')")
+    lines.append("async def _track_http_metrics(request, call_next):")
+    lines.append("    response = await call_next(request)")
+    lines.append("    _HTTP_METRICS['total'] += 1")
+    lines.append(
+        "    _HTTP_METRICS[f'status_{response.status_code // 100}xx'] += 1"
+    )
+    lines.append(
+        "    _HTTP_METRICS['duration_ms_sum'] += float("
+        "response.headers.get('X-Process-Time-Ms', '0'))"
+    )
+    lines.append("    return response")
+    lines.append("")
+    # GET /metrics/GET /metrics/prometheus above already report this
+    # app's own background-task counts and, since _HTTP_METRICS was
+    # added, its plain HTTP request throughput -- but neither one has
+    # ever said anything about webhook delivery health. A caller relying
+    # on ?callback_url= specifically to avoid polling get_task/
+    # wait_for_task has no aggregate signal to alert on at all: the only
+    # place a delivery failure is ever recorded is that one task's own
+    # TASKS[task_id]['webhook'] field (see _run_background_task below),
+    # which nothing short of polling every single task individually would
+    # ever surface a pattern in -- "webhook delivery failure rate just
+    # spiked" is exactly the kind of question a real Prometheus/Grafana
+    # alert is built to answer, and until now this app gave it nothing to
+    # scrape for that.
+    #
+    # A plain module-level dict, like _HTTP_METRICS above -- updated
+    # unconditionally (not gated behind an env var) at every point a
+    # webhook outcome is already being recorded onto TASKS anyway, since
+    # incrementing one more int counter alongside a write this app is
+    # already doing is negligible extra cost. "delivered"/"failed" track
+    # the three automatic delivery call sites inside _run_background_task
+    # (task completed, task timed out, task raised); "redelivered"/
+    # "redelivery_failed" track redeliver_task_webhook's own manual
+    # retrigger below -- kept as a separate pair, not folded into the
+    # first two, since a caller reading GET /metrics almost certainly
+    # wants to tell "my receiver has been flaky enough that I've had to
+    # manually redeliver N times" apart from "N automatic deliveries have
+    # failed outright" -- two very different operational signals folded
+    # into one counter would obscure both.
+    lines.append(
+        "_WEBHOOK_METRICS = {"
+        "'delivered': 0, 'failed': 0, "
+        "'redelivered': 0, 'redelivery_failed': 0"
+        "}"
+    )
+    lines.append("")
+    # Simple in‑memory task registry used by background endpoints
+    lines.append("TASKS = {}")
+    # Maps a caller-supplied Idempotency-Key header to the task_id it
+    # already created. Without this, a background endpoint retried after
+    # an ambiguous connection failure (the caller's request reached this
+    # server and a task was already created and queued, but the response
+    # carrying that task_id never made it back -- the exact failure mode
+    # both generated SDK clients' own _request/requestWithRetry already
+    # retry on) submits the *same* notebook function call a second time,
+    # running whatever side effect it has (writing to a database, sending
+    # an email, charging a card) twice with no error or warning anywhere.
+    # Populated/read under the same _TASKS_ADMISSION_LOCK as TASKS itself
+    # below, and pruned in lockstep with it in _evict_expired_tasks, so it
+    # never outlives (or leaks memory past) the TASKS entries it points
+    # to.
+    lines.append("IDEMPOTENCY_KEYS = {}")
+    # A background-task submission endpoint (below) is a plain
+    # synchronous `def`, not `async def` -- FastAPI runs a synchronous
+    # endpoint in Starlette's own threadpool, not the single asyncio
+    # event loop, exactly like verify_api_key/_enforce_rate_limit already
+    # are (see _RATE_LIMIT_LOCK's own comment above for the identical
+    # reasoning). Its own admission-control sequence -- evict expired
+    # tasks, check len(TASKS) against MAX_PENDING_TASKS, then insert a
+    # new entry -- is a classic non-atomic check-then-act with no lock at
+    # all before this: two concurrent submissions can both read the same
+    # not-yet-at-capacity count on two different worker threads, both
+    # pass the check, and both insert, overshooting MAX_PENDING_TASKS by
+    # as many requests as raced through. Confirmed exploitable via a real
+    # generated app: 20 concurrent submissions (with an artificially
+    # widened race window) against MAX_PENDING_TASKS=5 all succeeded,
+    # leaving 20 entries in TASKS instead of being capped at 5 -- the
+    # exact unbounded-memory-growth failure mode this cap exists to
+    # prevent, under precisely the concurrent-burst scenario (legitimate
+    # traffic, or a caller deliberately flooding submissions) it exists
+    # to withstand. retry_task below shares this identical admission-
+    # control sequence (and so this identical lock) for the same reason.
+    lines.append("_TASKS_ADMISSION_LOCK = threading.Lock()")
+    lines.append(
+        'TASK_TTL_SECONDS = int(os.getenv('
+        '"NOTEBOOK_API_TASK_TTL_SECONDS", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_TASK_TTL_SECONDS")}"'
+        '))'
+    )
+    # _evict_expired_tasks bounds TASKS' *long-term* growth (nothing
+    # older than TASK_TTL_SECONDS survives), but a burst of background
+    # requests arriving faster than that TTL still grows TASKS without
+    # limit in the meantime -- eviction alone doesn't stop a client
+    # (malicious, or just a retry loop against a stuck deploy) from
+    # submitting far more tasks than this process could ever actually
+    # get to, exhausting memory well before any of them would expire.
+    # Matches the same NOTEBOOK_API_* convention this generated app's
+    # other limits (API_KEYS, TASK_TTL_SECONDS, MAX_REQUEST_BODY_BYTES)
+    # already follow.
+    lines.append(
+        'MAX_PENDING_TASKS = int(os.getenv('
+        '"NOTEBOOK_API_MAX_TASKS", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_MAX_TASKS")}"'
+        '))'
+    )
+    # Bounds _run_background_task's own single execution below (see its
+    # own docstring) -- 0 (the default) disables this entirely, the
+    # identical "0 means off, preserving the previous unbounded behavior"
+    # convention RATE_LIMIT_PER_MINUTE/MAX_PENDING_TASKS's own defaults
+    # already follow.
+    lines.append(
+        'TASK_EXECUTION_TIMEOUT_SECONDS = int(os.getenv('
+        '"NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS")}"'
+        '))'
+    )
+    # Bounds _deliver_task_webhook's own single delivery attempt below --
+    # a caller-supplied ?callback_url= pointing at a slow or unresponsive
+    # endpoint must never be allowed to tie up a worker thread (and, by
+    # extension, this process' limited thread pool) indefinitely.
+    lines.append(
+        'WEBHOOK_TIMEOUT_SECONDS = int(os.getenv('
+        '"NOTEBOOK_API_WEBHOOK_TIMEOUT_SECONDS", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_WEBHOOK_TIMEOUT_SECONDS")}"'
+        '))'
+    )
+    # Read by _deliver_task_webhook below to sign the webhook body with
+    # HMAC-SHA256 (the same X-Hub-Signature-256 contract GitHub/Stripe
+    # webhooks already use) -- empty (the default) sends the webhook
+    # unsigned, exactly as before this existed. A caller-supplied
+    # ?callback_url= is, by definition, a URL the caller themselves
+    # chose to receive this app's own task results at, but it's still
+    # commonly a public endpoint reachable by anyone who learns it (a
+    # webhook.site-style debugging URL, or a real endpoint whose path
+    # alone isn't a secret) -- without a signature, that endpoint's own
+    # handler has no way to tell a request that actually came from this
+    # app apart from one an attacker crafted by hand with a guessed or
+    # leaked task_id/result.
+    lines.append(
+        'WEBHOOK_SECRET = os.getenv('
+        '"NOTEBOOK_API_WEBHOOK_SECRET", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_WEBHOOK_SECRET")}"'
+        ')'
+    )
+    # Read by _deliver_task_webhook below to decide how many additional
+    # attempts a failed delivery gets -- 0 (the default) preserves the
+    # previous single-best-effort-attempt behavior exactly, the same
+    # "0 means off" convention TASK_EXECUTION_TIMEOUT_SECONDS/
+    # RATE_LIMIT_PER_MINUTE's own defaults already follow.
+    lines.append(
+        'WEBHOOK_MAX_RETRIES = int(os.getenv('
+        '"NOTEBOOK_API_WEBHOOK_MAX_RETRIES", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_WEBHOOK_MAX_RETRIES")}"'
+        '))'
+    )
+    # Read by _deliver_task_webhook below as the base delay between
+    # retries -- float, not int, so a sub-second base delay (the default,
+    # 0.5s) stays exact instead of truncating to 0.
+    lines.append(
+        'WEBHOOK_RETRY_BACKOFF_SECONDS = float(os.getenv('
+        '"NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS")}"'
+        '))'
+    )
+    lines.append(
+        '# A comma-separated list, not a single value, so a key can be'
+    )
+    lines.append(
+        '# rotated with zero downtime: add the new key alongside the old'
+    )
+    lines.append(
+        '# one, restart, let clients switch over, then remove the old key'
+    )
+    lines.append(
+        '# and restart again -- requests are never rejected mid-rotation.'
+    )
+    lines.append(
+        'API_KEYS = tuple('
+        'k.strip() for k in os.getenv('
+        '"NOTEBOOK_API_KEY", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_KEY")}"'
+        ').split(",") if k.strip()'
+        ')'
+    )
+    lines.append("API_KEY_HEADER_NAME = 'X-API-Key'")
+    lines.append("")
+    # Tracked per API key (not globally, and not per-IP): a shared global
+    # counter would let one heavy, legitimate key starve every other
+    # key's own quota, and this app has no reliable notion of client
+    # identity below the API key layer anyway (a proxy/load balancer in
+    # front of it can make every request appear to come from the same
+    # IP). API_KEYS is a small, fixed set fully known at startup, so
+    # _RATE_LIMIT_WINDOWS below never grows past len(API_KEYS) entries --
+    # unlike TASKS (which needs its own TTL-based eviction above), a
+    # matching eviction scheme isn't needed here.
+    lines.append(
+        'RATE_LIMIT_PER_MINUTE = int(os.getenv('
+        '"NOTEBOOK_API_RATE_LIMIT_PER_MINUTE", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_RATE_LIMIT_PER_MINUTE")}"'
+        '))'
+    )
+    lines.append("RATE_LIMIT_WINDOW_SECONDS = 60")
+    lines.append("_RATE_LIMIT_WINDOWS = {}")
+    # verify_api_key (below) is a plain synchronous `def`, not `async
+    # def` -- FastAPI runs a synchronous dependency in Starlette's own
+    # threadpool (run_in_threadpool), not on the single asyncio event
+    # loop, so two concurrent requests carrying the *same* API key can
+    # genuinely run _enforce_rate_limit on two different worker threads
+    # at once. Without a lock, the read-modify-write below
+    # (get-then-increment-then-store) is a classic non-atomic
+    # check-then-act race: both threads can read the same starting
+    # `count`, each increment their own local copy, and whichever writes
+    # last simply overwrites the other's update -- a lost update.
+    # Confirmed exploitable before this: 20 concurrent requests against a
+    # real generated app with RATE_LIMIT_PER_MINUTE=5 all went through
+    # (none ever saw the true, already-incremented count), and
+    # _RATE_LIMIT_WINDOWS' own final stored count was 1, not 20 -- the
+    # exact silent failure of the one control whose entire purpose is
+    # enforcing a hard cap, and precisely the scenario (a concurrent
+    # burst, whether legitimate traffic or an actual abuse attempt) a
+    # rate limiter exists to withstand. A plain threading.Lock (not an
+    # asyncio.Lock, which only ever protects against other *coroutines*
+    # on the same event loop, not concurrent OS threads) makes the whole
+    # read-modify-write atomic across threads.
+    lines.append("_RATE_LIMIT_LOCK = threading.Lock()")
+    lines.append("")
+    lines.append("def _enforce_rate_limit(api_key, response):")
+    lines.append("    # RATE_LIMIT_PER_MINUTE <= 0 (the default) means rate")
+    lines.append("    # limiting is disabled entirely -- no window is even")
+    lines.append("    # tracked, so this is a no-op on the hot path for every")
+    lines.append("    # deployment that never opts into it.")
+    lines.append("    if RATE_LIMIT_PER_MINUTE <= 0:")
+    lines.append("        return")
+    lines.append("    now = time.time()")
+    lines.append("    with _RATE_LIMIT_LOCK:")
+    lines.append(
+        "        window_start, count = "
+        "_RATE_LIMIT_WINDOWS.get(api_key, (now, 0))"
+    )
+    lines.append("        # Fixed window, not sliding: once RATE_LIMIT_WINDOW_SECONDS")
+    lines.append("        # has elapsed since this key's window opened, it resets to a")
+    lines.append("        # fresh window rather than decaying the count gradually --")
+    lines.append("        # the same lazy, no-background-thread eviction style")
+    lines.append("        # _evict_expired_tasks above already uses for TASKS.")
+    lines.append("        if now - window_start >= RATE_LIMIT_WINDOW_SECONDS:")
+    lines.append("            window_start, count = now, 0")
+    lines.append("        count += 1")
+    lines.append("        _RATE_LIMIT_WINDOWS[api_key] = (window_start, count)")
+    lines.append("    reset_at = int(window_start + RATE_LIMIT_WINDOW_SECONDS)")
+    lines.append("    remaining = max(0, RATE_LIMIT_PER_MINUTE - count)")
+    lines.append("    # Set on every rate-limited request, not just a 429 -- the")
+    lines.append("    # standard client contract (GitHub/Stripe/...) these three")
+    lines.append("    # headers follow lets a well-behaved caller see it's about to")
+    lines.append("    # be throttled (a low/zero Remaining) and back off on its own,")
+    lines.append("    # rather than the only previous signal being a 429 it's")
+    lines.append("    # already received. `response` is the actual Response FastAPI")
+    lines.append("    # is about to send back -- injecting it into this dependency")
+    lines.append("    # (see verify_api_key below) rather than building a separate")
+    lines.append("    # Response of its own is the documented way to mutate headers")
+    lines.append("    # on a request that succeeds; it plays no part when this")
+    lines.append("    # raises below; instead, the 429 branch attaches the same")
+    lines.append("    # three headers directly to the HTTPException itself.")
+    lines.append("    response.headers['X-RateLimit-Limit'] = str(RATE_LIMIT_PER_MINUTE)")
+    lines.append("    response.headers['X-RateLimit-Remaining'] = str(remaining)")
+    lines.append("    response.headers['X-RateLimit-Reset'] = str(reset_at)")
+    lines.append("    if count > RATE_LIMIT_PER_MINUTE:")
+    lines.append("        retry_after = max(")
+    lines.append("            1, int(RATE_LIMIT_WINDOW_SECONDS - (now - window_start))")
+    lines.append("        )")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=429,")
+    lines.append("            detail=(")
+    lines.append("                f'Rate limit exceeded: {RATE_LIMIT_PER_MINUTE} '")
+    lines.append("                f'requests per {RATE_LIMIT_WINDOW_SECONDS}s per API key'")
+    lines.append("            ),")
+    lines.append("            headers={")
+    lines.append("                'Retry-After': str(retry_after),")
+    lines.append("                'X-RateLimit-Limit': str(RATE_LIMIT_PER_MINUTE),")
+    lines.append("                'X-RateLimit-Remaining': '0',")
+    lines.append("                'X-RateLimit-Reset': str(reset_at),")
+    lines.append("            },")
+    lines.append("        )")
+    lines.append("")
+    lines.append("def _evict_expired_tasks():")
+    lines.append("    # TASKS is an in-memory dict with no automatic eviction anywhere")
+    lines.append("    # else in this app -- without this, a long-running deployment")
+    lines.append("    # handling steady background-task traffic accumulates one entry")
+    lines.append("    # per call forever, growing memory usage without bound. Called")
+    lines.append("    # opportunistically on every new task's creation (lazy expiry)")
+    lines.append("    # rather than a periodic background loop, so it needs no extra")
+    lines.append("    # scheduler/thread and behaves the same whether or not anything")
+    lines.append("    # ever polls /tasks.")
+    lines.append("    #")
+    lines.append("    # A task still 'processing' is never evicted here, no matter how")
+    lines.append("    # old its created_at is. TASK_TTL_SECONDS bounds how long a")
+    lines.append("    # *finished* task's own result lingers in memory -- it was never")
+    lines.append("    # meant to be a deadline on how long the underlying notebook")
+    lines.append("    # function itself is allowed to run. Confirmed exploitable before")
+    lines.append("    # this: a background task (train/process/generate/embed/scrape --")
+    lines.append("    # routinely slow, long-running work by design) that took longer")
+    lines.append("    # than TASK_TTL_SECONDS to finish had its own TASKS entry evicted")
+    lines.append("    # by this exact sweep while still running, out from under it --")
+    lines.append("    # so _run_background_task's own eventual")
+    lines.append("    # TASKS[task_id][\"status\"] = ... write (see below) raised a bare")
+    lines.append("    # KeyError, an unhandled exception in a fire-and-forget asyncio")
+    lines.append("    # task that's silently swallowed (logged, at best, as an opaque")
+    lines.append("    # 'Task exception was never retrieved'). The task's real result")
+    lines.append("    # (or error) was lost forever, and a caller polling GET")
+    lines.append("    # /tasks/{task_id} for it saw a plain 404 instead -- indistinguishable")
+    lines.append("    # from a task_id that never existed at all.")
+    lines.append("    now = time.time()")
+    # list(...) snapshot -- not a live iteration. Both call sites below
+    # run under _TASKS_ADMISSION_LOCK, but that lock only ever serializes
+    # against *each other* -- it does nothing to stop a completely
+    # unrelated concurrent mutation elsewhere (DELETE /tasks/{task_id},
+    # /tasks/cleanup, /tasks/reset, or _run_background_task's own
+    # completion write, none of which take this lock) from changing
+    # TASKS' own size while this list comprehension is mid-iteration. See
+    # list_tasks' own "tasks_snapshot" comment above for the identical
+    # "RuntimeError: dictionary changed size during iteration" this
+    # guards against.
+    lines.append("    expired_ids = [")
+    lines.append("        task_id")
+    lines.append("        for task_id, task in list(TASKS.items())")
+    lines.append("        if task.get('status') != 'processing'")
+    lines.append("        and now - task.get('created_at', now) > TASK_TTL_SECONDS")
+    lines.append("    ]")
+    lines.append("    for task_id in expired_ids:")
+    lines.append("        TASKS.pop(task_id, None)")
+    # Every IDEMPOTENCY_KEYS entry exists solely to point back at a live
+    # TASKS entry (see submit_task's own idempotency_key handling below)
+    # -- once that entry is gone, whether just evicted above or removed
+    # some other way entirely (DELETE /tasks/{task_id}, /tasks/cleanup,
+    # /tasks/reset), the mapping is dead weight that would otherwise
+    # accumulate in memory for as long as this process runs, since
+    # nothing else here ever prunes it.
+    lines.append("    stale_idempotency_keys = [")
+    lines.append("        key for key, task_id in IDEMPOTENCY_KEYS.items()")
+    lines.append("        if task_id not in TASKS")
+    lines.append("    ]")
+    lines.append("    for key in stale_idempotency_keys:")
+    lines.append("        IDEMPOTENCY_KEYS.pop(key, None)")
+    lines.append("")
+    lines.append("def verify_api_key(response: Response, x_api_key: str = Header(None)):")
+    lines.append("    # hmac.compare_digest instead of != : a plain string")
+    lines.append("    # comparison short-circuits on the first differing byte, which")
+    lines.append("    # makes response time leak how many leading characters of a")
+    lines.append("    # guess were correct -- a classic timing side-channel for")
+    lines.append("    # guessing the key byte by byte. Checked against every")
+    lines.append("    # configured key (not just the first) so rotation doesn't")
+    lines.append("    # reintroduce that leak by short-circuiting once a candidate")
+    lines.append("    # key's own length/prefix happens to fail fast.")
+    lines.append("    if x_api_key is None or not any(")
+    lines.append("        hmac.compare_digest(x_api_key, key) for key in API_KEYS")
+    lines.append("    ):")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=401,")
+    lines.append("            detail='Invalid API key'")
+    lines.append("        )")
+    lines.append("    # Rate limiting only ever applies once a request has already")
+    lines.append("    # authenticated as a specific key -- an invalid/missing key")
+    lines.append("    # already gets rejected with 401 above, before it could consume")
+    lines.append("    # any key's own quota. x_api_key itself (not a separately")
+    lines.append("    # re-matched entry from API_KEYS) is the right identity to key")
+    lines.append("    # on: the any(...) check above already proved it's exactly")
+    lines.append("    # equal to one of them.")
+    lines.append("    _enforce_rate_limit(x_api_key, response)")
+    lines.append("")
+    lines.append("from fastapi.openapi.utils import get_openapi")
+    lines.append("")
+    lines.append("def custom_openapi():")
+    lines.append("    if app.openapi_schema:")
+    lines.append("        return app.openapi_schema")
+    lines.append("")
+    # servers=app.servers -- confirmed missing before this fix: FastAPI's
+    # own app.openapi() would include the servers=[...] this app's own
+    # constructor call above passes it automatically, but app.openapi is
+    # overridden with this function entirely (see app.openapi =
+    # custom_openapi below), and get_openapi() only ever returns what a
+    # caller explicitly asks it to build. Without this line, the
+    # PUBLIC_URL constructor kwarg above was silently discarded --
+    # confirmed live: app.openapi()["servers"] was never even a key in
+    # the resulting schema, let alone reflecting PUBLIC_URL -- so every
+    # compiled app's own /docs (Swagger UI) had no configured servers
+    # entry at all, no matter what NOTEBOOK_API_PUBLIC_URL was set to.
+    lines.append("    openapi_schema = get_openapi(")
+    lines.append("        title=app.title,")
+    lines.append("        version=app.version,")
+    lines.append("        description=app.description,")
+    lines.append("        routes=app.routes,")
+    lines.append("        servers=app.servers,")
+    lines.append("    )")
+    lines.append("")
+    lines.append("    openapi_schema.setdefault('components', {})")
+    lines.append("    openapi_schema['components'].setdefault('securitySchemes', {})")
+    lines.append("")
+    lines.append("    openapi_schema['components']['securitySchemes']['ApiKeyAuth'] = {")
+    lines.append("        'type': 'apiKey',")
+    lines.append("        'in': 'header',")
+    lines.append("        'name': API_KEY_HEADER_NAME")
+    lines.append("    }")
+    lines.append("")
+    # get_openapi() above silently drops any None-valued key from a
+    # model's own "example" (set via model_config['json_schema_extra']
+    # below, on every generated {Pascal}Request class) while rebuilding
+    # this served schema -- confirmed exploitable: BaseModel.
+    # model_json_schema() on the exact same model correctly keeps
+    # {"name": None, "age": 5}, but this schema's own components/
+    # schemas/{Pascal}Request/example, reached only through get_openapi()
+    # (a FastAPI utility, not this project's own code), silently comes
+    # back as {"age": 5} -- the "name" key is gone entirely. This
+    # defeats generate_example_payload's own "Optional[X] = None keeps
+    # its real declared default, not a generic placeholder" fix
+    # (backend/parser/ast_parser.py): the example is computed correctly
+    # and embedded correctly in this very model's own json_schema_extra,
+    # but the schema anyone actually reads -- /docs (Swagger UI),
+    # /openapi.json, or any third-party tool generating a client from
+    # it -- never sees the field this example most needed to show a
+    # real value for. Restored here by re-copying each request model's
+    # own already-correct example back over whatever get_openapi() built
+    # for it, the same "the framework silently drops/reshapes something
+    # this project's own code already got right, so compensate for it
+    # right where the schema is finalized" pattern the "servers=" fix
+    # just above already established for a different FastAPI gap.
+    lines.append("    for _model_name, _model_schema in (")
+    lines.append("        openapi_schema.get('components', {})")
+    lines.append("        .get('schemas', {}).items()")
+    lines.append("    ):")
+    lines.append("        _model_cls = globals().get(_model_name)")
+    lines.append(
+        "        if not (isinstance(_model_cls, type) "
+        "and issubclass(_model_cls, BaseModel)):"
+    )
+    lines.append("            continue")
+    lines.append("")
+    lines.append("        _example = (")
+    lines.append("            getattr(_model_cls, 'model_config', {})")
+    lines.append("            .get('json_schema_extra', {})")
+    lines.append("            .get('example')")
+    lines.append("        )")
+    lines.append("        if _example is not None:")
+    lines.append("            _model_schema['example'] = _example")
+    lines.append("")
+    # The identical get_openapi() stripping above, one level down: not
+    # just a model's own top-level "example", but every individual
+    # field's own "default" whose real, declared value is None.
+    # Confirmed exploitable via the exact same model: GreetRequest.
+    # model_json_schema() (pure Pydantic) correctly gives "name" a
+    # "default": null entry (Optional[str] = None is very much a real,
+    # optional field with a real default, the same as any other) -- but
+    # this schema's own properties/name never got a "default" key at
+    # all, having gone through get_openapi() instead. A schema reader
+    # can still tell the field is optional from this model's own
+    # "required" list either way, but loses the field's own actual
+    # fallback value entirely -- the identical "the example/default this
+    # project's own generated model already gets right is silently
+    # discarded the moment anyone reads the served schema instead of the
+    # model class directly" gap the "example" restoration just above
+    # closes, just for a field's own "default" instead of the model's
+    # own "example". model_fields (not model_json_schema() a second
+    # time) is used here since it's a direct, real Python object -- the
+    # exact FieldInfo this model class was actually built from -- rather
+    # than re-deriving the same value through Pydantic's own schema
+    # builder a second time only to risk the identical loss again.
+    lines.append("        for _field_name, _field_info in (")
+    lines.append("            _model_cls.model_fields.items()")
+    lines.append("        ):")
+    lines.append("            if _field_info.is_required():")
+    lines.append("                continue")
+    lines.append(
+        "            _prop_schema = ("
+        "_model_schema.get('properties', {}).get(_field_name)"
+        ")"
+    )
+    lines.append(
+        "            if _prop_schema is not None "
+        "and 'default' not in _prop_schema:"
+    )
+    lines.append(
+        "                _prop_schema['default'] = _field_info.default"
+    )
+    lines.append("")
+    # The identical get_openapi() stripping above, for the *other* place
+    # every generated endpoint's own example ever lives -- a synchronous
+    # endpoint's own responses={200: {'content': {'application/json':
+    # {'example': ...}}}, ...} kwarg (see sync_responses/task_responses
+    # below), passed straight to @app.{method}(...) rather than through
+    # a Pydantic model's own json_schema_extra at all. Confirmed
+    # exploitable the identical way: `def maybe_get(x: int): return None`
+    # (any function with no return annotation, or one that can genuinely
+    # return None, an extremely common real-world shape) has its own
+    # generated source correctly carrying {'result': None} as this
+    # response's example -- but the served schema's own paths/
+    # '/maybe_get'/post/responses/'200'/content/'application/json'/
+    # example came back as {}, the single key's own None value stripped
+    # until nothing was left at all. Every route FastAPI itself
+    # constructs already keeps the exact, unmodified `responses=` dict
+    # this project's own code passed it, unaffected by get_openapi()'s
+    # own rebuild -- accessible here as route.responses -- so each
+    # status code's own real example is restored from there instead of
+    # trusting whatever get_openapi() reconstructed, the identical
+    # "the framework already has this right on the route object itself,
+    # so read it back from there rather than recomputing or trusting the
+    # schema builder's own rebuild" approach the model-schema restoration
+    # just above takes.
+    lines.append("    for _route in app.routes:")
+    lines.append("        _route_responses = getattr(_route, 'responses', None)")
+    lines.append("        if not _route_responses:")
+    lines.append("            continue")
+    lines.append(
+        "        _path_item = openapi_schema.get('paths', {}).get(_route.path, {})"
+    )
+    lines.append("        for _method in getattr(_route, 'methods', None) or ():")
+    lines.append("            _operation = _path_item.get(_method.lower())")
+    lines.append("            if not _operation:")
+    lines.append("                continue")
+    lines.append(
+        "            for _status_code, _response_spec in _route_responses.items():"
+    )
+    lines.append(
+        "                _original_content = ("
+    )
+    lines.append(
+        "                    (_response_spec.get('content') or {})"
+    )
+    lines.append(
+        "                    .get('application/json', {})"
+    )
+    lines.append("                )")
+    lines.append("                if 'example' not in _original_content:")
+    lines.append("                    continue")
+    lines.append(
+        "                _served_response = ("
+    )
+    lines.append(
+        "                    _operation.get('responses', {}).get(str(_status_code))"
+    )
+    lines.append("                )")
+    lines.append("                if _served_response is None:")
+    lines.append("                    continue")
+    lines.append(
+        "                _served_response.setdefault("
+        "'content', {}).setdefault('application/json', {})["
+        "'example'] = _original_content['example']"
+    )
+    lines.append("")
+    lines.append("    app.openapi_schema = openapi_schema")
+    lines.append("    return app.openapi_schema")
+    lines.append("")
+    lines.append("app.openapi = custom_openapi")
+    lines.append("")
+    lines.append("START_TIME = time.time()")
+    lines.append(
+        "GENERATED_AT = datetime.utcnow().isoformat() + 'Z'"
+    )
+    lines.append(
+        "PYTHON_VERSION = sys.version.split()[0]"
+    )
+    lines.append(
+        f"SOURCE_NOTEBOOK_SHA256 = {source_notebook_sha256!r}"
+    )
+    lines.append(
+        f"NOTEBOOK_TO_API_VERSION = {notebook_to_api_version!r}"
+    )
+    lines.append("")
+    protected_endpoint_count = len(functions)
+    endpoint_list = [
+        f"/{func['name']}"
+        for func in functions
+    ]
+    total_generated_endpoint_count = len(endpoint_list)
+    background_endpoint_count = sum(
+        1
+        for func in functions
+        if resolve_is_background(func["name"], background_overrides)
+    )
+    lines.append("# Public infrastructure endpoints")
+    lines.append("@app.get('/')")
+    lines.append("def root():")
+    lines.append("    return {")
+    lines.append("        'service': 'Notebook-to-API Generated Service',")
+    lines.append("        'generator': 'notebook-to-api',")
+    lines.append("        'generator_version': NOTEBOOK_TO_API_VERSION,")
+    lines.append(
+        "        'generated_at': GENERATED_AT,"
+    )
+    lines.append(
+        "        'python_version': PYTHON_VERSION,"
+    )
+
+    lines.append(
+        "        'framework': 'FastAPI',"
+    )
+    lines.append(
+        "        'background_task_support': True,"
+    )
+
+    lines.append(
+        f"        'background_endpoint_count': {background_endpoint_count},"
+    )
+    lines.append(
+        "        'available_features': ["
+    )
+
+    lines.append(
+        "            'authentication',"
+    )
+
+    lines.append(
+        "            'background_tasks',"
+    )
+
+    lines.append(
+        "            'openapi_docs',"
+    )
+
+    lines.append(
+        "            'metrics',"
+    )
+
+    lines.append(
+        "            'task_monitoring',"
+    )
+
+    lines.append(
+        "            'health_checks'"
+    )
+
+    lines.append(
+        "        ],"
+    )
+    lines.append("        'documentation': {")
+    lines.append("            'swagger': '/docs',")
+    lines.append("            'openapi': '/openapi.json',")
+    lines.append("            'redoc': '/redoc'")
+    lines.append("        },")
+    lines.append("        'operations': {")
+    lines.append("            'health': '/health',")
+    lines.append("            'ready': '/ready',")
+    lines.append("            'info': '/info',")
+    lines.append("            'config': '/config',")
+    lines.append("            'metrics': '/metrics',")
+    lines.append("            'uptime': '/uptime'")
+    lines.append("        },")
+    lines.append("        'task_management': {")
+    lines.append("            'list': '/tasks',")
+    lines.append("            'metrics': '/metrics',")
+    lines.append("            'cleanup': '/tasks/cleanup',")
+    lines.append("            'reset': '/tasks/reset'")
+    lines.append("        },")
+    lines.append("        'authentication': {")
+    lines.append("            'status': '/auth/status',")
+    lines.append("            'info': '/auth/info',")
+    lines.append("            'validate': '/auth/validate'")
+    lines.append("        },")
+    lines.append(
+        f"        'endpoint_count': {total_generated_endpoint_count},"
+    )
+    lines.append(
+        f"        'protected_endpoints': {protected_endpoint_count},"
+    )
+
+    lines.append(
+        f"        'sample_endpoints': {repr(endpoint_list[:10])}"
+    )
+    lines.append("    }")
+    lines.append("")
+    lines.append("@app.get('/health')")
+    lines.append("def health_check():")
+    lines.append("    return {'status': 'healthy'}")
+    lines.append("")
+    lines.append("@app.get('/ready')")
+    lines.append("def readiness_check():")
+
+    lines.append("    return {")
+    lines.append("        'status': 'ready',")
+    lines.append("        'tasks_registered': len(TASKS)")
+    lines.append("    }")
+
+    lines.append("")
+    lines.append("@app.get('/auth/status')")
+    lines.append("def auth_status():")
+
+    lines.append("    return {")
+    lines.append("        'authentication': 'enabled',")
+    lines.append("        'api_key_configured': bool(API_KEYS)")
+    lines.append("    }")
+
+    lines.append("")
+    lines.append("@app.get('/auth/info')")
+    lines.append("def auth_info():")
+
+    lines.append("    return {")
+    lines.append("        'authentication': 'api_key',")
+    lines.append("        'header': API_KEY_HEADER_NAME,")
+    lines.append("        'environment_variable': 'NOTEBOOK_API_KEY',")
+    lines.append("        'rate_limiting': RATE_LIMIT_PER_MINUTE > 0,")
+    lines.append("        'rate_limit_per_minute': RATE_LIMIT_PER_MINUTE or None,")
+    lines.append("        'key_rotation': True,")
+    lines.append("        'configured_keys': len(API_KEYS),")
+    lines.append(
+        f"        'protected_endpoints': {protected_endpoint_count}"
+    )
+    lines.append("    }")
+
+    lines.append("")
+    lines.append("@app.get('/auth/validate')")
+    lines.append("def validate_auth(_: None = Depends(verify_api_key)):")
+
+    lines.append("    return {")
+    lines.append("        'authenticated': True")
+    lines.append("    }")
+
+    lines.append("")
+    lines.append("@app.get('/info')")
+    lines.append("def service_info():")
+    lines.append("    return {")
+    lines.append('        "service": "Notebook-to-API Generated Service",')
+    lines.append('        "version": NOTEBOOK_TO_API_VERSION,')
+    lines.append('        "status": "running",')
+    lines.append(f'        "endpoints": {repr(endpoint_list)},')
+    lines.append(f'        "endpoint_count": {len(endpoint_list)},')
+    lines.append(f'        "background_endpoint_count": {background_endpoint_count},')
+    lines.append('        "source_notebook_sha256": SOURCE_NOTEBOOK_SHA256,')
+    lines.append('        "authentication": {')
+    lines.append('            "enabled": True,')
+    lines.append('            "type": "api_key"')
+    lines.append('        }')
+    lines.append("    }")
+    lines.append("")
+    # Every NOTEBOOK_API_* limit this app enforces (MAX_REQUEST_BODY_BYTES,
+    # TASK_TTL_SECONDS, MAX_PENDING_TASKS, RATE_LIMIT_PER_MINUTE,
+    # ALLOWED_ORIGINS, DISABLE_DOCS, PUBLIC_URL) was previously only
+    # discoverable by reading the deployment's own environment directly --
+    # shell access to the container, or knowledge of what was passed to
+    # `docker run -e ...` -- with /auth/info's own "rate_limiting"/
+    # "rate_limit_per_minute" the sole exception. An operator (or a
+    # caller building a client that wants to size its own retries/backoff
+    # against MAX_REQUEST_BODY_BYTES/RATE_LIMIT_PER_MINUTE without a
+    # separate 413/429 round trip first) had no way to just ask the
+    # running app what it's actually configured with -- the same gap GET
+    # /api/config already closes for this dashboard's own configuration
+    # (see routes/upload.py), just never given an equivalent here. No
+    # secrets here (API_KEYS' own values are deliberately never
+    # returned), so -- like /info/auth/status/auth/info above -- this
+    # needs no authentication of its own.
+    lines.append("@app.get('/config')")
+    lines.append("def service_config():")
+    lines.append("    return {")
+    lines.append("        'max_request_body_bytes': MAX_REQUEST_BODY_BYTES,")
+    lines.append("        'task_ttl_seconds': TASK_TTL_SECONDS,")
+    lines.append("        'max_pending_tasks': MAX_PENDING_TASKS,")
+    lines.append(
+        "        'task_execution_timeout_seconds': "
+        "TASK_EXECUTION_TIMEOUT_SECONDS or None,"
+    )
+    lines.append("        'webhook_timeout_seconds': WEBHOOK_TIMEOUT_SECONDS,")
+    lines.append("        'webhook_signing_enabled': bool(WEBHOOK_SECRET),")
+    lines.append("        'webhook_max_retries': WEBHOOK_MAX_RETRIES,")
+    lines.append(
+        "        'webhook_retry_backoff_seconds': WEBHOOK_RETRY_BACKOFF_SECONDS,"
+    )
+    lines.append("        'rate_limit_per_minute': RATE_LIMIT_PER_MINUTE or None,")
+    lines.append("        'allowed_origins': ALLOWED_ORIGINS,")
+    lines.append("        'disable_docs': DISABLE_DOCS,")
+    lines.append("        'public_url': PUBLIC_URL,")
+    lines.append("        'json_logs_enabled': JSON_REQUEST_LOGS,")
+    lines.append("    }")
+    lines.append("")
+    lines.append("@app.get('/tasks')")
+    lines.append("def list_tasks(")
+    lines.append("    status: Optional[str] = None,")
+    lines.append("    webhook_delivery_failed: Optional[bool] = None,")
+    lines.append("    limit: int = Query(default=100, ge=1, le=1000),")
+    lines.append("    offset: int = Query(default=0, ge=0),")
+    lines.append("    _: None = Depends(verify_api_key),")
+    lines.append("):")
+
+    lines.append("    valid_statuses = ('processing', 'completed', 'failed')")
+    lines.append("    if status is not None and status not in valid_statuses:")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=400,")
+    lines.append(
+        "            detail=f\"Invalid status '{status}'; must be one of: "
+        "{', '.join(valid_statuses)}\""
+    )
+    lines.append("        )")
+    lines.append("")
+
+    # A single snapshot -- not five separate live iterations of TASKS
+    # below -- for two reasons. First, thread safety: this endpoint is a
+    # plain synchronous `def`, run in Starlette's own threadpool, while a
+    # background task's own eventual completion (_run_background_task) or
+    # a concurrent submission's own admission-controlled insert
+    # (_TASKS_ADMISSION_LOCK above) can mutate TASKS -- add or remove a
+    # key -- from a different thread/the event loop at the same moment.
+    # Iterating a dict directly while another thread changes its *size*
+    # raises "RuntimeError: dictionary changed size during iteration" in
+    # CPython; confirmed exploitable before this fix, with a real
+    # concurrent TASKS mutation racing a live `for ... in TASKS.items()`.
+    # list(TASKS.items()) itself never releases the GIL mid-conversion,
+    # so this one line is atomic with respect to any other thread.
+    # Second, consistency: five separate live passes over a *changing*
+    # TASKS could each see a different, still-changing state -- a task
+    # completing between the "completed_tasks" sum and "matching_items"
+    # below could make the two disagree about that exact task, even
+    # though this is one nominally-single response. A single snapshot up
+    # front means every count and every returned task below describes
+    # the identical instant.
+    lines.append("    tasks_snapshot = list(TASKS.items())")
+    lines.append("")
+
+    lines.append("    completed_tasks = sum(")
+    lines.append("        1")
+    lines.append("        for _, task in tasks_snapshot")
+    lines.append("        if task.get('status') == 'completed'")
+    lines.append("    )")
+
+    lines.append("    failed_tasks = sum(")
+    lines.append("        1")
+    lines.append("        for _, task in tasks_snapshot")
+    lines.append("        if task.get('status') == 'failed'")
+    lines.append("    )")
+
+    lines.append("    processing_tasks = sum(")
+    lines.append("        1")
+    lines.append("        for _, task in tasks_snapshot")
+    lines.append("        if task.get('status') == 'processing'")
+    lines.append("    )")
+
+    # Unconditional -- like completed_tasks/failed_tasks/processing_tasks
+    # above -- so a caller can see "how many tasks currently have a failed
+    # webhook" without first knowing to pass webhook_delivery_failed=true
+    # just to get a count. Distinct from _WEBHOOK_METRICS' own aggregate
+    # delivered/failed counters (GET /metrics): those tally every delivery
+    # *attempt* ever made, including ones long since redelivered
+    # successfully and no longer reflect any task's own *current* state;
+    # this instead reflects exactly how many tasks, right now, still have
+    # an undelivered webhook worth investigating or redelivering.
+    lines.append("    webhook_delivery_failed_tasks = sum(")
+    lines.append("        1")
+    lines.append("        for _, task in tasks_snapshot")
+    lines.append("        if task.get('webhook', {}).get('delivered') is False")
+    lines.append("    )")
+
+    # Before this, a caller who'd just learned from GET /metrics that N
+    # automatic webhook deliveries have failed (see _WEBHOOK_METRICS) had
+    # no way to find out *which* tasks those were short of fetching every
+    # task via GET /tasks and inspecting each one's own 'webhook' field by
+    # hand -- there was no way to ask this endpoint for just the ones
+    # still needing a POST /tasks/{task_id}/redeliver-webhook. True
+    # narrows to a task whose most recent delivery attempt (automatic or a
+    # prior manual redelivery alike) did not succeed; False narrows to one
+    # that did. A task with no 'webhook' field at all (no callback_url was
+    # ever given) matches neither -- webhook_delivery_failed is a question
+    # about delivery outcome, not something either value can meaningfully
+    # answer for a task that never attempted one. Composes with status
+    # exactly like every other filter here already does.
+    lines.append("    matching_items = [")
+    lines.append("        (task_id, task)")
+    lines.append("        for task_id, task in tasks_snapshot")
+    lines.append("        if (status is None or task.get('status') == status)")
+    lines.append("        and (")
+    lines.append("            webhook_delivery_failed is None")
+    lines.append("            or task.get('webhook', {}).get('delivered')")
+    lines.append("            == (not webhook_delivery_failed)")
+    lines.append("        )")
+    lines.append("    ]")
+    lines.append(
+        "    matching_items.sort("
+        "key=lambda item: item[1].get('created_at', 0), reverse=True)"
+    )
+    lines.append("    page_items = matching_items[offset:offset + limit]")
+
+    lines.append("    return {")
+    lines.append("        'active_tasks': len(TASKS),")
+    lines.append("        'processing_tasks': processing_tasks,")
+    lines.append("        'completed_tasks': completed_tasks,")
+    lines.append("        'failed_tasks': failed_tasks,")
+    lines.append(
+        "        'webhook_delivery_failed_tasks': webhook_delivery_failed_tasks,"
+    )
+    lines.append("        'matching_tasks': len(matching_items),")
+    lines.append("        'limit': limit,")
+    lines.append("        'offset': offset,")
+    # '_replay' (a failed background task's own recorded function
+    # name/args/kwargs, written below so POST /tasks/{task_id}/retry can
+    # later re-execute it) is internal bookkeeping, not part of this
+    # endpoint's own public task shape -- it can hold an arbitrary
+    # notebook-supplied value (whatever a request model field's real type
+    # is, not necessarily JSON-safe on its own), and was never meant to be
+    # inspected by a caller polling GET /tasks the way 'status'/'result'/
+    # 'webhook' already are. Stripped the same way from GET
+    # /tasks/{task_id} below, so a task's shape is identical whether seen
+    # through this endpoint or that one.
+    lines.append("        'tasks': {")
+    lines.append("            task_id: {")
+    lines.append("                k: v for k, v in task.items() if k != '_replay'")
+    lines.append("            }")
+    lines.append("            for task_id, task in page_items")
+    lines.append("        }")
+    lines.append("    }")
+    lines.append("")
+    lines.append("@app.get('/tasks/{task_id}')")
+    lines.append("def get_task(task_id: str, _: None = Depends(verify_api_key)):")
+    lines.append("    task = TASKS.get(task_id)")
+    lines.append("")
+    lines.append("    if not task:")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=404,")
+    lines.append("            detail=f'Task {task_id} not found'")
+    lines.append("        )")
+    lines.append("")
+    # See the identical '_replay' filtering comment on GET /tasks' own
+    # 'tasks' field above -- this is that same internal field, stripped
+    # here too so a caller sees the same task shape either way.
+    lines.append(
+        "    return {k: v for k, v in task.items() if k != '_replay'}"
+    )
+    lines.append("")
+    lines.append("@app.delete('/tasks/completed')")
+    lines.append("def delete_completed_tasks(_: None = Depends(verify_api_key)):")
+
+    # list(...) snapshot -- see list_tasks' own "tasks_snapshot" comment
+    # above for why a live TASKS.items() iteration here can raise
+    # "RuntimeError: dictionary changed size during iteration" the
+    # moment a concurrent submission/completion/eviction changes TASKS'
+    # own size mid-iteration.
+    lines.append("    completed_task_ids = [")
+    lines.append("        task_id")
+    lines.append("        for task_id, task in list(TASKS.items())")
+    lines.append("        if task.get('status') == 'completed'")
+    lines.append("    ]")
+
+    lines.append("    for task_id in completed_task_ids:")
+    lines.append("        TASKS.pop(task_id, None)")
+
+    lines.append("    return {")
+    lines.append("        'deleted': len(completed_task_ids),")
+    lines.append("        'remaining_tasks': len(TASKS)")
+    lines.append("    }")
+
+    lines.append("")
+    lines.append("@app.delete('/tasks/failed')")
+    lines.append("def delete_failed_tasks(_: None = Depends(verify_api_key)):")
+
+    # list(...) snapshot -- same "RuntimeError: dictionary changed size
+    # during iteration" reasoning as delete_completed_tasks just above.
+    lines.append("    failed_task_ids = [")
+    lines.append("        task_id")
+    lines.append("        for task_id, task in list(TASKS.items())")
+    lines.append("        if task.get('status') == 'failed'")
+    lines.append("    ]")
+
+    lines.append("    for task_id in failed_task_ids:")
+    lines.append("        TASKS.pop(task_id, None)")
+
+    lines.append("    return {")
+    lines.append("        'deleted': len(failed_task_ids),")
+    lines.append("        'remaining_tasks': len(TASKS)")
+    lines.append("    }")
+
+    lines.append("")
+    lines.append("@app.post('/tasks/cleanup')")
+    lines.append("def cleanup_tasks(_: None = Depends(verify_api_key)):")
+
+    lines.append("    completed_deleted = 0")
+    lines.append("    failed_deleted = 0")
+
+    lines.append("    task_ids = list(TASKS.keys())")
+
+    lines.append("    for task_id in task_ids:")
+    lines.append("        status = TASKS[task_id].get('status')")
+
+    lines.append("        if status == 'completed':")
+    lines.append("            TASKS.pop(task_id, None)")
+    lines.append("            completed_deleted += 1")
+
+    lines.append("        elif status == 'failed':")
+    lines.append("            TASKS.pop(task_id, None)")
+    lines.append("            failed_deleted += 1")
+
+    lines.append("    return {")
+    lines.append("        'completed_deleted': completed_deleted,")
+    lines.append("        'failed_deleted': failed_deleted,")
+    lines.append("        'remaining_tasks': len(TASKS)")
+    lines.append("    }")
+
+    lines.append("")
+    # Shared by GET /metrics and GET /metrics/prometheus below, so the two
+    # can never report different counts for the exact same underlying
+    # TASKS state -- before this existed, /metrics computed this inline,
+    # and a second endpoint reporting the identical breakdown in a
+    # different format would otherwise have had to duplicate (and could
+    # drift from) the exact same three sum()s.
+    lines.append("def _task_status_counts():")
+    # A single snapshot, not three separate live iterations -- the same
+    # "RuntimeError: dictionary changed size during iteration" this
+    # function is otherwise exposed to (see list_tasks' own
+    # "tasks_snapshot" comment above), plus the identical "three
+    # separate passes over a *changing* TASKS could disagree with each
+    # other" consistency concern.
+    lines.append("    tasks_snapshot = list(TASKS.values())")
+    lines.append("    processing = sum(")
+    lines.append("        1")
+    lines.append("        for task in tasks_snapshot")
+    lines.append("        if task.get('status') == 'processing'")
+    lines.append("    )")
+
+    lines.append("    completed = sum(")
+    lines.append("        1")
+    lines.append("        for task in tasks_snapshot")
+    lines.append("        if task.get('status') == 'completed'")
+    lines.append("    )")
+
+    lines.append("    failed = sum(")
+    lines.append("        1")
+    lines.append("        for task in tasks_snapshot")
+    lines.append("        if task.get('status') == 'failed'")
+    lines.append("    )")
+
+    lines.append("    return processing, completed, failed")
+
+    lines.append("")
+    lines.append("@app.get('/metrics')")
+    lines.append("def metrics():")
+
+    lines.append("    processing, completed, failed = _task_status_counts()")
+
+    lines.append("    return {")
+    lines.append("        'total_tasks': len(TASKS),")
+    lines.append("        'processing': processing,")
+    lines.append("        'completed': completed,")
+    lines.append("        'failed': failed,")
+    # Purely additive alongside the four task fields above -- an existing
+    # consumer reading only "total_tasks"/"processing"/"completed"/
+    # "failed" (this endpoint's own shape since before this feature)
+    # keeps working unchanged; a new one gets this app's own HTTP
+    # request throughput (see _HTTP_METRICS' own comment above) without
+    # a second, separate call.
+    lines.append("        'http_requests_total': _HTTP_METRICS['total'],")
+    lines.append("        'http_requests_by_status_class': {")
+    lines.append("            '1xx': _HTTP_METRICS['status_1xx'],")
+    lines.append("            '2xx': _HTTP_METRICS['status_2xx'],")
+    lines.append("            '3xx': _HTTP_METRICS['status_3xx'],")
+    lines.append("            '4xx': _HTTP_METRICS['status_4xx'],")
+    lines.append("            '5xx': _HTTP_METRICS['status_5xx'],")
+    lines.append("        },")
+    lines.append(
+        "        'http_request_duration_ms_sum': "
+        "_HTTP_METRICS['duration_ms_sum'],"
+    )
+    # Purely additive alongside every field above, mirroring the same
+    # "existing consumer keeps working unchanged" guarantee
+    # http_requests_total's own addition already gives -- webhook
+    # delivery/redelivery health (see _WEBHOOK_METRICS' own definition
+    # above for why "delivered"/"failed" and "redelivered"/
+    # "redelivery_failed" are reported as two separate pairs rather than
+    # one shared counter).
+    lines.append("        'webhook_deliveries_by_outcome': {")
+    lines.append("            'delivered': _WEBHOOK_METRICS['delivered'],")
+    lines.append("            'failed': _WEBHOOK_METRICS['failed'],")
+    lines.append("        },")
+    lines.append("        'webhook_redeliveries_by_outcome': {")
+    lines.append("            'delivered': _WEBHOOK_METRICS['redelivered'],")
+    lines.append("            'failed': _WEBHOOK_METRICS['redelivery_failed'],")
+    lines.append("        },")
+    lines.append("    }")
+
+    # GET /metrics above has served this dashboard-shaped JSON summary
+    # since before this endpoint existed -- changing its own response
+    # shape now would break any existing consumer already parsing it.
+    # But it's exactly the wrong shape for the far more common real
+    # consumer of a "/metrics" path by convention: Prometheus (and
+    # anything speaking its own text exposition format -- Grafana Agent,
+    # VictoriaMetrics, ...) expects "# HELP"/"# TYPE" comments followed by
+    # "metric_name value" lines, not a JSON object, and has no way to
+    # scrape this app's own task counts without a separate translation
+    # sidecar in between. A new, purely additive path -- not a query
+    # param or Accept-header branch on GET /metrics itself, which would
+    # risk a real scraper's request somehow landing on the JSON branch
+    # instead -- lets a real Prometheus config point "metrics_path" here
+    # with a one-line scrape-config change, no sidecar required, while
+    # leaving GET /metrics itself completely unchanged for whatever
+    # already depends on its JSON shape today.
+    #
+    # No Depends(verify_api_key), matching GET /metrics/GET /health
+    # above: a Prometheus scrape target is configured with a fixed URL a
+    # scraper hits unattended on a timer, and Prometheus's own scrape
+    # config supports only a handful of fixed auth schemes (basic auth, a
+    # bearer token) -- not this app's own X-API-Key header -- so requiring
+    # it here would make this endpoint unreachable from a real Prometheus
+    # instance's default configuration.
+    lines.append("")
+    lines.append("@app.get('/metrics/prometheus')")
+    lines.append("def metrics_prometheus():")
+    lines.append("    processing, completed, failed = _task_status_counts()")
+    lines.append("    uptime_seconds = time.time() - START_TIME")
+    lines.append("    body = (")
+    lines.append(
+        "        '# HELP notebook_api_tasks_total Total number of "
+        "background tasks currently tracked, across every status.\\n'"
+    )
+    lines.append("        '# TYPE notebook_api_tasks_total gauge\\n'")
+    lines.append("        f'notebook_api_tasks_total {len(TASKS)}\\n'")
+    lines.append(
+        "        '# HELP notebook_api_tasks_processing Number of "
+        "background tasks currently processing.\\n'"
+    )
+    lines.append("        '# TYPE notebook_api_tasks_processing gauge\\n'")
+    lines.append("        f'notebook_api_tasks_processing {processing}\\n'")
+    lines.append(
+        "        '# HELP notebook_api_tasks_completed Number of "
+        "background tasks that completed successfully.\\n'"
+    )
+    lines.append("        '# TYPE notebook_api_tasks_completed gauge\\n'")
+    lines.append("        f'notebook_api_tasks_completed {completed}\\n'")
+    lines.append(
+        "        '# HELP notebook_api_tasks_failed Number of background "
+        "tasks that failed.\\n'"
+    )
+    lines.append("        '# TYPE notebook_api_tasks_failed gauge\\n'")
+    lines.append("        f'notebook_api_tasks_failed {failed}\\n'")
+    lines.append(
+        "        '# HELP notebook_api_uptime_seconds Seconds since this "
+        "process started.\\n'"
+    )
+    lines.append("        '# TYPE notebook_api_uptime_seconds counter\\n'")
+    lines.append("        f'notebook_api_uptime_seconds {uptime_seconds}\\n'")
+    # A "status_class" label rather than one metric per distinct status
+    # code -- 200/201/404/500/... collapse into the same "2xx"/"4xx"/
+    # "5xx" bucket a human skimming a dashboard already reasons in (see
+    # _track_http_metrics' own comment above), the same choice
+    # deliberately made there. Always emits all five buckets, even ones
+    # still at 0 -- like notebook_api_tasks_processing/_completed/_failed
+    # above, a series that only appears once its count first goes
+    # non-zero would leave a gap at the start of any graph plotting it
+    # from this app's own startup, rather than a flat, honest 0.
+    lines.append(
+        "        '# HELP notebook_api_http_requests_total Total number "
+        "of HTTP requests this app has handled, by response status "
+        "class.\\n'"
+    )
+    lines.append(
+        "        '# TYPE notebook_api_http_requests_total counter\\n'"
+    )
+    lines.append("        f'notebook_api_http_requests_total"
+                  "{{status_class=\"1xx\"}} "
+                  "{_HTTP_METRICS[\"status_1xx\"]}\\n'")
+    lines.append("        f'notebook_api_http_requests_total"
+                  "{{status_class=\"2xx\"}} "
+                  "{_HTTP_METRICS[\"status_2xx\"]}\\n'")
+    lines.append("        f'notebook_api_http_requests_total"
+                  "{{status_class=\"3xx\"}} "
+                  "{_HTTP_METRICS[\"status_3xx\"]}\\n'")
+    lines.append("        f'notebook_api_http_requests_total"
+                  "{{status_class=\"4xx\"}} "
+                  "{_HTTP_METRICS[\"status_4xx\"]}\\n'")
+    lines.append("        f'notebook_api_http_requests_total"
+                  "{{status_class=\"5xx\"}} "
+                  "{_HTTP_METRICS[\"status_5xx\"]}\\n'")
+    # A counter, not a Prometheus Summary/Histogram (which this hand-
+    # rolled exposition writer -- no prometheus_client dependency
+    # anywhere in this generated app -- has no machinery to emit
+    # quantiles/buckets for): the "_sum"/"_count" naming convention real
+    # Prometheus Summary types already use, so an operator graphing
+    # average per-request latency over a window can still do so with
+    # rate(notebook_api_http_request_duration_ms_sum[5m]) /
+    # rate(notebook_api_http_requests_total{status_class=~".."}[5m]) (or
+    # any other status_class-aggregated total), the identical query
+    # shape a real Summary's own "_sum"/"_count" pair would support.
+    lines.append(
+        "        '# HELP notebook_api_http_request_duration_ms_sum "
+        "Total accumulated wall-clock time, in milliseconds, spent "
+        "handling every HTTP request this app has served.\\n'"
+    )
+    lines.append(
+        "        '# TYPE notebook_api_http_request_duration_ms_sum "
+        "counter\\n'"
+    )
+    lines.append(
+        "        f'notebook_api_http_request_duration_ms_sum "
+        "{_HTTP_METRICS[\"duration_ms_sum\"]}\\n'"
+    )
+    # An "outcome" label rather than two separately named metrics -- the
+    # same status_class-bucketing choice notebook_api_http_requests_total
+    # already makes above, applied to "delivered"/"failed" here instead.
+    # Always emits both outcomes, even at 0, for the identical
+    # no-gap-at-startup reason every other counter in this function
+    # already does. See _WEBHOOK_METRICS' own definition (above, near
+    # _HTTP_METRICS) for why automatic deliveries and manual redeliveries
+    # are reported as two distinct metrics rather than folded together.
+    lines.append(
+        "        '# HELP notebook_api_webhook_deliveries_total Total "
+        "number of automatic task webhook delivery attempts, by "
+        "outcome.\\n'"
+    )
+    lines.append(
+        "        '# TYPE notebook_api_webhook_deliveries_total "
+        "counter\\n'"
+    )
+    lines.append("        f'notebook_api_webhook_deliveries_total"
+                  "{{outcome=\"delivered\"}} "
+                  "{_WEBHOOK_METRICS[\"delivered\"]}\\n'")
+    lines.append("        f'notebook_api_webhook_deliveries_total"
+                  "{{outcome=\"failed\"}} "
+                  "{_WEBHOOK_METRICS[\"failed\"]}\\n'")
+    lines.append(
+        "        '# HELP notebook_api_webhook_redeliveries_total Total "
+        "number of manual POST /tasks/{task_id}/redeliver-webhook "
+        "attempts, by outcome.\\n'"
+    )
+    lines.append(
+        "        '# TYPE notebook_api_webhook_redeliveries_total "
+        "counter\\n'"
+    )
+    lines.append("        f'notebook_api_webhook_redeliveries_total"
+                  "{{outcome=\"delivered\"}} "
+                  "{_WEBHOOK_METRICS[\"redelivered\"]}\\n'")
+    lines.append("        f'notebook_api_webhook_redeliveries_total"
+                  "{{outcome=\"failed\"}} "
+                  "{_WEBHOOK_METRICS[\"redelivery_failed\"]}\\n'")
+    lines.append("    )")
+    # The Prometheus text exposition format's own registered media type --
+    # not "text/plain" alone, which a real Prometheus scraper (and
+    # promtool's own format validator) does not recognize as this format
+    # at all.
+    lines.append(
+        "    return Response("
+        "content=body, media_type='text/plain; version=0.0.4; "
+        "charset=utf-8')"
+    )
+
+    lines.append("")
+    lines.append("@app.get('/uptime')")
+    lines.append("def uptime():")
+
+    lines.append("    return {")
+    lines.append("        'uptime_seconds': int(time.time() - START_TIME)")
+    lines.append("    }")
+
+    lines.append("")
+    lines.append("@app.post('/tasks/reset')")
+    lines.append("def reset_tasks(_: None = Depends(verify_api_key)):")
+
+    lines.append("    deleted_tasks = len(TASKS)")
+
+    lines.append("    TASKS.clear()")
+
+    lines.append("    return {")
+    lines.append("        'deleted_tasks': deleted_tasks")
+    lines.append("    }")
+
+    lines.append("")
+    lines.append("@app.delete('/tasks/{task_id}')")
+    lines.append("def delete_task(task_id: str, _: None = Depends(verify_api_key)):")
+
+    lines.append("    task = TASKS.get(task_id)")
+    lines.append("")
+    lines.append("    if task is None:")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=404,")
+    lines.append("            detail=f'Task {task_id} not found'")
+    lines.append("        )")
+    lines.append("")
+    # Confirmed exploitable before this: deleting a still-processing task
+    # popped its TASKS entry immediately, but the background task itself
+    # kept running -- there is no way to actually cancel work already
+    # handed to anyio.to_thread.run_sync/asyncio. When it eventually
+    # finished, _run_background_task's own TASKS[task_id][...] write (see
+    # below) raised a bare KeyError against the now-missing entry, an
+    # unhandled exception in a fire-and-forget asyncio task that's
+    # silently swallowed rather than surfaced anywhere -- permanently
+    # losing that task's real result or error with nothing to show for
+    # it. Rejecting the delete outright while a task is still processing
+    # (mirroring the 503 MAX_PENDING_TASKS already returns for "try again
+    # once some have completed") gives a caller an actionable answer
+    # instead of a delete that "succeeds" while quietly corrupting the
+    # task it just claimed to remove.
+    lines.append("    if task.get('status') == 'processing':")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=409,")
+    lines.append("            detail=(")
+    lines.append(
+        "                f'Task {task_id} is still processing and cannot be '"
+    )
+    lines.append(
+        "                'deleted -- wait for it to complete or fail first'"
+    )
+    lines.append("            ),")
+    lines.append("        )")
+    lines.append("")
+    lines.append("    deleted_task = TASKS.pop(task_id)")
+
+    lines.append("    return {")
+    lines.append("        'message': 'Task deleted',")
+    lines.append("        'task_id': task_id,")
+    lines.append("        'status': deleted_task.get('status')")
+    lines.append("    }")
+
+    lines.append("")
+    # A task's own automatic webhook delivery (see _deliver_task_webhook
+    # below) already retries WEBHOOK_MAX_RETRIES times with backoff -- but
+    # that's still bounded, and finite, by design (an unbounded retry loop
+    # would hold this app's own limited worker-thread pool hostage to
+    # however long a caller's receiver stays down). Before this endpoint,
+    # a caller whose receiver was unreachable (a deploy, an outage) for
+    # longer than every automatic retry combined had no way to ever get
+    # that webhook short of resubmitting the entire background task from
+    # scratch -- discarding a real, already-computed result or error
+    # (still sitting right there in TASKS[task_id]) purely to get it
+    # delivered a second time. This instead redelivers the task's own
+    # already-recorded outcome, verbatim, to the exact callback_url it was
+    # originally submitted with -- no re-execution of the notebook
+    # function itself, so it works identically whether that function was
+    # idempotent or not.
+    lines.append("@app.post('/tasks/{task_id}/redeliver-webhook')")
+    lines.append(
+        "async def redeliver_task_webhook(task_id: str, "
+        "_: None = Depends(verify_api_key)):"
+    )
+
+    lines.append("    task = TASKS.get(task_id)")
+    lines.append("")
+    lines.append("    if task is None:")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=404,")
+    lines.append("            detail=f'Task {task_id} not found'")
+    lines.append("        )")
+    lines.append("")
+    # A task's own eventual "result"/"error" only exists once it's left
+    # 'processing' -- the same reason DELETE /tasks/{task_id} above
+    # already refuses to act on one that hasn't. There is nothing to
+    # redeliver yet, not merely a delivery that hasn't been attempted.
+    lines.append("    if task.get('status') == 'processing':")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=409,")
+    lines.append("            detail=(")
+    lines.append(
+        "                f'Task {task_id} is still processing -- there is '"
+    )
+    lines.append(
+        "                'no recorded result or error to redeliver yet'"
+    )
+    lines.append("            ),")
+    lines.append("        )")
+    lines.append("")
+    # 'callback_url' is None for a task that was never submitted with one
+    # in the first place (a plain, polling-only caller) -- redelivering a
+    # webhook it never asked for isn't a delivery failure to retry, it's a
+    # different request entirely, so this is rejected the same 400 way
+    # POST /{func_name}'s own callback_url validation already rejects a
+    # malformed one at submission time, rather than silently doing
+    # nothing.
+    lines.append("    callback_url = task.get('callback_url')")
+    lines.append("    if not callback_url:")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=400,")
+    lines.append("            detail=(")
+    lines.append(
+        "                f'Task {task_id} was not submitted with a '"
+    )
+    lines.append(
+        "                'callback_url -- there is no webhook to redeliver'"
+    )
+    lines.append("            ),")
+    lines.append("        )")
+    lines.append("")
+    # Rebuilt from the task's own already-recorded outcome, not replayed
+    # from anywhere else -- the identical {'task_id', 'status', 'result'}/
+    # {'task_id', 'status', 'error'} shape _run_background_task's own two
+    # completion branches already build for the automatic delivery this
+    # mirrors, so a receiver can't tell a redelivered webhook apart from
+    # the original one except by it arriving a second time.
+    lines.append("    if task.get('status') == 'completed':")
+    lines.append("        payload = {")
+    lines.append("            'task_id': task_id,")
+    lines.append("            'status': 'completed',")
+    lines.append("            'result': task.get('result'),")
+    lines.append("        }")
+    lines.append("    else:")
+    lines.append("        payload = {")
+    lines.append("            'task_id': task_id,")
+    lines.append("            'status': task.get('status'),")
+    lines.append("            'error': task.get('error'),")
+    lines.append("        }")
+    lines.append("")
+    # Off this coroutine's own event loop for the identical reason every
+    # other call site of _deliver_task_webhook already is (see its own
+    # docstring below) -- an operator triggering a manual redelivery is no
+    # less able to stall every other concurrent request on a slow/hung
+    # receiver than the automatic path already was.
+    lines.append("    webhook_result = await anyio.to_thread.run_sync(")
+    lines.append("        _deliver_task_webhook, callback_url, payload")
+    lines.append("    )")
+    # Tracked separately from _WEBHOOK_METRICS' own 'delivered'/'failed'
+    # pair (the three automatic call sites inside _run_background_task
+    # above) -- a manual redelivery is a distinct operational signal
+    # ("my receiver has been flaky enough that I've had to redeliver N
+    # times") from "N automatic deliveries have failed outright", so
+    # folding the two together would obscure both. See _WEBHOOK_METRICS'
+    # own definition above for the full rationale.
+    lines.append(
+        "    _WEBHOOK_METRICS["
+        "'redelivered' if webhook_result['delivered'] else 'redelivery_failed'"
+        "] += 1"
+    )
+    # Guarded by 'task_id in TASKS' for the identical race
+    # _run_background_task's own post-delivery writes already guard
+    # against: DELETE /tasks/{task_id} refuses a still-processing task,
+    # but this task is already completed/failed by the time we get here,
+    # so a concurrent delete can legitimately remove it while this
+    # redelivery's own (possibly slow, possibly retried) HTTP call is
+    # still in flight.
+    lines.append("    if task_id in TASKS:")
+    lines.append("        TASKS[task_id]['webhook'] = webhook_result")
+    lines.append(
+        "        TASKS[task_id]['webhook_redelivery_count'] = ("
+        "TASKS[task_id].get('webhook_redelivery_count', 0) + 1"
+        ")"
+    )
+    lines.append("")
+    lines.append("    return {")
+    lines.append("        'task_id': task_id,")
+    lines.append("        'webhook': webhook_result,")
+    lines.append(
+        "        'webhook_redelivery_count': "
+        "TASKS.get(task_id, {}).get('webhook_redelivery_count', 0),"
+    )
+    lines.append("    }")
+
+    lines.append("")
+    # redeliver_task_webhook above resends a finished task's own
+    # already-recorded result/error, verbatim -- deliberately never
+    # re-running the notebook function itself (see its own comment
+    # above). That leaves a real gap for a task that actually *failed*:
+    # there was no way, short of re-submitting POST /{func_name} from
+    # scratch with the exact original body, to make this app try the
+    # underlying computation again -- and a caller doing that by hand had
+    # to have kept the original request body around themselves, since
+    # nothing here ever gave it back to them. This instead re-executes the
+    # notebook function using '_replay' (recorded at submission time, see
+    # its own comment above), under a brand-new task_id -- the failed
+    # task itself is left exactly as it was, so its own error stays
+    # available for inspection, and a caller can tell a retry's own result
+    # apart from the original failure it retried.
+    lines.append("@app.post('/tasks/{task_id}/retry')")
+    lines.append(
+        "async def retry_task(task_id: str, background_tasks: "
+        "BackgroundTasks, _: None = Depends(verify_api_key)):"
+    )
+
+    lines.append("    task = TASKS.get(task_id)")
+    lines.append("")
+    lines.append("    if task is None:")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=404,")
+    lines.append("            detail=f'Task {task_id} not found'")
+    lines.append("        )")
+    lines.append("")
+    # Only a *failed* task may be retried -- a still-'processing' task has
+    # nothing to retry yet (mirroring DELETE/redeliver-webhook's own
+    # "still processing" 409 above), and a 'completed' one already
+    # succeeded, so retrying it would silently re-run a notebook function
+    # that already did its job once, which is very likely not idempotent
+    # (the exact class of function LONG_RUNNING_KEYWORDS routes here in
+    # the first place: train/process/generate/embed/scrape).
+    lines.append("    if task.get('status') != 'failed':")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=409,")
+    lines.append("            detail=(")
+    lines.append(
+        "                f\"Task {task_id} has status "
+        "{task.get('status')!r} -- only a failed task can be retried\""
+    )
+    lines.append("            ),")
+    lines.append("        )")
+    lines.append("")
+    # A task submitted before this endpoint existed (or one that is
+    # itself the *result* of an earlier retry -- see 'retried_from' below,
+    # never itself given its own '_replay') has no recorded inputs to
+    # replay. Distinct from the 404/409 cases above: the task is real and
+    # really did fail, there is simply nothing here to re-execute it with.
+    lines.append("    replay = task.get('_replay')")
+    lines.append("    if replay is None:")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=409,")
+    lines.append("            detail=(")
+    lines.append(
+        "                f'Task {task_id} has no recorded inputs to '"
+    )
+    lines.append(
+        "                'retry -- it may predate this endpoint'"
+    )
+    lines.append("            ),")
+    lines.append("        )")
+    lines.append("")
+    # A retry is a brand-new submission in every way that matters -- same
+    # MAX_PENDING_TASKS admission check POST /{func_name} itself already
+    # enforces (a retry storm must not be able to bypass it), same lazy
+    # eviction sweep first -- and the identical _TASKS_ADMISSION_LOCK
+    # that endpoint's own admission check/insert are held under (see that
+    # lock's own definition above for the race this closes): retry_task
+    # is `async def`, so it never races against *itself* the way a
+    # synchronous, threadpool-run endpoint could, but it mutates this
+    # same TASKS dict the synchronous submission endpoint does, so both
+    # must still serialize against each other.
+    lines.append("    with _TASKS_ADMISSION_LOCK:")
+    lines.append("        _evict_expired_tasks()")
+    lines.append("        if len(TASKS) >= MAX_PENDING_TASKS:")
+    lines.append("            raise HTTPException(")
+    lines.append("                status_code=503,")
+    lines.append("                detail=(")
+    lines.append(
+        "                    f'Too many pending background tasks (limit '"
+    )
+    lines.append(
+        "                    f'{MAX_PENDING_TASKS}); try again once some have '"
+    )
+    lines.append("                    'finished.'")
+    lines.append("                ),")
+    lines.append("            )")
+    lines.append("")
+    # Looked up by name on notebook_module again, rather than trusting
+    # anything cached from the original submission -- the same
+    # "resolve fresh, don't assume it's unchanged" reasoning
+    # notebook_module's own docstring already carries elsewhere in this
+    # file. Still inside the same lock -- a plain getattr, no I/O, so
+    # holding the lock across it is not a meaningful cost.
+    lines.append("        func = getattr(notebook_module, replay['func_name'], None)")
+    lines.append("        if func is None:")
+    lines.append("            raise HTTPException(")
+    lines.append("                status_code=500,")
+    lines.append("                detail=(")
+    lines.append(
+        "                    f\"Task {task_id}'s own function "
+        "{replay['func_name']!r} no longer exists in this deployment\""
+    )
+    lines.append("                ),")
+    lines.append("            )")
+    lines.append("")
+    lines.append("        new_task_id = uuid.uuid4().hex")
+    lines.append("        callback_url = task.get('callback_url')")
+    lines.append("        TASKS[new_task_id] = {")
+    lines.append("            'status': 'processing',")
+    lines.append("            'created_at': time.time(),")
+    lines.append("            'callback_url': callback_url,")
+    # 'retried_from' is left in the caller-facing shape on purpose (unlike
+    # '_replay') -- it is exactly the kind of lineage a caller polling
+    # GET /tasks/{new_task_id} benefits from seeing: which original,
+    # now-failed task this one is a re-run of.
+    lines.append("            'retried_from': task_id,")
+    lines.append("            '_replay': replay,")
+    lines.append("        }")
+    lines.append(
+        "    background_tasks.add_task(_run_background_task, func, "
+        "new_task_id, *replay['args'], callback_url=callback_url, "
+        "**replay['kwargs'])"
+    )
+    lines.append("    return {")
+    lines.append("        'task_id': new_task_id,")
+    lines.append("        'status': 'processing',")
+    lines.append("        'retried_from': task_id,")
+    lines.append("    }")
+
+    lines.append("")
+    # Whether `url`'s own hostname resolves to a non-public address (or
+    # doesn't resolve at all) -- the identical private/loopback/link-
+    # local/reserved/multicast/unspecified check POST /api/notebooks/
+    # import-url's own _reject_unsafe_import_url_host (backend/routes/
+    # upload.py) already applies to a caller-supplied URL *that dashboard*
+    # fetches, reused here for the identical shape of risk: a caller-
+    # supplied URL *this compiled app* fetches. The scheme check just
+    # above this function (rejecting "file://", "gopher://", ...) already
+    # stops one request-forgery vector; it does nothing to stop a
+    # perfectly valid http(s) URL whose host is
+    # "http://169.254.169.254/" (a cloud metadata endpoint reachable from
+    # inside this app's own deployment, not the caller's) or
+    # "http://localhost:<internal-port>/" -- confirmed exploitable before
+    # this: a caller-supplied ?callback_url= pointing at either turned
+    # this app's own background-task delivery into an open proxy into
+    # infrastructure only its own network can reach, since nothing here
+    # ever inspected where the hostname actually resolved to.
+    #
+    # A resolution failure (an unroutable, typo'd, or since-deleted host)
+    # is also treated as unsafe rather than merely "will fail to
+    # deliver": the alternative -- letting socket.gaierror propagate --
+    # would need its own handling at every call site below, for no
+    # benefit over just reporting it the same way a private address is.
+    lines.append("def _is_unsafe_webhook_host(url):")
+    lines.append("    try:")
+    lines.append("        hostname = urlparse(url).hostname")
+    lines.append("        if not hostname:")
+    lines.append("            return True")
+    lines.append("        for info in socket.getaddrinfo(hostname, None):")
+    lines.append("            ip = ipaddress.ip_address(info[4][0])")
+    lines.append("            if (")
+    lines.append("                ip.is_private or ip.is_loopback")
+    lines.append("                or ip.is_link_local or ip.is_reserved")
+    lines.append("                or ip.is_multicast or ip.is_unspecified")
+    lines.append("            ):")
+    lines.append("                return True")
+    lines.append("    except (socket.gaierror, ValueError):")
+    lines.append("        return True")
+    lines.append("    return False")
+    lines.append("")
+    # Delivers a single best-effort (well, WEBHOOK_MAX_RETRIES-effort) POST
+    # of `payload` (the finished task's own TASKS record: status/result, or
+    # status/error) to `callback_url`, so a caller can opt out of polling
+    # get_task/wait_for_task for a background task's completion.
+    # Deliberately synchronous (urllib, not an async HTTP client) -- called
+    # only from inside anyio.to_thread.run_sync below, the same
+    # worker-thread pattern a plain (non-async) notebook function itself
+    # already runs under, for the identical reason: it must never block
+    # this app's single event loop for up to WEBHOOK_TIMEOUT_SECONDS
+    # waiting on a caller-controlled endpoint that might be slow or
+    # unresponsive. Any failure (a DNS failure, connection refused, a
+    # non-2xx response, a timeout) never raises out of here -- delivery is
+    # never allowed to affect the task's own real result, which is already
+    # durably recorded in TASKS by the time this is ever called -- but,
+    # unlike before, it's no longer silently swallowed either: this now
+    # returns a plain dict ({'delivered', 'attempts', 'status_code',
+    # 'error'}) describing exactly what happened, which _run_background_task
+    # below records onto the task's own TASKS entry as its 'webhook' field.
+    # Before this, a caller who chose ?callback_url= over polling
+    # get_task/wait_for_task had no way to ever discover that delivery
+    # itself had failed (a typo'd host, a receiver that's down, one that
+    # keeps rejecting the signed body with 401) short of noticing the
+    # webhook they were expecting simply never arrived and guessing why --
+    # GET /tasks/{task_id} (which returns this exact record unmodified)
+    # now answers that directly, without requiring the caller to also stand
+    # up their own delivery logging just to debug it.
+    #
+    # When WEBHOOK_SECRET is configured, the request also carries an
+    # X-Webhook-Signature: sha256=<hex hmac> header -- computed over the
+    # exact same `body` bytes being sent, using hmac.compare_digest's own
+    # module (already imported above for API-key comparison) rather than
+    # a second, separate crypto dependency. digestmod is passed as the
+    # plain string "sha256" specifically so this needs no `import
+    # hashlib` of its own: hmac.new resolves a string digestmod via
+    # hashlib.new internally. A receiving endpoint recomputes the same
+    # HMAC over the raw body it received (using the identical shared
+    # secret) and compares it against this header -- via
+    # hmac.compare_digest, never `==`, for the same timing-attack reason
+    # verify_api_key below already uses it -- to confirm both that the
+    # request actually came from this app and that the body wasn't
+    # altered in transit, the same X-Hub-Signature-256 contract GitHub/
+    # Stripe webhooks already use. Omitted entirely when WEBHOOK_SECRET
+    # is empty (the default), so an existing receiver that predates this
+    # feature keeps working unmodified.
+    lines.append("def _deliver_task_webhook(callback_url, payload):")
+    lines.append("    attempt = 0")
+    # Re-checked here, not just once at task-submission time (see the
+    # scheme validation above this function's own call site) -- delivery
+    # can happen an arbitrary amount of time after submission (a slow
+    # notebook function, a retried task, a manual POST
+    # /tasks/{task_id}/redeliver-webhook long after the original request),
+    # during which the same hostname could have started resolving
+    # somewhere unsafe (DNS rebinding, or simply a record changing) even
+    # though it looked fine when first validated. Every delivery path
+    # (the original completion, a retried task's own eventual completion,
+    # and a manual redeliver) all funnel through this one function, so
+    # checking it here protects all three without needing its own copy of
+    # this check in each of them.
+    lines.append("    if _is_unsafe_webhook_host(callback_url):")
+    lines.append("        return {")
+    lines.append("            'delivered': False,")
+    lines.append("            'attempts': 0,")
+    lines.append("            'status_code': None,")
+    lines.append(
+        "            'error': 'callback_url resolves to a non-public "
+        "address; refusing to deliver',"
+    )
+    lines.append("        }")
+    lines.append("    try:")
+    lines.append("        body = json.dumps(payload).encode('utf-8')")
+    lines.append("        headers = {'Content-Type': 'application/json'}")
+    lines.append("        if WEBHOOK_SECRET:")
+    lines.append("            signature = hmac.new(")
+    lines.append(
+        "                WEBHOOK_SECRET.encode('utf-8'), body, 'sha256'"
+    )
+    lines.append("            ).hexdigest()")
+    lines.append(
+        "            headers['X-Webhook-Signature'] = f'sha256={signature}'"
+    )
+    # attempt/while loop below: WEBHOOK_MAX_RETRIES (0 by default,
+    # preserving the previous single-best-effort-attempt behavior
+    # exactly) additional tries after a retryable failure -- a
+    # network-level error (connection refused, DNS failure,
+    # WEBHOOK_TIMEOUT_SECONDS itself elapsing, caught by the
+    # (URLError, OSError) branch below) or a 429/5xx HTTPError, the same
+    # class of transient failure a real receiving endpoint's own
+    # restart/deploy/overload would produce. A 4xx HTTPError other than
+    # 429 returns immediately without retrying at all: the receiver
+    # deliberately rejected this exact, unchanged request, so retrying it
+    # again can only ever fail the same way. Still runs entirely inside
+    # the worker thread already backing this one delivery (see
+    # _run_background_task's own anyio.to_thread.run_sync call site) --
+    # every retry (and the time.sleep between them) stays off this app's
+    # single event loop, the identical reason a single attempt already
+    # never blocked it.
+    #
+    # `attempt > 0` re-checks _is_unsafe_webhook_host on every retry, not
+    # just the one check already made above before this loop starts.
+    # Confirmed exploitable before this: that single check only ever
+    # protected the *first* connection attempt -- WEBHOOK_MAX_RETRIES
+    # additional ones can each follow an exponential-backoff/Retry-After
+    # time.sleep of up to 30 seconds (capped below), a real window for a
+    # DNS record a caller fully controls (their own callback_url's own
+    # domain) to start resolving somewhere unsafe between one retry and
+    # the next -- the exact "DNS rebinding" scenario this function's own
+    # comment already names as the reason redelivery/retry re-checks at
+    # all, just not yet applied *within* one already-in-progress retry
+    # loop, only across separate top-level calls to this function
+    # (the original completion, a later manual redeliver, a retried
+    # task's own eventual completion). Skipped on the very first
+    # iteration (`attempt == 0`) since that one is already covered by the
+    # check immediately above, with no sleep in between to matter.
+    lines.append("        while True:")
+    lines.append("            if attempt > 0 and _is_unsafe_webhook_host(callback_url):")
+    lines.append("                return {")
+    lines.append("                    'delivered': False,")
+    lines.append("                    'attempts': attempt + 1,")
+    lines.append("                    'status_code': None,")
+    lines.append(
+        "                    'error': 'callback_url resolves to a "
+        "non-public address; refusing to deliver',"
+    )
+    lines.append("                }")
+    lines.append("            try:")
+    lines.append("                request = urllib.request.Request(")
+    lines.append("                    callback_url,")
+    lines.append("                    data=body,")
+    lines.append("                    headers=headers,")
+    lines.append("                    method='POST',")
+    lines.append("                )")
+    lines.append("                response = urllib.request.urlopen(")
+    lines.append("                    request, timeout=WEBHOOK_TIMEOUT_SECONDS")
+    lines.append("                )")
+    lines.append("                status_code = response.status")
+    lines.append("                response.close()")
+    lines.append("                return {")
+    lines.append("                    'delivered': True,")
+    lines.append("                    'attempts': attempt + 1,")
+    lines.append("                    'status_code': status_code,")
+    lines.append("                    'error': None,")
+    lines.append("                }")
+    lines.append("            except urllib.error.HTTPError as e:")
+    lines.append("                retryable = e.code == 429 or e.code >= 500")
+    lines.append(
+        "                if not retryable or attempt >= WEBHOOK_MAX_RETRIES:"
+    )
+    lines.append("                    return {")
+    lines.append("                        'delivered': False,")
+    lines.append("                        'attempts': attempt + 1,")
+    lines.append("                        'status_code': e.code,")
+    lines.append("                        'error': str(e),")
+    lines.append("                    }")
+    # A 429's own Retry-After header (RFC 9110 -- seconds, or an HTTP
+    # date; only the seconds form is honored here, the same bounded
+    # subset _enforce_rate_limit's own 429 responses always send rather
+    # than a date) takes priority over the computed exponential backoff
+    # below when present and parseable -- the receiving endpoint told
+    # this app exactly how long to wait, the identical "honor Retry-After
+    # instead of guessing" behavior the generated SDK clients' own
+    # wait_for_task/waitForTask retry loop already gives a 429 response.
+    lines.append(
+        "                retry_after = "
+        "e.headers.get('Retry-After') if e.headers else None"
+    )
+    lines.append("                try:")
+    lines.append(
+        "                    delay = "
+        "float(retry_after) if retry_after is not None else None"
+    )
+    lines.append("                except ValueError:")
+    lines.append("                    delay = None")
+    lines.append("            except (urllib.error.URLError, OSError) as e:")
+    lines.append("                if attempt >= WEBHOOK_MAX_RETRIES:")
+    lines.append("                    return {")
+    lines.append("                        'delivered': False,")
+    lines.append("                        'attempts': attempt + 1,")
+    lines.append("                        'status_code': None,")
+    lines.append("                        'error': str(e),")
+    lines.append("                    }")
+    lines.append("                delay = None")
+    lines.append("            if delay is None:")
+    lines.append(
+        "                delay = "
+        "WEBHOOK_RETRY_BACKOFF_SECONDS * (2 ** attempt)"
+    )
+    # Capped at 30s regardless of source (a computed backoff that's
+    # already grown large after several retries, or a Retry-After value
+    # the receiving endpoint itself sent) -- this worker thread is one of
+    # this process' limited pool (the same one every synchronous
+    # notebook-function endpoint also runs on), so an unbounded wait here
+    # is the identical starvation risk TASK_EXECUTION_TIMEOUT_SECONDS
+    # already exists to bound elsewhere in this file.
+    lines.append("            time.sleep(min(delay, 30))")
+    lines.append("            attempt += 1")
+    lines.append("    except (urllib.error.URLError, ValueError, OSError) as e:")
+    lines.append("        return {")
+    lines.append("            'delivered': False,")
+    lines.append("            'attempts': attempt + 1,")
+    lines.append("            'status_code': None,")
+    lines.append("            'error': str(e),")
+    lines.append("        }")
+    lines.append("")
+    lines.append(
+        "async def _run_background_task(func, task_id, *args, "
+        "callback_url=None, **kwargs):"
+    )
+    lines.append("    try:")
+    lines.append("        # Calling a plain (non-async) notebook function directly")
+    lines.append("        # here would run its entire body synchronously, inline, on")
+    lines.append("        # this coroutine -- which is this app's single asyncio")
+    lines.append("        # event loop, shared by every other request the process is")
+    lines.append("        # handling right now, including completely unrelated ones")
+    lines.append("        # like GET /health. Confirmed against a real (non-")
+    lines.append("        # TestClient) uvicorn server: a background task doing")
+    lines.append("        # nothing but time.sleep(2) froze a concurrent GET /health")
+    lines.append("        # for the full 2 seconds -- the exact opposite of what a")
+    lines.append("        # 'background' task is supposed to mean, and especially")
+    lines.append("        # damaging here since the 'train'/'process'/'generate'/")
+    lines.append("        # 'embed'/'scrape' keywords that route a function to a")
+    lines.append("        # background task in the first place are routinely slow,")
+    lines.append("        # CPU-bound work. anyio.to_thread.run_sync (anyio is")
+    lines.append("        # already a transitive dependency of fastapi/starlette --")
+    lines.append("        # BackgroundTasks itself is built on it -- not a new one)")
+    lines.append("        # runs a synchronous function in a worker thread instead,")
+    lines.append("        # so it no longer blocks every other request this server")
+    lines.append("        # is handling for its entire duration. An `async def`")
+    lines.append("        # notebook function is awaited directly instead, exactly")
+    lines.append("        # as before -- it already cooperates with the event loop")
+    lines.append("        # on its own and has no need for a worker thread.")
+    lines.append("        # anyio.fail_after(None) (TASK_EXECUTION_TIMEOUT_SECONDS'")
+    lines.append("        # own default, 0, is falsy -- `0 or None` is None) never")
+    lines.append("        # times out at all, preserving the previous unbounded-")
+    lines.append("        # execution-time behavior exactly. Given a real timeout,")
+    lines.append("        # it raises a plain TimeoutError (caught below) the moment")
+    lines.append("        # it elapses. abandon_on_cancel=True on the sync branch is")
+    lines.append("        # what actually makes that timeout meaningful there: a real")
+    lines.append("        # OS thread already running arbitrary notebook code can't be")
+    lines.append("        # forcibly killed, but without this, anyio's own default")
+    lines.append("        # (abandon_on_cancel=False) still *blocks this coroutine*")
+    lines.append("        # until that thread finishes on its own -- silently")
+    lines.append("        # defeating the timeout for the one case (a hung sync call)")
+    lines.append("        # it exists to catch. Abandoning it instead frees this")
+    lines.append("        # coroutine (and the capacity-limiter slot backing every")
+    lines.append("        # other endpoint's own threadpool use) immediately; the")
+    lines.append("        # orphaned thread itself still runs to completion")
+    lines.append("        # afterward, an unavoidable limit of cooperatively")
+    lines.append("        # cancelling arbitrary synchronous code at all.")
+    lines.append("        with anyio.fail_after(TASK_EXECUTION_TIMEOUT_SECONDS or None):")
+    lines.append("            if inspect.iscoroutinefunction(func):")
+    lines.append("                result = await func(*args, **kwargs)")
+    lines.append("            else:")
+    lines.append("                result = await anyio.to_thread.run_sync(")
+    lines.append("                    functools.partial(func, *args, **kwargs),")
+    lines.append("                    abandon_on_cancel=True,")
+    lines.append("                )")
+    lines.append("        # jsonable_encoder both validates that `result` is")
+    lines.append("        # actually something GET /tasks/{task_id} -- and GET")
+    lines.append("        # /tasks, which returns *every* task in one response --")
+    lines.append("        # can serialize, and converts common library-native")
+    lines.append("        # return types (numpy arrays, pandas DataFrames, ...)")
+    lines.append("        # into plain JSON-safe data first. Without this, a")
+    lines.append("        # background function returning one of those -- an")
+    lines.append("        # entirely ordinary thing for the 'train'/'process'/")
+    lines.append("        # 'generate'/'embed'/'scrape' keywords that route a")
+    lines.append("        # function here in the first place -- marked the task")
+    lines.append("        # 'completed' with an unserializable result, which then")
+    lines.append("        # crashed every subsequent GET /tasks/{task_id} for it,")
+    lines.append("        # and GET /tasks entirely (for every task, not just this")
+    lines.append("        # one), the moment FastAPI's own response serialization")
+    lines.append("        # ran into it.")
+    lines.append("        result = jsonable_encoder(result)")
+    # `task_id in TASKS` rather than an unconditional TASKS[task_id][...]
+    # write: _evict_expired_tasks above never removes a 'processing' task,
+    # but POST /tasks/reset still unconditionally clears every entry,
+    # in-flight or not (an admin nuke, by design). Without this guard, a
+    # task still running when /tasks/reset fires raised a bare KeyError
+    # here -- an unhandled exception in a fire-and-forget asyncio task,
+    # silently logged (at best) as an opaque "Task exception was never
+    # retrieved" rather than surfaced anywhere. This task's own result is
+    # honestly gone either way (the caller asked to forget it); the fix
+    # is just to let that happen quietly instead of crashing on it.
+    lines.append("        if task_id in TASKS:")
+    lines.append("            TASKS[task_id][\"status\"] = \"completed\"")
+    lines.append("            TASKS[task_id][\"result\"] = result")
+    # Built from the local outcome directly, not read back from TASKS --
+    # this must still deliver the real result even when the entry is
+    # already gone by the time we get here (POST /tasks/reset firing
+    # mid-run; see the "if task_id in TASKS" guard above), rather than
+    # silently sending a webhook with nothing in it. The delivery outcome
+    # itself is recorded back onto the (still-guarded, for the identical
+    # /tasks/reset reason) TASKS entry as "webhook", so a caller polling
+    # GET /tasks/{task_id} instead of relying on the webhook arriving can
+    # actually see whether it did.
+    lines.append("        if callback_url:")
+    lines.append("            webhook_result = await anyio.to_thread.run_sync(")
+    lines.append(
+        "                _deliver_task_webhook, callback_url, "
+        "{\"task_id\": task_id, \"status\": \"completed\", \"result\": result}"
+    )
+    lines.append("            )")
+    lines.append(
+        "            _WEBHOOK_METRICS["
+        "'delivered' if webhook_result['delivered'] else 'failed'"
+        "] += 1"
+    )
+    lines.append("            if task_id in TASKS:")
+    lines.append("                TASKS[task_id][\"webhook\"] = webhook_result")
+    # A separate except clause from the generic Exception one below,
+    # rather than letting it fall through to that one's own str(e) --
+    # anyio.fail_after's own TimeoutError carries no message at all
+    # (str(e) is just ""), which would otherwise record a completely
+    # uninformative empty "error", indistinguishable from any other
+    # unlabeled failure.
+    lines.append("    except TimeoutError:")
+    lines.append(
+        "        timeout_error = ("
+        "f'Task exceeded its {TASK_EXECUTION_TIMEOUT_SECONDS}s '"
+        "'execution timeout')"
+    )
+    lines.append("        if task_id in TASKS:")
+    lines.append("            TASKS[task_id][\"status\"] = \"failed\"")
+    lines.append("            TASKS[task_id][\"error\"] = timeout_error")
+    lines.append("        if callback_url:")
+    lines.append("            webhook_result = await anyio.to_thread.run_sync(")
+    lines.append(
+        "                _deliver_task_webhook, callback_url, "
+        "{\"task_id\": task_id, \"status\": \"failed\", \"error\": timeout_error}"
+    )
+    lines.append("            )")
+    lines.append(
+        "            _WEBHOOK_METRICS["
+        "'delivered' if webhook_result['delivered'] else 'failed'"
+        "] += 1"
+    )
+    lines.append("            if task_id in TASKS:")
+    lines.append("                TASKS[task_id][\"webhook\"] = webhook_result")
+    lines.append("    except Exception as e:")
+    lines.append("        if task_id in TASKS:")
+    lines.append("            TASKS[task_id][\"status\"] = \"failed\"")
+    lines.append("            TASKS[task_id][\"error\"] = str(e)")
+    lines.append("        if callback_url:")
+    lines.append("            webhook_result = await anyio.to_thread.run_sync(")
+    lines.append(
+        "                _deliver_task_webhook, callback_url, "
+        "{\"task_id\": task_id, \"status\": \"failed\", \"error\": str(e)}"
+    )
+    lines.append("            )")
+    lines.append(
+        "            _WEBHOOK_METRICS["
+        "'delivered' if webhook_result['delivered'] else 'failed'"
+        "] += 1"
+    )
+    lines.append("            if task_id in TASKS:")
+    lines.append("                TASKS[task_id][\"webhook\"] = webhook_result")
+    lines.append("")
+    # Generate Pydantic models for request bodies
+    for func in functions:
+        func_name = func["name"]
+        model_name = model_names[func_name]
+        example_payload = func.get(
+            "example_payload",
+            {}
+        )
+        lines.append(f"class {model_name}(BaseModel):")
+        if not func.get("args"):
+            # A zero-parameter notebook function (e.g. `def health(): ...`)
+            # produces a class body with no fields and, since
+            # example_payload is empty too, no model_config block either --
+            # an empty class body is a SyntaxError, which would fail to
+            # compile the *entire* generated app, not just this endpoint.
+            lines.append("    pass")
+        for arg in func.get("args", []):
+            arg_name = arg.get("name", "param")
+            raw_arg_type = arg.get("type")
+            arg_type, _ = _resolve_annotation_source(raw_arg_type)
+
+            # repr()'d below (see description=repr(field_description)),
+            # not embedded as a raw f-string inside a hand-written
+            # description="..." literal -- raw_arg_type is arbitrary,
+            # notebook-author-controlled text (ast.unparse of the
+            # parameter's own annotation), and can itself legitimately
+            # contain a double quote (e.g. a real, valid Python
+            # `Literal["a\"b"]` parameter unparses to `Literal['a"b']`).
+            # Confirmed exploitable before this fix: that embedded `"`
+            # closed the description="..." string literal early,
+            # corrupting the rest of the line into a SyntaxError that
+            # failed to compile the *entire* generated app.py, not just
+            # this one field.
+            #
+            # None (added to a `Field(...)` call below only when not
+            # None) whenever the annotation already supplies its own
+            # description via Annotated[T, Field(..., description=...)]
+            # -- see _annotation_has_own_field_description's own
+            # docstring for the silent-override bug this avoids.
+            # Otherwise prefers the notebook author's own per-parameter
+            # docstring description (extract_functions_from_code's
+            # "description", from a Google-style "Args:" section -- see
+            # _parse_docstring_arg_descriptions, backend/parser/
+            # ast_parser.py) over the generic fallback every field used
+            # to get regardless of how the function was actually
+            # documented.
+            if _annotation_has_own_field_description(raw_arg_type):
+                field_description = None
+            else:
+                field_description = arg.get("description") or (
+                    f"Parameter '{arg_name}' "
+                    f"of type {raw_arg_type or 'str'}"
+                )
+
+            default_value = arg.get("default")
+
+            if arg.get("has_default"):
+                if arg.get("default_is_literal", True):
+                    default_expr = repr(default_value)
+                else:
+                    # A non-literal default (e.g. a notebook-defined Enum
+                    # member like `Priority.HIGH` -- see
+                    # extract_functions_from_code's default_is_literal in
+                    # ast_parser.py). `default_value` here is raw notebook
+                    # source, not a Python value, so repr()-ing it like a
+                    # literal default would embed it as the *string*
+                    # "Priority.HIGH" instead of the actual enum member --
+                    # confirmed broken before this fix: a caller omitting
+                    # this field to take its default raised an
+                    # AttributeError inside the notebook's own function the
+                    # moment it tried to use the (wrongly stringified)
+                    # value. Reusing _resolve_annotation_source qualifies
+                    # any bare notebook-defined name it references (e.g.
+                    # "Priority") to notebook_module.Priority, exactly as
+                    # it already does for type annotations, then the
+                    # qualified source is embedded directly as a code
+                    # expression rather than a string literal.
+                    default_expr, _ = _resolve_annotation_source(default_value)
+                if field_description is not None:
+                    lines.append(
+                        f'    {arg_name}: {arg_type} = Field('
+                        f'default={default_expr}, '
+                        f'description={repr(field_description)}'
+                        f')'
+                    )
+                else:
+                    lines.append(
+                        f'    {arg_name}: {arg_type} = Field('
+                        f'default={default_expr}'
+                        f')'
+                    )
+            elif field_description is not None:
+                lines.append(
+                    f'    {arg_name}: {arg_type} = Field('
+                    f'description={repr(field_description)}'
+                    f')'
+                )
+            else:
+                # No default to assign, and the annotation already
+                # carries its own description (see
+                # _annotation_has_own_field_description above) -- a bare
+                # annotated field, with no assignment at all, is already
+                # a valid required Pydantic field declaration, exactly
+                # like a hand-written `Annotated[...]`-only field would
+                # be; an empty `= Field()` here would add nothing.
+                lines.append(f'    {arg_name}: {arg_type}')
+        if example_payload:
+            lines.append("")
+            lines.append("    model_config = {")
+            lines.append(
+                f"        'json_schema_extra': {{'example': {repr(example_payload)}}}"
+            )
+            lines.append("    }")
+        lines.append("")
+    # Generate endpoints
+    for func in functions:
+        func_name = func["name"]
+        operation_id = func_name
+        tag = "General"
+        if "train" in func_name.lower():
+            tag = "Training"
+        elif "predict" in func_name.lower():
+            tag = "Inference"
+        elif any(
+            kw in func_name.lower()
+            for kw in ["scrape", "extract", "process"]
+        ):
+            tag = "Data Processing"
+        elif any(
+            kw in func_name.lower()
+            for kw in ["embed", "vector"]
+        ):
+            tag = "Embeddings"
+        category = tag
+        args = func.get("args", [])
+        example_response = func.get(
+            "example_response",
+            {"result": None}
+        )
+        return_type = func.get(
+            "return_type",
+            "unknown"
+        )
+        # Prefers the notebook author's own "Returns:"-section docstring
+        # description (extract_functions_from_code's "return_description",
+        # from _parse_docstring_return_description, backend/parser/
+        # ast_parser.py) over the generic, type-only fallback every
+        # endpoint's own OpenAPI response description used to get
+        # regardless of how thoroughly the function was actually
+        # documented -- the identical "prefer the author's own words"
+        # precedent field_description already establishes below for each
+        # parameter's own "Args:"-section description.
+        response_description = func.get("return_description") or (
+            f"Returns {return_type}"
+        )
+        model_name = model_names[func_name]
+        call_args = ", ".join(_call_arg_expr(arg) for arg in args)
+        is_background = resolve_is_background(func_name, background_overrides)
+        summary = (
+            func_name
+            .replace("_", " ")
+            .title()
+        )
+        # A notebook function's own docstring is exactly the description
+        # its author already wrote, on purpose, for this exact function --
+        # strictly more useful than a generic templated sentence that
+        # doesn't even manage to say what the endpoint *does*. Before this,
+        # extract_functions_from_code (parser/ast_parser.py) didn't even
+        # extract it, so it was always discarded no matter what a notebook
+        # author wrote; only ever falls back to the auto-generated summary
+        # below for a function with no docstring at all (or one that's
+        # empty/all-whitespace, which ast.get_docstring(clean=True) already
+        # normalizes down to a falsy value).
+        docstring = func.get("docstring")
+        description = (
+            docstring
+            if docstring
+            else (
+                f"Auto-generated endpoint for {func_name}. "
+                f"Operation ID: {operation_id}. "
+                f"Parameters: {', '.join(arg['name'] for arg in args) if args else 'None'}."
+            )
+        )
+        if is_background:
+            # A background endpoint doesn't return `example_response`/
+            # `response_description` (the notebook function's own return
+            # value) at all -- it returns {"task_id": ..., "status":
+            # "processing"} (see the `return` statement below) and the
+            # real result only becomes available later via GET
+            # /tasks/{task_id}. Documenting the function's own return
+            # shape here instead was actively misleading: /docs, and any
+            # third-party tool generating a client from openapi.json,
+            # would expect a response this endpoint never actually sends.
+            # repr()'d below for the same reason field_description is:
+            # return_type is arbitrary, notebook-author-controlled text
+            # (ast.unparse of the function's own return annotation) that
+            # can itself legitimately contain a double quote -- embedding
+            # it as a raw f-string inside a hand-written
+            # "description": "..." literal let that quote close the
+            # string early, corrupting the whole responses={...} dict
+            # literal into a SyntaxError that failed to compile the
+            # entire generated app.py.
+            task_response_description = (
+                f"Task enqueued. Poll GET /tasks/{{task_id}} for the "
+                f"completed {return_type} result."
+            )
+            task_example_response = {"task_id": "<uuid>", "status": "processing"}
+            # A background endpoint's own two extra failure modes, on top
+            # of the {401, 429} every endpoint can already produce (see
+            # _auth_and_rate_limit_error_responses): 503 when
+            # NOTEBOOK_API_MAX_TASKS is already at capacity, and 400 for
+            # a caller-supplied ?callback_url= that isn't http(s) (see
+            # this same function's own body below) -- neither was
+            # documented anywhere in the served schema before this,
+            # despite both being real, reachable responses. The whole
+            # dict is repr()'d as one native Python object below, not
+            # hand-assembled via string concatenation the way this used
+            # to be -- repr() can never produce invalid Python source no
+            # matter what a notebook author's own docstring/return-type
+            # text contains, closing the exact class of quote-escaping
+            # bug e91b1fa already had to fix here once by hand.
+            task_responses = {
+                200: {
+                    "description": task_response_description,
+                    "content": {
+                        "application/json": {"example": task_example_response}
+                    },
+                },
+                400: {
+                    "description": (
+                        "callback_url was given but isn't an http:// or "
+                        "https:// URL, or resolves to a non-public "
+                        "address."
+                    ),
+                    "content": {
+                        "application/json": {
+                            "example": {
+                                "detail": (
+                                    "callback_url must be an http:// or "
+                                    "https:// URL"
+                                )
+                            }
+                        }
+                    },
+                },
+                503: {
+                    "description": (
+                        "Too many pending background tasks (see "
+                        "NOTEBOOK_API_MAX_TASKS)."
+                    ),
+                    "content": {
+                        "application/json": {
+                            "example": {
+                                "detail": (
+                                    "Too many pending background tasks "
+                                    "(limit 10000); try again once some "
+                                    "have finished."
+                                )
+                            }
+                        }
+                    },
+                },
+                **_auth_and_rate_limit_error_responses(),
+            }
+            lines.append(
+                f'@app.post("/{func_name}", '
+                f'summary="{summary}", '
+                # repr()'d, not embedded as a raw f-string like the fixed,
+                # server-generated boilerplate this replaces when there's
+                # no docstring: description can now be a notebook author's
+                # own docstring, arbitrary content that can legitimately
+                # contain a double quote, a newline, or a backslash --
+                # embedding it as a raw "description="..."" literal would
+                # let any of those close the string early, corrupting the
+                # whole @app.post(...) call into a SyntaxError and failing
+                # the entire compile, not just this one endpoint's docs
+                # (the exact bug class e91b1fa already fixed for the
+                # Pydantic Field description and the responses={} dict's
+                # own "description" entry).
+                f'description={repr(description)}, '
+                f'tags=["{tag}"], '
+                f'operation_id="{operation_id}", '
+                # "x-notebook-to-api-return-type" (the notebook function's
+                # own raw return annotation, exactly as extracted by
+                # extract_functions_from_code -- not resolved/qualified
+                # the way _resolve_annotation_source does for the actual
+                # Python model, since a downstream consumer of this
+                # schema has no notebook_module of its own to qualify
+                # against) is read by generate_typescript_sdk
+                # (backend/exporters/sdk_generator.py) the same way it
+                # already reads "x-notebook-to-api-async"/
+                # "x-notebook-to-api-category" -- an out-of-band channel
+                # for information the OpenAPI spec itself has no field
+                # for, since this endpoint's own declared 200 response
+                # schema is deliberately {} (see task_responses above):
+                # nothing about the *eventual* result a real
+                # GET /tasks/{{task_id}} will carry is otherwise
+                # discoverable from this schema at all.
+                f'openapi_extra={{"x-notebook-to-api-category": "{category}", "x-notebook-to-api-async": True, "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
+                f'responses={repr(task_responses)})'
+            )
+            lines.append(
+                f"def {func_name}(req: {model_name}, background_tasks: "
+                "BackgroundTasks, callback_url: Optional[str] = None, "
+                "idempotency_key: Optional[str] = "
+                'Header(None, alias="Idempotency-Key"), '
+                "_: None = Depends(verify_api_key)):"
+            )
+            # A caller opting into webhook delivery (rather than polling
+            # get_task/wait_for_task) supplies this per-request, not via a
+            # server-side operator setting -- so, unlike every other limit
+            # this app enforces, this is the one input here that's fully
+            # attacker/caller-controlled. Restricted to http(s) so a typo'd
+            # or malicious "file:///etc/passwd"-style scheme can't reach
+            # urllib.request.urlopen inside _deliver_task_webhook at all --
+            # validated here, before a task is even created, so the error
+            # is immediate and actionable rather than a silent delivery
+            # failure discovered only much later. Checked before the
+            # MAX_PENDING_TASKS admission check just below (previously
+            # after it) specifically so _is_unsafe_webhook_host's own real
+            # DNS lookup -- genuinely slow, unbounded I/O -- never happens
+            # while _TASKS_ADMISSION_LOCK is held; the only user-visible
+            # effect is which of the two error codes a request carrying
+            # *both* a full queue and an invalid callback_url gets back
+            # (400 now, 503 before), an edge case with no other observable
+            # difference either way.
+            lines.append("    if callback_url is not None:")
+            lines.append("        if urlparse(callback_url).scheme not in ('http', 'https'):")
+            lines.append("            raise HTTPException(")
+            lines.append("                status_code=400,")
+            lines.append("                detail=(")
+            lines.append(
+                "                    'callback_url must be an http:// or '"
+            )
+            lines.append(
+                "                    'https:// URL'"
+            )
+            lines.append("                ),")
+            lines.append("            )")
+            # The scheme check above stops "file://"/"gopher://"/etc, but
+            # a perfectly valid http(s) URL can still name a host only
+            # this app's own network can reach ("http://169.254.169.254/",
+            # a cloud metadata endpoint; "http://localhost:<internal-
+            # port>/"; ...) -- see _is_unsafe_webhook_host's own docstring
+            # above for the full "why". Checked here too (not just inside
+            # _deliver_task_webhook, which re-checks at actual delivery
+            # time) so a caller supplying an obviously-unsafe host gets an
+            # immediate, actionable 400 instead of a task that's created
+            # successfully and only reported as failed-to-deliver later.
+            lines.append("        if _is_unsafe_webhook_host(callback_url):")
+            lines.append("            raise HTTPException(")
+            lines.append("                status_code=400,")
+            lines.append("                detail=(")
+            lines.append(
+                "                    'callback_url resolves to a "
+                "non-public address; only publicly-routable URLs may be '"
+            )
+            lines.append(
+                "                    'used for webhook delivery'"
+            )
+            lines.append("                ),")
+            lines.append("            )")
+            # _evict_expired_tasks/the len(TASKS) admission check/the
+            # actual TASKS[task_id] insert below are held under one lock
+            # (see _TASKS_ADMISSION_LOCK's own definition for the
+            # "confirmed exploitable" race this closes) -- this endpoint
+            # is a plain synchronous `def`, run in Starlette's own
+            # threadpool exactly like verify_api_key/_enforce_rate_limit
+            # already are, so two concurrent submissions can genuinely
+            # interleave their own check-then-insert here on different
+            # worker threads without it.
+            lines.append("    with _TASKS_ADMISSION_LOCK:")
+            lines.append("        _evict_expired_tasks()")
+            # Checked -- and, on a hit, returned from -- before the
+            # MAX_PENDING_TASKS admission check just below, not after: a
+            # caller's own retry of a call it already submitted (the
+            # generated SDK clients' own _request/requestWithRetry send
+            # the identical Idempotency-Key on every retry attempt of one
+            # logical call, see sdk_generator.py) must never be turned
+            # away with a 503 just because unrelated traffic has since
+            # filled the queue, and must never re-run the underlying
+            # notebook function a second time even when it hasn't. Only a
+            # key this exact process has seen before is ever in
+            # IDEMPOTENCY_KEYS -- a caller that never sent one (or sends a
+            # fresh one per call, as any non-retry submission does)
+            # always falls through to the normal admission/creation path
+            # below unaffected.
+            # isinstance(..., str), not merely "is not None": FastAPI's
+            # own dependency injection always resolves a missing
+            # "Idempotency-Key" header to a real None (or an actual
+            # string when present) before this function body ever runs,
+            # but idempotency_key's own default value here is the
+            # fastapi.Header(...) sentinel object itself, not None -- a
+            # caller that reaches this function directly, bypassing
+            # FastAPI's own request handling entirely (as this app's own
+            # test suite does to exercise MAX_PENDING_TASKS' concurrency
+            # under real threads, with no ASGI server involved), gets
+            # that literal sentinel back, unresolved. Confirmed
+            # exploitable with the weaker "is not None" check: since a
+            # bare `def`'s default argument is one single object shared
+            # by every call that omits it, every such direct call
+            # collided on that identical sentinel as if it were the same
+            # real caller-supplied key, so the *second* concurrent
+            # request already found the *first*'s task_id sitting in
+            # IDEMPOTENCY_KEYS and returned it immediately -- completely
+            # bypassing the MAX_PENDING_TASKS admission check below for
+            # every request after the first.
+            lines.append(
+                "        if isinstance(idempotency_key, str) and "
+                "idempotency_key in IDEMPOTENCY_KEYS:"
+            )
+            lines.append(
+                "            existing_task_id = IDEMPOTENCY_KEYS[idempotency_key]"
+            )
+            lines.append(
+                "            existing_task = TASKS.get(existing_task_id)"
+            )
+            lines.append("            if existing_task is not None:")
+            lines.append(
+                "                return {\"task_id\": existing_task_id, "
+                "\"status\": existing_task[\"status\"]}"
+            )
+            lines.append("        if len(TASKS) >= MAX_PENDING_TASKS:")
+            lines.append("            raise HTTPException(")
+            lines.append("                status_code=503,")
+            lines.append("                detail=(")
+            lines.append("                    f'Too many pending background tasks (limit '")
+            lines.append(
+                "                    f'{MAX_PENDING_TASKS}); try again once some have '"
+            )
+            lines.append("                    'finished.'")
+            lines.append("                ),")
+            lines.append("            )")
+            lines.append("        task_id = uuid.uuid4().hex")
+            # 'callback_url' recorded on the task itself (not just passed
+            # through to _run_background_task below and then discarded) so
+            # POST /tasks/{task_id}/redeliver-webhook can later redeliver
+            # to the exact same URL without a caller needing to resupply
+            # it -- before this, the URL only ever existed as a local
+            # variable inside this one request/the fire-and-forget
+            # background task it kicks off, gone the moment both
+            # completed. Still inside the same lock as the admission
+            # check above: the insert itself is what the check exists to
+            # gate, so it must happen before the lock is ever released,
+            # not after -- releasing in between would let two threads
+            # each pass the check against the same pre-insert count and
+            # both proceed to insert, the exact race this lock exists to
+            # close.
+            lines.append(
+                "        TASKS[task_id] = {\"status\": \"processing\", "
+                "\"created_at\": time.time(), \"callback_url\": callback_url}"
+            )
+            # Recorded only now, after TASKS[task_id] above already exists
+            # -- so a concurrent lookup of this same key (see the
+            # short-circuit above; both run under this same lock, so
+            # there's no race between the two, but ordering still matters
+            # for a crash mid-request) can never observe a key mapped to a
+            # task_id that isn't in TASKS yet.
+            lines.append("        if isinstance(idempotency_key, str):")
+            lines.append("            IDEMPOTENCY_KEYS[idempotency_key] = task_id")
+            # '_replay' records exactly what would be needed to run this
+            # exact call a second time: the notebook function's own name
+            # (looked up on notebook_module again at retry time, rather
+            # than closing over the function object itself, so a retry
+            # still resolves to whatever notebook_module.{func_name}
+            # currently is) plus its positional/keyword arguments, taken
+            # from this same `req` this endpoint was already given -- the
+            # identical values _call_arg_expr already renders into the
+            # call below, just captured instead of only ever being used
+            # once. Before this, POST /tasks/{task_id}/retry had no source
+            # of truth for a failed task's own original inputs to
+            # re-execute against; nothing else in TASKS records them.
+            # Filtered back out of every caller-facing response (see GET
+            # /tasks and GET /tasks/{task_id} above) -- this exists purely
+            # for retry_task below to consume.
+            replay_pos_args = "".join(
+                f"req.{arg['name']}, "
+                for arg in args
+                if arg.get("kind") != "keyword_only"
+            )
+            replay_kwargs = "".join(
+                f"{arg['name']!r}: req.{arg['name']}, "
+                for arg in args
+                if arg.get("kind") == "keyword_only"
+            )
+            lines.append(
+                f"    TASKS[task_id]['_replay'] = {{'func_name': {func_name!r}, "
+                f"'args': ({replay_pos_args}), 'kwargs': {{{replay_kwargs}}}}}"
+            )
+            # Pass positional arguments to the background function
+            call_parts = (
+                [f"notebook_module.{func_name}", "task_id"]
+                + [_call_arg_expr(arg) for arg in args]
+                + ["callback_url=callback_url"]
+            )
+            lines.append(
+                "    background_tasks.add_task(_run_background_task, "
+                f"{', '.join(call_parts)})"
+            )
+            lines.append("    return {\"task_id\": task_id, \"status\": \"processing\"}")
+        else:
+            # A synchronous endpoint's own extra failure mode, on top of
+            # the {401, 429} every endpoint can already produce (see
+            # _auth_and_rate_limit_error_responses): 500, wrapping either
+            # the notebook function's own exception or a non-JSON-
+            # serializable return value (see this same function's own
+            # body below) -- undocumented anywhere in the served schema
+            # before this. repr()'d as one native Python object, not
+            # hand-assembled via string concatenation, the same
+            # quote-escaping-proof technique the background branch above
+            # now uses too.
+            sync_responses = {
+                200: {
+                    "description": response_description,
+                    "content": {
+                        "application/json": {"example": example_response}
+                    },
+                },
+                500: {
+                    "description": (
+                        f"'{func_name}' raised an exception, or returned "
+                        "a value that isn't JSON-serializable."
+                    ),
+                    "content": {
+                        "application/json": {
+                            "example": {
+                                "detail": (
+                                    f"'{func_name}' raised ValueError: "
+                                    "<message>"
+                                )
+                            }
+                        }
+                    },
+                },
+                **_auth_and_rate_limit_error_responses(),
+            }
+            lines.append(
+                f'@app.post("/{func_name}", '
+                f'summary="{summary}", '
+                # repr()'d, not embedded as a raw f-string like the fixed,
+                # server-generated boilerplate this replaces when there's
+                # no docstring: description can now be a notebook author's
+                # own docstring, arbitrary content that can legitimately
+                # contain a double quote, a newline, or a backslash --
+                # embedding it as a raw "description="..."" literal would
+                # let any of those close the string early, corrupting the
+                # whole @app.post(...) call into a SyntaxError and failing
+                # the entire compile, not just this one endpoint's docs
+                # (the exact bug class e91b1fa already fixed for the
+                # Pydantic Field description and the responses={} dict's
+                # own "description" entry).
+                f'description={repr(description)}, '
+                f'tags=["{tag}"], '
+                f'operation_id="{operation_id}", '
+                # See the background branch's own identical
+                # "x-notebook-to-api-return-type" comment above --
+                # this endpoint's own declared 200 response schema is
+                # deliberately {} too (see sync_responses above), so
+                # generate_typescript_sdk has no other way to learn what
+                # "result" actually contains.
+                f'openapi_extra={{"x-notebook-to-api-category": "{category}", "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
+                f'responses={repr(sync_responses)})'
+            )
+            is_async = func.get("is_async", False)
+            def_keyword = "async def" if is_async else "def"
+            call_prefix = "await " if is_async else ""
+            lines.append(f"{def_keyword} {func_name}(req: {model_name}, _: None = Depends(verify_api_key)):")
+            # _run_background_task already wraps a background function's own
+            # call the same way (reporting the task "failed" with str(e)
+            # instead of leaving it stuck "processing" forever), but a
+            # synchronous endpoint had no equivalent at all: the notebook
+            # function's own exception -- a ZeroDivisionError, a KeyError, a
+            # bad file path, anything -- propagated straight out unhandled,
+            # crashing with the exact same bare, detail-free "Internal
+            # Server Error" the jsonable_encoder gap below already had.
+            # HTTPException is re-raised as-is (not wrapped into a generic
+            # 500) since a notebook function that imports fastapi itself and
+            # deliberately raises one (e.g. HTTPException(404, ...)) is
+            # already choosing its own status code and message on purpose.
+            lines.append("    try:")
+            lines.append(f"        result = {call_prefix}notebook_module.{func_name}({call_args})")
+            lines.append("    except HTTPException:")
+            lines.append("        raise")
+            lines.append("    except Exception as e:")
+            lines.append("        raise HTTPException(")
+            lines.append("            status_code=500,")
+            lines.append(
+                f"            detail=f\"'{func_name}' raised "
+                "{type(e).__name__}: {e}\","
+            )
+            lines.append("        )")
+            # Same reasoning as _run_background_task's own jsonable_encoder
+            # call: without pre-encoding here, a result FastAPI's response
+            # serialization can't handle on its own (a raw numpy array, a
+            # pandas DataFrame, ...) doesn't fail with anything resembling
+            # this app's other error responses -- it crashes deep inside
+            # FastAPI's routing internals as an unhandled ValueError, which
+            # a real (non-test-client) deployment surfaces to the caller as
+            # a bare "Internal Server Error" with no detail at all, unlike
+            # every other failure mode this generated app already reports
+            # clearly (auth, reserved names, oversized bodies, ...).
+            lines.append("    try:")
+            lines.append("        result = jsonable_encoder(result)")
+            lines.append("    except Exception as e:")
+            lines.append("        raise HTTPException(")
+            lines.append("            status_code=500,")
+            lines.append(
+                f"            detail=f\"'{func_name}' returned a value that "
+                "is not JSON-serializable: {e}\","
+            )
+            lines.append("        )")
+            lines.append("    return {\"result\": result}")
+        lines.append("")
+    return "\n".join(lines)
+
+# Helper to write the generated FastAPI source file
+def write_generated_api(code, output_path="generated/app.py"):
+    output_file = Path(output_path)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write(code)
+    print(f"Generated API written to: {output_path}")
+
+
+def endpoint_openapi_metadata(
+    schema_generator,
+    endpoint
+):
+
+    description = (
+        schema_generator
+        .generate_openapi_description(
+            endpoint
+        )
+    )
+
+    return {
+
+        "summary":
+            description.summary,
+
+        "description":
+            description.description,
+
+        "tags":
+            description.tags
+    }
+
+
+def endpoint_examples(
+    schema_generator,
+    endpoint
+):
+
+    example = (
+        schema_generator
+        .generate_api_examples(
+            endpoint
+        )
+    )
+
+    return {
+
+        "request":
+            example.request_example,
+
+        "response":
+            example.response_example
+    }
+
+
+def endpoint_errors(
+    schema_generator
+):
+
+    return (
+        schema_generator
+        .generate_api_error_docs()
+    )
+
+# Simple demo when run directly
+if __name__ == "__main__":
+    sample_functions = [
+        {
+            "name": "add",
+            "args": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "int"}
+            ],
+            "return_type": "int"
+        },
+        {
+            "name": "train_model",
+            "args": [
+                {"name": "epochs", "type": "int"}
+            ],
+            "return_type": "str"
+        }
+    ]
+    generated_code = generate_fastapi_code(sample_functions)
+    write_generated_api(generated_code)

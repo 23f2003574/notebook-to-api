@@ -1,0 +1,1538 @@
+import subprocess
+import sys
+
+import pytest
+
+from backend import serve as serve_module
+
+
+class _FakePopen:
+    """Records the command it was invoked with instead of actually
+    launching uvicorn, and no-ops terminate/wait so serve_notebook's
+    shutdown path can be exercised without a real subprocess.
+
+    default_poll_returncode is a class attribute (reset in _reset_fakes)
+    so a test can set it before calling serve_notebook to simulate the
+    server process having already exited (e.g. `port` already in use) --
+    None means "still running", matching subprocess.Popen.poll()'s own
+    contract.
+
+    default_wait_raises_timeout_expired (also reset in _reset_fakes) lets
+    a test simulate a child process that doesn't stop within wait()'s own
+    timeout after terminate() (SIGTERM) -- the exact scenario
+    serve_notebook's own Ctrl+C shutdown path must escalate to kill()
+    (SIGKILL) for. Only the *first* wait() call raises; a real killed
+    process can't ignore SIGKILL, so the second wait() (after kill())
+    succeeds, the same way a real subprocess would.
+    """
+
+    instances = []
+    default_poll_returncode = None
+    default_wait_raises_timeout_expired = False
+
+    def __init__(self, cmd, *args, **kwargs):
+        self.cmd = cmd
+        self.cwd = kwargs.get("cwd")
+        self.terminated = False
+        self.killed = False
+        self.waited_timeout = None
+        self.wait_call_count = 0
+        self.poll_returncode = _FakePopen.default_poll_returncode
+        self._raises_timeout_expired_once = _FakePopen.default_wait_raises_timeout_expired
+        _FakePopen.instances.append(self)
+
+    def terminate(self):
+        self.terminated = True
+
+    def kill(self):
+        self.killed = True
+
+    def wait(self, timeout=None):
+        self.wait_call_count += 1
+        self.waited_timeout = timeout
+
+        if self._raises_timeout_expired_once and self.wait_call_count == 1:
+            raise subprocess.TimeoutExpired(cmd=self.cmd, timeout=timeout)
+
+    def poll(self):
+        return self.poll_returncode
+
+
+class _FakeObserver:
+    """Records scheduling/lifecycle calls instead of actually watching the
+    filesystem, so tests don't depend on real inotify/fsevents timing."""
+
+    instances = []
+
+    def __init__(self):
+        self.scheduled = []
+        self.started = False
+        self.stopped = False
+        self.joined = False
+        _FakeObserver.instances.append(self)
+
+    def schedule(self, handler, path, recursive=False):
+        self.scheduled.append((handler, path, recursive))
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
+
+    def join(self):
+        self.joined = True
+
+
+def _raise_keyboard_interrupt(*args, **kwargs):
+    raise KeyboardInterrupt
+
+
+@pytest.fixture(autouse=True)
+def _reset_fakes():
+    _FakePopen.instances.clear()
+    _FakePopen.default_poll_returncode = None
+    _FakePopen.default_wait_raises_timeout_expired = False
+    _FakeObserver.instances.clear()
+    yield
+
+
+def _run_serve(
+    monkeypatch, notebook_path, output_dir, port=None, host=None,
+    compiled_calls=None, summary_calls=None, only=None, exclude=None,
+    only_exclude_calls=None, debounce_seconds=None, on_change=None,
+    hook_calls=None,
+):
+    """serve_notebook only returns because time.sleep is patched to raise
+    KeyboardInterrupt on its first call inside the `while True` loop --
+    mirroring how a real user would Ctrl+C it -- so this exercises the
+    full startup-through-shutdown path in one synchronous call.
+
+    print_compile_summary is stubbed alongside compile_notebook (rather
+    than left to run for real) because it calls inspect_notebook_data,
+    which would otherwise try to actually parse these tests' placeholder
+    "{}" notebook content as a real notebook and raise.
+
+    compiled_calls/summary_calls keep recording plain (nb_path, out_dir)
+    tuples, unchanged from before serve_notebook accepted only/exclude at
+    all -- every existing assertion against them stays valid. A test that
+    also needs to confirm only/exclude actually reached compile_notebook/
+    print_compile_summary passes its own `only_exclude_calls` list
+    instead, appended to separately as (only, exclude) tuples.
+    """
+    if compiled_calls is None:
+        compiled_calls = []
+
+    if summary_calls is None:
+        summary_calls = []
+
+    if only_exclude_calls is None:
+        only_exclude_calls = []
+
+    if hook_calls is None:
+        hook_calls = []
+
+    def fake_compile_notebook(nb_path, out_dir, only=None, exclude=None):
+        compiled_calls.append((nb_path, out_dir))
+        only_exclude_calls.append((only, exclude))
+
+    def fake_print_compile_summary(nb_path, out_dir, only=None, exclude=None):
+        summary_calls.append((nb_path, out_dir))
+
+    def fake_run_on_change_hook(command):
+        hook_calls.append(command)
+
+    monkeypatch.setattr(serve_module, "compile_notebook", fake_compile_notebook)
+    monkeypatch.setattr(
+        serve_module, "print_compile_summary", fake_print_compile_summary
+    )
+    monkeypatch.setattr(serve_module, "run_on_change_hook", fake_run_on_change_hook)
+    monkeypatch.setattr(serve_module, "Observer", _FakeObserver)
+    monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(serve_module.time, "sleep", _raise_keyboard_interrupt)
+
+    kwargs = {}
+    if port is not None:
+        kwargs["port"] = port
+    if host is not None:
+        kwargs["host"] = host
+    if only is not None:
+        kwargs["only"] = only
+    if exclude is not None:
+        kwargs["exclude"] = exclude
+    if debounce_seconds is not None:
+        kwargs["debounce_seconds"] = debounce_seconds
+    if on_change is not None:
+        kwargs["on_change"] = on_change
+
+    serve_module.serve_notebook(str(notebook_path), str(output_dir), **kwargs)
+
+
+def test_serve_notebook_defaults_to_port_8000(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    assert len(_FakePopen.instances) == 1
+    assert _FakePopen.instances[0].cmd[-2:] == ["--port", "8000"]
+
+
+def test_serve_notebook_passes_custom_port_to_uvicorn_command(tmp_path, monkeypatch):
+    """Confirmed missing before this: the port was hardcoded to 8000 in
+    the uvicorn subprocess command with no way to override it, making it
+    impossible to `serve` two notebooks at once.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir, port=9500)
+
+    assert len(_FakePopen.instances) == 1
+    assert _FakePopen.instances[0].cmd[-2:] == ["--port", "9500"]
+
+
+def test_serve_notebook_defaults_to_host_0_0_0_0(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    assert len(_FakePopen.instances) == 1
+    assert _FakePopen.instances[0].cmd[-4:-2] == ["--host", "0.0.0.0"]
+
+
+def test_serve_notebook_passes_custom_host_to_uvicorn_command(tmp_path, monkeypatch):
+    """Confirmed missing before this: the host was hardcoded to "0.0.0.0"
+    in the uvicorn subprocess command with no way to override it -- unlike
+    the dashboard API server's bind host, which is already configurable
+    via NOTEBOOK_API_DASHBOARD_HOST for the same reason (see
+    dashboard_host() in backend/dashboard.py).
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir, host="127.0.0.1")
+
+    assert len(_FakePopen.instances) == 1
+    assert _FakePopen.instances[0].cmd[-4:-2] == ["--host", "127.0.0.1"]
+
+
+def test_serve_notebook_runs_uvicorn_from_the_output_dirs_parent_directory(
+    tmp_path, monkeypatch
+):
+    """package_name_for_output_dir(output_dir) only ever returns
+    output_dir's *basename* (e.g. "built" for a "subdir/built"
+    output_dir), so "{package_name}.app:app" is only importable by a
+    process whose own cwd has that basename as a direct child. Confirmed
+    exploitable before this fix: `serve nb.ipynb --output subdir/built`
+    compiled cleanly, but the uvicorn subprocess -- launched with no
+    explicit cwd, so it inherited whatever directory `serve` itself was
+    invoked from -- crashed immediately with "ModuleNotFoundError: No
+    module named 'built'", since "built" was never a direct child of the
+    invocation directory, only of "subdir/".
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "subdir" / "built"
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    assert len(_FakePopen.instances) == 1
+    assert _FakePopen.instances[0].cwd == str(output_dir.parent)
+    assert _FakePopen.instances[0].cmd[3] == "built.app:app"
+
+
+def test_serve_notebook_cwd_is_the_invocation_directory_for_the_default_output(
+    tmp_path, monkeypatch
+):
+    """The fix above must be a complete no-op for the documented default
+    (--output "generated", a direct child of wherever `serve` is
+    invoked from): Path("generated").resolve().parent is exactly the
+    original invocation directory, identical to the previous
+    unset-cwd behavior.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    assert len(_FakePopen.instances) == 1
+    assert _FakePopen.instances[0].cwd == str(tmp_path)
+
+
+def test_serve_notebook_passes_reload_dir_scoped_to_the_output_dir(tmp_path, monkeypatch):
+    """uvicorn's own --reload watcher, when no --reload-dir is given,
+    defaults to watching `Path.cwd()` recursively (confirmed against the
+    installed uvicorn's own Config.__init__: reload_dirs falls back to
+    [Path.cwd()] whenever it ends up empty) -- and cwd here is
+    output_dir's *parent* (needed for `{package_name}.app:app` to be
+    importable), not output_dir itself. Without an explicit --reload-dir,
+    the uvicorn subprocess watched the *entire* invocation directory tree
+    for the documented default (--output "generated", whose parent is the
+    project root) -- every unrelated file in the project, not just the
+    compiled app -- triggering a spurious restart on a totally unrelated
+    edit and paying the filesystem-watch cost of a potentially large,
+    unrelated directory tree for no benefit.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    assert len(_FakePopen.instances) == 1
+    cmd = _FakePopen.instances[0].cmd
+    assert "--reload-dir" in cmd
+    reload_dir_index = cmd.index("--reload-dir")
+    assert cmd[reload_dir_index + 1] == str(output_dir.resolve())
+
+
+def test_serve_notebook_scopes_reload_dir_to_output_dir_not_its_parent_for_a_nested_output(
+    tmp_path, monkeypatch
+):
+    """Same fix as above, verified for a multi-segment --output: the
+    reload watcher must stay scoped to output_dir itself even when cwd
+    (output_dir's parent, for import resolution) is a different, wider
+    directory than output_dir.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "subdir" / "built"
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    assert len(_FakePopen.instances) == 1
+    cmd = _FakePopen.instances[0].cmd
+    reload_dir_index = cmd.index("--reload-dir")
+    assert cmd[reload_dir_index + 1] == str(output_dir.resolve())
+    # The reload dir must be output_dir itself, not the (wider) cwd the
+    # subprocess was launched from.
+    assert cmd[reload_dir_index + 1] != _FakePopen.instances[0].cwd
+
+
+def test_serve_notebook_prints_localhost_for_the_default_host(tmp_path, monkeypatch, capsys):
+    """"0.0.0.0" isn't itself a browsable address -- the printed API/Docs
+    URLs must still say "localhost" for the common default, exactly as
+    they did before `host` became configurable.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    output = capsys.readouterr().out
+    assert "http://localhost:8000" in output
+    assert "http://0.0.0.0:8000" not in output
+
+
+def test_serve_notebook_prints_the_actual_host_when_customized(tmp_path, monkeypatch, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir, host="127.0.0.1")
+
+    output = capsys.readouterr().out
+    assert "http://127.0.0.1:8000" in output
+
+
+def test_serve_notebook_compiles_before_starting_the_server(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    compiled_calls = []
+
+    _run_serve(monkeypatch, notebook_path, output_dir, compiled_calls=compiled_calls)
+
+    assert compiled_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_serve_notebook_passes_only_to_the_initial_compile(tmp_path, monkeypatch):
+    """Before this, `serve` (and `watch`, below) had no equivalent of
+    `compile`/`deploy`'s own --only/--exclude at all -- every function
+    always became an endpoint on every compile, with no way to iterate
+    on just a subset while running a live dev server.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    only_exclude_calls = []
+
+    _run_serve(
+        monkeypatch, notebook_path, output_dir,
+        only=["add"], only_exclude_calls=only_exclude_calls,
+    )
+
+    assert only_exclude_calls == [(["add"], None)]
+
+
+def test_serve_notebook_passes_exclude_to_the_initial_compile(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    only_exclude_calls = []
+
+    _run_serve(
+        monkeypatch, notebook_path, output_dir,
+        exclude=["helper"], only_exclude_calls=only_exclude_calls,
+    )
+
+    assert only_exclude_calls == [(None, ["helper"])]
+
+
+def test_serve_notebook_defaults_the_change_handlers_debounce_to_one_second(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    handler, _path, _recursive = _FakeObserver.instances[0].scheduled[0]
+    assert handler.debounce_seconds == 1.0
+
+
+def test_serve_notebook_passes_debounce_seconds_to_the_change_handler(
+    tmp_path, monkeypatch
+):
+    """Before this, the 1-second debounce window
+    NotebookChangeHandler._handle_possible_notebook_change applies
+    between recompiles was hardcoded, with no way to widen it (for an
+    editor whose save touches the notebook's file more than once) or
+    narrow it (to get feedback faster on a plain, single-write save)
+    without editing backend/serve.py directly.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir, debounce_seconds=5.0)
+
+    handler, _path, _recursive = _FakeObserver.instances[0].scheduled[0]
+    assert handler.debounce_seconds == 5.0
+
+
+def test_serve_notebook_runs_the_on_change_hook_after_the_initial_compile(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    hook_calls = []
+
+    _run_serve(
+        monkeypatch, notebook_path, output_dir,
+        on_change="pytest -x", hook_calls=hook_calls,
+    )
+
+    assert hook_calls == ["pytest -x"]
+
+
+def test_serve_notebook_does_not_run_a_hook_when_none_is_given(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    hook_calls = []
+
+    _run_serve(monkeypatch, notebook_path, output_dir, hook_calls=hook_calls)
+
+    assert hook_calls == []
+
+
+def test_serve_notebook_passes_on_change_to_the_change_handler(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir, on_change="pytest -x")
+
+    handler, _path, _recursive = _FakeObserver.instances[0].scheduled[0]
+    assert handler.on_change == "pytest -x"
+
+
+def test_serve_notebook_prints_a_compile_summary_after_the_initial_compile(tmp_path, monkeypatch):
+    """Before this, `serve`'s initial compile gave no feedback at all
+    about what had actually been generated -- just "Initial compilation
+    complete." -- even though `compile` already got this exact summary
+    (endpoint list, background markers, dependencies) in an earlier fix.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    summary_calls = []
+
+    _run_serve(monkeypatch, notebook_path, output_dir, summary_calls=summary_calls)
+
+    assert summary_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_serve_notebook_watches_the_notebooks_parent_directory(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    assert len(_FakeObserver.instances) == 1
+    [(handler, path, recursive)] = _FakeObserver.instances[0].scheduled
+    assert isinstance(handler, serve_module.NotebookChangeHandler)
+    assert path == str(tmp_path.resolve())
+    assert recursive is False
+
+
+def test_serve_notebook_stops_server_and_observer_on_keyboard_interrupt(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    assert _FakePopen.instances[0].terminated is True
+    assert _FakePopen.instances[0].waited_timeout == 5
+    assert _FakeObserver.instances[0].stopped is True
+    assert _FakeObserver.instances[0].joined is True
+
+
+def test_serve_notebook_kills_the_server_process_if_it_does_not_stop_within_the_timeout(
+    tmp_path, monkeypatch
+):
+    """terminate() sends SIGTERM once, with no escalation. Confirmed
+    exploitable before this fix: a child uvicorn that doesn't exit within
+    wait()'s own 5s timeout (an in-flight long-running request, a slow
+    debugger attach, a loaded system, or a process that simply ignores
+    SIGTERM) left wait(timeout=5) raising subprocess.TimeoutExpired
+    unhandled, propagating straight out of Ctrl+C's own documented
+    graceful-shutdown path as a raw traceback instead of the "Server
+    stopped." message this same shutdown block already prints for the
+    common case.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _FakePopen.default_wait_raises_timeout_expired = True
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    assert _FakePopen.instances[0].terminated is True
+    assert _FakePopen.instances[0].killed is True
+    # wait() is called twice: the first (timing out) after terminate(),
+    # the second (succeeding, the same way a real killed process can't
+    # ignore SIGKILL) after kill().
+    assert _FakePopen.instances[0].wait_call_count == 2
+
+
+def test_serve_notebook_still_joins_the_observer_after_the_server_process_is_killed(
+    tmp_path, monkeypatch
+):
+    """observer.join() (confirming the notebook-watcher thread has
+    actually stopped, not just been asked to) sits after the whole
+    terminate/wait try/except in serve_notebook -- before this fix, an
+    unhandled TimeoutExpired escaping that block skipped it entirely,
+    potentially leaving that thread unjoined on top of the already-crashed
+    shutdown.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _FakePopen.default_wait_raises_timeout_expired = True
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    assert _FakeObserver.instances[0].stopped is True
+    assert _FakeObserver.instances[0].joined is True
+
+
+def test_serve_notebook_prints_a_warning_when_escalating_to_kill(tmp_path, monkeypatch, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _FakePopen.default_wait_raises_timeout_expired = True
+
+    _run_serve(monkeypatch, notebook_path, output_dir)
+
+    captured = capsys.readouterr()
+    assert "forcing it to stop" in captured.out
+    assert "Server stopped" in captured.out
+
+
+def test_serve_notebook_raises_when_the_server_process_exits_unexpectedly(tmp_path, monkeypatch):
+    """subprocess.Popen doesn't raise or notify anything when the process
+    it started exits on its own -- before polling it in the loop, a
+    uvicorn that died immediately (most commonly: another process already
+    had the port bound) left serve_notebook sleeping forever, looking
+    like a healthy running server with no indication anything had gone
+    wrong, until the user eventually gave up and hit Ctrl+C themselves.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out, **kwargs: None)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+    monkeypatch.setattr(serve_module, "Observer", _FakeObserver)
+    monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
+    # time.sleep must never be reached on this path -- the crash is
+    # detected on the very first poll, before the loop ever sleeps.
+    monkeypatch.setattr(
+        serve_module.time, "sleep",
+        lambda *a, **k: pytest.fail("must not sleep after the process has already exited")
+    )
+
+    _FakePopen.default_poll_returncode = 1
+
+    with pytest.raises(RuntimeError, match="exited unexpectedly"):
+        serve_module.serve_notebook(str(notebook_path), str(output_dir), 8123)
+
+
+def test_serve_notebook_reports_the_exit_code_and_port_when_the_server_dies(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out, **kwargs: None)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+    monkeypatch.setattr(serve_module, "Observer", _FakeObserver)
+    monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
+
+    _FakePopen.default_poll_returncode = 1
+
+    with pytest.raises(RuntimeError) as exc_info:
+        serve_module.serve_notebook(str(notebook_path), str(output_dir), 8123)
+
+    assert "exit code 1" in str(exc_info.value)
+    assert "port 8123" in str(exc_info.value)
+
+
+def test_serve_notebook_stops_and_joins_the_observer_when_the_server_dies(tmp_path, monkeypatch):
+    """Cleanup must happen on this failure path too, not just the
+    KeyboardInterrupt path -- otherwise the filesystem watcher thread
+    from _FakeObserver's real counterpart would keep running after
+    serve_notebook has already given up and raised.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out, **kwargs: None)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+    monkeypatch.setattr(serve_module, "Observer", _FakeObserver)
+    monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
+
+    _FakePopen.default_poll_returncode = 1
+
+    with pytest.raises(RuntimeError):
+        serve_module.serve_notebook(str(notebook_path), str(output_dir), 8123)
+
+    assert _FakeObserver.instances[0].stopped is True
+    assert _FakeObserver.instances[0].joined is True
+    # Nothing to terminate/wait on -- the process was already dead, unlike
+    # the KeyboardInterrupt shutdown path.
+    assert _FakePopen.instances[0].terminated is False
+
+
+def _run_watch(
+    monkeypatch, notebook_path, output_dir, compiled_calls=None, summary_calls=None,
+    only=None, exclude=None, only_exclude_calls=None, debounce_seconds=None,
+    on_change=None, hook_calls=None,
+):
+    """watch_notebook only returns because time.sleep is patched to raise
+    KeyboardInterrupt on its first call inside the `while True` loop,
+    mirroring _run_serve above -- the same technique, since watch_notebook
+    reuses the identical Observer/NotebookChangeHandler setup and
+    KeyboardInterrupt-driven shutdown loop as serve_notebook, just with no
+    uvicorn subprocess at all.
+
+    See _run_serve's own docstring for why compiled_calls/summary_calls
+    stay plain (nb_path, out_dir) tuples and only_exclude_calls is the
+    separate list a test passes to also confirm only/exclude reached
+    compile_notebook/print_compile_summary.
+    """
+    if compiled_calls is None:
+        compiled_calls = []
+
+    if summary_calls is None:
+        summary_calls = []
+
+    if only_exclude_calls is None:
+        only_exclude_calls = []
+
+    if hook_calls is None:
+        hook_calls = []
+
+    def fake_compile_notebook(nb_path, out_dir, only=None, exclude=None):
+        compiled_calls.append((nb_path, out_dir))
+        only_exclude_calls.append((only, exclude))
+
+    def fake_print_compile_summary(nb_path, out_dir, only=None, exclude=None):
+        summary_calls.append((nb_path, out_dir))
+
+    def fake_run_on_change_hook(command):
+        hook_calls.append(command)
+
+    monkeypatch.setattr(serve_module, "compile_notebook", fake_compile_notebook)
+    monkeypatch.setattr(
+        serve_module, "print_compile_summary", fake_print_compile_summary
+    )
+    monkeypatch.setattr(serve_module, "run_on_change_hook", fake_run_on_change_hook)
+    monkeypatch.setattr(serve_module, "Observer", _FakeObserver)
+    monkeypatch.setattr(serve_module.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(serve_module.time, "sleep", _raise_keyboard_interrupt)
+
+    kwargs = {}
+    if only is not None:
+        kwargs["only"] = only
+    if exclude is not None:
+        kwargs["exclude"] = exclude
+    if debounce_seconds is not None:
+        kwargs["debounce_seconds"] = debounce_seconds
+    if on_change is not None:
+        kwargs["on_change"] = on_change
+
+    serve_module.watch_notebook(str(notebook_path), str(output_dir), **kwargs)
+
+
+def test_watch_notebook_compiles_before_watching(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    compiled_calls = []
+
+    _run_watch(monkeypatch, notebook_path, output_dir, compiled_calls=compiled_calls)
+
+    assert compiled_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_watch_notebook_passes_only_to_the_initial_compile(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    only_exclude_calls = []
+
+    _run_watch(
+        monkeypatch, notebook_path, output_dir,
+        only=["add"], only_exclude_calls=only_exclude_calls,
+    )
+
+    assert only_exclude_calls == [(["add"], None)]
+
+
+def test_watch_notebook_passes_exclude_to_the_initial_compile(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    only_exclude_calls = []
+
+    _run_watch(
+        monkeypatch, notebook_path, output_dir,
+        exclude=["helper"], only_exclude_calls=only_exclude_calls,
+    )
+
+    assert only_exclude_calls == [(None, ["helper"])]
+
+
+def test_watch_notebook_defaults_the_change_handlers_debounce_to_one_second(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_watch(monkeypatch, notebook_path, output_dir)
+
+    handler, _path, _recursive = _FakeObserver.instances[0].scheduled[0]
+    assert handler.debounce_seconds == 1.0
+
+
+def test_watch_notebook_passes_debounce_seconds_to_the_change_handler(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_watch(monkeypatch, notebook_path, output_dir, debounce_seconds=0.2)
+
+    handler, _path, _recursive = _FakeObserver.instances[0].scheduled[0]
+    assert handler.debounce_seconds == 0.2
+
+
+def test_watch_notebook_runs_the_on_change_hook_after_the_initial_compile(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    hook_calls = []
+
+    _run_watch(
+        monkeypatch, notebook_path, output_dir,
+        on_change="pytest -x", hook_calls=hook_calls,
+    )
+
+    assert hook_calls == ["pytest -x"]
+
+
+def test_watch_notebook_passes_on_change_to_the_change_handler(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_watch(monkeypatch, notebook_path, output_dir, on_change="pytest -x")
+
+    handler, _path, _recursive = _FakeObserver.instances[0].scheduled[0]
+    assert handler.on_change == "pytest -x"
+
+
+def test_watch_notebook_prints_a_compile_summary_after_the_initial_compile(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+    summary_calls = []
+
+    _run_watch(monkeypatch, notebook_path, output_dir, summary_calls=summary_calls)
+
+    assert summary_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_watch_notebook_watches_the_notebooks_parent_directory(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_watch(monkeypatch, notebook_path, output_dir)
+
+    assert len(_FakeObserver.instances) == 1
+    [(handler, path, recursive)] = _FakeObserver.instances[0].scheduled
+    assert isinstance(handler, serve_module.NotebookChangeHandler)
+    assert path == str(tmp_path.resolve())
+    assert recursive is False
+
+
+def test_watch_notebook_never_spawns_a_subprocess(tmp_path, monkeypatch):
+    """The entire point of `watch` over `serve`: no uvicorn subprocess, no
+    port bound, nothing left running that a developer would need to
+    remember to stop separately.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_watch(monkeypatch, notebook_path, output_dir)
+
+    assert _FakePopen.instances == []
+
+
+def test_watch_notebook_stops_and_joins_the_observer_on_keyboard_interrupt(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_watch(monkeypatch, notebook_path, output_dir)
+
+    assert _FakeObserver.instances[0].stopped is True
+    assert _FakeObserver.instances[0].joined is True
+
+
+def test_watch_notebook_prints_a_watching_message_naming_the_notebook_path(
+    tmp_path, monkeypatch, capsys
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    _run_watch(monkeypatch, notebook_path, output_dir)
+
+    out = capsys.readouterr().out
+    assert "Watching" in out
+    assert str(notebook_path.resolve()) in out
+    assert "Watch stopped" in out
+
+
+def test_notebook_change_handler_recompiles_on_matching_notebook_modification(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_modified(event)
+
+    assert compiled_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_notebook_change_handler_recompiles_with_only_and_exclude(tmp_path, monkeypatch):
+    """A handler constructed with only/exclude must keep applying them on
+    every recompile a save triggers, not just whatever compile happened
+    to run when it was first constructed (see serve_notebook/
+    watch_notebook, which both pass only/exclude through here).
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    only_exclude_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, only=None, exclude=None: only_exclude_calls.append((only, exclude))
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    handler = serve_module.NotebookChangeHandler(
+        str(notebook_path), str(output_dir), only=["add"], exclude=None,
+    )
+    handler.last_compile_time = 0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_modified(event)
+
+    assert only_exclude_calls == [(["add"], None)]
+
+
+def test_notebook_change_handler_recompiles_on_notebook_created_at_the_watched_path(
+    tmp_path, monkeypatch
+):
+    """Some editors write a brand-new notebook to the watched path outright
+    (rather than modifying an existing inode), which watchdog reports as a
+    FileCreatedEvent -- distinct from the FileModifiedEvent an in-place
+    write produces.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_created(event)
+
+    assert compiled_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_notebook_change_handler_recompiles_on_notebook_moved_into_place(
+    tmp_path, monkeypatch
+):
+    """Jupyter's own save mechanism -- and this project's own POST
+    /api/upload endpoint (see resolve_upload_path in
+    backend/routes/upload.py) -- writes to a temp file first and then
+    atomically renames it into place, to avoid ever leaving a half-written
+    notebook on disk. watchdog reports that rename as a FileMovedEvent
+    whose dest_path is the final notebook path; src_path is the
+    now-irrelevant temp file name. Before this, on_moved wasn't handled at
+    all, so this exact save pattern silently never triggered a
+    recompile.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    temp_path = tmp_path / ".nb.ipynb.tmp"
+    event = type(
+        "Event", (), {"src_path": str(temp_path), "dest_path": str(notebook_path)}
+    )()
+    handler.on_moved(event)
+
+    assert compiled_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_notebook_change_handler_ignores_an_unrelated_file_moved_into_the_directory(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
+    )
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    temp_path = tmp_path / ".other.ipynb.tmp"
+    other_path = tmp_path / "other.ipynb"
+    event = type(
+        "Event", (), {"src_path": str(temp_path), "dest_path": str(other_path)}
+    )()
+    handler.on_moved(event)
+
+    assert compiled_calls == []
+
+
+def test_notebook_change_handler_warns_when_the_notebook_is_deleted(
+    tmp_path, monkeypatch, capsys
+):
+    """Before this, deleting the notebook mid-`serve` session (e.g. `rm
+    notebook.ipynb`, a git checkout/branch switch) printed nothing and
+    raised nothing at all -- the live uvicorn subprocess just kept
+    serving the last successfully compiled app forever, with zero
+    indication its source had disappeared.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
+    )
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    notebook_path.unlink()
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_deleted(event)
+
+    # A deletion is never a recompile-able change.
+    assert compiled_calls == []
+
+    captured = capsys.readouterr()
+    assert "no longer found" in captured.out
+    assert str(notebook_path) in captured.out
+
+
+def test_notebook_change_handler_ignores_deletion_of_an_unrelated_file(
+    tmp_path, monkeypatch, capsys
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    other_path = tmp_path / "other.ipynb"
+    other_path.write_text("{}", encoding="utf-8")
+    other_path.unlink()
+
+    event = type("Event", (), {"src_path": str(other_path)})()
+    handler.on_deleted(event)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+
+
+def test_notebook_change_handler_warns_when_the_notebook_is_moved_away(
+    tmp_path, monkeypatch, capsys
+):
+    """The same "notebook no longer at the watched path" condition as a
+    hard delete above, just reached by renaming the watched notebook
+    itself away instead -- on_moved's existing dest_path check only
+    catches something new arriving at notebook_path, not notebook_path's
+    own content leaving it.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
+    )
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    renamed_path = tmp_path / "nb_renamed_away.ipynb"
+    notebook_path.rename(renamed_path)
+
+    event = type(
+        "Event", (), {"src_path": str(notebook_path), "dest_path": str(renamed_path)}
+    )()
+    handler.on_moved(event)
+
+    assert compiled_calls == []
+
+    captured = capsys.readouterr()
+    assert "no longer found" in captured.out
+
+
+def test_notebook_change_handler_recovers_after_the_notebook_is_recreated(
+    tmp_path, monkeypatch, capsys
+):
+    """Recovery from the "deleted" warning above needs no separate code
+    path: recreating a notebook at the watched path fires on_created,
+    which _handle_possible_notebook_change already treats as an ordinary
+    change and recompiles from.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    notebook_path.unlink()
+    handler.on_deleted(type("Event", (), {"src_path": str(notebook_path)})())
+    capsys.readouterr()
+
+    notebook_path.write_text("{}", encoding="utf-8")
+    handler.last_compile_time = 0
+    handler.on_created(type("Event", (), {"src_path": str(notebook_path)})())
+
+    assert compiled_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_notebook_change_handler_prints_a_compile_summary_after_recompiling(tmp_path, monkeypatch):
+    """A live `serve` session's entire point is a fast, informative
+    feedback loop after every save -- before this, a hot-recompile gave
+    no indication at all of what had changed, just "Recompilation
+    complete."
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out, **kwargs: None)
+
+    summary_calls = []
+    monkeypatch.setattr(
+        serve_module, "print_compile_summary",
+        lambda nb, out, **kwargs: summary_calls.append((nb, out))
+    )
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_modified(event)
+
+    assert summary_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_notebook_change_handler_does_not_print_a_summary_when_recompilation_fails(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    def fake_compile_notebook(nb, out, **kwargs):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(serve_module, "compile_notebook", fake_compile_notebook)
+
+    summary_calls = []
+    monkeypatch.setattr(
+        serve_module, "print_compile_summary",
+        lambda nb, out, **kwargs: summary_calls.append((nb, out))
+    )
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_modified(event)  # must not raise
+
+    assert summary_calls == []
+
+
+def test_notebook_change_handler_runs_the_on_change_hook_after_a_successful_recompile(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out, **kwargs: None)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    hook_calls = []
+    monkeypatch.setattr(
+        serve_module, "run_on_change_hook", lambda command: hook_calls.append(command)
+    )
+
+    handler = serve_module.NotebookChangeHandler(
+        str(notebook_path), str(output_dir), on_change="pytest -x"
+    )
+    handler.last_compile_time = 0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_modified(event)
+
+    assert hook_calls == ["pytest -x"]
+
+
+def test_notebook_change_handler_does_not_run_a_hook_when_none_is_given(
+    tmp_path, monkeypatch
+):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    monkeypatch.setattr(serve_module, "compile_notebook", lambda nb, out, **kwargs: None)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    hook_calls = []
+    monkeypatch.setattr(
+        serve_module, "run_on_change_hook", lambda command: hook_calls.append(command)
+    )
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_modified(event)
+
+    assert hook_calls == []
+
+
+def test_notebook_change_handler_does_not_run_the_hook_when_recompilation_fails(
+    tmp_path, monkeypatch
+):
+    """The hook exists to check something about a *successfully* compiled
+    app (a test suite, a smoke check) -- running it against a compile
+    that just failed would either crash against a stale/missing app or
+    produce a misleading result, so it must be skipped entirely, the same
+    way print_compile_summary already is above.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    def fake_compile_notebook(nb, out, **kwargs):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(serve_module, "compile_notebook", fake_compile_notebook)
+
+    hook_calls = []
+    monkeypatch.setattr(
+        serve_module, "run_on_change_hook", lambda command: hook_calls.append(command)
+    )
+
+    handler = serve_module.NotebookChangeHandler(
+        str(notebook_path), str(output_dir), on_change="pytest -x"
+    )
+    handler.last_compile_time = 0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_modified(event)  # must not raise
+
+    assert hook_calls == []
+
+
+def test_run_on_change_hook_reports_success(capsys):
+
+    serve_module.run_on_change_hook(f"{sys.executable} -c 'pass'")
+
+    output = capsys.readouterr().out
+    assert "Running on-change hook" in output
+    assert "succeeded" in output
+
+
+def test_run_on_change_hook_reports_a_non_zero_exit_without_raising(capsys):
+
+    serve_module.run_on_change_hook(
+        f"{sys.executable} -c 'import sys; sys.exit(3)'"
+    )  # must not raise
+
+    output = capsys.readouterr().out
+    assert "exited with code 3" in output
+
+
+def test_notebook_change_handler_ignores_a_different_notebook_file(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    other_path = tmp_path / "other.ipynb"
+    other_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
+    )
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    event = type("Event", (), {"src_path": str(other_path)})()
+    handler.on_modified(event)
+
+    assert compiled_calls == []
+
+
+def test_notebook_change_handler_ignores_non_ipynb_modification(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
+    )
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    event = type("Event", (), {"src_path": str(tmp_path / "nb.ipynb.swp")})()
+    handler.on_modified(event)
+
+    assert compiled_calls == []
+
+
+def test_notebook_change_handler_debounces_rapid_modifications(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    fake_now = [100.0]
+    monkeypatch.setattr(serve_module.time, "time", lambda: fake_now[0])
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 100.0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+
+    fake_now[0] = 100.5  # within the 1-second debounce window
+    handler.on_modified(event)
+    assert compiled_calls == []
+
+    fake_now[0] = 101.5  # past the debounce window
+    handler.on_modified(event)
+    assert compiled_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_notebook_change_handler_respects_a_custom_debounce_window(tmp_path, monkeypatch):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    fake_now = [100.0]
+    monkeypatch.setattr(serve_module.time, "time", lambda: fake_now[0])
+
+    handler = serve_module.NotebookChangeHandler(
+        str(notebook_path), str(output_dir), debounce_seconds=5.0,
+    )
+    handler.last_compile_time = 100.0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+
+    fake_now[0] = 104.9  # within the wider 5-second debounce window
+    handler.on_modified(event)
+    assert compiled_calls == []
+
+    fake_now[0] = 105.1  # past the wider debounce window
+    handler.on_modified(event)
+    assert compiled_calls == [(str(notebook_path), str(output_dir))]
+
+
+def test_notebook_change_handler_reports_a_debounced_change_instead_of_staying_silent(
+    tmp_path, monkeypatch, capsys,
+):
+    """Confirmed exploitable before this fix: a notebook edit saved within
+    debounce_seconds of the previous recompile was silently skipped, with
+    no output of any kind -- indistinguishable, from the terminal a
+    developer is watching, from `serve`/`watch` already having picked
+    the edit up and recompiled it. Every other branch in this handler
+    (an unrelated file, the watched notebook itself moving/deleted, a
+    successful or failing recompile) already prints something; only this
+    one didn't.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, **kwargs: compiled_calls.append((nb, out))
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    fake_now = [100.0]
+    monkeypatch.setattr(serve_module.time, "time", lambda: fake_now[0])
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 100.0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+
+    fake_now[0] = 100.5  # within the 1-second debounce window
+    handler.on_modified(event)
+
+    assert compiled_calls == []
+    output = capsys.readouterr().out
+    assert "changed again within 1.0s of the last recompile" in output
+    assert "0.5s left in the debounce window" in output
+    assert "Save again once the window has passed" in output
+
+
+def test_notebook_change_handler_does_not_report_debouncing_for_a_first_change(
+    tmp_path, monkeypatch, capsys,
+):
+    """The complement of the test above: an ordinary change that clears
+    the debounce window must print only the normal recompile messages,
+    not the debounce notice -- that notice belongs solely to the branch
+    that actually skips a recompile.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    monkeypatch.setattr(
+        serve_module, "compile_notebook", lambda nb, out, **kwargs: None
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    fake_now = [100.0]
+    monkeypatch.setattr(serve_module.time, "time", lambda: fake_now[0])
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0.0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.on_modified(event)
+
+    output = capsys.readouterr().out
+    assert "debounce window" not in output
+    assert "Recompiling API" in output
+
+
+def test_notebook_change_handler_reports_compilation_errors_without_raising(tmp_path, monkeypatch, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    def fake_compile_notebook(nb, out, **kwargs):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(serve_module, "compile_notebook", fake_compile_notebook)
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(output_dir))
+    handler.last_compile_time = 0
+
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+
+    handler.on_modified(event)  # must not raise
+
+    captured = capsys.readouterr()
+    assert "boom" in captured.out
