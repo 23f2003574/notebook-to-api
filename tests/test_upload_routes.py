@@ -30328,6 +30328,57 @@ def test_list_notebook_versions_note_search_matches_nothing_for_an_unnoted_versi
     assert resp.json()["versions"] == []
 
 
+def test_list_notebook_versions_note_search_regex_matches_a_pattern():
+
+    filename = "version_note_search_regex.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "hotfix-v2"},
+    )
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"note_search": r"^hotfix-v\d+$", "regex": "true"},
+    )
+
+    assert resp.status_code == 200
+    assert [v["version_id"] for v in resp.json()["versions"]] == [version_id]
+
+
+def test_list_notebook_versions_note_search_regex_false_treats_pattern_as_literal():
+
+    filename = "version_note_search_regex_off.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "hotfix-v2"},
+    )
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"note_search": r"^hotfix-v\d+$"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["versions"] == []
+
+
+def test_list_notebook_versions_note_search_regex_rejects_an_invalid_pattern():
+
+    filename = "version_note_search_bad_regex.ipynb"
+    _upload_and_create_one_version(filename)
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"note_search": "[", "regex": "true"},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_delete_notebook_version_also_discards_its_note():
 
     filename = "version_note_delete_cleanup.ipynb"

@@ -5818,6 +5818,8 @@ def _dispatch_core_command(args):
                 params["notes"] = "true"
             if args.note_search:
                 params["note_search"] = args.note_search
+            if args.note_search_regex:
+                params["regex"] = True
 
             try:
                 response = httpx.get(
@@ -12903,6 +12905,18 @@ def main():
             "(--notes) and searching by hand. Does not itself imply "
             "--notes -- combine both to also print each matching "
             "version's own note text."
+        )
+    )
+    versions_list_parser.add_argument(
+        "--note-search-regex",
+        action="store_true",
+        dest="note_search_regex",
+        help=(
+            "Treat --note-search as a case-insensitive Python regular "
+            "expression instead of a plain substring, via GET "
+            "/api/notebooks/{filename}/versions's own ?regex=true -- "
+            "e.g. --note-search '^hotfix' to find a specific category "
+            "of snapshot. Ignored without --note-search."
         )
     )
     versions_list_parser.add_argument(
