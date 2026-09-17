@@ -16129,6 +16129,147 @@ def test_copy_notebook_version_rejects_collision_without_overwrite():
     os.remove(Path(UPLOAD_DIR) / "versions_copy_collision_target.ipynb")
 
 
+def test_copy_notebook_version_overwrite_with_matching_expected_sha256_succeeds():
+
+    filename = "versions_copy_expected_sha256_match_source.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    dest_filename = "versions_copy_expected_sha256_match_target.ipynb"
+    dest_content = _notebook_bytes("def h() -> int:\n    return 3\n")
+    client.post(
+        "/api/upload",
+        files={"file": (dest_filename, io.BytesIO(dest_content), "application/json")},
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/copy",
+        json={
+            "new_filename": dest_filename,
+            "overwrite": True,
+            "expected_sha256": hashlib.sha256(dest_content).hexdigest(),
+        },
+    )
+
+    assert resp.status_code == 200
+    os.remove(Path(UPLOAD_DIR) / dest_filename)
+
+
+def test_copy_notebook_version_overwrite_with_mismatched_expected_sha256_is_rejected():
+
+    filename = "versions_copy_expected_sha256_mismatch_source.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    dest_filename = "versions_copy_expected_sha256_mismatch_target.ipynb"
+    dest_content = _notebook_bytes("def h() -> int:\n    return 3\n")
+    client.post(
+        "/api/upload",
+        files={"file": (dest_filename, io.BytesIO(dest_content), "application/json")},
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/copy",
+        json={
+            "new_filename": dest_filename,
+            "overwrite": True,
+            "expected_sha256": "0" * 64,
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "expected_sha256" in resp.json()["detail"]
+    assert (Path(UPLOAD_DIR) / dest_filename).read_bytes() == dest_content
+
+    os.remove(Path(UPLOAD_DIR) / dest_filename)
+
+
+def test_copy_notebook_version_expected_sha256_ignored_for_a_brand_new_destination():
+
+    filename = "versions_copy_expected_sha256_new_dest_source.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    dest_filename = "versions_copy_expected_sha256_new_dest_target.ipynb"
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/copy",
+        json={"new_filename": dest_filename, "expected_sha256": "0" * 64},
+    )
+
+    assert resp.status_code == 200
+    os.remove(Path(UPLOAD_DIR) / dest_filename)
+
+
 def test_copy_notebook_version_rejects_once_max_total_storage_bytes_is_reached(
     monkeypatch,
 ):
