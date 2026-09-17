@@ -16253,7 +16253,7 @@ def _bundle_sha256(file_details_with_sha256):
 
 
 @router.get("/generated")
-def list_generated_files_endpoint(checksums: bool = False):
+def list_generated_files_endpoint(checksums: bool = False, format: str = "json"):
     """List the files currently sitting in GENERATED_DIR, without requiring
     a notebook_path -- unlike POST /api/inspect, which can also list this
     same generated_files set, but only alongside a full inspection of a
@@ -16340,7 +16340,34 @@ def list_generated_files_endpoint(checksums: bool = False):
     compile with this field has actually happened; null if nothing has
     been compiled yet, or if GENERATED_DIR was produced by a compile that
     predates this field entirely.
+
+    "format" (optional, default "json") returns "csv" instead -- the same
+    "csv"/"json" choice GET /api/notebooks, GET /api/functions, GET
+    /api/notebooks/search-content, GET /api/notebooks/storage, GET
+    /api/deploy/history, and GET /api/compile/history's own "format"
+    already offer for their own listings, just applied here to this
+    endpoint's own "file_details" -- the one file listing in this project
+    that never got a CSV export at all. Column order is "filename,
+    size_bytes,modified_at", with a trailing "sha256" column only when
+    "checksums" is also given -- the same "checksums"-gated column every
+    other CSV export with a "checksums" opt-in already adds. The
+    singleton, bundle-level fields the "json" response also carries
+    ("compiled_at", "source_notebook_filename",
+    "generated_files_modified_since_compile", "bundle_sha256", ...) have
+    no per-row home in a CSV shaped around "file_details" and are left
+    out, the same way "status"/"total_count" are already left out of
+    every other endpoint's own CSV export here. An unrecognized "format"
+    is rejected with 400 before GENERATED_DIR is even read, the same
+    validation every other "format"-accepting endpoint here already
+    applies.
     """
+
+    if format not in ("json", "csv"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="format must be 'json' or 'csv'"
+        )
 
     with COMPILE_LOCK:
 
@@ -16400,6 +16427,36 @@ def list_generated_files_endpoint(checksums: bool = False):
             )
         except ValueError:
             source_notebook_filename = None
+
+    if format == "csv":
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+
+        header = ["filename", "size_bytes", "modified_at"]
+        if checksums:
+            header.append("sha256")
+        writer.writerow(header)
+
+        for file_entry in generated_file_details:
+
+            row = [
+                file_entry["filename"],
+                file_entry["size_bytes"],
+                file_entry["modified_at"],
+            ]
+            if checksums:
+                row.append(file_entry["sha256"])
+
+            writer.writerow(row)
+
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": 'attachment; filename="generated.csv"',
+            },
+        )
 
     response = {
         "status": "success",

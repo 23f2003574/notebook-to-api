@@ -27578,6 +27578,52 @@ def test_list_generated_files_lists_the_compiled_output():
     os.remove(Path(UPLOAD_DIR) / "list_generated_files_test.ipynb")
 
 
+def test_list_generated_files_format_csv_lists_one_row_per_file():
+
+    filename = "list_generated_files_csv_test.ipynb"
+    _compile_a_notebook(filename)
+
+    resp = client.get("/api/generated", params={"format": "csv"})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert 'attachment; filename="generated.csv"' in resp.headers["content-disposition"]
+
+    rows = resp.text.strip().split("\r\n")
+    assert rows[0] == "filename,size_bytes,modified_at"
+
+    body = client.get("/api/generated").json()
+    row_filenames = {row.split(",")[0] for row in rows[1:]}
+    assert row_filenames == set(body["generated_files"])
+
+    os.remove(Path(UPLOAD_DIR) / filename)
+
+
+def test_list_generated_files_format_csv_with_checksums_adds_sha256_column():
+
+    filename = "list_generated_files_csv_checksums_test.ipynb"
+    _compile_a_notebook(filename)
+
+    resp = client.get(
+        "/api/generated", params={"format": "csv", "checksums": "true"}
+    )
+
+    assert resp.status_code == 200
+    rows = resp.text.strip().split("\r\n")
+    assert rows[0] == "filename,size_bytes,modified_at,sha256"
+    for row in rows[1:]:
+        assert len(row.split(",")) == 4
+
+    os.remove(Path(UPLOAD_DIR) / filename)
+
+
+def test_list_generated_files_rejects_an_invalid_format_value():
+
+    resp = client.get("/api/generated", params={"format": "xml"})
+
+    assert resp.status_code == 400
+
+
 def test_list_generated_files_file_details_reports_size_and_modified_at():
     """"file_details" closes a gap "generated_files" (a bare list of
     names) always had: a dashboard frontend wanting to show a real file

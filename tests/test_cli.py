@@ -7546,6 +7546,30 @@ def test_generated_list_command_checksums_flag_sends_the_query_param_and_prints_
     assert handler.requests == ["/api/generated?checksums=true"]
 
 
+def test_generated_list_command_format_csv_prints_the_dashboards_raw_csv_response(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    csv_body = "filename,size_bytes,modified_at\r\napp.py,1234,2024-01-01T00:00:00+00:00\r\n"
+    handler.responses = [_raw_response(200, csv_body.encode("utf-8"), "text/csv")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "generated", "list", "--format", "csv",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout == csv_body.replace("\r\n", "\n")
+    assert handler.requests == ["/api/generated?format=csv"]
+
+
 def test_generated_list_command_json_flag_emits_a_machine_readable_result(
     tmp_path, fake_dashboard
 ):

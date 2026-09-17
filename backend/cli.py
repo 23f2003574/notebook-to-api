@@ -3358,7 +3358,11 @@ def _dispatch_core_command(args):
 
         if args.generated_command == "list":
 
-            params = {"checksums": True} if args.checksums else {}
+            params = {}
+            if args.checksums:
+                params["checksums"] = True
+            if args.format == "csv":
+                params["format"] = "csv"
 
             try:
                 response = httpx.get(
@@ -3375,6 +3379,10 @@ def _dispatch_core_command(args):
                     f"Dashboard rejected the request ({response.status_code}): "
                     f"{_extract_dashboard_error_detail(response)}"
                 )
+
+            if args.format == "csv":
+                print(response.text, end="")
+                return
 
             data = response.json()
 
@@ -10401,6 +10409,24 @@ def main():
             "?checksums=true -- off by default, since hashing every "
             "compiled file is real work most callers of a plain listing "
             "don't need."
+        )
+    )
+    generated_list_parser.add_argument(
+        "--format",
+        choices=["json", "csv"],
+        default="json",
+        help=(
+            "Response format to request via GET /api/generated's own "
+            "?format= query param, the same \"json\"/\"csv\" choice "
+            "`list`/`search-functions`/`search-content` already offer "
+            "for their own listings. \"csv\" prints the dashboard's own "
+            "per-file CSV response straight to stdout (redirect it to a "
+            "file, e.g. `> generated.csv`) -- one row per compiled file, "
+            "the same already-computed \"file_details\" the \"json\" "
+            "response's own listing would show. --checksums still "
+            "applies, adding a matching \"sha256\" column; --json is "
+            "ignored under --format csv, since the response isn't JSON "
+            "at all."
         )
     )
     generated_list_parser.add_argument(
