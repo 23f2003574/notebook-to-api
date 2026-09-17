@@ -28121,6 +28121,60 @@ def test_get_generated_file_reports_content_sha256():
     assert body["sha256"] == expected_sha256
 
 
+def test_get_generated_file_reports_a_quoted_etag_matching_the_content_sha256():
+
+    _compile_a_notebook("get_file_etag_test.ipynb")
+
+    resp = client.get("/api/generated/app.py")
+
+    assert resp.status_code == 200
+    assert resp.headers["etag"] == f'"{resp.json()["sha256"]}"'
+    assert resp.headers["x-content-sha256"] == resp.json()["sha256"]
+    assert resp.headers["cache-control"] == "no-cache"
+
+
+def test_get_generated_file_returns_304_when_if_none_match_matches_the_current_etag():
+
+    _compile_a_notebook("get_file_conditional_test.ipynb")
+
+    first = client.get("/api/generated/app.py")
+    etag = first.headers["etag"]
+
+    second = client.get(
+        "/api/generated/app.py", headers={"If-None-Match": etag}
+    )
+
+    assert second.status_code == 304
+    assert second.content == b""
+    assert second.headers["etag"] == etag
+    assert second.headers["x-content-sha256"] == first.headers["x-content-sha256"]
+    assert second.headers["cache-control"] == "no-cache"
+
+
+def test_get_generated_file_returns_200_when_if_none_match_is_stale():
+
+    _compile_a_notebook("get_file_stale_etag_test.ipynb")
+
+    resp = client.get(
+        "/api/generated/app.py",
+        headers={"If-None-Match": '"not-the-real-hash"'},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["filename"] == "app.py"
+
+
+def test_get_generated_file_returns_304_for_a_wildcard_if_none_match():
+
+    _compile_a_notebook("get_file_wildcard_etag_test.ipynb")
+
+    resp = client.get(
+        "/api/generated/app.py", headers={"If-None-Match": "*"}
+    )
+
+    assert resp.status_code == 304
+
+
 def test_get_generated_file_returns_requirements_txt_content():
 
     _compile_a_notebook("get_file_requirements_test.ipynb")

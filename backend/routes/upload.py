@@ -1,5 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Request, Response
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.testclient import TestClient
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -7593,9 +7593,9 @@ def _if_none_match_satisfied(request: Request, etag_value: str) -> bool:
     caller who already has a previous response's own "ETag" sends back
     to ask "has this changed since I last fetched it", so GET
     /api/notebooks/{filename}, GET /api/notebooks/{filename}/versions/
-    {version_id}, and GET /api/download can each answer with a bodyless
-    304 instead of re-sending content a caller already has an identical
-    copy of.
+    {version_id}, GET /api/download, and GET /api/generated/{filename}
+    can each answer with a bodyless 304 instead of re-sending content a
+    caller already has an identical copy of.
 
     Every one of those endpoints already computes this exact same
     content hash unconditionally, for the "X-Content-SHA256"/
@@ -16598,7 +16598,7 @@ def delete_generated_app(dry_run: bool = False):
 
 
 @router.get("/generated/{filename:path}")
-def get_generated_file(filename: str):
+def get_generated_file(filename: str, request: Request):
     """Preview a single compiled output file's raw text content by name
     (e.g. "app.py", "requirements.txt", "Dockerfile", or
     "runtime/notebook_module.py").
@@ -16629,6 +16629,23 @@ def get_generated_file(filename: str):
     /api/generated?checksums=true call just to look up its entry, even
     though this endpoint already reads the exact same bytes to answer the
     request in the first place.
+
+    Also now sent as a real "ETag" header (quoted, per RFC 7232), and
+    honored right back via "If-None-Match" -- the identical conditional-
+    GET support GET /api/notebooks/{filename}, GET
+    /api/notebooks/{filename}/versions/{version_id}, and GET
+    /api/download already provide (see _if_none_match_satisfied's own
+    docstring), just applied here to a single compiled file's own preview
+    instead of a raw file/bundle download. This was the one content-
+    serving endpoint in this project that still always re-sent its full
+    body on every request, even to a caller re-polling it (e.g. watching
+    one compiled file for a hand-edit -- see GET /api/generated's own
+    "generated_files_modified_since_compile" -- or re-checking after a
+    recompile) that already had an identical copy and said so via its own
+    previous response's "sha256". A caller with a matching "If-None-
+    Match" now gets a bodyless 304 (with the same "ETag"/
+    "X-Content-SHA256" headers, no "content"/"filename"/"sha256" JSON
+    body) instead.
     """
 
     file_path = resolve_generated_path(filename)
@@ -16683,12 +16700,30 @@ def get_generated_file(filename: str):
 
         sha256 = hash_notebook_file(str(file_path))
 
-    return {
-        "status": "success",
-        "filename": filename,
-        "content": content,
-        "sha256": sha256,
-    }
+    if _if_none_match_satisfied(request, sha256):
+
+        return Response(
+            status_code=304,
+            headers={
+                "ETag": f'"{sha256}"',
+                "X-Content-SHA256": sha256,
+                "Cache-Control": "no-cache",
+            },
+        )
+
+    return JSONResponse(
+        content={
+            "status": "success",
+            "filename": filename,
+            "content": content,
+            "sha256": sha256,
+        },
+        headers={
+            "ETag": f'"{sha256}"',
+            "X-Content-SHA256": sha256,
+            "Cache-Control": "no-cache",
+        },
+    )
 
 
 def _directory_is_writable(path: str) -> bool:
