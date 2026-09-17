@@ -2889,7 +2889,10 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        params = {"search": args.search, "offset": args.offset}
+        params = {
+            "search": args.search, "sort": args.sort, "order": args.order,
+            "offset": args.offset,
+        }
         if args.tag:
             params["tag"] = args.tag
         if args.sha256:
@@ -2957,7 +2960,10 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        params = {"search": args.search, "offset": args.offset}
+        params = {
+            "search": args.search, "sort": args.sort, "order": args.order,
+            "offset": args.offset,
+        }
         if args.tag:
             params["tag"] = args.tag
         if args.sha256:
@@ -9832,6 +9838,23 @@ def main():
         )
     )
     search_functions_parser.add_argument(
+        "--sort",
+        choices=["name", "modified", "match_count"],
+        default="name",
+        help=(
+            "Field to sort matching notebooks by, mirroring GET "
+            "/api/functions' own ?sort= -- `list`'s own --sort has no "
+            "\"match_count\", since a plain listing has no matches to "
+            "count (default: name)."
+        )
+    )
+    search_functions_parser.add_argument(
+        "--order",
+        choices=["asc", "desc"],
+        default="asc",
+        help="Sort direction, mirroring GET /api/functions' own ?order= (default: asc)."
+    )
+    search_functions_parser.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -9956,6 +9979,27 @@ def main():
             "/api/notebooks/search-content's own ?regex=true -- e.g. to "
             "find every notebook calling `pd\\.read_csv\\(.*index_col=` "
             "rather than one exact, unchanging literal string."
+        )
+    )
+    search_content_parser.add_argument(
+        "--sort",
+        choices=["name", "modified", "match_count"],
+        default="name",
+        help=(
+            "Field to sort matching notebooks by, mirroring GET "
+            "/api/notebooks/search-content's own ?sort= -- the same "
+            "choice `search-functions --sort` just gained, \"match_count\" "
+            "here counting matching code cells instead of matching "
+            "functions (default: name)."
+        )
+    )
+    search_content_parser.add_argument(
+        "--order",
+        choices=["asc", "desc"],
+        default="asc",
+        help=(
+            "Sort direction, mirroring GET /api/notebooks/search-content's "
+            "own ?order= (default: asc)."
         )
     )
     search_content_parser.add_argument(

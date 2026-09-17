@@ -3210,6 +3210,14 @@ def _currently_compiled_notebook_is_stale():
 _NOTEBOOK_SORT_KEYS = frozenset({"name", "size", "modified"})
 _NOTEBOOK_SORT_ORDERS = frozenset({"asc", "desc"})
 
+# Shared by GET /api/functions and GET /api/notebooks/search-content below --
+# both return one entry per matching *notebook*, never per-notebook size, so
+# "size" (meaningful for GET /api/notebooks' own per-notebook listing) has no
+# counterpart here; "match_count" (how many functions/cells matched within
+# that notebook) takes its place as the one sort dimension unique to a
+# search result that GET /api/notebooks' own listing has no equivalent of.
+_SEARCH_SORT_KEYS = frozenset({"name", "modified", "match_count"})
+
 # Bounds enforced by _validate_and_normalize_tags below. Without them, a
 # single PUT /api/notebooks/{filename}/tags call could attach an unbounded
 # number of arbitrarily long strings to a notebook -- there was previously
@@ -4560,6 +4568,7 @@ def _compile_search_regex(pattern_text, field_name="search"):
 def search_functions(
     search: str = None, tag: str = None, sha256: str = None,
     modified_after: str = None, modified_before: str = None, regex: bool = False,
+    sort: str = "name", order: str = "asc",
     limit: int = None, offset: int = 0, format: str = "json",
     checksums: bool = False,
 ):
@@ -4699,6 +4708,25 @@ def search_functions(
     duplicates of each other. CSV export gains a matching "sha256"
     column only when "checksums" is given, so a plain `format=csv`
     request's own column set is unchanged from before this existed.
+
+    "sort" and "order" mirror GET /api/notebooks' own identical pair --
+    before this, "matches" was always returned in the fixed alphabetical-
+    by-filename order `sorted(upload_root.iterdir())` itself iterates in,
+    with no way to see the most-recently-touched matching notebook first,
+    or -- unique to a search result, with no GET /api/notebooks
+    counterpart -- the notebook defining the *most* matching functions
+    first, without a caller sorting the already-fetched "matches" itself
+    client-side. "sort" is one of "name" (the previous, and still
+    default, order), "modified" (each matching notebook's own file
+    mtime, the same field GET /api/notebooks' own "modified"/
+    "modified_after"/"modified_before" already use), or "match_count"
+    (how many of that notebook's own functions matched `search` -- i.e.
+    `len(functions)` on each "matches" entry); "order" is "asc" (default)
+    or "desc". Applied after every filter above has already narrowed
+    down which notebooks match at all, but before "limit"/"offset" page
+    the result -- the same ordering GET /api/notebooks' own "sort"/
+    "order"/"limit"/"offset" already establish. An invalid "sort"/"order"
+    value is rejected with 400, the same way GET /api/notebooks' own is.
     """
 
     if format not in ("json", "csv"):
@@ -4706,6 +4734,20 @@ def search_functions(
         raise HTTPException(
             status_code=400,
             detail="format must be 'json' or 'csv'"
+        )
+
+    if sort not in _SEARCH_SORT_KEYS:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"sort must be one of {sorted(_SEARCH_SORT_KEYS)}"
+        )
+
+    if order not in _NOTEBOOK_SORT_ORDERS:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"order must be one of {sorted(_NOTEBOOK_SORT_ORDERS)}"
         )
 
     if not search:
@@ -4752,7 +4794,11 @@ def search_functions(
 
     upload_root = Path(UPLOAD_DIR)
 
-    matches = []
+    # (name, mtime, match_count, match entry dict) tuples -- see GET
+    # /api/notebooks' own identical comment above `entries.sort` in
+    # list_notebooks for why the raw sortable values are kept alongside
+    # the dict rather than re-derived from it afterward.
+    scored_matches = []
 
     for entry in sorted(upload_root.iterdir()):
 
@@ -4767,10 +4813,12 @@ def search_functions(
         if sha256 and entry_sha256 != sha256:
             continue
 
+        entry_mtime = entry.stat().st_mtime
+
         if modified_after_dt is not None or modified_before_dt is not None:
 
             entry_modified_at = datetime.fromtimestamp(
-                entry.stat().st_mtime, tz=timezone.utc
+                entry_mtime, tz=timezone.utc
             )
 
             if modified_after_dt is not None and entry_modified_at < modified_after_dt:
@@ -4809,7 +4857,18 @@ def search_functions(
             if checksums:
                 match_entry["sha256"] = entry_sha256
 
-            matches.append(match_entry)
+            scored_matches.append(
+                (entry.name, entry_mtime, len(matching_functions), match_entry)
+            )
+
+    sort_key_index = {"name": 0, "modified": 1, "match_count": 2}[sort]
+
+    scored_matches.sort(
+        key=lambda scored: scored[sort_key_index],
+        reverse=(order == "desc"),
+    )
+
+    matches = [scored[3] for scored in scored_matches]
 
     notebook_count = len(matches)
 
@@ -6214,6 +6273,7 @@ def resolve_duplicate_notebooks(data: dict = None):
 def search_notebook_content(
     search: str = None, tag: str = None, sha256: str = None,
     modified_after: str = None, modified_before: str = None, regex: bool = False,
+    sort: str = "name", order: str = "asc",
     limit: int = None, offset: int = 0, format: str = "json",
     checksums: bool = False,
 ):
@@ -6325,6 +6385,25 @@ def search_notebook_content(
     own filter check when that's also given, rather than hashing the
     same notebook twice. CSV export gains a matching "sha256" column
     only when "checksums" is given.
+
+    "sort" and "order" mirror GET /api/notebooks' own identical pair, and
+    GET /api/functions' own identical new pair -- before this, "matches"
+    was always returned in the fixed alphabetical-by-filename order
+    `sorted(upload_root.iterdir())` itself iterates in, with no way to
+    see the most-recently-touched matching notebook first, or -- unique
+    to a search result -- the notebook with the *most* matching cells
+    first, without a caller sorting the already-fetched "matches" itself
+    client-side. "sort" is one of "name" (the previous, and still
+    default, order), "modified" (each matching notebook's own file
+    mtime), or "match_count" (how many of that notebook's own code cells
+    matched `search` -- i.e. `len(matches)` on each "matches" entry, the
+    identical "match_count" meaning GET /api/functions' own new "sort"
+    just gained, just counting matching cells instead of matching
+    functions); "order" is "asc" (default) or "desc". Applied after
+    every filter above has already narrowed down which notebooks match
+    at all, but before "limit"/"offset" page the result. An invalid
+    "sort"/"order" value is rejected with 400, the same way GET
+    /api/notebooks' own and GET /api/functions' own new one already are.
     """
 
     if format not in ("json", "csv"):
@@ -6332,6 +6411,20 @@ def search_notebook_content(
         raise HTTPException(
             status_code=400,
             detail="format must be 'json' or 'csv'"
+        )
+
+    if sort not in _SEARCH_SORT_KEYS:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"sort must be one of {sorted(_SEARCH_SORT_KEYS)}"
+        )
+
+    if order not in _NOTEBOOK_SORT_ORDERS:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"order must be one of {sorted(_NOTEBOOK_SORT_ORDERS)}"
         )
 
     if not search:
@@ -6378,7 +6471,7 @@ def search_notebook_content(
 
     upload_root = Path(UPLOAD_DIR)
 
-    matches = []
+    scored_matches = []
 
     for entry in sorted(upload_root.iterdir()):
 
@@ -6393,10 +6486,12 @@ def search_notebook_content(
         if sha256 and entry_sha256 != sha256:
             continue
 
+        entry_mtime = entry.stat().st_mtime
+
         if modified_after_dt is not None or modified_before_dt is not None:
 
             entry_modified_at = datetime.fromtimestamp(
-                entry.stat().st_mtime, tz=timezone.utc
+                entry_mtime, tz=timezone.utc
             )
 
             if modified_after_dt is not None and entry_modified_at < modified_after_dt:
@@ -6459,7 +6554,18 @@ def search_notebook_content(
             if checksums:
                 match_entry["sha256"] = entry_sha256
 
-            matches.append(match_entry)
+            scored_matches.append(
+                (entry.name, entry_mtime, len(cell_matches), match_entry)
+            )
+
+    sort_key_index = {"name": 0, "modified": 1, "match_count": 2}[sort]
+
+    scored_matches.sort(
+        key=lambda scored: scored[sort_key_index],
+        reverse=(order == "desc"),
+    )
+
+    matches = [scored[3] for scored in scored_matches]
 
     notebook_count = len(matches)
 

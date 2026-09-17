@@ -5827,7 +5827,7 @@ def test_search_functions_command_prints_matching_notebooks(fake_dashboard):
     assert "a.ipynb: train_model" in proc.stdout
     assert "b.ipynb: retrain" in proc.stdout
     assert "2 notebook(s) matched." in proc.stdout
-    assert handler.requests == ["/api/functions?search=train&offset=0"]
+    assert handler.requests == ["/api/functions?search=train&sort=name&order=asc&offset=0"]
 
 
 def test_search_functions_command_sends_tag_query_param(fake_dashboard):
@@ -5842,7 +5842,7 @@ def test_search_functions_command_sends_tag_query_param(fake_dashboard):
     )
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert handler.requests == ["/api/functions?search=train&offset=0&tag=prod"]
+    assert handler.requests == ["/api/functions?search=train&sort=name&order=asc&offset=0&tag=prod"]
 
 
 def test_search_functions_command_checksums_sends_query_param_and_prints_sha256(
@@ -5866,7 +5866,7 @@ def test_search_functions_command_checksums_sends_query_param_and_prints_sha256(
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert f"sha256:{'a' * 64}" in proc.stdout
-    assert handler.requests == ["/api/functions?search=train&offset=0&checksums=true"]
+    assert handler.requests == ["/api/functions?search=train&sort=name&order=asc&offset=0&checksums=true"]
 
 
 def test_search_functions_command_sends_sha256_query_param(fake_dashboard):
@@ -5885,7 +5885,7 @@ def test_search_functions_command_sends_sha256_query_param(fake_dashboard):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert handler.requests == [
-        f"/api/functions?search=train&offset=0&sha256={'a' * 64}"
+        f"/api/functions?search=train&sort=name&order=asc&offset=0&sha256={'a' * 64}"
     ]
 
 
@@ -5909,7 +5909,7 @@ def test_search_functions_command_sends_modified_after_and_before_query_params(
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert handler.requests == [
-        "/api/functions?search=train&offset=0"
+        "/api/functions?search=train&sort=name&order=asc&offset=0"
         "&modified_after=2024-01-02T00%3A00%3A00%2B00%3A00"
         "&modified_before=2024-01-03T00%3A00%3A00%2B00%3A00"
     ]
@@ -5934,7 +5934,7 @@ def test_search_functions_command_sends_regex_query_param(fake_dashboard):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert handler.requests == [
-        "/api/functions?search=_v%5Cd%2B%24&offset=0&regex=true"
+        "/api/functions?search=_v%5Cd%2B%24&sort=name&order=asc&offset=0&regex=true"
     ]
 
 
@@ -5950,7 +5950,7 @@ def test_search_functions_command_omits_regex_query_param_by_default(fake_dashbo
     )
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert handler.requests == ["/api/functions?search=train&offset=0"]
+    assert handler.requests == ["/api/functions?search=train&sort=name&order=asc&offset=0"]
 
 
 def test_search_functions_command_reports_no_matches(fake_dashboard):
@@ -5995,7 +5995,7 @@ def test_search_functions_command_passes_limit_and_offset_through(fake_dashboard
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "b.ipynb: retrain" in proc.stdout
     assert "Showing 1 of 3 notebook(s) (offset 1)." in proc.stdout
-    assert handler.requests == ["/api/functions?search=train&offset=1&limit=1"]
+    assert handler.requests == ["/api/functions?search=train&sort=name&order=asc&offset=1&limit=1"]
 
 
 def test_search_functions_command_json_flag_emits_the_dashboards_own_response(
@@ -6042,7 +6042,7 @@ def test_search_functions_command_format_csv_prints_the_dashboards_raw_csv_respo
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert proc.stdout == csv_body.replace("\r\n", "\n")
     assert handler.requests == [
-        "/api/functions?search=train&offset=0&format=csv"
+        "/api/functions?search=train&sort=name&order=asc&offset=0&format=csv"
     ]
 
 
@@ -6062,7 +6062,7 @@ def test_search_functions_command_omits_format_query_param_by_default(fake_dashb
     )
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert handler.requests == ["/api/functions?search=train&offset=0"]
+    assert handler.requests == ["/api/functions?search=train&sort=name&order=asc&offset=0"]
 
 
 def test_search_functions_command_reports_a_clean_error_for_an_empty_search(
@@ -6128,7 +6128,7 @@ def test_search_content_command_prints_matching_notebooks(fake_dashboard):
     assert "a.ipynb:" in proc.stdout
     assert "[0] df = pd.read_csv('x.csv')" in proc.stdout
     assert "1 notebook(s) matched." in proc.stdout
-    assert handler.requests == ["/api/notebooks/search-content?search=read_csv&offset=0"]
+    assert handler.requests == ["/api/notebooks/search-content?search=read_csv&sort=name&order=asc&offset=0"]
 
 
 def test_search_content_command_sends_tag_query_param(fake_dashboard):
@@ -6146,7 +6146,7 @@ def test_search_content_command_sends_tag_query_param(fake_dashboard):
     )
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert handler.requests == ["/api/notebooks/search-content?search=read_csv&offset=0&tag=prod"]
+    assert handler.requests == ["/api/notebooks/search-content?search=read_csv&sort=name&order=asc&offset=0&tag=prod"]
 
 
 def test_search_content_command_checksums_sends_query_param_and_prints_sha256(
@@ -6178,7 +6178,7 @@ def test_search_content_command_checksums_sends_query_param_and_prints_sha256(
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert f"sha256:{'a' * 64}" in proc.stdout
     assert handler.requests == [
-        "/api/notebooks/search-content?search=read_csv&offset=0&checksums=true"
+        "/api/notebooks/search-content?search=read_csv&sort=name&order=asc&offset=0&checksums=true"
     ]
 
 
@@ -6198,7 +6198,7 @@ def test_search_content_command_sends_sha256_query_param(fake_dashboard):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert handler.requests == [
-        f"/api/notebooks/search-content?search=read_csv&offset=0&sha256={'b' * 64}"
+        f"/api/notebooks/search-content?search=read_csv&sort=name&order=asc&offset=0&sha256={'b' * 64}"
     ]
 
 
@@ -6222,7 +6222,7 @@ def test_search_content_command_sends_modified_after_and_before_query_params(
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert handler.requests == [
-        "/api/notebooks/search-content?search=read_csv&offset=0"
+        "/api/notebooks/search-content?search=read_csv&sort=name&order=asc&offset=0"
         "&modified_after=2024-01-02T00%3A00%3A00%2B00%3A00"
         "&modified_before=2024-01-03T00%3A00%3A00%2B00%3A00"
     ]
@@ -6247,7 +6247,7 @@ def test_search_content_command_sends_regex_query_param(fake_dashboard):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert handler.requests == [
-        "/api/notebooks/search-content?search=read_csv%5C%28.%2Aindex_col%3D&offset=0&regex=true"
+        "/api/notebooks/search-content?search=read_csv%5C%28.%2Aindex_col%3D&sort=name&order=asc&offset=0&regex=true"
     ]
 
 
@@ -6263,7 +6263,7 @@ def test_search_content_command_omits_regex_query_param_by_default(fake_dashboar
     )
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert handler.requests == ["/api/notebooks/search-content?search=read_csv&offset=0"]
+    assert handler.requests == ["/api/notebooks/search-content?search=read_csv&sort=name&order=asc&offset=0"]
 
 
 def test_search_content_command_reports_no_matches(fake_dashboard):
@@ -6307,7 +6307,7 @@ def test_search_content_command_passes_limit_and_offset_through(fake_dashboard):
     assert "b.ipynb:" in proc.stdout
     assert "Showing 1 of 3 notebook(s) (offset 1)." in proc.stdout
     assert handler.requests == [
-        "/api/notebooks/search-content?search=read_csv&offset=1&limit=1"
+        "/api/notebooks/search-content?search=read_csv&sort=name&order=asc&offset=1&limit=1"
     ]
 
 
@@ -6356,7 +6356,7 @@ def test_search_content_command_format_csv_prints_the_dashboards_raw_csv_respons
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert proc.stdout == csv_body.replace("\r\n", "\n")
     assert handler.requests == [
-        "/api/notebooks/search-content?search=pd.&offset=0&format=csv"
+        "/api/notebooks/search-content?search=pd.&sort=name&order=asc&offset=0&format=csv"
     ]
 
 

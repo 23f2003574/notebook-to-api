@@ -6498,6 +6498,86 @@ def test_search_notebook_content_omits_sha256_without_checksums():
     assert "sha256" not in resp.json()["matches"][0]
 
 
+def test_search_notebook_content_sorts_by_name_ascending_by_default():
+
+    for filename in ("content_sort_b.ipynb", "content_sort_a.ipynb"):
+        client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("x = 'read_csv marker'\n")),
+                    "application/json",
+                )
+            },
+        )
+
+    matches = client.get(
+        "/api/notebooks/search-content", params={"search": "read_csv"}
+    ).json()["matches"]
+    filenames = [m["filename"] for m in matches if m["filename"].startswith("content_sort_")]
+
+    assert filenames == ["content_sort_a.ipynb", "content_sort_b.ipynb"]
+
+
+def test_search_notebook_content_sorts_by_match_count_descending():
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "content_sort_mc_one.ipynb",
+                io.BytesIO(_notebook_bytes("x = 'read_csv marker'\n")),
+                "application/json",
+            )
+        },
+    )
+
+    two_cell_notebook = nbformat.v4.new_notebook()
+    two_cell_notebook.cells.append(nbformat.v4.new_code_cell("x = 'read_csv marker'\n"))
+    two_cell_notebook.cells.append(nbformat.v4.new_code_cell("y = 'read_csv marker again'\n"))
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "content_sort_mc_two.ipynb",
+                io.BytesIO(nbformat.writes(two_cell_notebook).encode("utf-8")),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={"search": "read_csv", "sort": "match_count", "order": "desc"},
+    )
+    matches = resp.json()["matches"]
+    filenames = [m["filename"] for m in matches if m["filename"].startswith("content_sort_mc_")]
+
+    assert filenames == ["content_sort_mc_two.ipynb", "content_sort_mc_one.ipynb"]
+
+
+def test_search_notebook_content_rejects_an_invalid_sort_value():
+
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={"search": "read_csv", "sort": "not_a_real_field"},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_search_notebook_content_rejects_an_invalid_order_value():
+
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={"search": "read_csv", "order": "sideways"},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_search_notebook_content_filters_by_tag():
 
     client.delete("/api/notebooks?confirm=true")
@@ -12142,6 +12222,110 @@ def test_search_functions_omits_sha256_without_checksums():
     resp = client.get("/api/functions?search=train_model")
 
     assert "sha256" not in resp.json()["matches"][0]
+
+
+def test_search_functions_sorts_by_name_ascending_by_default():
+
+    for filename in ("search_sort_b.ipynb", "search_sort_a.ipynb"):
+        client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def train_model():\n    return 1\n")),
+                    "application/json",
+                )
+            },
+        )
+
+    matches = client.get("/api/functions?search=train_model").json()["matches"]
+    filenames = [m["filename"] for m in matches if m["filename"].startswith("search_sort_")]
+
+    assert filenames == ["search_sort_a.ipynb", "search_sort_b.ipynb"]
+
+
+def test_search_functions_sorts_by_match_count_descending():
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "search_sort_mc_one.ipynb",
+                io.BytesIO(_notebook_bytes("def train_a():\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "search_sort_mc_two.ipynb",
+                io.BytesIO(_notebook_bytes(
+                    "def train_a():\n    return 1\n\n\ndef train_b():\n    return 2\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.get(
+        "/api/functions?search=train_&sort=match_count&order=desc"
+    )
+    matches = resp.json()["matches"]
+    filenames = [m["filename"] for m in matches if m["filename"].startswith("search_sort_mc_")]
+
+    assert filenames == ["search_sort_mc_two.ipynb", "search_sort_mc_one.ipynb"]
+
+
+def test_search_functions_sorts_by_modified_descending_shows_newest_first():
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "search_sort_mod_older.ipynb",
+                io.BytesIO(_notebook_bytes("def train_model():\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    older_path = Path(UPLOAD_DIR) / "search_sort_mod_older.ipynb"
+    older_stat = older_path.stat()
+    os.utime(older_path, (older_stat.st_atime, older_stat.st_mtime - 3600))
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "search_sort_mod_newer.ipynb",
+                io.BytesIO(_notebook_bytes("def train_model():\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.get(
+        "/api/functions?search=train_model&sort=modified&order=desc"
+    )
+    matches = resp.json()["matches"]
+    filenames = [m["filename"] for m in matches if m["filename"].startswith("search_sort_mod_")]
+
+    assert filenames == ["search_sort_mod_newer.ipynb", "search_sort_mod_older.ipynb"]
+
+
+def test_search_functions_rejects_an_invalid_sort_value():
+
+    resp = client.get("/api/functions?search=train_model&sort=not_a_real_field")
+
+    assert resp.status_code == 400
+
+
+def test_search_functions_rejects_an_invalid_order_value():
+
+    resp = client.get("/api/functions?search=train_model&order=sideways")
+
+    assert resp.status_code == 400
 
 
 def test_search_functions_filters_by_tag():
