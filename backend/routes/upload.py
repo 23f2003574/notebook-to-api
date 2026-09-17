@@ -10768,7 +10768,10 @@ def set_notebook_version_notes_batch(filename: str, data: dict):
 
 
 @router.get("/notebooks/{filename}/versions/{version_id}/inspect")
-def inspect_notebook_version(filename: str, version_id: str, expected_sha256: str = None):
+def inspect_notebook_version(
+    filename: str, version_id: str, expected_sha256: str = None,
+    only: str = None, exclude: str = None,
+):
     """Inspect one of a notebook's previously snapshotted versions --
     its functions, dependencies, reserved-name conflicts, would-be
     endpoints, and skipped functions -- exactly as POST /api/inspect
@@ -10814,7 +10817,31 @@ def inspect_notebook_version(filename: str, version_id: str, expected_sha256: st
     "did I get exactly the content I meant to" guard POST /api/compile,
     /api/inspect, and /api/validate's own "expected_sha256" already give
     for a notebook's current content.
+
+    "only"/"exclude" (each an optional comma-separated list of function
+    names -- a query-param-friendly rendering of the identical JSON-body
+    list field POST /api/inspect's own "only"/"exclude" just gained,
+    since this is a GET endpoint) restrict "functions", "endpoints",
+    "reserved_name_conflicts", and "functions_without_docstrings" to
+    whichever functions _filter_functions_by_name (backend/compiler.py)
+    would actually leave compiled -- the identical filtering POST
+    /api/inspect's own docstring already explains in full, applied here
+    to a version snapshot's own content instead of a notebook's current
+    one. An unrecognized name, or both given together, is rejected with
+    400, the same way POST /api/inspect's own already is.
     """
+
+    only_names = [name.strip() for name in only.split(",") if name.strip()] if only else None
+    exclude_names = (
+        [name.strip() for name in exclude.split(",") if name.strip()] if exclude else None
+    )
+
+    if only_names and exclude_names:
+
+        raise HTTPException(
+            status_code=400,
+            detail="only and exclude can't both be given -- choose one."
+        )
 
     file_path = resolve_upload_path(filename)
 
@@ -10862,6 +10889,38 @@ def inspect_notebook_version(filename: str, version_id: str, expected_sha256: st
             str(version_path),
             GENERATED_DIR
         )
+
+    if only_names or exclude_names:
+
+        try:
+
+            kept_names = {
+                func["name"]
+                for func in _filter_functions_by_name(
+                    inspection["functions"], only_names, exclude_names
+                )
+            }
+
+        except ValueError as e:
+
+            raise HTTPException(
+                status_code=400,
+                detail=str(e)
+            )
+
+        inspection["functions"] = [
+            func for func in inspection["functions"] if func["name"] in kept_names
+        ]
+        inspection["endpoints"] = [
+            endpoint for endpoint in inspection["endpoints"]
+            if endpoint["path"].lstrip("/") in kept_names
+        ]
+        inspection["reserved_name_conflicts"] = [
+            name for name in inspection["reserved_name_conflicts"] if name in kept_names
+        ]
+        inspection["functions_without_docstrings"] = [
+            name for name in inspection["functions_without_docstrings"] if name in kept_names
+        ]
 
     return {
         "status": "success",

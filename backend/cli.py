@@ -4912,18 +4912,15 @@ def _dispatch_core_command(args):
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
 
-        if (only or exclude) and args.version_id:
-            raise RuntimeError(
-                "--only/--exclude are not supported together with "
-                "--version-id -- GET .../versions/{version_id}/inspect "
-                "has no equivalent filter."
-            )
-
         try:
             if args.version_id:
                 params = {}
                 if args.expected_sha256:
                     params["expected_sha256"] = args.expected_sha256
+                if args.only:
+                    params["only"] = args.only
+                if args.exclude:
+                    params["exclude"] = args.exclude
                 response = httpx.get(
                     f"{dashboard_url}/api/notebooks/{args.filename}"
                     f"/versions/{args.version_id}/inspect",
