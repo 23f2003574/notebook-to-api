@@ -3581,6 +3581,9 @@ def _dispatch_core_command(args):
         if args.sha256 and not args.all:
             raise RuntimeError("--sha256 only applies together with --all.")
 
+        if args.expected_sha256 and args.all:
+            raise RuntimeError("--expected-sha256 does not apply together with --all.")
+
         if args.all:
             # DELETE /api/notebooks requires its own ?confirm=true before
             # it does anything (routes/upload.py) -- always passed here
@@ -3677,6 +3680,8 @@ def _dispatch_core_command(args):
                     return
 
             params = {"dry_run": "true"} if args.dry_run else {}
+            if args.expected_sha256:
+                params["expected_sha256"] = args.expected_sha256
 
             try:
                 response = httpx.delete(
@@ -10695,6 +10700,21 @@ def main():
             "filename(s) it currently sits under. Composes with --tag: "
             "with both given, a notebook must match both to be deleted. "
             "Ignored (and rejected) without --all."
+        )
+    )
+    delete_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "Without --all, reject the deletion with an error unless "
+            "`filename`'s own current content still matches this hash, "
+            "via DELETE /api/notebooks/{filename}'s own "
+            "?expected_sha256= query param -- guards against deleting a "
+            "filename that was concurrently overwritten since you last "
+            "checked its sha256 (e.g. via `list --checksums`). Ignored "
+            "(and rejected) with --all."
         )
     )
     delete_parser.add_argument(

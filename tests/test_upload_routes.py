@@ -4467,6 +4467,58 @@ def test_delete_notebook_dry_run_still_returns_404_for_missing_file():
     assert resp.status_code == 404
 
 
+def test_delete_notebook_with_matching_expected_sha256_succeeds():
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "delete_expected_sha256_match.ipynb", io.BytesIO(content), "application/json"
+            )
+        },
+    )
+
+    resp = client.delete(
+        "/api/notebooks/delete_expected_sha256_match.ipynb",
+        params={"expected_sha256": hashlib.sha256(content).hexdigest()},
+    )
+
+    assert resp.status_code == 200
+    assert not (Path(UPLOAD_DIR) / "delete_expected_sha256_match.ipynb").exists()
+
+
+def test_delete_notebook_with_mismatched_expected_sha256_is_rejected_and_deletes_nothing():
+
+    _upload_sample_notebook("delete_expected_sha256_mismatch.ipynb")
+
+    resp = client.delete(
+        "/api/notebooks/delete_expected_sha256_mismatch.ipynb",
+        params={"expected_sha256": "0" * 64},
+    )
+
+    assert resp.status_code == 400
+    assert "expected_sha256" in resp.json()["detail"]
+    assert (Path(UPLOAD_DIR) / "delete_expected_sha256_mismatch.ipynb").is_file()
+
+    os.remove(Path(UPLOAD_DIR) / "delete_expected_sha256_mismatch.ipynb")
+
+
+def test_delete_notebook_dry_run_with_mismatched_expected_sha256_is_rejected():
+
+    _upload_sample_notebook("delete_dry_run_expected_sha256_mismatch.ipynb")
+
+    resp = client.delete(
+        "/api/notebooks/delete_dry_run_expected_sha256_mismatch.ipynb",
+        params={"dry_run": "true", "expected_sha256": "0" * 64},
+    )
+
+    assert resp.status_code == 400
+    assert (Path(UPLOAD_DIR) / "delete_dry_run_expected_sha256_mismatch.ipynb").is_file()
+
+    os.remove(Path(UPLOAD_DIR) / "delete_dry_run_expected_sha256_mismatch.ipynb")
+
+
 def test_get_notebook_returns_the_uploaded_content():
     """GET /api/notebooks lists what's been uploaded and DELETE removes
     it, but there was previously no way to retrieve a specific notebook's

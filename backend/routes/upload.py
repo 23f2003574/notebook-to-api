@@ -7425,7 +7425,7 @@ def prune_all_notebook_versions(
 
 
 @router.delete("/notebooks/{filename}")
-def delete_notebook(filename: str, dry_run: bool = False):
+def delete_notebook(filename: str, dry_run: bool = False, expected_sha256: str = None):
     """Delete a previously uploaded notebook.
 
     Reuses resolve_upload_path for the same traversal protection already
@@ -7457,6 +7457,25 @@ def delete_notebook(filename: str, dry_run: bool = False):
     preview POST /api/notebooks/delete-batch's own "dry_run" already
     provides for deleting several notebooks at once, applied here to
     this endpoint's own single notebook instead.
+
+    "expected_sha256" (optional query parameter), see
+    _verify_expected_notebook_sha256 above, rejects the request with 400
+    -- deleting nothing -- unless `filename`'s own current content still
+    matches. Deletion here is the most permanent action any of this
+    file's "act on a notebook purely by name" endpoints can take: unlike
+    POST /api/compile/inspect/validate or a preview, which only ever
+    *read* stale content, or POST /api/notebooks/{filename}/copy, which
+    at worst duplicates it, a delete discards `filename`'s own current
+    bytes, tags, description, and entire version history all at once,
+    with no undo. A caller who listed notebooks (or a duplicate group),
+    noted a specific filename's own sha256 as the one they meant to
+    remove, then deleted that filename by name alone had no way to guard
+    against a concurrent overwrite (POST /api/upload?overwrite=true, a
+    rename onto this filename, ...) landing in between and silently
+    deleting different content than the caller had just confirmed --
+    exactly the race _verify_expected_notebook_sha256 already closes for
+    every other name-based endpoint in this file, just never for the one
+    where getting it wrong is least recoverable.
     """
 
     file_path = resolve_upload_path(filename)
@@ -7467,6 +7486,8 @@ def delete_notebook(filename: str, dry_run: bool = False):
             status_code=404,
             detail="Notebook file not found"
         )
+
+    _verify_expected_notebook_sha256(file_path, expected_sha256)
 
     compiled_path, _, _, _ = _currently_compiled_notebook_metadata()
 
