@@ -30233,6 +30233,101 @@ def test_list_notebook_versions_notes_csv_format_adds_a_note_column():
     assert rows[1].endswith(",csv-note")
 
 
+def test_list_notebook_versions_note_search_filters_by_note_text():
+
+    filename = "version_note_search.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    matching_id, other_id = versions[0]["version_id"], versions[1]["version_id"]
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{matching_id}/note",
+        json={"note": "before the refactor"},
+    )
+    client.put(
+        f"/api/notebooks/{filename}/versions/{other_id}/note",
+        json={"note": "unrelated"},
+    )
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"note_search": "REFACTOR"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [v["version_id"] for v in body["versions"]] == [matching_id]
+    assert body["total_count"] == 1
+    # "note_search" doesn't itself imply "notes" -- no "note" field unless
+    # "notes" is also given.
+    assert "note" not in body["versions"][0]
+
+
+def test_list_notebook_versions_note_search_composes_with_notes():
+
+    filename = "version_note_search_with_notes.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "hotfix"},
+    )
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"note_search": "hotfix", "notes": "true"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["versions"][0]["note"] == "hotfix"
+
+
+def test_list_notebook_versions_note_search_matches_nothing_for_an_unnoted_version():
+
+    filename = "version_note_search_no_match.ipynb"
+    _upload_and_create_one_version(filename)
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"note_search": "anything"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["versions"] == []
+
+
 def test_delete_notebook_version_also_discards_its_note():
 
     filename = "version_note_delete_cleanup.ipynb"

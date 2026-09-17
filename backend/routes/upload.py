@@ -9395,7 +9395,7 @@ def set_notebook_description_batch(data: dict):
 def list_notebook_versions(
     filename: str, limit: int = None, offset: int = 0, format: str = "json",
     saved_after: str = None, saved_before: str = None, checksums: bool = False,
-    notes: bool = False,
+    notes: bool = False, note_search: str = None,
 ):
     """List a previously uploaded notebook's snapshotted previous
     versions, newest first.
@@ -9487,6 +9487,26 @@ def list_notebook_versions(
     reading a notebook's whole version-notes sidecar file is real work
     this endpoint's existing listing never needed, most callers don't
     need either.
+
+    "note_search" (optional) narrows "versions" to only snapshots whose
+    own note contains this text, case-insensitively -- a version with no
+    note at all ("" -- the same default "notes" above already reports)
+    never matches a non-empty "note_search", the same way an untagged
+    notebook already never matches GET /api/notebooks' own "tag". Before
+    this, finding "the version I labeled 'before the refactor'" among a
+    notebook with many snapshots meant fetching every one of them with
+    "notes": true and searching the response by hand, the identical
+    "server never let a caller narrow by this text at all" gap GET
+    /api/notebooks' own "description_search" already closed for a
+    notebook's description. Reads the same version-notes sidecar file
+    "notes" itself already does (only once, shared with "notes" when
+    both are given, never twice) -- applied before "limit"/"offset" page
+    the result, so "total_count" reflects only the matching versions, the
+    same "totals describe the whole matching set" reasoning every other
+    filter here already follows. Composes with "saved_after"/
+    "saved_before" as an AND. Does NOT itself imply "notes": true -- a
+    plain "note_search" response still omits each entry's own "note"
+    field unless "notes" is also given, exactly as before this existed.
     """
 
     if format not in ("json", "csv"):
@@ -9560,6 +9580,22 @@ def list_notebook_versions(
                 "saved_at": entry_saved_at.isoformat(),
             })
 
+    # Read once, shared by "note_search" (to filter, below) and "notes"
+    # (to pair onto each entry, further below) alike when both are
+    # given -- never twice for the same request.
+    all_notes = (
+        _read_all_version_notes(file_path.name) if (notes or note_search) else None
+    )
+
+    if note_search:
+
+        note_search_lower = note_search.lower()
+
+        versions = [
+            entry for entry in versions
+            if note_search_lower in all_notes.get(entry["version_id"], "").lower()
+        ]
+
     total_count = len(versions)
 
     paginated_versions = (
@@ -9581,10 +9617,13 @@ def list_notebook_versions(
     # read, not N" reasoning _read_all_version_notes' own single-file
     # storage already makes this cheap for, unlike "checksums" above
     # (which has no equivalent whole-notebook shortcut: hashing one
-    # version's content says nothing about another's).
+    # version's content says nothing about another's). Reuses the same
+    # `all_notes` "note_search" above already read, rather than reading
+    # the identical sidecar file a second time when both are given.
     if notes:
 
-        all_notes = _read_all_version_notes(file_path.name)
+        if all_notes is None:
+            all_notes = _read_all_version_notes(file_path.name)
 
         for entry in paginated_versions:
             entry["note"] = all_notes.get(entry["version_id"], "")
