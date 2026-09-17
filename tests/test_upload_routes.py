@@ -19733,6 +19733,86 @@ def test_inspect_with_matching_expected_sha256_succeeds():
     assert resp.status_code == 200
 
 
+def test_inspect_exclude_filters_functions_endpoints_and_conflicts():
+
+    content = _notebook_bytes(
+        "def health_check() -> dict:\n    return {}\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    client.post(
+        "/api/upload",
+        files={
+            "file": ("inspect_exclude.ipynb", io.BytesIO(content), "application/json")
+        },
+    )
+
+    resp = client.post(
+        "/api/inspect",
+        json={"notebook_path": "inspect_exclude.ipynb", "exclude": ["health_check"]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [f["name"] for f in body["functions"]] == ["add"]
+    assert [e["path"] for e in body["endpoints"]] == ["/add"]
+    assert body["reserved_name_conflicts"] == []
+
+
+def test_inspect_only_keeps_just_the_named_function():
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+    )
+    client.post(
+        "/api/upload",
+        files={
+            "file": ("inspect_only.ipynb", io.BytesIO(content), "application/json")
+        },
+    )
+
+    resp = client.post(
+        "/api/inspect",
+        json={"notebook_path": "inspect_only.ipynb", "only": ["add"]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [f["name"] for f in body["functions"]] == ["add"]
+    assert [e["path"] for e in body["endpoints"]] == ["/add"]
+
+
+def test_inspect_rejects_only_and_exclude_together():
+
+    _upload_sample_notebook("inspect_only_exclude_conflict.ipynb")
+
+    resp = client.post(
+        "/api/inspect",
+        json={
+            "notebook_path": "inspect_only_exclude_conflict.ipynb",
+            "only": ["a"],
+            "exclude": ["b"],
+        },
+    )
+
+    assert resp.status_code == 400
+
+
+def test_inspect_rejects_an_unknown_only_name():
+
+    _upload_sample_notebook("inspect_unknown_only.ipynb")
+
+    resp = client.post(
+        "/api/inspect",
+        json={
+            "notebook_path": "inspect_unknown_only.ipynb",
+            "only": ["not_a_real_function"],
+        },
+    )
+
+    assert resp.status_code == 400
+
+
 def test_validate_with_mismatched_expected_sha256_is_rejected():
 
     filename = "validate_expected_sha256_mismatch.ipynb"
