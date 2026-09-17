@@ -9395,7 +9395,7 @@ def set_notebook_description_batch(data: dict):
 def list_notebook_versions(
     filename: str, limit: int = None, offset: int = 0, format: str = "json",
     saved_after: str = None, saved_before: str = None, checksums: bool = False,
-    notes: bool = False, note_search: str = None,
+    notes: bool = False, note_search: str = None, regex: bool = False,
 ):
     """List a previously uploaded notebook's snapshotted previous
     versions, newest first.
@@ -9507,6 +9507,21 @@ def list_notebook_versions(
     "saved_before" as an AND. Does NOT itself imply "notes": true -- a
     plain "note_search" response still omits each entry's own "note"
     field unless "notes" is also given, exactly as before this existed.
+
+    "regex" (optional, default false) treats "note_search" as a
+    case-insensitive Python regular expression instead of a plain
+    substring -- the identical "regex" GET /api/notebooks' own "search"/
+    "description_search" and GET /api/notebooks/search-content's own
+    "search" already support, just applied here to a version's own note.
+    Useful for the same kind of pattern a plain substring can't express
+    (e.g. every note matching "^hotfix" to find a specific category of
+    snapshot, or "v[0-9]+" to find ones that mention a version number).
+    A "note_search" that isn't a valid pattern under "regex" is rejected
+    with 400, naming the underlying re.error, before a single version is
+    even read. Leaving "regex" false (the default) behaves exactly as
+    before this -- a plain substring match, byte for byte identical to
+    the previous implementation. Ignored (has no effect) when
+    "note_search" itself isn't given.
     """
 
     if format not in ("json", "csv"):
@@ -9589,12 +9604,23 @@ def list_notebook_versions(
 
     if note_search:
 
-        note_search_lower = note_search.lower()
+        if regex:
 
-        versions = [
-            entry for entry in versions
-            if note_search_lower in all_notes.get(entry["version_id"], "").lower()
-        ]
+            note_search_pattern = _compile_search_regex(note_search, "note_search")
+
+            versions = [
+                entry for entry in versions
+                if note_search_pattern.search(all_notes.get(entry["version_id"], ""))
+            ]
+
+        else:
+
+            note_search_lower = note_search.lower()
+
+            versions = [
+                entry for entry in versions
+                if note_search_lower in all_notes.get(entry["version_id"], "").lower()
+            ]
 
     total_count = len(versions)
 
