@@ -3192,7 +3192,7 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        params = {"offset": args.offset}
+        params = {"offset": args.offset, "sort": args.sort, "order": args.order}
         if args.tag:
             params["tag"] = args.tag
         if args.limit is not None:
@@ -10296,6 +10296,27 @@ def main():
             "Skip this many of the biggest-first notebooks before "
             "--limit is applied, via GET /api/notebooks/storage's own "
             "?offset= query param, for paging past the first --limit."
+        )
+    )
+    storage_parser.add_argument(
+        "--sort",
+        choices=["name", "notebook_bytes", "version_bytes", "version_count", "total_bytes"],
+        default="total_bytes",
+        help=(
+            "Field to sort notebooks by, mirroring GET "
+            "/api/notebooks/storage's own ?sort= -- e.g. "
+            "--sort version_bytes to find version-history bloat "
+            "specifically, rather than overall size (default: total_bytes)."
+        )
+    )
+    storage_parser.add_argument(
+        "--order",
+        choices=["asc", "desc"],
+        default="desc",
+        help=(
+            "Sort direction, mirroring GET /api/notebooks/storage's own "
+            "?order= (default: desc, biggest first -- the previous, "
+            "fixed behavior)."
         )
     )
     storage_parser.add_argument(

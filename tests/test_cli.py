@@ -6993,7 +6993,7 @@ def test_storage_command_prints_per_notebook_and_total_usage(fake_dashboard):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "a.ipynb: 1200 bytes (900 notebook + 300 bytes across 2 version(s))" in proc.stdout
     assert "1 notebook(s), 1200 bytes total" in proc.stdout
-    assert handler.requests == ["/api/notebooks/storage?offset=0"]
+    assert handler.requests == ["/api/notebooks/storage?offset=0&sort=total_bytes&order=desc"]
 
 
 def test_storage_command_prints_the_catalog_cap_when_configured(fake_dashboard):
@@ -7112,7 +7112,7 @@ def test_storage_command_sends_tag_query_param(fake_dashboard):
     )
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert handler.requests == ["/api/notebooks/storage?offset=0&tag=prod"]
+    assert handler.requests == ["/api/notebooks/storage?offset=0&sort=total_bytes&order=desc&tag=prod"]
 
 
 def test_storage_command_format_csv_prints_the_dashboards_raw_csv_response(
@@ -7133,7 +7133,7 @@ def test_storage_command_format_csv_prints_the_dashboards_raw_csv_response(
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert proc.stdout == csv_body.replace("\r\n", "\n")
-    assert handler.requests == ["/api/notebooks/storage?offset=0&format=csv"]
+    assert handler.requests == ["/api/notebooks/storage?offset=0&sort=total_bytes&order=desc&format=csv"]
 
 
 def test_storage_command_omits_format_query_param_by_default(fake_dashboard):
@@ -7151,7 +7151,7 @@ def test_storage_command_omits_format_query_param_by_default(fake_dashboard):
     )
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert handler.requests == ["/api/notebooks/storage?offset=0"]
+    assert handler.requests == ["/api/notebooks/storage?offset=0&sort=total_bytes&order=desc"]
 
 
 def test_storage_command_passes_limit_and_offset_through(fake_dashboard):
@@ -7183,7 +7183,7 @@ def test_storage_command_passes_limit_and_offset_through(fake_dashboard):
     assert "b.ipynb: 500 bytes" in proc.stdout
     assert "Showing 1 of 3 notebook(s) (offset 1)." in proc.stdout
     assert "1800 bytes total" in proc.stdout
-    assert handler.requests == ["/api/notebooks/storage?offset=1&limit=1"]
+    assert handler.requests == ["/api/notebooks/storage?offset=1&sort=total_bytes&order=desc&limit=1"]
 
 
 def test_storage_command_reports_no_notebooks(fake_dashboard):

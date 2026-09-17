@@ -7849,6 +7849,89 @@ def test_notebook_storage_sorts_by_total_bytes_descending():
     assert filenames_in_order == ["storage_large.ipynb", "storage_small.ipynb"]
 
 
+def test_notebook_storage_sorts_by_name_ascending():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    for filename in ("storage_sort_b.ipynb", "storage_sort_a.ipynb"):
+        client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                    "application/json",
+                )
+            },
+        )
+
+    resp = client.get("/api/notebooks/storage", params={"sort": "name", "order": "asc"})
+
+    assert resp.status_code == 200
+    filenames_in_order = [n["filename"] for n in resp.json()["notebooks"]]
+    assert filenames_in_order == ["storage_sort_a.ipynb", "storage_sort_b.ipynb"]
+
+
+def test_notebook_storage_sorts_by_version_count_ascending():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "storage_sort_vc_many.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload",
+        params={"overwrite": "true"},
+        files={
+            "file": (
+                "storage_sort_vc_many.ipynb",
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "storage_sort_vc_none.ipynb",
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.get(
+        "/api/notebooks/storage",
+        params={"sort": "version_count", "order": "asc"},
+    )
+
+    assert resp.status_code == 200
+    filenames_in_order = [n["filename"] for n in resp.json()["notebooks"]]
+    assert filenames_in_order == ["storage_sort_vc_none.ipynb", "storage_sort_vc_many.ipynb"]
+
+
+def test_notebook_storage_rejects_an_invalid_sort_value():
+
+    resp = client.get("/api/notebooks/storage", params={"sort": "not_a_real_field"})
+
+    assert resp.status_code == 400
+
+
+def test_notebook_storage_rejects_an_invalid_order_value():
+
+    resp = client.get("/api/notebooks/storage", params={"order": "sideways"})
+
+    assert resp.status_code == 400
+
+
 def test_notebook_storage_limit_caps_the_biggest_first_notebooks():
 
     client.delete("/api/notebooks?confirm=true")

@@ -6784,9 +6784,15 @@ def diff_notebooks(
     return response
 
 
+_STORAGE_SORT_KEYS = frozenset(
+    {"name", "notebook_bytes", "version_bytes", "version_count", "total_bytes"}
+)
+
+
 @router.get("/notebooks/storage")
 def notebook_storage_usage(
     tag: str = None, limit: int = None, offset: int = 0, format: str = "json",
+    sort: str = "total_bytes", order: str = "desc",
 ):
     """How much disk space UPLOAD_DIR is actually using, broken down per
     notebook -- its own current bytes plus everything its snapshotted
@@ -6902,6 +6908,24 @@ def notebook_storage_usage(
     _current_total_storage_bytes(), same "null" when the cap is disabled,
     same "can go negative" honesty if the cap was lowered after the
     catalog already exceeded it.
+
+    "sort" and "order" mirror GET /api/notebooks' own identical pair --
+    before this, "notebooks" was always ordered by "total_bytes"
+    descending (see above) with no way to change it, unlike every other
+    listing endpoint in this file, each of which lets a caller choose at
+    least a filename/date order. An operator auditing version-history
+    bloat specifically had no way to ask for "sort by version_bytes" or
+    "version_count" -- a notebook with a small current file but years of
+    snapshotted versions ranks the same as, or below, a large notebook
+    with none at all under the fixed "total_bytes" order, even though
+    it's "version_bytes"/"version_count" that DELETE .../versions would
+    actually reclaim. "sort" is one of "name", "notebook_bytes",
+    "version_bytes", "version_count", or "total_bytes" (the previous, and
+    still default, key); "order" is "asc" or "desc" (the previous, and
+    still default, direction). Composes with "tag" identically -- applied
+    after every notebook has already been sized, before "limit"/"offset"
+    page the result. An invalid "sort"/"order" value is rejected with
+    400, the same way GET /api/notebooks' own already is.
     """
 
     if format not in ("json", "csv"):
@@ -6909,6 +6933,20 @@ def notebook_storage_usage(
         raise HTTPException(
             status_code=400,
             detail="format must be 'json' or 'csv'"
+        )
+
+    if sort not in _STORAGE_SORT_KEYS:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"sort must be one of {sorted(_STORAGE_SORT_KEYS)}"
+        )
+
+    if order not in _NOTEBOOK_SORT_ORDERS:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"order must be one of {sorted(_NOTEBOOK_SORT_ORDERS)}"
         )
 
     if offset < 0:
@@ -6964,7 +7002,12 @@ def notebook_storage_usage(
         total_version_bytes += version_bytes
         total_version_count += version_count
 
-    notebooks.sort(key=lambda entry: entry["total_bytes"], reverse=True)
+    sort_field = "filename" if sort == "name" else sort
+
+    notebooks.sort(
+        key=lambda entry: entry[sort_field],
+        reverse=(order == "desc"),
+    )
 
     notebook_count = len(notebooks)
 
