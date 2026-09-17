@@ -7783,6 +7783,8 @@ def _dispatch_core_command(args):
             print(f"  stale upload temp file threshold: {config.get('stale_upload_temp_file_seconds')}s")
             print(f"  notebook sort keys: {', '.join(config.get('notebook_sort_keys', []))}")
             print(f"  notebook sort orders: {', '.join(config.get('notebook_sort_orders', []))}")
+            print(f"  search sort keys: {', '.join(config.get('search_sort_keys', []))}")
+            print(f"  storage sort keys: {', '.join(config.get('storage_sort_keys', []))}")
             print(f"  allowed origins: {', '.join(config.get('allowed_origins', []))}")
             dashboard_rate_limit = config.get('dashboard_rate_limit_per_minute')
             print(

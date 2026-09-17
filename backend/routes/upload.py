@@ -17243,6 +17243,22 @@ def get_config():
     that could drift out of sync with this file's own definitions -- had
     no way to know any of this ahead of time.
 
+    "search_sort_keys" and "storage_sort_keys" mirror "notebook_sort_keys"
+    immediately below (see its own paragraph just above) for GET
+    /api/functions/GET /api/notebooks/search-content's own "sort" (backed
+    by _SEARCH_SORT_KEYS) and GET /api/notebooks/storage's own "sort"
+    (backed by _STORAGE_SORT_KEYS) respectively -- each a distinct set
+    from "notebook_sort_keys" itself ("match_count" has no meaning for a
+    plain catalog listing; "notebook_bytes"/"version_bytes"/
+    "version_count" only exist once a notebook's version history is
+    being sized at all), so a client populating a "sort by" control for
+    either of those two endpoints previously had no accepted-values list
+    of its own to read, only "notebook_sort_keys" -- silently wrong for
+    both. "order" is shared unchanged: every "sort"-accepting endpoint in
+    this file already validates "order" against the identical
+    _NOTEBOOK_SORT_ORDERS ({"asc", "desc"}), so "notebook_sort_orders"
+    alone already covers all three.
+
     Every one of these is already independently configurable via its own
     NOTEBOOK_API_* environment variable (see each constant's own comment
     above) -- this endpoint doesn't add any new configuration, only a way
@@ -17486,5 +17502,7 @@ def get_config():
         "stale_upload_temp_file_seconds": STALE_UPLOAD_TEMP_FILE_SECONDS,
         "notebook_sort_keys": sorted(_NOTEBOOK_SORT_KEYS),
         "notebook_sort_orders": sorted(_NOTEBOOK_SORT_ORDERS),
+        "search_sort_keys": sorted(_SEARCH_SORT_KEYS),
+        "storage_sort_keys": sorted(_STORAGE_SORT_KEYS),
         "compiling_python_version": compiling_python_version(),
     }

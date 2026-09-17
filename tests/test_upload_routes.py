@@ -29563,6 +29563,47 @@ def test_get_config_reports_notebook_sort_keys_and_orders_matching_list_notebook
         assert client.get(f"/api/notebooks?order={order}").status_code == 200
 
 
+def test_get_config_reports_search_sort_keys_matching_functions_and_search_content():
+    """GET /api/functions and GET /api/notebooks/search-content's own
+    "sort" query parameter accept exactly _SEARCH_SORT_KEYS -- this must
+    report the same values, not a second, independently-drifting copy.
+    """
+
+    from backend.routes.upload import _SEARCH_SORT_KEYS
+
+    resp = client.get("/api/config")
+    body = resp.json()
+
+    assert body["search_sort_keys"] == sorted(_SEARCH_SORT_KEYS)
+
+    _upload_sample_notebook("config_search_sort_keys.ipynb")
+
+    for sort_key in body["search_sort_keys"]:
+        assert client.get(f"/api/functions?search=x&sort={sort_key}").status_code == 200
+        assert (
+            client.get(
+                f"/api/notebooks/search-content?search=x&sort={sort_key}"
+            ).status_code == 200
+        )
+
+
+def test_get_config_reports_storage_sort_keys_matching_notebook_storage():
+    """GET /api/notebooks/storage's own "sort" query parameter accepts
+    exactly _STORAGE_SORT_KEYS -- this must report the same values, not
+    a second, independently-drifting copy.
+    """
+
+    from backend.routes.upload import _STORAGE_SORT_KEYS
+
+    resp = client.get("/api/config")
+    body = resp.json()
+
+    assert body["storage_sort_keys"] == sorted(_STORAGE_SORT_KEYS)
+
+    for sort_key in body["storage_sort_keys"]:
+        assert client.get(f"/api/notebooks/storage?sort={sort_key}").status_code == 200
+
+
 def test_get_config_never_leaks_the_upload_or_generated_directory_path():
     """UPLOAD_DIR/GENERATED_DIR are filesystem paths on the compiling
     server -- the same category of information GET /api/health's own
