@@ -5816,6 +5816,8 @@ def _dispatch_core_command(args):
                 params["checksums"] = "true"
             if args.notes:
                 params["notes"] = "true"
+            if args.note_search:
+                params["note_search"] = args.note_search
 
             try:
                 response = httpx.get(
@@ -12886,6 +12888,21 @@ def main():
             "N+1 `versions note-get` per entry. Adds a matching \"note\" "
             "column under --format csv; a plain `versions list` (without "
             "--notes) keeps its previous column set unchanged."
+        )
+    )
+    versions_list_parser.add_argument(
+        "--note-search",
+        default=None,
+        dest="note_search",
+        help=(
+            "Only list versions whose own note contains this text, "
+            "case-insensitively, via GET "
+            "/api/notebooks/{filename}/versions's own \"note_search\" "
+            "query param -- e.g. to find \"the version I labeled 'before "
+            "the refactor'\" without fetching every version's own note "
+            "(--notes) and searching by hand. Does not itself imply "
+            "--notes -- combine both to also print each matching "
+            "version's own note text."
         )
     )
     versions_list_parser.add_argument(
