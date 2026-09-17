@@ -16789,6 +16789,62 @@ def test_restore_notebook_version_returns_404_for_an_unknown_version_id():
     assert resp.status_code == 404
 
 
+def test_restore_notebook_version_with_matching_expected_sha256_succeeds():
+
+    filename = "versions_restore_expected_sha256_match.ipynb"
+    original_content = _notebook_bytes("def f() -> int:\n    return 1\n")
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(original_content), "application/json")},
+    )
+    current_content = _notebook_bytes("def g() -> int:\n    return 2\n")
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(current_content), "application/json")},
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    version_id = versions[0]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/restore",
+        params={"expected_sha256": hashlib.sha256(current_content).hexdigest()},
+    )
+
+    assert resp.status_code == 200
+    assert (Path(UPLOAD_DIR) / filename).read_bytes() == original_content
+
+
+def test_restore_notebook_version_with_mismatched_expected_sha256_is_rejected_and_restores_nothing():
+
+    filename = "versions_restore_expected_sha256_mismatch.ipynb"
+    _upload_sample_notebook(filename)
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    current_content = (Path(UPLOAD_DIR) / filename).read_bytes()
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    version_id = versions[0]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/{version_id}/restore",
+        params={"expected_sha256": "0" * 64},
+    )
+
+    assert resp.status_code == 400
+    assert "expected_sha256" in resp.json()["detail"]
+    assert (Path(UPLOAD_DIR) / filename).read_bytes() == current_content
+
+
 def test_restore_notebook_versions_batch_restores_each_notebook_to_its_own_version():
 
     filename_a = "versions_restore_batch_a.ipynb"
