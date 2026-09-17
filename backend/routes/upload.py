@@ -11179,6 +11179,25 @@ def copy_notebook_version(filename: str, version_id: str, data: dict):
     provides this for POST /api/notebooks/{filename}/versions/copy-batch's
     own per-entry preview; this was the one caller of that helper that
     never actually passed it through.
+
+    "expected_sha256" (optional), see _verify_expected_notebook_sha256
+    above, rejects the request with 400 -- copying nothing -- unless
+    `new_filename` already exists AND its own current content still
+    matches. The mirror case POST .../restore's own identical
+    "expected_sha256" just closed for that endpoint's own destination:
+    every other "expected_sha256" guard in this file protects a caller
+    from acting on stale *source* content, but "overwrite": true here
+    discards whatever `new_filename` currently holds -- its own bytes,
+    tags, description, and version history all at once -- exactly the
+    destination-clobbering restore's own guard already protects against,
+    just reached via "overwrite" instead of an implicit same-name target.
+    A caller who checked `new_filename`'s own current sha256 before
+    overwriting it with an old snapshot had no way to guard against a
+    concurrent edit landing in between and silently being discarded
+    instead. Has no effect when `new_filename` doesn't exist yet (a
+    brand-new destination has no current content to protect) or when
+    "overwrite" isn't given at all (nothing will be discarded either
+    way).
     """
 
     file_path = resolve_upload_path(filename)
@@ -11204,9 +11223,19 @@ def copy_notebook_version(filename: str, version_id: str, data: dict):
         if description is not None else None
     )
 
+    expected_sha256 = data.get("expected_sha256")
+
+    if expected_sha256 is not None and not isinstance(expected_sha256, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="expected_sha256 must be a string"
+        )
+
     new_filename = _copy_notebook_version_to(
         file_path, versions_dir, version_id, data.get("new_filename"), overwrite,
         dry_run=dry_run, tags=normalized_tags, description=normalized_description,
+        expected_sha256=expected_sha256,
     )
 
     return {
@@ -11220,7 +11249,7 @@ def copy_notebook_version(filename: str, version_id: str, data: dict):
 
 def _copy_notebook_version_to(
     file_path: Path, versions_dir: Path, version_id, new_filename, overwrite: bool,
-    dry_run: bool = False, tags=None, description=None,
+    dry_run: bool = False, tags=None, description=None, expected_sha256=None,
 ) -> str:
     """Copy `version_id` (one of `file_path`'s own snapshotted past
     versions, in `versions_dir`) to `new_filename` within UPLOAD_DIR,
@@ -11310,6 +11339,9 @@ def _copy_notebook_version_to(
                     'Pass "overwrite": true to replace it.'
                 )
             )
+
+        if dest_path.exists() and overwrite:
+            _verify_expected_notebook_sha256(dest_path, expected_sha256)
 
         if (
             MAX_NOTEBOOKS

@@ -6240,6 +6240,8 @@ def _dispatch_core_command(args):
                 versions_copy_body["description"] = args.description
             if args.dry_run:
                 versions_copy_body["dry_run"] = True
+            if args.expected_sha256:
+                versions_copy_body["expected_sha256"] = args.expected_sha256
 
             try:
                 response = httpx.post(
@@ -13366,6 +13368,22 @@ def main():
             "endpoint's own \"dry_run\" body field, without copying "
             "anything -- the same preview `versions copy-batch` already "
             "offers for copying several versions at once."
+        )
+    )
+    versions_copy_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "With --overwrite onto an existing new_filename, reject the "
+            "copy with an error unless that notebook's own current "
+            "content still matches this hash, via this endpoint's own "
+            "\"expected_sha256\" body field -- the same destination guard "
+            "`versions restore --expected-sha256` already provides, "
+            "applied here to \"overwrite\"'s own identical clobber. "
+            "Ignored when new_filename doesn't already exist, or without "
+            "--overwrite."
         )
     )
     versions_copy_parser.add_argument(
