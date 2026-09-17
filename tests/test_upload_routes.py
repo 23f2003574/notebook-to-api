@@ -9507,6 +9507,59 @@ def test_copy_notebook_dry_run_still_reports_a_same_name_collision():
     assert resp.status_code == 409
 
 
+def test_copy_notebook_with_matching_expected_sha256_succeeds():
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "copy_expected_sha256_match.ipynb", io.BytesIO(content), "application/json"
+            )
+        },
+    )
+
+    resp = client.post(
+        "/api/notebooks/copy_expected_sha256_match.ipynb/copy",
+        json={
+            "new_filename": "copy_expected_sha256_match_target.ipynb",
+            "expected_sha256": hashlib.sha256(content).hexdigest(),
+        },
+    )
+
+    assert resp.status_code == 200
+    assert (Path(UPLOAD_DIR) / "copy_expected_sha256_match_target.ipynb").is_file()
+
+
+def test_copy_notebook_with_mismatched_expected_sha256_is_rejected_and_copies_nothing():
+
+    _upload_sample_notebook("copy_expected_sha256_mismatch.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/copy_expected_sha256_mismatch.ipynb/copy",
+        json={
+            "new_filename": "copy_expected_sha256_mismatch_target.ipynb",
+            "expected_sha256": "0" * 64,
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "expected_sha256" in resp.json()["detail"]
+    assert not (Path(UPLOAD_DIR) / "copy_expected_sha256_mismatch_target.ipynb").exists()
+
+
+def test_copy_notebook_rejects_a_non_string_expected_sha256():
+
+    _upload_sample_notebook("copy_expected_sha256_bad_type.ipynb")
+
+    resp = client.post(
+        "/api/notebooks/copy_expected_sha256_bad_type.ipynb/copy",
+        json={"new_filename": "copy_expected_sha256_bad_type_target.ipynb", "expected_sha256": 123},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_copy_notebook_rejects_a_new_destination_once_max_notebooks_is_reached(
     monkeypatch,
 ):

@@ -4035,6 +4035,8 @@ def _dispatch_core_command(args):
             copy_body["description"] = args.description
         if args.dry_run:
             copy_body["dry_run"] = True
+        if args.expected_sha256:
+            copy_body["expected_sha256"] = args.expected_sha256
 
         try:
             response = httpx.post(
@@ -11118,6 +11120,20 @@ def main():
             "/api/notebooks/{filename}/copy's own \"dry_run\" body field, "
             "without copying anything -- the same preview `copy-batch` "
             "already offers for copying to several destinations at once."
+        )
+    )
+    copy_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "Reject the copy with an error unless `filename`'s own "
+            "current content still matches this hash, via POST "
+            "/api/notebooks/{filename}/copy's own \"expected_sha256\" "
+            "body field -- guards against copying a filename that was "
+            "concurrently overwritten since you last checked its sha256 "
+            "(e.g. via `list --checksums`)."
         )
     )
     copy_parser.add_argument(

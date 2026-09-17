@@ -8437,6 +8437,22 @@ def copy_notebook(filename: str, data: dict):
     this for POST /api/notebooks/{filename}/copy-batch's own per-
     destination preview; this was the one caller of that helper that
     never actually passed it through.
+
+    "expected_sha256" (optional), see _verify_expected_notebook_sha256
+    above, rejects the request with 400 before copying a single byte if
+    `filename`'s own current content doesn't match -- the identical
+    concurrent-overwrite guard POST /api/compile, /api/inspect, /api/
+    validate, and every preview endpoint in this file already give a
+    caller acting on a notebook purely by name. Without it, a caller that
+    listed notebooks (or a duplicate group), noted a specific filename's
+    own sha256, then copied that filename by name alone had no way to
+    guard against a concurrent overwrite (POST /api/upload
+    ?overwrite=true, a rename onto this filename, ...) landing in
+    between -- the copy would silently duplicate whatever content now
+    sits under that name instead, with no error at all, even though this
+    endpoint's own docstring already promises "leaving the source
+    notebook ... completely untouched" -- untouched, but not necessarily
+    the content the caller thought it was.
     """
 
     overwrite = bool(data.get("overwrite", False))
@@ -8451,6 +8467,15 @@ def copy_notebook(filename: str, data: dict):
         if description is not None else None
     )
 
+    expected_sha256 = data.get("expected_sha256")
+
+    if expected_sha256 is not None and not isinstance(expected_sha256, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="expected_sha256 must be a string"
+        )
+
     source_path = resolve_upload_path(filename)
 
     if not source_path.is_file():
@@ -8459,6 +8484,8 @@ def copy_notebook(filename: str, data: dict):
             status_code=404,
             detail="Notebook file not found"
         )
+
+    _verify_expected_notebook_sha256(source_path, expected_sha256)
 
     new_filename = _copy_notebook_to(
         source_path, data.get("new_filename"), overwrite, dry_run=dry_run,
