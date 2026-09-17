@@ -6312,6 +6312,8 @@ def _dispatch_core_command(args):
         elif args.versions_command == "restore":
 
             params = {"dry_run": "true"} if args.dry_run else {}
+            if args.expected_sha256:
+                params["expected_sha256"] = args.expected_sha256
 
             try:
                 response = httpx.post(
@@ -13415,6 +13417,20 @@ def main():
             "own \"dry_run\" query param, without actually restoring "
             "anything. The same preview `restore-batch` already offers "
             "for restoring several different notebooks at once."
+        )
+    )
+    versions_restore_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "Reject the restore with an error unless `filename`'s own "
+            "*current* content still matches this hash, via POST "
+            "/api/notebooks/{filename}/versions/{version_id}/restore's "
+            "own \"expected_sha256\" query param -- guards against "
+            "clobbering a concurrent edit made since you last checked "
+            "`filename`'s own sha256 (e.g. via `list --checksums`)."
         )
     )
     _add_dashboard_url_and_timeout_arguments(versions_restore_parser)

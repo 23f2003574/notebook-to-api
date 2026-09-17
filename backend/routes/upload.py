@@ -11403,7 +11403,9 @@ def copy_notebook_versions_batch(filename: str, data: dict):
 
 
 @router.post("/notebooks/{filename}/versions/{version_id}/restore")
-def restore_notebook_version(filename: str, version_id: str, dry_run: bool = False):
+def restore_notebook_version(
+    filename: str, version_id: str, dry_run: bool = False, expected_sha256: str = None,
+):
     """Make a previously snapshotted version `filename`'s current content
     again, undoing one or more overwrites (POST
     /api/upload?overwrite=true).
@@ -11449,6 +11451,29 @@ def restore_notebook_version(filename: str, version_id: str, dry_run: bool = Fal
     closes (the exact write path POST /api/upload?overwrite=true's own
     check already covers for an ordinary overwrite, silently bypassed
     here before this fix).
+
+    "expected_sha256" (optional query parameter), see
+    _verify_expected_notebook_sha256 above, rejects the request with 400
+    -- restoring nothing -- unless `filename`'s own *current* content
+    still matches, checked before version_id is even resolved. Every
+    other "expected_sha256" guard in this file protects a caller from
+    acting on stale *source* content read purely by name (a compile, an
+    inspect, a copy, a delete) -- this is the mirror case: a restore
+    overwrites `filename`'s own current content with `version_id`'s own
+    (itself immutable and content-addressed by version_id once
+    snapshotted, so it needs no guard of its own), so what needs
+    protecting here is the *destination* about to be discarded, not the
+    source being applied. A caller who checked `filename`'s own current
+    sha256 (e.g. to confirm nothing important had been overwritten since
+    they last touched it) before restoring an old version over it had no
+    way to guard against a concurrent edit -- another POST
+    /api/upload?overwrite=true, or a different restore -- landing in
+    between and silently being discarded by this restore instead of the
+    content the caller actually verified. Restoring does snapshot
+    whatever's currently in place first (see above), so a wrongly-
+    clobbered edit is itself recoverable via a second restore -- but only
+    for a caller who notices, which "expected_sha256" lets them avoid
+    needing to in the first place.
     """
 
     file_path = resolve_upload_path(filename)
@@ -11459,6 +11484,8 @@ def restore_notebook_version(filename: str, version_id: str, dry_run: bool = Fal
             status_code=404,
             detail="Notebook file not found"
         )
+
+    _verify_expected_notebook_sha256(file_path, expected_sha256)
 
     versions_dir = _notebook_versions_dir(file_path.name)
 
