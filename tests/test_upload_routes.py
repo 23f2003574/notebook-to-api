@@ -13506,6 +13506,68 @@ def test_list_notebooks_filters_by_description_search():
     assert [nb["filename"] for nb in notebooks] == ["desc_search_a.ipynb"]
 
 
+def test_list_notebooks_filters_by_source_url_search():
+
+    _upload_sample_notebook("source_url_search_a.ipynb")
+    _upload_sample_notebook("source_url_search_b.ipynb")
+
+    client.put(
+        "/api/notebooks/source_url_search_a.ipynb/source-url",
+        json={"source_url": "https://github.com/myorg/repo-a/blob/main/nb.ipynb"},
+    )
+    client.put(
+        "/api/notebooks/source_url_search_b.ipynb/source-url",
+        json={"source_url": "https://gitlab.com/otherorg/repo-b/nb.ipynb"},
+    )
+
+    notebooks = client.get(
+        "/api/notebooks?search=source_url_search_&source_url_search=github.com"
+    ).json()["notebooks"]
+
+    assert [nb["filename"] for nb in notebooks] == ["source_url_search_a.ipynb"]
+
+
+def test_list_notebooks_source_url_search_never_matches_a_notebook_without_one():
+
+    _upload_sample_notebook("source_url_search_unset.ipynb")
+
+    notebooks = client.get(
+        "/api/notebooks?search=source_url_search_unset&source_url_search=anything"
+    ).json()["notebooks"]
+
+    assert notebooks == []
+
+
+def test_list_notebooks_source_url_search_regex_matches_a_pattern():
+
+    _upload_sample_notebook("source_url_search_regex.ipynb")
+
+    client.put(
+        "/api/notebooks/source_url_search_regex.ipynb/source-url",
+        json={"source_url": "https://github.com/myorg/repo/nb.ipynb"},
+    )
+
+    notebooks = client.get(
+        "/api/notebooks",
+        params={
+            "search": "source_url_search_regex",
+            "source_url_search": r"^https://github\.com/myorg/",
+            "regex": "true",
+        },
+    ).json()["notebooks"]
+
+    assert [nb["filename"] for nb in notebooks] == ["source_url_search_regex.ipynb"]
+
+
+def test_list_notebooks_source_url_search_regex_rejects_an_invalid_pattern():
+
+    resp = client.get(
+        "/api/notebooks", params={"source_url_search": "[", "regex": "true"}
+    )
+
+    assert resp.status_code == 400
+
+
 def test_list_notebooks_filters_by_sha256():
 
     import hashlib

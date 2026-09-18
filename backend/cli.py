@@ -2724,6 +2724,8 @@ def _dispatch_core_command(args):
             params["tags_match"] = args.tags_match
         if args.description_search:
             params["description_search"] = args.description_search
+        if args.source_url_search:
+            params["source_url_search"] = args.source_url_search
         if args.regex:
             params["regex"] = "true"
         if args.sha256:
@@ -9735,6 +9737,18 @@ def main():
         help=(
             "Case-insensitive description substring filter, mirroring "
             "GET /api/notebooks' own ?description_search=."
+        )
+    )
+    list_parser.add_argument(
+        "--source-url-search",
+        default=None,
+        dest="source_url_search",
+        help=(
+            "Case-insensitive substring filter against each notebook's "
+            "own source_url (see `source-url get`), mirroring GET "
+            "/api/notebooks' own ?source_url_search= -- e.g. to find "
+            "every notebook imported from a particular repo/host before "
+            "rotating a token it required."
         )
     )
     list_parser.add_argument(
