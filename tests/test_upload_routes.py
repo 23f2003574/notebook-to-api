@@ -10042,6 +10042,127 @@ def test_copy_notebook_batch_does_not_copy_version_history():
     ).json()["versions"] == []
 
 
+def test_copy_notebook_batch_with_matching_expected_sha256_succeeds():
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    filename = "copy_batch_expected_sha256_match.ipynb"
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/copy-batch",
+        json={
+            "new_filenames": ["copy_batch_expected_sha256_match_target.ipynb"],
+            "expected_sha256": hashlib.sha256(content).hexdigest(),
+        },
+    )
+
+    assert resp.status_code == 200
+    assert (Path(UPLOAD_DIR) / "copy_batch_expected_sha256_match_target.ipynb").is_file()
+
+
+def test_copy_notebook_batch_with_mismatched_expected_sha256_rejects_the_whole_batch():
+
+    filename = "copy_batch_expected_sha256_mismatch.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/copy-batch",
+        json={
+            "new_filenames": ["copy_batch_expected_sha256_mismatch_target.ipynb"],
+            "expected_sha256": "0" * 64,
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "expected_sha256" in resp.json()["detail"]
+    assert not (
+        Path(UPLOAD_DIR) / "copy_batch_expected_sha256_mismatch_target.ipynb"
+    ).exists()
+
+
+def test_copy_notebook_batch_rejects_a_non_string_expected_sha256():
+
+    filename = "copy_batch_expected_sha256_bad_type.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/copy-batch",
+        json={
+            "new_filenames": ["copy_batch_expected_sha256_bad_type_target.ipynb"],
+            "expected_sha256": 12345,
+        },
+    )
+
+    assert resp.status_code == 400
+
+
+def test_copy_notebooks_batch_entry_with_mismatched_expected_sha256_fails_only_that_entry():
+
+    content_a = _notebook_bytes("def a() -> int:\n    return 1\n")
+    filename_a = "copy_many_expected_sha256_mismatch_a.ipynb"
+    filename_b = "copy_many_expected_sha256_mismatch_b.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename_a, io.BytesIO(content_a), "application/json")},
+    )
+    _upload_sample_notebook(filename_b)
+
+    resp = client.post(
+        "/api/notebooks/copy-batch",
+        json={"entries": [
+            {
+                "filename": filename_a,
+                "new_filename": "copy_many_expected_sha256_mismatch_a_target.ipynb",
+                "expected_sha256": "0" * 64,
+            },
+            {
+                "filename": filename_b,
+                "new_filename": "copy_many_expected_sha256_mismatch_b_target.ipynb",
+            },
+        ]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+    assert body["results"][0]["status"] == "error"
+    assert body["results"][1]["status"] == "success"
+    assert not (
+        Path(UPLOAD_DIR) / "copy_many_expected_sha256_mismatch_a_target.ipynb"
+    ).exists()
+    assert (
+        Path(UPLOAD_DIR) / "copy_many_expected_sha256_mismatch_b_target.ipynb"
+    ).is_file()
+
+
+def test_copy_notebooks_batch_entry_with_matching_expected_sha256_succeeds():
+
+    content_a = _notebook_bytes("def a() -> int:\n    return 1\n")
+    filename_a = "copy_many_expected_sha256_match_a.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename_a, io.BytesIO(content_a), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/notebooks/copy-batch",
+        json={"entries": [{
+            "filename": filename_a,
+            "new_filename": "copy_many_expected_sha256_match_a_target.ipynb",
+            "expected_sha256": hashlib.sha256(content_a).hexdigest(),
+        }]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["results"][0]["status"] == "success"
+
+
 def test_copy_notebooks_batch_duplicates_each_different_source_to_its_own_destination():
 
     content_a = _notebook_bytes("def a() -> int:\n    return 1\n")

@@ -8832,6 +8832,23 @@ def copy_notebook_batch(filename: str, data: dict):
     "overwrite": true would raise) -- without copying a single byte, the
     identical preview POST /api/notebooks/{filename}/versions/delete-batch's
     own "dry_run" already provides for deleting several versions at once.
+
+    "expected_sha256" (optional) is the identical concurrent-overwrite
+    guard POST /api/notebooks/{filename}/copy's own singular counterpart
+    already applies to `filename`'s own current content before copying
+    it -- checked once, against the one shared source every destination
+    here copies from, the same "one shared value across every
+    destination" reasoning "overwrite"/"tags"/"description" above
+    already follow. Before this, a caller that verified `filename`'s own
+    sha256 before fanning it out to several destinations at once had no
+    way to guard against a concurrent overwrite of the *source* landing
+    in between and being silently duplicated into every destination
+    instead of the content actually checked -- even though the single-
+    destination endpoint this fans out from already closed that exact
+    race. Rejects the whole request with 400 -- copying nothing -- if
+    `filename`'s current content doesn't match, checked once before any
+    destination is even attempted, not per destination (there is only
+    one source to check here).
     """
 
     new_filenames = data.get("new_filenames")
@@ -8860,6 +8877,15 @@ def copy_notebook_batch(filename: str, data: dict):
         if description is not None else None
     )
 
+    expected_sha256 = data.get("expected_sha256")
+
+    if expected_sha256 is not None and not isinstance(expected_sha256, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="expected_sha256 must be a string"
+        )
+
     source_path = resolve_upload_path(filename)
 
     if not source_path.is_file():
@@ -8868,6 +8894,8 @@ def copy_notebook_batch(filename: str, data: dict):
             status_code=404,
             detail="Notebook file not found"
         )
+
+    _verify_expected_notebook_sha256(source_path, expected_sha256)
 
     results = []
     succeeded_count = 0
@@ -8969,6 +8997,16 @@ def copy_notebooks_batch(data: dict):
     "overwrite": true would raise -- without copying a single byte, the
     identical preview POST /api/notebooks/{filename}/copy-batch's own
     "dry_run" already provides one level up from here.
+
+    Each entry's own optional "expected_sha256" is the identical
+    concurrent-overwrite guard POST /api/notebooks/{filename}/copy's own
+    singular counterpart already applies to its own source -- checked
+    against that entry's own "filename", since each entry here names its
+    own independent source (unlike POST /api/notebooks/{filename}/copy-
+    batch's single shared source, which checks it once for the whole
+    batch instead). A mismatch fails only that one entry's own "error"
+    result, with the identical 400 detail a standalone POST .../copy call
+    would have raised, rather than aborting the rest of the batch.
     """
 
     entries = data.get("entries")
@@ -9031,6 +9069,17 @@ def copy_notebooks_batch(data: dict):
                     status_code=404,
                     detail="Notebook file not found"
                 )
+
+            entry_expected_sha256 = entry.get("expected_sha256")
+
+            if entry_expected_sha256 is not None and not isinstance(entry_expected_sha256, str):
+
+                raise HTTPException(
+                    status_code=400,
+                    detail="expected_sha256 must be a string"
+                )
+
+            _verify_expected_notebook_sha256(source_path, entry_expected_sha256)
 
             _copy_notebook_to(
                 source_path, new_filename, overwrite, dry_run=dry_run,
