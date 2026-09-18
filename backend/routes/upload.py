@@ -11741,6 +11741,18 @@ def copy_notebook_versions_batch(filename: str, data: dict):
     identical preview POST /api/notebooks/copy-batch's own "dry_run"
     already provides for copying several notebooks' current content at
     once.
+
+    Each entry's own optional "expected_sha256" is the identical
+    concurrent-overwrite guard POST .../{version_id}/copy's own singular
+    counterpart already applies to its own "overwrite": true destination
+    -- this batch endpoint reuses the exact same _copy_notebook_version_to
+    (above), so it silently never enforced this at all before now, even
+    though the single-entry copy this reduces to already did. Has no
+    effect on an entry without its own "overwrite": true, or one whose
+    "new_filename" doesn't exist yet, the same as that endpoint's own
+    identical field. A mismatch fails only that one entry's own "error"
+    result -- with the identical 400 detail a standalone POST .../copy
+    call would have raised -- rather than aborting the rest of the batch.
     """
 
     file_path = resolve_upload_path(filename)
@@ -11810,6 +11822,7 @@ def copy_notebook_versions_batch(filename: str, data: dict):
                 file_path, versions_dir, version_id, new_filename, overwrite,
                 dry_run=dry_run,
                 tags=normalized_entry_tags, description=normalized_entry_description,
+                expected_sha256=entry.get("expected_sha256"),
             )
 
             results.append({
@@ -12019,6 +12032,18 @@ def restore_notebook_versions_batch(data: dict):
     call), reported as that one entry's own "error" rather than aborting
     the rest of the batch -- the identical per-entry isolation every
     other check in this loop already gets.
+
+    Each entry's own optional "expected_sha256" is the identical
+    concurrent-overwrite guard POST .../{version_id}/restore's own
+    singular counterpart already applies to `filename`'s own current
+    content before restoring over it -- this batch endpoint reused none
+    of that check at all before now, even though the single-entry
+    restore this reduces to already did. Checked before that entry's own
+    version_id is even resolved, the same order the singular endpoint's
+    own docstring already establishes; a mismatch fails only that one
+    entry's own "error" result, with the identical 400 detail a
+    standalone POST .../restore call would have raised, rather than
+    aborting the rest of the batch.
     """
 
     entries = data.get("entries")
@@ -12070,6 +12095,8 @@ def restore_notebook_versions_batch(data: dict):
                     status_code=404,
                     detail="Notebook file not found"
                 )
+
+            _verify_expected_notebook_sha256(file_path, entry.get("expected_sha256"))
 
             versions_dir = _notebook_versions_dir(file_path.name)
 

@@ -17663,6 +17663,225 @@ def test_restore_notebook_versions_batch_rejects_an_entry_missing_version_id():
     assert resp.status_code == 400
 
 
+def test_restore_notebook_versions_batch_matching_expected_sha256_succeeds():
+
+    filename = "versions_restore_batch_expected_sha256_match.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    current_content = _notebook_bytes("def g() -> int:\n    return 2\n")
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(current_content), "application/json")},
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        "/api/notebooks/versions/restore-batch",
+        json={"entries": [{
+            "filename": filename,
+            "version_id": version_id,
+            "expected_sha256": hashlib.sha256(current_content).hexdigest(),
+        }]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["results"] == [{
+        "filename": filename,
+        "version_id": version_id,
+        "status": "success",
+        "restored_version_id": version_id,
+        "was_currently_compiled": False,
+    }]
+
+
+def test_restore_notebook_versions_batch_mismatched_expected_sha256_fails_only_that_entry():
+
+    filename = "versions_restore_batch_expected_sha256_mismatch.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    other_filename = "versions_restore_batch_expected_sha256_untouched.ipynb"
+    other_version_id = _upload_and_create_one_version(other_filename)
+
+    resp = client.post(
+        "/api/notebooks/versions/restore-batch",
+        json={"entries": [
+            {
+                "filename": filename,
+                "version_id": version_id,
+                "expected_sha256": "0" * 64,
+            },
+            {"filename": other_filename, "version_id": other_version_id},
+        ]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+    assert body["results"][0]["status"] == "error"
+    assert body["results"][1]["status"] == "success"
+
+    # The mismatched entry's own notebook was never restored -- no new
+    # snapshot was taken (a real restore would snapshot current content
+    # first), so its own version history is unchanged.
+    remaining_versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert [v["version_id"] for v in remaining_versions] == [version_id]
+
+
+def test_copy_notebook_versions_batch_matching_expected_sha256_succeeds():
+
+    filename = "versions_copy_batch_expected_sha256_match_source.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    dest_filename = "versions_copy_batch_expected_sha256_match_target.ipynb"
+    dest_content = _notebook_bytes("def h() -> int:\n    return 3\n")
+    client.post(
+        "/api/upload",
+        files={"file": (dest_filename, io.BytesIO(dest_content), "application/json")},
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/copy-batch",
+        json={"entries": [{
+            "version_id": version_id,
+            "new_filename": dest_filename,
+            "overwrite": True,
+            "expected_sha256": hashlib.sha256(dest_content).hexdigest(),
+        }]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["results"] == [{
+        "version_id": version_id,
+        "new_filename": dest_filename,
+        "status": "success",
+    }]
+
+
+def test_copy_notebook_versions_batch_mismatched_expected_sha256_fails_only_that_entry():
+
+    filename = "versions_copy_batch_expected_sha256_mismatch_source.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    dest_filename = "versions_copy_batch_expected_sha256_mismatch_target.ipynb"
+    dest_content = _notebook_bytes("def h() -> int:\n    return 3\n")
+    client.post(
+        "/api/upload",
+        files={"file": (dest_filename, io.BytesIO(dest_content), "application/json")},
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    other_dest_filename = "versions_copy_batch_expected_sha256_other_target.ipynb"
+
+    resp = client.post(
+        f"/api/notebooks/{filename}/versions/copy-batch",
+        json={"entries": [
+            {
+                "version_id": version_id,
+                "new_filename": dest_filename,
+                "overwrite": True,
+                "expected_sha256": "0" * 64,
+            },
+            {"version_id": version_id, "new_filename": other_dest_filename},
+        ]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+    assert body["results"][0]["status"] == "error"
+    assert body["results"][1]["status"] == "success"
+
+    # The mismatched entry's own destination was never overwritten.
+    assert client.get(f"/api/notebooks/{dest_filename}").content == dest_content
+
+
 def test_delete_notebook_version_removes_only_that_snapshot():
 
     filename = "versions_delete.ipynb"
